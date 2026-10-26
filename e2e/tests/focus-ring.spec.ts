@@ -1,27 +1,51 @@
 // Every control the keyboard reaches shows a visible focus ring (#1584; DESIGN.md §7, WCAG 2.4.7), on every sidebar
 // screen, in light and dark. axe (layout.spec.ts) cannot see this: it depends on the styles a focused element gets. The
-// walk presses Tab through each screen and, for every element that takes the focus, wants an outline that is not `none`
-// or a box-shadow ring on the element or on the wrapper that draws its ring (an input group). Its own user, created
+// walk records, before any key is pressed, how each focusable element and its parent look (outline, shadow, border,
+// background); then presses Tab through the screen and wants each focused element, or the wrapper that draws its ring,
+// to look different from that, with an outline or a shadow when it had none of its own. Its own user, created
 // confirmed without the sign-up form, so it draws nothing from the sign-up budget.
 import { expect, test, type Page } from '@playwright/test';
 import { createOrg, newEmail, signInNewUser } from '../lib/session.ts';
 
 test.use({ viewport: { width: 1280, height: 800 } });
 
-// What the focused element lacks, or null when it shows a ring (or nothing visible has the focus).
+const MAX_STOPS = 120;
+
+// Each focusable element's look, and its parent's, while nothing has the focus.
+async function recordUnfocused(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const look = (node: Element | null) => {
+      if (!node) return '';
+      const s = getComputedStyle(node);
+      return [s.outlineStyle, s.outlineWidth, s.outlineColor, s.boxShadow, s.borderColor, s.backgroundColor].join('|');
+    };
+    const base = new WeakMap<Element, { self: string; parent: string }>();
+    for (const el of document.querySelectorAll('a[href], button, input, select, textarea, summary, [tabindex]')) base.set(el, { self: look(el), parent: look(el.parentElement) });
+    (window as unknown as { __ringBase: typeof base }).__ringBase = base;
+  });
+}
+
+// What the focused element lacks, or null when it shows an indicator (or nothing visible has the focus).
 async function missingRing(page: Page): Promise<string | null> {
   return page.evaluate(() => {
     const el = document.activeElement as HTMLElement | null;
     if (!el || el === document.body) return null;
     const r = el.getBoundingClientRect();
     if (r.width === 0 || r.height === 0) return null;
-    const shows = (node: Element | null) => {
+    const look = (node: Element | null) => {
+      if (!node) return '';
+      const s = getComputedStyle(node);
+      return [s.outlineStyle, s.outlineWidth, s.outlineColor, s.boxShadow, s.borderColor, s.backgroundColor].join('|');
+    };
+    const ring = (node: Element | null) => {
       if (!node) return false;
       const s = getComputedStyle(node);
-      const outline = s.outlineStyle !== 'none' && parseFloat(s.outlineWidth) > 0;
-      return outline || s.boxShadow !== 'none';
+      return (s.outlineStyle !== 'none' && parseFloat(s.outlineWidth) > 0) || s.boxShadow !== 'none';
     };
-    if (shows(el) || shows(el.parentElement)) return null;
+    const base = (window as unknown as { __ringBase?: WeakMap<Element, { self: string; parent: string }> }).__ringBase?.get(el);
+    // Rendered after the screen loaded: no record to compare with, so an outline or a shadow has to show.
+    const shows = base ? look(el) !== base.self || look(el.parentElement) !== base.parent : ring(el) || ring(el.parentElement);
+    if (shows) return null;
     const name = (el.getAttribute('aria-label') ?? el.textContent ?? '').trim().slice(0, 40);
     return `${el.tagName.toLowerCase()}${el.getAttribute('role') ? `[role=${el.getAttribute('role')}]` : ''} "${name}" (${el.className.toString().slice(0, 80)})`;
   });
@@ -49,9 +73,12 @@ test('every control the keyboard reaches on every sidebar screen shows a focus r
     for (const path of links) {
       await page.goto(path);
       await page.waitForLoadState('networkidle');
+      await expect(page.locator('html')).toHaveClass(theme === 'dark' ? /\bdark\b/ : /^(?!.*\bdark\b)/);
+      await recordUnfocused(page);
       // Through the screen from its top, until the focus comes round to where it started.
       const seen = new Set<string>();
-      for (let i = 0; i < 120; i++) {
+      let round = false;
+      for (let i = 0; i < MAX_STOPS; i++) {
         await page.keyboard.press('Tab');
         const key = await page.evaluate(() => {
           const el = document.activeElement;
@@ -60,11 +87,16 @@ test('every control the keyboard reaches on every sidebar screen shows a focus r
           for (let n: Element | null = el; n && n.parentElement; n = n.parentElement) path.unshift([...n.parentElement.children].indexOf(n));
           return path.join('.');
         });
-        if (seen.has(key)) break;
+        if (seen.has(key)) {
+          round = true;
+          break;
+        }
         seen.add(key);
         const missing = await missingRing(page);
         if (missing) problems.add(`${path} (${theme}): ${missing}`);
       }
+      // A screen with more stops than the walk takes is said, so no control goes unchecked unnoticed.
+      if (!round) problems.add(`${path} (${theme}): more than ${MAX_STOPS} tab stops, the rest not checked`);
     }
   }
   expect([...problems]).toEqual([]);
