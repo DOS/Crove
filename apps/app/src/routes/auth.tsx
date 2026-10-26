@@ -8,6 +8,7 @@ import { ErrorText, Field, focusFirstInvalid, isEmailAddress, Logo, Notice, useF
 import { LocaleSwitcher } from '../i18n/provider.tsx';
 import { auth, authErrorText, authFailure, callbackNoticeText, clearCallbackNotice, peekCallbackNotice, type AuthFailure, type CallbackNotice } from '../lib/auth.ts';
 import { LegalConsent } from '../components/legal-consent.tsx';
+import { SupportLink } from '../components/support-link.tsx';
 
 type Mode = 'login' | 'signup' | 'reset';
 // The notices the screen shows after sending an email, by message key: state holds no translated text (issue #215).
@@ -70,7 +71,7 @@ export function AuthPage() {
   const titles: Record<Mode, string> = { login: t('login'), signup: t('signup'), reset: t('reset') };
 
   return (
-    <main className="flex min-h-full items-center justify-center bg-background px-4 py-16">
+    <main className="flex min-h-full flex-col items-center justify-center bg-background px-4 py-16">
       <Card className="relative block w-full max-w-sm p-6">
         <div className="flex items-center justify-between gap-2">
           <Logo />
@@ -140,6 +141,8 @@ export function AuthPage() {
           )}
         </div>
       </Card>
+      {/* Help in the same place as on every screen of the app (DESIGN.md §7, 3.2.6; #1516). */}
+      <SupportLink className="mt-4 text-sm text-link" />
     </main>
   );
 }
