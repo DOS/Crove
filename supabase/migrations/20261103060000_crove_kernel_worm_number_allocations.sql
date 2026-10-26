@@ -8,7 +8,7 @@
 -- adds three kinds of rows, with their own references:
 --   number:<org_id>:<id>                       an allocation: its series (entity, doc type, period key), its number and
 --                                              the record it went to
---   number_void:<org_id>:<id>                  a void: the allocation, the reason, who and when
+--   number_void:<org_id>:<id>                  a void: its legal entity, the allocation, the reason, who and when
 --   voucher_number:<type>:<org_id>:<id>        a cash or journal voucher's number, number period and allocation
 --
 -- crove_kernel.archive_allocation_hashes(from, to) gives those rows made in [from, to) (allocated_at, voided_at, the
@@ -42,7 +42,7 @@ BEGIN
   UNION ALL
   SELECT 'number_void:' || v.org_id::text || ':' || v.id::text,
          pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.jsonb_build_object(
-           'org_id', v.org_id, 'id', v.id, 'allocation_id', v.allocation_id, 'reason', v.reason,
+           'org_id', v.org_id, 'id', v.id, 'legal_entity_id', v.legal_entity_id, 'allocation_id', v.allocation_id, 'reason', v.reason,
            'voided_by', v.voided_by, 'voided_at', crove_kernel.archive_ts(v.voided_at))::text, 'UTF8')), 'hex')
   FROM crove_kernel.number_void v
   WHERE v.voided_at >= p_from AND v.voided_at < p_to
