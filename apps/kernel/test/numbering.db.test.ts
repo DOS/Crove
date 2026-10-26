@@ -293,4 +293,40 @@ suite('gapless numbering on PostgreSQL (#1401)', () => {
     const empty = await rt.query<NumberSeriesPage>('kernel.number.allocations', { docType: 'test.none', periodKey: '2027' }, { actor: asUser(owner), orgId });
     expect(empty).toMatchObject({ nextNumber: 1, items: [], more: false });
   });
+
+  it('makes a policy change wait for the first allocation of a document type, then refuses it (#1607)', async () => {
+    const open = async (user: string) => {
+      const c = new pg.Client({ connectionString: appUrl });
+      await c.connect();
+      await c.query('BEGIN');
+      await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [user, orgId]);
+      return c;
+    };
+    let first: pg.Client | undefined;
+    let change: pg.Client | undefined;
+    try {
+      first = await open(owner);
+      change = await open(owner);
+      // The first number of a new document type, under the default yearly reset, not committed yet.
+      const { rows } = await first.query<{ period_key: string; number: string }>(
+        `SELECT period_key, number::text AS number FROM crove_kernel.allocate_number(NULL, 'test.race', '2026-06-01', 'test.record', $1::uuid)`,
+        [randomUUID()],
+      );
+      expect(rows[0]).toEqual({ period_key: '2026', number: '1' });
+      // The switch to 'never' waits for it, instead of committing beside it and numbering PT 1 again in 2026.
+      let settled = false;
+      const switched = change.query(`SELECT crove_kernel.number_series_policy_set(NULL, 'test.race', 'never')`).finally(() => {
+        settled = true;
+      });
+      switched.catch(() => {});
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(settled).toBe(false);
+      await first.query('COMMIT');
+      await expect(switched).rejects.toMatchObject({ code: '55000', message: 'NUMBER_POLICY_IN_USE' });
+    } finally {
+      await first?.end().catch(() => {});
+      await change?.query('ROLLBACK').catch(() => {});
+      await change?.end().catch(() => {});
+    }
+  });
 });
