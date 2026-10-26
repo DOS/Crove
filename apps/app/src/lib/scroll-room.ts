@@ -10,7 +10,8 @@ export function useScrollRoom(bar: RefObject<HTMLElement | null>, side: 'top' | 
     const box = scroller ? scroller.current : document.documentElement;
     if (!el || !box) return;
     const property = side === 'top' ? 'scroll-padding-top' : 'scroll-padding-bottom';
-    const measure = () => box.style.setProperty(property, `${el.offsetHeight}px`);
+    // The rendered height, rounded up: offsetHeight rounds, and a fraction of a pixel short would leave a sliver under the bar.
+    const measure = () => box.style.setProperty(property, `${Math.ceil(el.getBoundingClientRect().height)}px`);
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(el);
