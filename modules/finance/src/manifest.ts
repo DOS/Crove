@@ -1,6 +1,7 @@
-// The finance module's manifest (plan §5.2, #1588, #1599): the tables it owns and the class of every column. A migration
-// that adds or drops a table or column of these schemas changes this list in the same PR; apps/kernel/test/manifest.db.test.ts
-// checks it against the catalog. A column is internal unless the second argument of columns() classifies it.
+// The finance module's manifest (plan §5.2, #1588, #1599, #1630): the tables it owns, the class of every column, and the
+// permissions it owns. A migration that adds or drops a table or column of these schemas, or a role_permission row,
+// changes this list in the same PR; apps/kernel/test/manifest.db.test.ts checks it against the catalog. A column is
+// internal unless the second argument of columns() classifies it.
 import { columns, defineModule } from '@crove/kernel-contract';
 
 export const financeManifest = defineModule({
@@ -34,4 +35,11 @@ export const financeManifest = defineModule({
       vendor_account_rule: columns(['org_id', 'party_id', 'debit_account', 'confirmed_by', 'updated_at']),
     },
   },
+  permissions: [
+    // ADR-0021 section 3: a chief accountant reopens a locked month (finance.period.unlock, and unlock_period() again).
+    { key: 'finance.period.unlock', risk: 'R3', defaultRoles: ['finance.chief_accountant'] },
+    // P12 (#1279): a chief accountant approves the ledger's proposals (kernel.proposal.approve and its bulk form, the
+    // approval policy's LEDGER_APPROVE_PERMISSION, and the accountant preset's guard on the last chief accountant).
+    { key: 'finance.proposal.approve', risk: 'R3', defaultRoles: ['finance.chief_accountant'] },
+  ],
 });

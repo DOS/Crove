@@ -63,4 +63,6 @@ export const socialManifest = defineModule({
       watermark: columns(['org_id', 'id', 'file_id', 'corner', 'scale_percent', 'opacity_percent', 'updated_by', 'created_at', 'updated_at']),
     },
   },
+  // It owns no permission: no command of the module declares one and no role grants one.
+  permissions: [],
 });
