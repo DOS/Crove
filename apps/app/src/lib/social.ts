@@ -173,7 +173,7 @@ export function parseMinute(value: string): number | null {
 export const REVIEWABLE: readonly VariantStatus[] = ['in_review'];
 export const SUBMITTABLE: readonly VariantStatus[] = ['draft', 'changes_requested', 'rejected'];
 export const EDITABLE: readonly VariantStatus[] = ['draft', 'in_review', 'changes_requested', 'rejected', 'approved', 'scheduled', 'paused', 'failed'];
-export const CANCELLABLE: readonly VariantStatus[] = EDITABLE;
+export const CANCELLABLE: readonly VariantStatus[] = [...EDITABLE];
 
 // A message for the next post page this tab opens (a submit that failed right after the draft was created).
 let flash: string | null = null;

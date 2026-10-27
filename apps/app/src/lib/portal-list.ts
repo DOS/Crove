@@ -3,7 +3,6 @@
 import { MAX_IMPORT_BYTES, type MissingInvoiceStatusView, type PortalReconciliation, type ReconcileOutcome } from '@crove/kernel-contract';
 
 export type ReconcileItem = PortalReconciliation['items'][number];
-export type PortalList = PortalReconciliation['lists'][number];
 
 // The roles that may import and remove lists (finance.portal_list.import and .remove); the kernel checks again.
 export function canImportPortalList(role: string | null | undefined): boolean {

@@ -6,7 +6,7 @@
 // trial balance list. They are warnings: the accountant decides, the file is still written.
 import { z } from 'zod';
 import type { MemberRole } from '@crove/db';
-import { STATEMENTS_HTKK_WARNINGS, vietnamToday, zId, zStatementsHtkkYear, type StatementsHtkkCheck, type StatementsHtkkWarning } from '@crove/kernel-contract';
+import { vietnamToday, zId, zStatementsHtkkYear, type StatementsHtkkCheck, type StatementsHtkkWarning } from '@crove/kernel-contract';
 import { DomainError, defineQuery, type QueryContext } from '@crove/kernel-runtime';
 import { buildStatementsXml, f01Values, type BctcInput, type BctcTaxpayer } from './domain/statements-htkk-xml.ts';
 import { HtkkAmountError } from './domain/vat-01gtgt-xml.ts';
@@ -20,7 +20,7 @@ const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 // The statements of one legal entity (#1280): legalEntityId as in zLegalEntityChoice. The taxpayer block is still the
 // org's (its tax code, name and address).
 export const zStatementsYearInput = z.object({ year: zStatementsHtkkYear, legalEntityId: zId.optional() });
-export { STATEMENTS_HTKK_WARNINGS, type StatementsHtkkWarning };
+export type { StatementsHtkkWarning };
 
 export interface StatementsFiling {
   input: BctcInput;

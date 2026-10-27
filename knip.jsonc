@@ -1,0 +1,34 @@
+// knip (G5, #1602): unused files, dependencies and exports, on every PR (`pnpm knip`). Every entry below that knip
+// cannot find by itself, and every ignore, says why.
+{
+  "$schema": "https://unpkg.com/knip@6/schema-jsonc.json",
+  // An export used only inside its own file is not dead code.
+  "ignoreExportsUsedInFile": true,
+  "workspaces": {
+    ".": {
+      // tools/*.mjs and tools/ci/*.mjs are scripts the package.json scripts and the workflows run by path.
+      "entry": ["tools/**/*.{mjs,ts}"],
+      // tools/ui-colors.mjs resolves tailwindcss/theme.css from packages/ui (createRequire), which lists it.
+      "ignoreDependencies": ["tailwindcss"]
+    },
+    "apps/extract": {
+      // child.ts is spawned by path from the sandbox (src/sandbox.ts); the container scripts run inside the image in CI.
+      "entry": ["src/child.ts", "test/container/*.mjs"]
+    },
+    "apps/kernel": {
+      // The image check runs inside the kernel image in CI (.github/workflows/ci.yml). src/kernel.ts is the composition
+      // root a Crove Cloud entrypoint imports (ADR-0030): its exports are its API.
+      "entry": ["test/container/*.mjs", "src/kernel.ts"]
+    },
+    "apps/web": {
+      // postcss.config.mjs names postcss-load-config only in a JSDoc type.
+      "ignoreDependencies": ["postcss-load-config"]
+    },
+    "e2e": {
+      // The fake tax portal runs in its own container (e2e/compose.e2e.yml).
+      "entry": ["fake-tax-portal/main.ts"]
+    }
+  },
+  // A finished spike (ADR on DBOS, #275), kept for the record and outside the pnpm workspace.
+  "ignore": ["spikes/**"]
+}

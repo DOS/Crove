@@ -344,7 +344,7 @@ export const MAILED_KINDS: ReadonlySet<SocialNotificationKind> = new Set([
 ]);
 export const NOTIFICATION_MAIL_TEMPLATE = 'social.notification';
 // The kinds that also go out as browser push (#1238): the mailed ones.
-export const PUSHED_KINDS: ReadonlySet<SocialNotificationKind> = MAILED_KINDS;
+export const PUSHED_KINDS: ReadonlySet<SocialNotificationKind> = new Set(MAILED_KINDS);
 
 // A due date as the mail shows it (#1359): "14:30 26/10/2026" in the post's time zone (Vietnam's when it has none or
 // one the runtime does not know).

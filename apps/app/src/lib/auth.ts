@@ -1,4 +1,4 @@
-import { AuthClient, type Session } from '@supabase/auth-js';
+import { AuthClient } from '@supabase/auth-js';
 import type { Translate } from '../i18n/runtime.ts';
 import { ClientError } from './errors.ts';
 import { withInviteToken } from './invite.ts';
@@ -129,8 +129,6 @@ export async function secondFactorStillOwed(client: Pick<Client, 'mfa'> = auth()
   await within(verifying, undefined);
   return within(needsSecondFactorNow(client), true);
 }
-
-export type { Session };
 
 // Supabase Auth error codes with a message of their own; any other error shows the server's message.
 const AUTH_ERRORS = [

@@ -7,7 +7,7 @@ import { useTranslations } from 'use-intl';
 import { buttonVariants } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 
-export { useReviewShortcuts, type ReviewHandlers } from '../lib/review-shortcuts.ts';
+export { useReviewShortcuts } from '../lib/review-shortcuts.ts';
 
 /** The shortcuts, as the review panel lists them. */
 export function ReviewKeysHint() {

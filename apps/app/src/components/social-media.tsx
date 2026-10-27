@@ -291,25 +291,6 @@ export function Thumb({ fileId, alt, className, mime, durationMs, frameMs, name 
   );
 }
 
-// The images in a channel preview, the way most platforms lay out one to four of them.
-export function MediaPreview({ media }: { media: readonly MediaItem[] }) {
-  const t = useTranslations('social');
-  if (media.length === 0) return null;
-  const shown = media.slice(0, 4);
-  return (
-    <div className={cn('mt-3 grid gap-1', shown.length === 1 ? 'grid-cols-1' : 'grid-cols-2')}>
-      {shown.map((m, i) => (
-        <div key={m.fileId} className="relative">
-          <Thumb fileId={m.fileId} alt={m.altText || t('imageAlt', { n: String(i + 1) })} name={m.filename} mime={m.mime} durationMs={m.durationMs} className={shown.length === 1 ? 'aspect-[4/3]' : 'aspect-square'} />
-          {i === 3 && media.length > 4 && (
-            <span className="absolute inset-0 flex items-center justify-center rounded-lg bg-background/70 text-lg font-semibold text-foreground">+{media.length - 4}</span>
-          )}
-        </div>
-      ))}
-    </div>
-  );
-}
-
 // An uploaded image's size as shown, measured in the browser for the checks until the post is saved (the server reads
 // its own from the file); nothing for a video or an image the browser cannot decode.
 async function measure(file: File): Promise<{ width: number; height: number } | null> {
