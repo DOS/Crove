@@ -1,7 +1,7 @@
 // The crm module's manifest (plan §5.2, #1588, #1599): the tables it owns and the class of every column. A migration
 // that adds or drops a table or column of these schemas changes this list in the same PR; apps/kernel/test/manifest.db.test.ts
 // checks it against the catalog. A column is internal unless the second argument of columns() classifies it.
-import { columns, defineModule } from '@crove/kernel-contract';
+import { MODULE_SCREENS, columns, defineModule } from '@crove/kernel-contract';
 
 export const crmManifest = defineModule({
   id: 'crm',
@@ -14,4 +14,6 @@ export const crmManifest = defineModule({
   },
   // It owns no permission: no command of the module declares one and no role grants one.
   permissions: [],
+  // Its screens in the app and its menu items (#1652), kept with the other modules' in @crove/kernel-contract.
+  ...MODULE_SCREENS.crm,
 });
