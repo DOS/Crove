@@ -38,8 +38,29 @@ export interface TargetUse {
   by: string;
 }
 
+// A function body with its SQL comments (`--` to the end of the line, `/* */`) removed and string literals kept, so a
+// quote, comma or parenthesis in a comment, or a commented-out call, is not read as code. Block comments are not
+// nested in Crove's functions.
+function stripSqlComments(body: string): string {
+  let out = '';
+  let quoted = false;
+  for (let i = 0; i < body.length; i += 1) {
+    const ch = body[i] as string;
+    if (ch === "'") quoted = !quoted;
+    if (!quoted && body.startsWith('--', i)) {
+      const end = body.indexOf('\n', i);
+      i = (end === -1 ? body.length : end) - 1;
+    } else if (!quoted && body.startsWith('/*', i)) {
+      const end = body.indexOf('*/', i + 2);
+      i = (end === -1 ? body.length : end + 2) - 1;
+    } else out += ch;
+  }
+  return out;
+}
+
 // The arguments of every call of crove_kernel.number_allocate in a function body, split at top-level commas.
-function allocateCalls(body: string): string[][] {
+function allocateCalls(source: string): string[][] {
+  const body = stripSqlComments(source);
   const calls: string[][] = [];
   const marker = 'crove_kernel.number_allocate(';
   for (let at = body.indexOf(marker); at !== -1; at = body.indexOf(marker, at + 1)) {

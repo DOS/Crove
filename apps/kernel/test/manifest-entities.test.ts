@@ -38,6 +38,18 @@ describe('numberingCalls()', () => {
     expect(problems).toHaveLength(1);
     expect(problems[0]).toMatch(/^trigger t on crove_finance\.v: cannot read its call/);
   });
+
+  it('ignores comments: a quote, comma or parenthesis in one, and a commented-out call', () => {
+    const body = `-- the voucher's number (PT, PC): crove_kernel.number_allocate(old, call)
+      /* was crove_kernel.number_allocate(NEW.org_id, 'x') */
+      PERFORM crove_kernel.number_allocate(NEW.org_id, NEW.legal_entity_id, -- it's the series
+        'finance.journal_voucher', NEW.d, /* target (the record) */ 'finance.journal_voucher', NEW.id);
+      v := 'a -- b';`;
+    expect(numberingCalls('crove_finance.v', 'trigger t', body)).toEqual({
+      calls: [{ table: 'crove_finance.v', by: 'trigger t', docType: 'finance.journal_voucher', targetType: 'finance.journal_voucher' }],
+      problems: [],
+    });
+  });
 });
 
 describe('entityProblems() on planted mismatches', () => {
