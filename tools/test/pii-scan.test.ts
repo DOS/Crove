@@ -13,6 +13,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import {
   ALLOWLIST_FILE,
   allowlistErrors,
+  commandData,
   commandProperty,
   decodeText,
   companyTaxCode,
@@ -220,6 +221,11 @@ describe('G5 PII scan (#1628)', () => {
       expect(scanFiles([file], readText, []).findings.map((f: { kind: string; line: number }) => [f.kind, f.line]), name).toEqual([['cccd', 2]]);
     }
     expect(decodeText(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01]))).toBeNull();
+    // An odd trailing byte of UTF-16BE is dropped; a UTF-8 byte order mark stays UTF-8; UTF-32 is skipped, not misread.
+    expect(decodeText(Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from('ab', 'utf16le').swap16(), Buffer.from([0x41])]))).toBe('ab');
+    expect(scanText(decodeText(Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(`CCCD ${cccd}`)]))).map((f) => f.kind)).toEqual(['cccd']);
+    expect(decodeText(Buffer.from([0xff, 0xfe, 0x00, 0x00, 0x41, 0x00, 0x00, 0x00]))).toBeNull();
+    expect(decodeText(Buffer.from([0x00, 0x00, 0xfe, 0xff, 0x00, 0x00, 0x00, 0x41]))).toBeNull();
   });
 
   it('lists each skipped file by path in the log, so a skipped sample is visible', () => {
@@ -233,8 +239,10 @@ describe('G5 PII scan (#1628)', () => {
     expect(run.stdout).toContain('2 path(s), 1 skipped, no personal data found');
   });
 
-  it('escapes the file name in the workflow command', () => {
+  it('escapes the file name and logged text in workflow commands', () => {
     expect(commandProperty('a,b:c%d\ne')).toBe('a%2Cb%3Ac%25d%0Ae');
+    // A skipped file named with a newline stays on one log line, so it cannot start a workflow command.
+    expect(commandData('x\n::stop-commands::t\r%')).toBe('x%0A::stop-commands::t%0D%25');
   });
 
   it('reads a malformed allowlist as errors, without quoting the file', () => {
@@ -252,8 +260,10 @@ describe('G5 PII scan (#1628)', () => {
       { kind: 'mobile', domains: ['x.vn'], reason: 'a reason that is long enough' },
       { kind: 'email', paths: [], reason: 'a reason that is long enough' },
       { kind: 'email', path: 'a', reason: 'a reason that is long enough' },
-      { kind: 'email', domains: ['vn', '.vn', 'example.'], reason: 'a reason that is long enough' },
+      { kind: 'email', domains: ['vn', '.vn', 'example.', 'a..b', '*.vn'], reason: 'a reason that is long enough' },
       { kind: 'email', paths: ['apps/', 'apps/kernel/test/', 'pnpm-lock.yaml'], reason: 'a reason that is long enough' },
+      { kind: 'email', domains: ['com.vn', 'co.uk', 'gmail.com', '-b.vn', 'congty.vn'], reason: 'a reason that is long enough' },
+      { kind: 'email', domains: ['gmail.com'], paths: ['apps/kernel/test/a.test.ts'], reason: 'a reason that is long enough' },
     ])).toEqual([
       'entry 0: names no paths, domains or values',
       'entry 1: needs a reason',
@@ -262,10 +272,11 @@ describe('G5 PII scan (#1628)', () => {
       'entry 4: paths must be a non-empty list of strings',
       'entry 5: unknown field path',
       'entry 5: names no paths, domains or values',
-      'entry 6: domain vn must have a dot (no bare TLD)',
-      'entry 6: domain .vn must have a dot (no bare TLD)',
-      'entry 6: domain example. must have a dot (no bare TLD)',
+      ...['vn', '.vn', 'example.', 'a..b', '*.vn'].map((d) => `entry 6: domain ${d} must be a domain name such as x.vn (no bare TLD)`),
       'entry 7: path prefix apps/ must name at least two directories',
+      'entry 8: domain com.vn is a public suffix',
+      'entry 8: domain co.uk is a public suffix',
+      'entry 8: webmail domain gmail.com needs paths, or pin the addresses as values',
     ]);
   });
 

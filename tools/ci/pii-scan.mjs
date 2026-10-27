@@ -161,6 +161,11 @@ export function entryAllows(entry, finding, path) {
 }
 
 const KINDS = new Set(['cccd', 'mobile', 'tax-code', 'email']);
+const DOMAIN_NAME = /^[a-z0-9-]+(\.[a-z0-9-]+)+$/;
+// Second-level public suffixes such as com.vn, edu.vn, gov.vn or co.uk: as broad as a bare TLD.
+const PUBLIC_SUFFIX = /^(com|net|org|edu|gov|ac|co|int|info|biz|name|health|pro)\.[a-z]{2}$/;
+// Where most personal addresses live.
+const WEBMAIL = new Set(['gmail.com', 'googlemail.com', 'yahoo.com', 'yahoo.com.vn', 'outlook.com', 'hotmail.com', 'live.com', 'icloud.com', 'me.com', 'proton.me', 'protonmail.com', 'zoho.com', 'aol.com', 'gmx.com', 'mail.com']);
 const FIELDS = new Set(['kind', 'paths', 'domains', 'values', 'reason']);
 
 // The allowlist's shape: a known kind, at least one non-empty list of paths, domains or values, and a reason someone
@@ -178,9 +183,14 @@ export function allowlistErrors(allowlist) {
       if (!Array.isArray(entry[k]) || entry[k].length === 0 || !entry[k].every((v) => typeof v === 'string' && v.length > 0)) errors.push(`entry ${i}: ${k} must be a non-empty list of strings`);
     }
     if (entry.domains !== undefined && entry.kind !== 'email') errors.push(`entry ${i}: domains apply to email only`);
-    // A bare TLD ("vn") or a top-level directory ("apps/") would exempt far more than one reason can cover.
+    // A bare TLD ("vn"), a public suffix ("com.vn"), a webmail domain without paths ("gmail.com") or a top-level
+    // directory ("apps/") would exempt far more than one reason can cover.
     for (const d of Array.isArray(entry.domains) ? entry.domains : []) {
-      if (typeof d === 'string' && !/^[^.]+\.[^.]/.test(d.replace(/^\./, ''))) errors.push(`entry ${i}: domain ${d} must have a dot (no bare TLD)`);
+      if (typeof d !== 'string') continue;
+      const domain = d.toLowerCase();
+      if (!DOMAIN_NAME.test(domain)) errors.push(`entry ${i}: domain ${d} must be a domain name such as x.vn (no bare TLD)`);
+      else if (PUBLIC_SUFFIX.test(domain)) errors.push(`entry ${i}: domain ${d} is a public suffix`);
+      else if (WEBMAIL.has(domain) && entry.paths === undefined) errors.push(`entry ${i}: webmail domain ${d} needs paths, or pin the addresses as values`);
     }
     for (const path of Array.isArray(entry.paths) ? entry.paths : []) {
       if (typeof path === 'string' && path.endsWith('/') && path.split('/').filter(Boolean).length < 2) errors.push(`entry ${i}: path prefix ${path} must name at least two directories`);
@@ -229,6 +239,8 @@ export function readText(path) {
 // The text of a file's bytes, or null when it is binary. UTF-16 with a byte order mark is decoded (big-endian by
 // swapping each pair); UTF-8 is the default.
 export function decodeText(buf) {
+  // UTF-32 (FF FE 00 00 or 00 00 FE FF) is not decoded: it stays in the skipped list rather than pass as UTF-16.
+  if (buf.length >= 4 && ((buf[0] === 0xff && buf[1] === 0xfe && buf[2] === 0 && buf[3] === 0) || (buf[0] === 0 && buf[1] === 0 && buf[2] === 0xfe && buf[3] === 0xff))) return null;
   if (buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe) return buf.subarray(2).toString('utf16le');
   if (buf.length >= 2 && buf[0] === 0xfe && buf[1] === 0xff) {
     const body = Buffer.from(buf.subarray(2, 2 + ((buf.length - 2) & ~1)));
@@ -243,6 +255,11 @@ const ALLOWLIST_PATH = 'tools/ci/pii-scan-allowlist.json';
 
 // A workflow command property (the file name) with its special characters escaped, so a crafted path cannot end the
 // command early.
+// Text printed to the log on one line: a file name with a newline cannot start a workflow command of its own.
+export function commandData(value) {
+  return value.replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
+}
+
 export function commandProperty(value) {
   return value.replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A').replace(/:/g, '%3A').replace(/,/g, '%2C');
 }
@@ -262,13 +279,13 @@ export function loadAllowlist(text) {
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const { allowlist, errors } = loadAllowlist(readFileSync(ALLOWLIST_FILE, 'utf8'));
   // A malformed allowlist stops the step before any scan: its entries cannot be trusted to exempt anything.
-  for (const e of errors) console.error(`::error file=${ALLOWLIST_PATH}::${e}`);
+  for (const e of errors) console.error(`::error file=${ALLOWLIST_PATH}::${commandData(e)}`);
   if (errors.length > 0) process.exit(1);
   const args = process.argv.slice(2);
   const paths = args.length > 0 ? args : execFileSync('git', ['ls-files', '-z'], { encoding: 'utf8' }).split('\0').filter(Boolean);
   const { findings, skipped } = scanFiles(paths, readText, allowlist);
   // Paths only, so a skipped file that should have been scanned is visible in the log.
-  for (const path of skipped) console.log(`pii-scan: skipped ${path} (binary, symlink or missing)`);
+  for (const path of skipped) console.log(`pii-scan: skipped ${commandData(path)} (binary, symlink or missing)`);
   for (const f of findings) {
     console.error(`::error file=${commandProperty(f.path)},line=${f.line}::line ${f.line} holds what looks like personal data (${f.kind} ${mask(f.kind, f.value)}); use a synthetic value (an address at example.com, a number that fails the check), or add a reasoned entry to tools/ci/pii-scan-allowlist.json`);
   }
