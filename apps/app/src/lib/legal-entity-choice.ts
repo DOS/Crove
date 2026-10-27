@@ -44,11 +44,12 @@ export function proposalEntity(
 
 // The entity the Inbox list shows beside a proposal (#1543), only to a caller who sees several: the one its revision
 // names, else, for a proposal approval records in the approver's default entity (an invoice or a voucher that names
-// none), the default one, as the proposal's own screen shows it. Nothing for an entity the caller does not see.
+// none), the default one. Nothing for an entity the caller does not see: with the default out of sight, approval
+// refuses to guess (LEGAL_ENTITY_REQUIRED), so neither does the list.
 export function listedEntity(entities: readonly VisibleEntity[], legalEntityId: string | null, postsToDefault: boolean): VisibleEntity | null {
   if (entities.length < 2) return null;
-  const id = legalEntityId ?? (postsToDefault ? chooseEntity(entities, null) : null);
-  return entities.find((e) => e.id === id) ?? null;
+  if (legalEntityId === null) return postsToDefault ? (entities.find((e) => e.isDefault) ?? null) : null;
+  return entities.find((e) => e.id === legalEntityId) ?? null;
 }
 
 // The query string of an /api/export download: its own parameters, and the chosen entity's legalEntityId when there

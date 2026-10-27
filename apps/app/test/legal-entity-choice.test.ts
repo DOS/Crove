@@ -61,6 +61,8 @@ describe('legal entity choice', () => {
     // Named none: an invoice or a voucher goes to the default entity; another kind has none.
     expect(listedEntity(all, null, true)?.id).toBe('b');
     expect(listedEntity(all, null, false)).toBeNull();
+    // The default entity out of the caller's sight: approval would not pick one of theirs, so the list names none.
+    expect(listedEntity([e('a'), e('c')], null, true)).toBeNull();
     // An entity out of the caller's sight is not named.
     expect(listedEntity(all, 'gone', true)).toBeNull();
     // One entity: nothing to tell apart.
