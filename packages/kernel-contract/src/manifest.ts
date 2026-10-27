@@ -22,15 +22,38 @@ export type DataClass = (typeof DATA_CLASSES)[number];
 export type TableColumns = Readonly<Record<string, DataClass>>;
 
 // A table's columns: the listed ones are `internal`, and `classified` gives every other column its class. A column in
-// both is a mistake in the manifest, refused when the module loads.
-export function columns(internal: readonly string[], classified: Readonly<Record<string, Exclude<DataClass, 'internal'>>> = {}): TableColumns {
+// both is a mistake in the manifest, refused when the module loads. The result keeps the column names in its type, so
+// auditValue() refuses a column the table does not have at typecheck.
+export function columns<const I extends string, const C extends string = never>(
+  internal: readonly I[],
+  classified: Readonly<Record<C, Exclude<DataClass, 'internal'>>> = {} as Record<C, Exclude<DataClass, 'internal'>>,
+): Readonly<Record<I | C, DataClass>> {
   const out: Record<string, DataClass> = {};
   for (const c of internal) out[c] = 'internal';
-  for (const [c, cls] of Object.entries(classified)) {
+  for (const [c, cls] of Object.entries(classified) as Array<[string, DataClass]>) {
     if (Object.hasOwn(out, c)) throw new Error(`manifest: column ${c} is listed as internal and as ${cls}`);
     out[c] = cls;
   }
-  return Object.freeze(out);
+  return Object.freeze(out) as Readonly<Record<I | C, DataClass>>;
+}
+
+// What an audit fact keeps of a classified column's value (plan §4.10, #1626): the class, never the value. Audit rows
+// are append-only and anchored in the WORM stream, so personal data the PDPL erasure (#923) must reach can never be
+// written there; the row's input_sha256 still ties it to the command's input.
+export interface RedactedValue {
+  readonly redacted: Exclude<DataClass, 'internal'>;
+}
+
+// A column's value as an audit fact (ctx.audit, or the audit facts of a DomainError): an internal value as it is, a
+// value of any other class replaced by a marker naming the class, and an absent value (null or undefined) kept, since
+// "there was none" or "it was cleared" says nothing about a person. Every fact whose key names a classified column, or
+// that holds a classified column's value, goes through this; apps/kernel/test/audit-facts.test.ts fails on one that
+// does not. A column the table does not have throws, so a misspelt column never passes a value through.
+export function auditValue<T extends TableColumns, V>(table: T, column: keyof T & string, value: V): V | RedactedValue {
+  if (!Object.hasOwn(table, column)) throw new Error(`auditValue: the table has no column ${column}`);
+  const cls = table[column] as DataClass;
+  if (cls === 'internal' || value === null || value === undefined) return value;
+  return Object.freeze({ redacted: cls });
 }
 
 export interface ModuleManifest {

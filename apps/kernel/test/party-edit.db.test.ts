@@ -102,7 +102,7 @@ suite('editing a party (#887)', () => {
     await root.end();
   });
 
-  it('lets a member correct the name and contact details, audited without the email or phone values', async () => {
+  it('lets a member correct the name and contact details, audited without the values', async () => {
     const o = await org();
     const id = await party(o.orgId, { name: 'CONG TY MAU', address: 'Hà Nội' });
     const result = await edit(o, o.member, {
@@ -131,9 +131,11 @@ suite('editing a party (#887)', () => {
     expect(audit?.detail).toMatchObject({
       partyId: id,
       changed: ['name', 'address', 'email', 'phone'],
-      previous: { name: 'CONG TY MAU', address: 'Hà Nội' },
-      next: { name: 'Công ty TNHH Mẫu', address: '1 Tràng Tiền, Hoàn Kiếm, Hà Nội' },
+      previous: { name: { redacted: 'pii' }, address: { redacted: 'contact' } },
+      next: { name: { redacted: 'pii' }, address: { redacted: 'contact' } },
     });
+    // Classified values never reach the row (#1626): a party may be a person.
+    for (const value of ['CONG TY MAU', 'Công ty TNHH Mẫu', 'Tràng Tiền']) expect(JSON.stringify(audit?.detail)).not.toContain(value);
     expect(JSON.stringify(audit?.detail)).not.toContain('ketoan@mau.example');
     expect(JSON.stringify(audit?.detail)).not.toContain('1234 5678');
     const activity = await admin(
