@@ -2,7 +2,8 @@
 // app has its own short menu, in groups; the switcher lists the apps whose module this deployment runs (CROVE_MODULES,
 // ADR-0031), and an item of a module that is not installed is left out of its app. The org's own screens (the chart
 // and AI, Settings) belong to no app: they sit at the foot of the switcher. Modules contribute the apps, groups and
-// items through their manifests (MODULE_SCREENS, #1652): the shell names none of them itself.
+// items through their manifests (MODULE_SCREENS, #1652); the shell keeps only how they look (the app icons, shorter
+// names inside the menu, which groups carry a heading), which typecheck and module-screens.test.ts hold to the list.
 import { MODULE_SCREENS, type ModuleScreens } from '@crove/kernel-contract';
 import { installedItems } from './modules.ts';
 

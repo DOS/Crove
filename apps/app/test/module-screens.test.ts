@@ -3,6 +3,7 @@
 // of its own module with its label in Vietnamese and English, and a screen of a module the deployment leaves out
 // redirects to the inbox, whichever module it is.
 import { MODULE_SCREENS, type ModuleScreens } from '@crove/kernel-contract';
+import { createMemoryHistory, createRouter } from '@tanstack/react-router';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { en } from '../src/i18n/messages/en.ts';
 import { vi as viMessages } from '../src/i18n/messages/vi.ts';
@@ -19,9 +20,7 @@ vi.mock('../src/lib/auth.ts', async (original) => ({
 }));
 
 type Router = (typeof import('../src/router.tsx'))['router'];
-type OrgRoute = (typeof import('../src/router.tsx'))['orgRoute'];
 let router: Router;
-let orgRoute: OrgRoute;
 
 // The router's modules read window and storage when they load; the unit tests run in Node.
 beforeAll(async () => {
@@ -30,7 +29,7 @@ beforeAll(async () => {
   vi.stubGlobal('window', { location: { origin: 'http://localhost', hash: '', pathname: '/', search: '' }, addEventListener() {}, removeEventListener() {}, localStorage: storage, sessionStorage: storage });
   vi.stubGlobal('localStorage', storage);
   vi.stubGlobal('sessionStorage', storage);
-  ({ router, orgRoute } = await import('../src/router.tsx'));
+  ({ router } = await import('../src/router.tsx'));
 });
 
 const MODULES = Object.entries(MODULE_SCREENS) as Array<[string, ModuleScreens]>;
@@ -137,6 +136,11 @@ describe('a module turned off (ADR-0031 §3, #1652)', () => {
     for (const [module] of MODULES) for (const path of addresses(module as keyof typeof MODULE_SCREENS)) expect(moduleOfPath(path), path).toBe(module);
     expect(moduleOfPath('/o/acme/social/new')).toBe('social');
     expect(moduleOfPath('/o/acme/journal/')).toBe('finance');
+    // The router matches without regard to case or percent-encoding, so the guard does too.
+    expect(moduleOfPath('/o/acme/JOURNAL')).toBe('finance');
+    expect(moduleOfPath('/O/acme/Social/New')).toBe('social');
+    expect(moduleOfPath('/o/acme/%62ookings')).toBe('crm');
+    expect(screenInstalled(['kernel'], '/o/acme/Bookings')).toBe(false);
     for (const path of ['/o/acme', '/o/acme/', '/clients', '/o/acme/nowhere', '/o/acme/inbox/1/2']) expect(moduleOfPath(path), path).toBeNull();
   });
 
@@ -148,37 +152,32 @@ describe('a module turned off (ADR-0031 §3, #1652)', () => {
     expect(appOfPath('/o/acme/guide')).toBe('accounting');
   });
 
-  it('sends every screen of crm and social to the inbox, through the org route, and opens the others', async () => {
+  // Where the router lands after loading an address: a router of the app's own route tree on a memory history, so the
+  // address goes through the router's matching (case, parameters) before the org route's guard sees it. isServer: the
+  // tests run in Node, where the router would otherwise skip loading.
+  const landing = async (address: string) => {
+    const r = createRouter({ routeTree: router.routeTree, history: createMemoryHistory({ initialEntries: [address] }), isServer: false });
+    await r.load();
+    return r.state.location.pathname;
+  };
+
+  it('sends every screen of crm and social to the inbox through the router, and opens the others', async () => {
     session.modules = ['kernel', 'finance'];
-    const beforeLoad = orgRoute.options.beforeLoad as unknown as (ctx: { params: { slug: string }; location: { pathname: string } }) => Promise<void>;
-    const outcome = async (pathname: string) => {
-      try {
-        await beforeLoad({ params: { slug: 'acme' }, location: { pathname } });
-        return 'open';
-      } catch (thrown) {
-        const r = thrown as { options?: { to?: string; params?: { slug?: string } } };
-        return `${r.options?.to} ${r.options?.params?.slug}`;
-      }
-    };
     for (const path of [...addresses('crm'), ...addresses('social')]) {
       expect(screenInstalled(session.modules, path), path).toBe(false);
-      // The print route of social sits outside the org's frame, with the same guard.
-      if (path.startsWith('/o/acme/print/')) continue;
-      expect(await outcome(path), path).toBe('/o/$slug/inbox acme');
+      expect(await landing(path), path).toBe('/o/acme/inbox');
     }
-    for (const path of [...addresses('kernel'), ...addresses('finance')]) expect(await outcome(path), path).toBe('open');
+    for (const path of [...addresses('kernel'), ...addresses('finance')]) expect(await landing(path), path).toBe(path);
+    // The router matches without regard to case, and so does the guard.
+    for (const path of ['/o/acme/Bookings', '/o/acme/SOCIAL/new', '/o/acme/Print/Social-Plan']) expect(await landing(path), path).toBe('/o/acme/inbox');
     session.modules = ['kernel'];
-    for (const path of addresses('finance')) expect(await outcome(path), path).toBe('/o/$slug/inbox acme');
+    for (const path of [...addresses('finance'), '/o/acme/JOURNAL']) expect(await landing(path), path).toBe('/o/acme/inbox');
     session.modules = ['kernel', 'finance', 'social', 'crm'];
-    for (const [module] of MODULES) for (const path of addresses(module as keyof typeof MODULE_SCREENS)) expect(screenInstalled(session.modules, path), path).toBe(true);
-  });
-
-  it('guards the printed social plan the same way', async () => {
-    session.modules = ['kernel'];
-    const print = router.routesById['/o/$slug/print/social-plan'];
-    const beforeLoad = print.options.beforeLoad as unknown as (ctx: { params: { slug: string }; location: { pathname: string } }) => Promise<void>;
-    await expect(beforeLoad({ params: { slug: 'acme' }, location: { pathname: '/o/acme/print/social-plan' } })).rejects.toMatchObject({ options: { to: '/o/$slug/inbox' } });
-    session.modules = ['kernel', 'social'];
-    await expect(beforeLoad({ params: { slug: 'acme' }, location: { pathname: '/o/acme/print/social-plan' } })).resolves.toBeUndefined();
+    for (const [module] of MODULES) {
+      for (const path of addresses(module as keyof typeof MODULE_SCREENS)) {
+        expect(screenInstalled(session.modules, path), path).toBe(true);
+        expect(await landing(path), path).toBe(path);
+      }
+    }
   });
 });

@@ -209,17 +209,19 @@ async function enterOrg(slug: string) {
 }
 
 // A screen of a module this deployment leaves out (CROVE_MODULES) sends you to the inbox (ADR-0031 §3). The module of
-// every screen comes from the manifests (#1652), so a new module's screens are guarded without a line here.
-function requireInstalledScreen(slug: string, pathname: string) {
-  if (!screenInstalled(getConfig().modules, pathname)) throw redirect({ to: '/o/$slug/inbox', params: { slug } });
+// every screen comes from the manifests (#1652), so a new module's screens are guarded without a line here. The screen
+// is the matched route's own path ('/o/$slug/journal' for /o/acme/JOURNAL), not the address as typed.
+function requireInstalledScreen(slug: string, matches: readonly { fullPath: unknown }[]) {
+  const screen = matches.at(-1)?.fullPath;
+  if (typeof screen === 'string' && !screenInstalled(getConfig().modules, screen)) throw redirect({ to: '/o/$slug/inbox', params: { slug } });
 }
 
 export const orgRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/o/$slug',
-  beforeLoad: async ({ params, location }) => {
+  beforeLoad: async ({ params, matches }) => {
     await enterOrg(params.slug);
-    requireInstalledScreen(params.slug, location.pathname);
+    requireInstalledScreen(params.slug, matches);
   },
   component: OrgLayout,
 });
@@ -322,9 +324,9 @@ const socialPostRoute = createRoute({ getParentRoute: () => socialRoute, path: '
 const socialPlanPrintRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/o/$slug/print/social-plan',
-  beforeLoad: async ({ params, location }) => {
+  beforeLoad: async ({ params, matches }) => {
     await enterOrg(params.slug);
-    requireInstalledScreen(params.slug, location.pathname);
+    requireInstalledScreen(params.slug, matches);
   },
   validateSearch: parsePlanSearch,
   component: SocialPlanPrintPage,

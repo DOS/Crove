@@ -22,12 +22,23 @@ const SCREENS = (Object.entries(MODULE_SCREENS) as Array<[string, ModuleScreens]
   .flatMap(([module, screens]) => screens.routes.map((route) => ({ module, segments: route.path.split('/') })))
   .sort((a, b) => a.segments.filter((s) => s.startsWith('$')).length - b.segments.filter((s) => s.startsWith('$')).length);
 
+// A path segment as the router compares it: decoded, and in lower case, since its routes match without regard to
+// case (/o/acme/JOURNAL opens the journal). Declared paths are lower case (manifest-screens.test.ts).
+function segmentOf(raw: string): string {
+  try {
+    return decodeURIComponent(raw).toLowerCase();
+  } catch {
+    return raw.toLowerCase();
+  }
+}
+
 // The module of the screen at a path (/o/<slug>/<screen>...), or null for a path no manifest declares (the org's
 // index, a path outside an org).
 export function moduleOfPath(pathname: string): string | null {
   const [, o, slug, ...rest] = pathname.replace(/\/+$/, '').split('/');
-  if (o !== 'o' || !slug || rest.length === 0) return null;
-  const found = SCREENS.find((s) => s.segments.length === rest.length && s.segments.every((seg, i) => seg.startsWith('$') || seg === rest[i]));
+  if (segmentOf(o ?? '') !== 'o' || !slug || rest.length === 0) return null;
+  const segments = rest.map(segmentOf);
+  const found = SCREENS.find((s) => s.segments.length === segments.length && s.segments.every((seg, i) => seg.startsWith('$') || seg === segments[i]));
   return found?.module ?? null;
 }
 
