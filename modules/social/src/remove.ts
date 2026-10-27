@@ -85,8 +85,9 @@ const requireSystem = (ctx: CommandContext) => {
 export const variantRemove = defineCommand({
   name: 'social.variant.remove',
   input: z.strictObject({ variantId: zId, reason: z.string().trim().max(REMOVE_REASON_MAX).optional() }),
+  // The worker takes the post down from its event: an effect outside Crove (#1653).
   risk: 'R2',
-  sideEffect: 'internal',
+  sideEffect: 'external',
   access: ADMINS,
   target: (input) => ({ type: 'social.post_variant', id: input.variantId }),
   handler: async (ctx, input) => {
@@ -206,8 +207,10 @@ export function removeDue(provider: string, settings: Readonly<Record<string, un
 export const removeSchedule = defineCommand({
   name: 'social.remove.schedule',
   input: z.strictObject({ variantId: zId }),
-  risk: 'R1',
-  sideEffect: 'internal',
+  // The worker takes the post down from its event: an effect outside Crove (#1653). A system command, gated by
+  // access, so R2 changes no caller.
+  risk: 'R2',
+  sideEffect: 'external',
   access: 'system',
   target: (input) => ({ type: 'social.post_variant', id: input.variantId }),
   handler: async (ctx, input): Promise<{ queued: boolean; reason?: string }> => {

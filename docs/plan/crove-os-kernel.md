@@ -748,7 +748,7 @@ COMMIT;
 
 **Derived risk:**
 - `sideEffect: financial|legal|irreversible` -> R3.
-- Enqueuing a job with `egress ≠ none` -> at least R2.
+- Enqueuing a job with `egress ≠ none` -> at least R2. A command whose outbox events the worker relays to such a queue declares `sideEffect: 'external'` (#1653, checked by `apps/kernel/test/job-egress.test.ts` from the relay's routing and the commands that emit each event). Six member-run R1 commands still feed one (a link preview, a composer list, and a post sent to review, which alerts the team chat); they stay on a shrink-only list until #1662 decides each.
 - Writing a field classified `contact` or `payment` -> P04 applies.
 - CI generates `docs/generated/agent-autonomy.md` in plain language: the list of commands the agent may run without approval. A PR that changes this table becomes a protected PR.
 
@@ -1326,7 +1326,8 @@ Superseded design (kept only so older references resolve): Crove-issued session 
 ### 7.7 Egress and SSRF
 
 - One egress policy lives in `@crove/kernel-runtime/egress`; jobs must declare `egress`.
-  - The guard for tenant-supplied URLs is `guardedFetch` in `packages/kernel-runtime/src/egress.ts` (#641; first used by Social link previews). It allows HTTP(S) on default ports only. Every resolved address must be public, and the connection is pinned to the checked one. Redirects are followed by hand and checked again. One deadline covers the whole fetch, and there is a byte limit. It sends no credentials and asks for no compression. Declaring `egress` per job is not built yet.
+  - The guard for tenant-supplied URLs is `guardedFetch` in `packages/kernel-runtime/src/egress.ts` (#641; first used by Social link previews). It allows HTTP(S) on default ports only. Every resolved address must be public, and the connection is pinned to the checked one. Redirects are followed by hand and checked again. One deadline covers the whole fetch, and there is a byte limit. It sends no credentials and asks for no compression.
+  - Every pg-boss queue declares its egress in `QUEUE_EGRESS` (`apps/kernel/src/jobs-schema.ts`, #1653): `none` (only the deployment's own services: the database, the blob store, crove-extract, Supabase Auth and the AI endpoint), `provider:<x>` (a platform through its adapter: the channel adapters, the mail provider, the chat platforms of team alerts), `tenant_url` (a URL a tenant or a browser supplied, through the guard), or both. A queue without one fails typecheck. `apps/kernel/test/job-egress.test.ts` parses the worker and follows each handler through the kernel's files and the `WorkerDeps` fields it uses. It fails on a queue the worker works, sends or schedules without a declaration, on a handler that reaches the guard, a provider adapter or a bare `fetch()` beyond what its queue declares, and on a declaration its handler no longer needs. Planted sources show each failure.
 - Tenant-supplied URLs must pass the guard:
   - block private, link-local and metadata ranges;
   - pin the resolved IP before connecting;

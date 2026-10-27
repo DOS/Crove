@@ -479,8 +479,10 @@ export const publishRecord = defineCommand({
     result: zResult,
     connectionVersion: z.iso.datetime({ offset: true }).nullable().optional(),
   }),
-  risk: 'R1',
-  sideEffect: 'internal',
+  // A published, failed or unclear post alerts the org's team chat, outside Crove (#1653). A system command, gated
+  // by access, so R2 changes no caller.
+  risk: 'R2',
+  sideEffect: 'external',
   access: 'system',
   handler: async (ctx, input) => {
     requireSystem(ctx);

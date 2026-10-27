@@ -168,8 +168,9 @@ export const commentRecord = defineCommand({
 export const commentRetry = defineCommand({
   name: 'social.comment.retry',
   input: z.strictObject({ variantId: zId }),
+  // The worker posts the comment from its event: an effect outside Crove (#1653).
   risk: 'R2',
-  sideEffect: 'internal',
+  sideEffect: 'external',
   access: ADMINS,
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');

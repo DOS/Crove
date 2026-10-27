@@ -69,6 +69,65 @@ export const SOCIAL_PUBLISH_QUEUES: readonly string[] = CHANNEL_PROVIDERS.map(so
 // (20261022050000).
 export const MAIL_QUEUES: readonly string[] = ['kernel-mail-send', 'kernel-mail-bulk'];
 
+// What a queue's jobs reach over the network (plan §4.6 `defineJob`, §7.7, #1653):
+// - 'none': only the deployment's own services, at hosts its operator configures and no tenant can name: the
+//   database, the blob store, crove-extract, Supabase Auth and the AI endpoint of packages/agent.
+// - 'provider:<x>': a platform through its provider adapter, which keeps to the platform's own hosts (the channel
+//   adapters of @crove/channel, the mail provider, the chat platforms of team alerts).
+// - 'tenant_url': a URL a tenant or a browser supplied, only through the egress guard of @crove/kernel-runtime
+//   (guardedFetch, guardedRequest, egressFetch).
+// A queue that reaches both lists both. apps/kernel/test/job-egress.test.ts checks each declaration against what the
+// queue's worker handler reaches, and that a command whose events feed a queue with egress declares an external
+// effect (R2, plan §4.7 "Derived risk").
+export type EgressTarget = 'tenant_url' | `provider:${string}`;
+export type JobEgress = 'none' | readonly [EgressTarget, ...EgressTarget[]];
+
+// The channel adapters reach the platforms; the tenant names the host of a Bluesky PDS, a Mastodon instance or a
+// WordPress site, which they reach through the egress guard the kernel hands them (channelPublishers in kernel.ts).
+const CHANNELS: JobEgress = ['provider:channel', 'tenant_url'];
+
+// Every queue in QUEUES; a queue without a declaration fails typecheck.
+const QUEUE_EGRESS: { readonly [Q in QueueName]: JobEgress } = {
+  [QUEUES.extract]: 'none',
+  [QUEUES.inbound]: 'none',
+  [QUEUES.signOut]: 'none',
+  [QUEUES.orgExport]: 'none',
+  [QUEUES.retention]: 'none',
+  [QUEUES.agentDispatch]: 'none',
+  [QUEUES.agentWake]: 'none',
+  [QUEUES.agentSweep]: 'none',
+  [QUEUES.agentProposal]: 'none',
+  [QUEUES.portalList]: 'none',
+  [QUEUES.mailEvent]: 'none',
+  [QUEUES.socialLinkPreview]: ['tenant_url'],
+  [QUEUES.socialChannelOption]: CHANNELS,
+  [QUEUES.socialNotify]: 'none',
+  [QUEUES.socialRemove]: CHANNELS,
+  [QUEUES.socialEdit]: CHANNELS,
+  // A browser's push service endpoint, through guardedRequest (web-push.ts).
+  [QUEUES.socialPush]: ['tenant_url'],
+  [QUEUES.socialChatAlert]: ['provider:telegram', 'provider:discord'],
+  [QUEUES.archiveWrite]: 'none',
+  [QUEUES.archiveVerify]: 'none',
+  [QUEUES.notify]: 'none',
+  [QUEUES.yearArchive]: 'none',
+  [QUEUES.crmBooking]: 'none',
+  [QUEUES.crmBookingRemind]: 'none',
+  [QUEUES.periodBalanceVerify]: 'none',
+};
+
+// The channel providers whose host the tenant names: their adapters get the egress guard (channelPublishers).
+export const TENANT_HOSTED_PROVIDERS: readonly string[] = ['bluesky', 'mastodon', 'wordpress'];
+
+// The egress a queue declares; a queue nobody declared throws.
+export function queueEgress(queue: string): JobEgress {
+  if (Object.hasOwn(QUEUE_EGRESS, queue)) return QUEUE_EGRESS[queue as QueueName];
+  const provider = CHANNEL_PROVIDERS.find((p) => socialPublishQueue(p) === queue);
+  if (provider) return TENANT_HOSTED_PROVIDERS.includes(provider) ? [`provider:${provider}`, 'tenant_url'] : [`provider:${provider}`];
+  if (MAIL_QUEUES.includes(queue)) return ['provider:mail'];
+  throw new Error(`queue ${queue} declares no egress (QUEUE_EGRESS in apps/kernel/src/jobs-schema.ts)`);
+}
+
 // The pg-boss policy of each queue that is not 'standard'. kernel-agent-wake is 'stately' with the singleton key
 // <org>:<agent>: at most one queued and one active job per agent, so wake-ups coalesce and an agent runs once at a
 // time (ADR-0029 section 5; the database also allows one running ai_run per agent).
