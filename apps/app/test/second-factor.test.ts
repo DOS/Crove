@@ -2,7 +2,7 @@
 // is missing from the cached session until the token refreshes, and the cached answer alone loops between /mfa and the
 // app (the kernel refuses with MFA_REQUIRED, which opens /mfa again).
 import { describe, expect, it, vi } from 'vitest';
-import { needsSecondFactorNow, secondFactorStillOwed, MFA_WAIT_MS, verifySecondFactor } from '../src/lib/auth.ts';
+import { MFA_WAIT_MS, needsSecondFactorNow, secondFactorStillOwed, verifySecondFactor } from '../src/lib/auth.ts';
 
 type Level = { currentLevel: string | null; nextLevel: string | null } | null;
 type Factor = { id: string; status: 'verified' | 'unverified' };
@@ -96,11 +96,14 @@ describe('secondFactorStillOwed', () => {
   it('decides from the session as it is when the verification never answers', async () => {
     vi.useFakeTimers();
     try {
-      const { client } = verifyingClient();
-      void verifySecondFactor({ factorId: 'f1', code: '123456' }, client);
+      const { client, finish } = verifyingClient();
+      const verified = verifySecondFactor({ factorId: 'f1', code: '123456' }, client);
       const owed = secondFactorStillOwed(client);
       await vi.advanceTimersByTimeAsync(MFA_WAIT_MS);
       expect(await owed).toBe(true);
+      // Settled for the tests after this one, which share the module.
+      finish();
+      await verified;
     } finally {
       vi.useRealTimers();
     }
@@ -120,11 +123,15 @@ describe('secondFactorStillOwed when Supabase Auth hangs', () => {
         },
       } as unknown as Parameters<typeof secondFactorStillOwed>[0];
       const owed = secondFactorStillOwed(hanging);
-      // Past both steps: a verification an earlier test left unanswered is waited for first.
-      await vi.advanceTimersByTimeAsync(2 * MFA_WAIT_MS);
+      await vi.advanceTimersByTimeAsync(MFA_WAIT_MS);
       expect(await owed).toBe(true);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // openMfa counts a failed check as owed; the failure itself is not swallowed into an answer here.
+  it('passes on a check that fails', async () => {
+    await expect(secondFactorStillOwed(fakeClient(new Error('no session'), []).client)).rejects.toThrow('no session');
   });
 });
