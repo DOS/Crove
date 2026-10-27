@@ -1,7 +1,7 @@
-// The TAP check of the pgTAP runner (issue #1627): every way a pgTAP file can fail is refused. pgtap.db.test.ts runs
-// the same cases through real pgTAP on PostgreSQL.
+// The TAP check of the pgTAP runner (issues #1627 and #1643): every way a pgTAP file can fail is refused.
+// ../pgtap-gate.db.test.ts runs the same cases through real pgTAP on PostgreSQL. Part of the invariant suite.
 import { describe, expect, it } from 'vitest';
-import { tapLines, tapProblems } from './tap.ts';
+import { isTapLine, tapLines, tapProblems } from './tap.ts';
 
 describe('the TAP check of the pgTAP runner', () => {
   it('passes a planned file whose tests all pass, ignoring diagnostics and setup output', () => {
@@ -39,6 +39,11 @@ describe('the TAP check of the pgTAP runner', () => {
 
   it('splits multi-line values and drops values that are not text', () => {
     expect(tapLines(['1..1', 'not ok 1\n# Failed test 1', 2, null])).toEqual(['1..1', 'not ok 1', '# Failed test 1']);
+  });
+
+  it('tells a TAP line from setup output', () => {
+    expect(['1..3', 'ok 1', 'ok 2 - named', 'not ok 3', 'Bail out! broken'].every(isTapLine)).toBe(true);
+    expect(['setup', '# a note', 'okay', ' ok 1', ''].some(isTapLine)).toBe(false);
   });
 
   it('splits CRLF output too, leaving no trailing carriage return', () => {
