@@ -16,7 +16,7 @@ const ALLOWED: ReadonlyArray<readonly [phrase: string, reason: string]> = [
 ];
 
 // A letter with a Vietnamese mark: a base letter followed by a combining diacritic once decomposed, or đ.
-const VIETNAMESE_LETTER = /\p{L}[\u0300-\u036f]+|[đĐ]/u;
+const VIETNAMESE_LETTER = /\p{L}[\u0300-\u036f]+|[đĐ]/gu;
 
 // The Vietnamese letters left in `text` once the allowed phrases are taken out, each with a few characters around it.
 export function vietnameseLeft(text: string): string[] {
@@ -24,7 +24,7 @@ export function vietnameseLeft(text: string): string[] {
   for (const [phrase] of ALLOWED) rest = rest.replaceAll(phrase, ' ');
   const found: string[] = [];
   const decomposed = rest.normalize('NFD');
-  for (const match of decomposed.matchAll(new RegExp(VIETNAMESE_LETTER, 'gu'))) {
+  for (const match of decomposed.matchAll(VIETNAMESE_LETTER)) {
     found.push(decomposed.slice(Math.max(0, match.index - 15), match.index + 15).normalize('NFC').trim());
   }
   return found;

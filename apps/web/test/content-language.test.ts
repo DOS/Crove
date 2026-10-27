@@ -11,7 +11,7 @@ function strings(value: unknown, path: string): Array<[path: string, text: strin
   return [];
 }
 
-const copy = strings(en, 'en');
+const copy = strings(en, 'en').map(([path, text]) => [path, text.normalize('NFC')] as const);
 
 describe('the English copy (content/en.ts)', () => {
   it('has no Vietnamese but the allowed example names', () => {
@@ -20,7 +20,7 @@ describe('the English copy (content/en.ts)', () => {
   });
 
   it('uses every allowed example name, so the list does not outlive the copy', () => {
-    const unused = allowedPhrases.filter(([phrase]) => !copy.some(([, text]) => text.normalize('NFC').includes(phrase))).map(([phrase]) => phrase);
+    const unused = allowedPhrases.filter(([phrase]) => !copy.some(([, text]) => text.includes(phrase))).map(([phrase]) => phrase);
     expect(unused).toEqual([]);
   });
 

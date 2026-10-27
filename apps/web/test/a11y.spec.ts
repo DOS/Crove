@@ -79,7 +79,10 @@ test('/en shows no Vietnamese but the allowed example names', async ({ page }) =
       if (!node.parentElement?.closest('script, style, noscript, template')) found.push(node.textContent ?? '');
     }
     for (const el of document.querySelectorAll('[aria-label], [alt], [title], [placeholder]')) {
-      for (const name of ['aria-label', 'alt', 'title', 'placeholder']) found.push(el.getAttribute(name) ?? '');
+      for (const name of ['aria-label', 'alt', 'title', 'placeholder']) {
+        const value = el.getAttribute(name);
+        if (value) found.push(value);
+      }
     }
     return found;
   });
