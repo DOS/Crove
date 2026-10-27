@@ -40,4 +40,10 @@ describe('the TAP check of the pgTAP runner', () => {
   it('splits multi-line values and drops values that are not text', () => {
     expect(tapLines(['1..1', 'not ok 1\n# Failed test 1', 2, null])).toEqual(['1..1', 'not ok 1', '# Failed test 1']);
   });
+
+  it('splits CRLF output too, leaving no trailing carriage return', () => {
+    const lines = tapLines(['1..2\r\nok 1 # SKIP later\r\nok 2']);
+    expect(lines).toEqual(['1..2', 'ok 1 # SKIP later', 'ok 2']);
+    expect(tapProblems(lines)[0]).toMatch(/marked SKIP/);
+  });
 });

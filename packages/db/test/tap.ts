@@ -16,7 +16,7 @@ const BAIL_OUT = /^Bail out!/;
 // Every text value of the results, split into lines: pgTAP functions return one text value per call, which may hold
 // several lines (a failed test is followed by its diagnostics).
 export function tapLines(values: readonly unknown[]): string[] {
-  return values.filter((v): v is string => typeof v === 'string').flatMap((v) => v.split('\n'));
+  return values.filter((v): v is string => typeof v === 'string').flatMap((v) => v.split(/\r?\n/));
 }
 
 // The reasons the TAP output fails, empty when it passes.
