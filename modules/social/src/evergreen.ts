@@ -207,10 +207,8 @@ export const postRepost = defineCommand({
 export const postRepostEvergreen = defineCommand({
   name: 'social.post.repost_evergreen',
   input: z.strictObject({ postId: zId }),
-  // The repost it sends to review alerts the org's team chat, outside Crove (#1653). A system command, gated by
-  // access, so R2 changes no caller.
-  risk: 'R2',
-  sideEffect: 'external',
+  risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   target: (input) => ({ type: 'social.post', id: input.postId }),
   handler: async (ctx, input) => {

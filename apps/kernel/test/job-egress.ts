@@ -4,8 +4,9 @@
 //
 // - workSites(): every boss.work() of the worker, with what its handler reaches: everything its code refers to,
 //   followed through the worker's own declarations and the kernel's own files (apps/kernel/src), and every WorkerDeps
-//   field it uses. The egress guard of @crove/kernel-runtime reaches a tenant's URL; a provider adapter of
-//   @crove/channel, the publishers and the mailer reach a provider; a bare fetch() is never allowed.
+//   field it uses. The egress guard of @crove/kernel-runtime reaches a tenant's URL; the readers and writers of
+//   @crove/agent and the invoice reader reach the AI endpoint; a provider adapter of @crove/channel, the publishers and
+//   the mailer reach a provider; a bare fetch() is never allowed.
 // - sendSites(): every boss.send() and boss.schedule() of apps/kernel/src, with the queues it may name and, inside the
 //   outbox relay, the outbox events that lead to it.
 // - emittersOf(): the commands whose handler emits an event, followed through the helpers they call.
@@ -22,24 +23,27 @@ const KERNEL_SRC = 'apps/kernel/src';
 // An ESTree node.
 type N = { type: string; start: number; end: number; [key: string]: any };
 
-// What a handler reaches. 'publishers': the channel adapters, a provider and, for the hosts a tenant names, the guard.
-export type Reach = 'tenant_url' | 'provider' | 'publishers' | 'raw_fetch';
+// What a handler reaches. 'ai': the AI endpoint. 'publishers': the channel adapters, a provider and, for the hosts a
+// tenant names, the guard.
+export type Reach = 'tenant_url' | 'ai' | 'provider' | 'publishers' | 'raw_fetch';
 
 // The egress guard (packages/kernel-runtime/src/egress.ts).
 const GUARDS: ReadonlySet<string> = new Set(['guardedFetch', 'guardedRequest', 'egressFetch']);
 // What calls a platform in @crove/channel: its send helpers, its publishers and its account connections.
 const PROVIDER_EXPORT = /^send[A-Z]|Publisher$|^connect[A-Z]/;
+// What calls the AI endpoint in @crove/agent: its model and the readers and writers built on it.
+const AI_EXPORT = /^chatModel$|^[A-Z]\w*(Extractor|Reader|Writer)$/;
 
 // Every field of WorkerDeps (a dotted path for a field inside one) and what using it reaches. A field the test does
-// not know fails it, so a new network dependency of the worker is classified before it is used. Empty: one of the
-// deployment's own services (QUEUE_EGRESS in jobs-schema.ts says which).
+// not know fails it, so a new network dependency of the worker is classified before it is used. Empty: a service of the
+// stack itself (QUEUE_EGRESS in jobs-schema.ts says which).
 export const DEPS_REACH: Readonly<Record<string, readonly Reach[]>> = {
   connectionString: [],
   workerDb: [],
   runtime: [],
   store: [],
-  // The AI endpoint of packages/agent, configured by the operator.
-  extractor: [],
+  // The invoice reader of packages/agent.
+  extractor: ['ai'],
   extract: [],
   inboundDomain: [],
   // Supabase Auth.
@@ -82,7 +86,7 @@ export interface SendSite extends Site {
   queues: readonly string[];
   // The outbox events that lead to it, inside the relay; null outside it, or when the test cannot read its condition.
   events: readonly string[] | null;
-  // 'the outbox relay', or the function it is in ('<queue> handler' inside a boss.work() handler).
+  // 'the outbox relay', '<queue> handler' inside a boss.work() handler, or the function it is in.
   within: string;
 }
 
@@ -441,6 +445,7 @@ export function reachOf(root: N, sources: Sources): Set<Reach> {
         const target = importTarget(decl);
         if (target.module === '@crove/kernel-runtime' && GUARDS.has(target.name)) out.add('tenant_url');
         else if (target.module === '@crove/channel' && PROVIDER_EXPORT.test(target.name)) out.add('provider');
+        else if (target.module === '@crove/agent' && AI_EXPORT.test(target.name)) out.add('ai');
         else if (target.path?.startsWith(`${KERNEL_SRC}/`)) {
           const there = exported(sources.get(target.path), target.name);
           if (!there) throw new Error(`${target.path} exports no ${target.name} (imported at ${at(id)})`);
@@ -464,17 +469,6 @@ const bossCall = (node: N, method: string): boolean =>
   node.callee.property.name === method &&
   node.callee.object.type === 'Identifier' &&
   node.callee.object.name === 'boss';
-
-// The function or handler a node is in: its name, or '<queue> handler' inside a boss.work() handler.
-function within(node: N, sources: Sources, known: Known): string {
-  let child = node;
-  for (let n = parentOf(node); n; child = n, n = parentOf(n)) {
-    if (bossCall(n, 'work') && n.arguments.at(-1) === child) return `${queuesOf(n.arguments[0], sources, known).join(', ')} handler`;
-    if (n.type === 'FunctionDeclaration' && n.id) return n.id.name;
-    if ((n.type === 'ArrowFunctionExpression' || n.type === 'FunctionExpression') && parentOf(n)?.type === 'VariableDeclarator' && parentOf(n)?.id.type === 'Identifier') return parentOf(n)?.id.name;
-  }
-  return '(top level)';
-}
 
 // Every boss.work() in the worker, with its queues and what its handler reaches.
 export function workSites(sources: Sources, known: Known, file = `${KERNEL_SRC}/worker.ts`): WorkSite[] {
@@ -527,7 +521,44 @@ function eventsOf(cond: N, sources: Sources, known: Known): string[] | null {
   return null;
 }
 
-// Every boss.send() and boss.schedule() of the kernel's own files.
+type Route = { events: readonly string[] | null; within: string };
+
+// How a node is reached: from the relay (with the events of the conditions around it), from a boss.work() handler, or
+// from a named function. A function of the same file the relay calls is followed into the relay; its other callers
+// are named by where they are.
+function routesOf(node: N, sources: Sources, known: Known, seen: Set<N> = new Set()): Route[] {
+  let events: string[] | null = null;
+  let child = node;
+  for (let p = parentOf(node); p; child = p, p = parentOf(p)) {
+    if (p.type === 'IfStatement' && p.consequent === child) events = events ?? readable(() => eventsOf(p.test, sources, known));
+    if (p.type === 'ConditionalExpression' && p.consequent === child) events = events ?? readable(() => eventsOf(p.test, sources, known));
+    const call = parentOf(p);
+    // The relay: the callback over the rows crove_kernel.outbox_claim returned.
+    if (p.type === 'ArrowFunctionExpression' && call?.type === 'CallExpression' && textOf(call.callee) === 'rows.map') {
+      let block: N | undefined = call;
+      while (block && block.type !== 'BlockStatement') block = parentOf(block);
+      if (block !== undefined && textOf(block).includes('crove_kernel.outbox_claim(')) return [{ events, within: 'the outbox relay' }];
+    }
+    if (bossCall(p, 'work') && p.arguments.at(-1) === child) return [{ events: null, within: `${queuesOf(p.arguments[0], sources, known).join(', ')} handler` }];
+    const holder = p.type === 'FunctionDeclaration' && p.id ? p : isFunction(p) && parentOf(p)?.type === 'VariableDeclarator' && parentOf(p)?.id.type === 'Identifier' ? parentOf(p) : null;
+    if (!holder) continue;
+    const name: string = holder.id.name;
+    if (seen.has(holder)) return [];
+    seen.add(holder);
+    const refs: N[] = [];
+    eachReference(sources.get(fileOf(holder)).program, (id) => {
+      if (id.name === name && declarationOf(id) === holder) refs.push(id);
+    });
+    // A caller that is neither the relay nor a handler (a sweep on a timer) is named by this function.
+    const routes = refs
+      .flatMap((ref) => routesOf(ref, sources, known, seen))
+      .map((r) => (r.within === 'the outbox relay' || r.within.endsWith(' handler') ? { events: events ?? r.events, within: r.within } : { events: null, within: name }));
+    return routes.length > 0 ? routes : [{ events: null, within: name }];
+  }
+  return [{ events: null, within: '(top level)' }];
+}
+
+// Every boss.send() and boss.schedule() of the kernel's own files, once per way it is reached.
 export function sendSites(sources: Sources, known: Known, files = sources.list([KERNEL_SRC])): SendSite[] {
   const out: SendSite[] = [];
   for (const file of files) {
@@ -535,22 +566,10 @@ export function sendSites(sources: Sources, known: Known, files = sources.list([
       if (!bossCall(node, 'send') && !bossCall(node, 'schedule')) return;
       const queue = node.arguments[0];
       if (!queue) throw new Error(`boss call without a queue at ${at(node)}`);
-      // Inside the relay: the callback over the rows crove_kernel.outbox_claim returned.
-      let relay = false;
-      let events: string[] | null = null;
-      let child = node;
-      for (let p = parentOf(node); p; child = p, p = parentOf(p)) {
-        if (p.type === 'IfStatement' && p.consequent === child) events = events ?? readable(() => eventsOf(p.test, sources, known));
-        if (p.type === 'ConditionalExpression' && p.consequent === child) events = events ?? readable(() => eventsOf(p.test, sources, known));
-        const call = parentOf(p);
-        if (p.type === 'ArrowFunctionExpression' && call?.type === 'CallExpression' && textOf(call.callee) === 'rows.map') {
-          let block: N | undefined = call;
-          while (block && block.type !== 'BlockStatement') block = parentOf(block);
-          relay = block !== undefined && textOf(block).includes('crove_kernel.outbox_claim(');
-          break;
-        }
+      const queues = queuesOf(queue, sources, known);
+      for (const route of routesOf(node, sources, known)) {
+        out.push({ file, line: lineOf(node), queues, events: route.within === 'the outbox relay' ? route.events : null, within: route.within });
       }
-      out.push({ file, line: lineOf(node), queues: queuesOf(queue, sources, known), events: relay ? events : null, within: relay ? 'the outbox relay' : within(node, sources, known) });
     });
   }
   return out;

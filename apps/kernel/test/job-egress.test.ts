@@ -22,6 +22,9 @@ const targets = (egress: JobEgress): readonly string[] => (egress === 'none' ? [
 const hasEgress = (queue: string) => queueEgress(queue) !== 'none';
 const publishProvider = (queue: string) => CHANNEL_PROVIDERS.find((p) => socialPublishQueue(p) === queue) ?? null;
 
+type Need = 'tenant_url' | 'ai' | 'provider';
+const NEED_TEXT: Record<Need, string> = { tenant_url: 'a tenant URL', ai: 'the AI endpoint (provider:ai)', provider: 'a provider' };
+
 // What is wrong with the worker's queues: an undeclared one, a handler reaching more than its queue declares, or a
 // declaration its handler no longer needs.
 function workProblems(sites: readonly WorkSite[]): string[] {
@@ -37,9 +40,9 @@ function workProblems(sites: readonly WorkSite[]): string[] {
         out.push(`${at}: ${(error as Error).message}`);
         continue;
       }
-      const needs = new Set<'tenant_url' | 'provider'>();
+      const needs = new Set<Need>();
       for (const r of site.reaches) {
-        if (r === 'tenant_url' || r === 'provider') needs.add(r);
+        if (r === 'tenant_url' || r === 'provider' || r === 'ai') needs.add(r);
         if (r === 'publishers') {
           // The channel adapters: a provider, and the guard for the hosts a tenant names. A publish queue holds one
           // provider's jobs.
@@ -48,10 +51,10 @@ function workProblems(sites: readonly WorkSite[]): string[] {
           if (provider === null || TENANT_HOSTED_PROVIDERS.includes(provider)) needs.add('tenant_url');
         }
       }
-      const declared = new Set(targets(egress).map((t) => (t === 'tenant_url' ? 'tenant_url' : 'provider')));
+      const declared = new Set(targets(egress).map((t): Need => (t === 'tenant_url' ? 'tenant_url' : t === 'provider:ai' ? 'ai' : 'provider')));
       const shown = egress === 'none' ? 'none' : egress.join(', ');
-      for (const n of needs) if (!declared.has(n)) out.push(`${at}: queue ${queue} reaches ${n === 'tenant_url' ? 'a tenant URL' : 'a provider'} but declares egress ${shown}`);
-      for (const d of declared) if (!needs.has(d)) out.push(`${at}: queue ${queue} declares ${d === 'tenant_url' ? 'tenant_url' : 'a provider'} but its handler reaches none`);
+      for (const n of needs) if (!declared.has(n)) out.push(`${at}: queue ${queue} reaches ${NEED_TEXT[n]} but declares egress ${shown}`);
+      for (const d of declared) if (!needs.has(d)) out.push(`${at}: queue ${queue} declares ${NEED_TEXT[d]} but its handler reaches none`);
     }
   }
   return out;
@@ -60,29 +63,47 @@ function workProblems(sites: readonly WorkSite[]): string[] {
 const all = (): Array<CommandDef<unknown, unknown>> =>
   [...kernelCommands, orgPurgeCommand({ store: {} as never }), ...financeCommands, ...socialCommands, ...crmCommands] as Array<CommandDef<unknown, unknown>>;
 
-// Commands below R2 whose events feed a queue with egress, each with the events. The derived risk (plan §4.7) says R2;
-// raising them changes who may run them (an agent in a chat gets a review) and the agent autonomy table, which #1662
-// decides. The list may only shrink: a new command feeding such a queue declares an external effect.
+// Commands below R2 whose events feed a queue with egress: each event, the queue it feeds and the queue's egress. The
+// derived risk (plan §4.7) says R2; raising a member's command changes who may run it (an agent in a chat gets a
+// review) and the agent autonomy table, so #1662 decides each, as it decides whether the org's own team chat counts.
+// No command changes risk in #1653. The list may only shrink: a new command feeding such a queue declares an external
+// effect.
+const SUBMITTED = ['social.post.submitted -> social-chat-alert (provider:telegram, provider:discord)'];
 const BELOW_R2: Readonly<Record<string, readonly string[]>> = {
+  // A file to read: its content goes to the AI endpoint.
+  'kernel.file.archive.record': ['kernel.file.ingested -> finance-file-extract (provider:ai)'],
+  'kernel.file.ingest': ['kernel.file.ingested -> finance-file-extract (provider:ai)'],
+  'kernel.file.reextract': ['kernel.file.reextract_requested -> finance-file-extract (provider:ai)'],
+  // A composer list, read from the platform with the channel's token.
+  'social.channel_option.request': ['social.channel_option.requested -> social-channel-option (provider:channel, tenant_url)'],
   // A link preview card: the worker fetches the page through the guard.
-  'social.link_preview.request': ['social.link_preview.requested'],
-  // A composer list: the worker reads it from the platform with the channel's token.
-  'social.channel_option.request': ['social.channel_option.requested'],
-  // A post sent to review: a line in the org's team chat.
-  'social.post.duplicate': ['social.post.submitted'],
-  'social.post.import': ['social.post.submitted'],
-  'social.post.repost': ['social.post.submitted'],
-  'social.post.submit': ['social.post.submitted'],
+  'social.link_preview.request': ['social.link_preview.requested -> social-link-preview (tenant_url)'],
+  // A post sent to review, a post published, failed or unclear: a line in the org's team chat.
+  'social.post.duplicate': SUBMITTED,
+  'social.post.import': SUBMITTED,
+  'social.post.repost': SUBMITTED,
+  'social.post.repost_evergreen': SUBMITTED,
+  'social.post.submit': SUBMITTED,
+  'social.publish.record': [
+    'social.variant.failed -> social-chat-alert (provider:telegram, provider:discord)',
+    'social.variant.needs_attention -> social-chat-alert (provider:telegram, provider:discord)',
+    'social.variant.published -> social-chat-alert (provider:telegram, provider:discord)',
+  ],
+  'social.recurring.next': SUBMITTED,
+  // A planned takedown: the worker takes the post down.
+  'social.remove.schedule': ['social.variant.remove_requested -> social-remove (provider:channel, tenant_url)'],
 };
 
-// Sends to a queue with egress outside the outbox relay, and what decides each.
-const OTHER_SENDS: Readonly<Record<string, string>> = {
-  // The sweep queues the variants that are due; the job runs social.publish.begin (R2, external) before any call.
-  sweepSocialPublishing: 'social.publish.begin',
-  // The push of a notification that social.notification.dispatch (R2, external) wrote.
-  [`${QUEUES.socialNotify} handler`]: 'social.notification.dispatch',
+// Sends to a queue with egress from outside the outbox relay, and why each needs no command of its own: the command
+// that decides it, which must declare an external effect, or the reason.
+const OTHER_SENDS: Readonly<Record<string, { command: string } | { reason: string }>> = {
+  // The sweep queues the variants that are due; the job runs social.publish.begin before any call.
+  sweepSocialPublishing: { command: 'social.publish.begin' },
+  // The push of a notification that social.notification.dispatch wrote.
+  [`${QUEUES.socialNotify} handler`]: { command: 'social.notification.dispatch' },
   // Mail a command queued; every command that queues mail declares an external effect (#1563).
-  sweepMail: 'kernel.mail.contact.queue',
+  sweepMail: { command: 'kernel.mail.contact.queue' },
+  [`${QUEUES.extract} handler`]: { reason: 'the same file again, once its org is back under its daily limit' },
 };
 
 // Events that feed a queue with egress and that no command emits: a definer writes them for a request without one.
@@ -130,10 +151,11 @@ describe('job egress (#1653)', () => {
     expect(reach('kernel-mail-send')).toEqual(new Set(['provider']));
     expect(reach(QUEUES.socialPush)).toEqual(new Set(['tenant_url']));
     expect(reach(QUEUES.socialRemove)).toEqual(new Set(['publishers']));
-    expect(reach(QUEUES.extract)).toEqual(new Set());
+    expect(reach(QUEUES.extract)).toEqual(new Set(['ai']));
+    expect(reach(QUEUES.agentWake)).toEqual(new Set());
   });
 
-  it('fails a planted queue without a declaration, a tenant URL, a provider or a bare fetch on a none queue', () => {
+  it('fails a planted queue without a declaration, and a tenant URL, a provider, the AI endpoint or a bare fetch on a none queue', () => {
     const planted = new Sources({
       'apps/kernel/src/planted-worker.ts': `
         import { guardedFetch } from '@crove/kernel-runtime';
@@ -153,6 +175,7 @@ describe('job egress (#1653)', () => {
           const mail = deps.mail;
           await boss.work(QUEUES.notify, async () => run({ ...mail }));
           await boss.work(QUEUES.socialLinkPreview, async () => {});
+          await boss.work(QUEUES.portalList, async () => read({ extractor: deps.extractor }));
         }`,
     });
     const problems = workProblems(workSites(planted, known, 'apps/kernel/src/planted-worker.ts'));
@@ -164,7 +187,8 @@ describe('job egress (#1653)', () => {
       `${at(14)}: queue ${QUEUES.inbound} reaches a provider but declares egress none`,
       `${at(15)}: the handler calls fetch() itself; reach the network through the egress guard or a provider adapter`,
       `${at(17)}: queue ${QUEUES.notify} reaches a provider but declares egress none`,
-      `${at(18)}: queue ${QUEUES.socialLinkPreview} declares tenant_url but its handler reaches none`,
+      `${at(18)}: queue ${QUEUES.socialLinkPreview} declares a tenant URL but its handler reaches none`,
+      `${at(19)}: queue ${QUEUES.portalList} reaches the AI endpoint (provider:ai) but declares egress none`,
     ]);
     // A WorkerDeps field nobody classified stops the analysis.
     const unknownField = new Sources({
@@ -216,14 +240,19 @@ describe('job egress (#1653)', () => {
       return def !== undefined && def.sideEffect !== undefined && deriveRisk(def.sideEffect) >= 'R2' && def.risk >= 'R2';
     };
     expect([...new Set(sends.filter((s) => s.within !== 'the outbox relay').map((s) => s.within))].sort()).toEqual(Object.keys(OTHER_SENDS).sort());
-    for (const [site, command] of Object.entries(OTHER_SENDS)) expect(external(command), `${site}: ${command}`).toBe(true);
+    for (const [site, why] of Object.entries(OTHER_SENDS)) if ('command' in why) expect(external(why.command), `${site}: ${why.command}`).toBe(true);
 
     const { commands, problems } = emittersOf(feeds, sources, known, ['packages/kernel/src', 'modules', 'apps/kernel/src']);
     expect(problems).toEqual([]);
     expect([...commands].filter(([, by]) => by.size === 0).map(([event]) => event)).toEqual(Object.keys(NO_COMMAND).sort());
+    // Each event with the queues it feeds and their egress: 'social.post.submitted -> social-chat-alert (provider:...)'.
+    const fed = (event: string) =>
+      [...new Set(sends.filter((s) => s.events?.includes(event)).flatMap((s) => s.queues.filter(hasEgress)))]
+        .sort()
+        .map((q) => `${event} -> ${q} (${targets(queueEgress(q)).join(', ')})`);
     const below: Record<string, string[]> = {};
-    for (const [event, by] of commands) for (const name of by) if (!external(name)) (below[name] ??= []).push(event);
-    for (const events of Object.values(below)) events.sort();
+    for (const [event, by] of commands) for (const name of by) if (!external(name)) (below[name] ??= []).push(...fed(event));
+    for (const routes of Object.values(below)) routes.sort();
     expect(below).toEqual(BELOW_R2);
   });
 });

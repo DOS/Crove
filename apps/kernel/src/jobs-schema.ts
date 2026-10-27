@@ -70,14 +70,16 @@ export const SOCIAL_PUBLISH_QUEUES: readonly string[] = CHANNEL_PROVIDERS.map(so
 export const MAIL_QUEUES: readonly string[] = ['kernel-mail-send', 'kernel-mail-bulk'];
 
 // What a queue's jobs reach over the network (plan §4.6 `defineJob`, §7.7, #1653):
-// - 'none': only the deployment's own services, at hosts its operator configures and no tenant can name: the
-//   database, the blob store, crove-extract, Supabase Auth and the AI endpoint of packages/agent.
-// - 'provider:<x>': a platform through its provider adapter, which keeps to the platform's own hosts (the channel
-//   adapters of @crove/channel, the mail provider, the chat platforms of team alerts).
+// - 'none': only services of the stack itself, which `docker compose up` runs beside the worker and its operator
+//   configures, and which no tenant can point elsewhere: the database, the blob store, crove-extract and Supabase Auth.
+//   Data reaching them stays inside the deployment.
+// - 'provider:<x>': a service outside the deployment through its adapter, which keeps to that service's own hosts: the
+//   AI endpoint of packages/agent ('provider:ai', where document content leaves the deployment), the channel adapters
+//   of @crove/channel, the mail provider, the chat platforms of team alerts.
 // - 'tenant_url': a URL a tenant or a browser supplied, only through the egress guard of @crove/kernel-runtime
 //   (guardedFetch, guardedRequest, egressFetch).
-// A queue that reaches both lists both. apps/kernel/test/job-egress.test.ts checks each declaration against what the
-// queue's worker handler reaches, and that a command whose events feed a queue with egress declares an external
+// A queue that reaches several lists each. apps/kernel/test/job-egress.test.ts checks each declaration against what
+// the queue's worker handler reaches, and that a command whose events feed a queue with egress declares an external
 // effect (R2, plan §4.7 "Derived risk").
 export type EgressTarget = 'tenant_url' | `provider:${string}`;
 export type JobEgress = 'none' | readonly [EgressTarget, ...EgressTarget[]];
@@ -88,7 +90,8 @@ const CHANNELS: JobEgress = ['provider:channel', 'tenant_url'];
 
 // Every queue in QUEUES; a queue without a declaration fails typecheck.
 const QUEUE_EGRESS: { readonly [Q in QueueName]: JobEgress } = {
-  [QUEUES.extract]: 'none',
+  // The invoice reader sends the document's text or image to the AI endpoint.
+  [QUEUES.extract]: ['provider:ai'],
   [QUEUES.inbound]: 'none',
   [QUEUES.signOut]: 'none',
   [QUEUES.orgExport]: 'none',

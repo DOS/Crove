@@ -207,10 +207,8 @@ export function removeDue(provider: string, settings: Readonly<Record<string, un
 export const removeSchedule = defineCommand({
   name: 'social.remove.schedule',
   input: z.strictObject({ variantId: zId }),
-  // The worker takes the post down from its event: an effect outside Crove (#1653). A system command, gated by
-  // access, so R2 changes no caller.
-  risk: 'R2',
-  sideEffect: 'external',
+  risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   target: (input) => ({ type: 'social.post_variant', id: input.variantId }),
   handler: async (ctx, input): Promise<{ queued: boolean; reason?: string }> => {
