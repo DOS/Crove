@@ -15,9 +15,10 @@
 -- voucher's created_at), with their hashes, to the worker only. Batches the worker writes from now on are version 4:
 -- the version 3 rows of their window plus these, from allocationsFrom (the epoch for the first version 4 batch, which
 -- takes in every allocation, void and voucher made before it; the window's start after). Version 1 to 3 batches keep
--- verifying as they were written. An allocation and a void are made in the transaction of their command, which writes
--- an audit event with the same time, so archive_next_window, which cuts windows by audit events and journal entries,
--- never leaves one behind.
+-- verifying as they were written. Windows follow each other with no gap (archive_record refuses one), so every row
+-- falls in exactly one window. An allocation and a void are made in the transaction of their command, which writes an
+-- audit event with the same time, so archive_next_window, which cuts windows by audit events and journal entries, cuts
+-- the window that holds them without waiting for later activity.
 SET LOCAL lock_timeout = '2s';
 
 CREATE INDEX IF NOT EXISTS number_allocation_allocated_brin ON crove_kernel.number_allocation USING brin (allocated_at);
