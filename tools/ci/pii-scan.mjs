@@ -18,7 +18,7 @@
 //   Scans every path git tracks (or only the named files). Exits 1 and names each finding by file, line and kind. The
 //   matched value is always masked: the repository is public, and a CI log must not repeat what it found.
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { lstatSync, readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 // Province and city codes of the CCCD's first three digits (Circular 07/2016/TT-BCA, unchanged by the 2025 merger of
@@ -33,15 +33,15 @@ export const PROVINCES = new Set([
 // Not part of a longer number, identifier, UUID segment or decimal.
 const CCCD = /(?<![\w.-])(\d{3})[0-3]\d{8}(?![\w-]|\.\d)/g;
 // Carrier prefixes after the leading 0 (Viettel, MobiFone, VinaPhone, Vietnamobile, Gmobile, Itel, Reddi). The groups
-// are checked by mobileShaped: one kind of separator, groups of three digits or more.
+// are checked by mobileShaped: one kind of separator, a first group of three digits or more.
 const MOBILE = /(?<![\w.+-])(?:\(\+84\)|\+84|84|0)[ .-]?(?:3[2-9]|5[25689]|7[06-9]|8[1-9]|9\d)(?:[ .-]?\d){7}(?![\w-]|\.\d)/g;
-const TAX_CODE = /(?<![\w.-])8\d{9}(?:-\d{3})?(?![\w.-])/g;
+const TAX_CODE = /(?<![\w.-])8\d{9}(?:-\d{3})?(?![\w-]|\.\d)/g;
 const EMAIL = /(?<![\w.%])[A-Za-z0-9_][A-Za-z0-9._%+-]*@((?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,})(?![\w-])/g;
 
 // RFC 2606 and RFC 6761: names that never reach a real mailbox.
 const RESERVED_DOMAIN = /(^|\.)(example\.(com|net|org)|test|example|invalid|localhost)$/i;
 // Where test data lives: an individual's tax code is only looked for there (a company's is public).
-const FIXTURE_PATH = /(^|\/)(test|tests|fixtures|__fixtures__|e2e|seed|seeds)\/|\.(test|spec)\.[cm]?[jt]sx?$|(fixture|seed)[^/]*$/i;
+const FIXTURE_PATH = /(^|\/)(test|tests|__tests__|fixtures|__fixtures__|testdata|mocks|__mocks__|e2e|seed|seeds)\/|\.(test|spec)\.([cm]?[jt]sx?|sql)$|(fixture|seed)[^/]*$/i;
 // Files that are not text are skipped: a NUL byte in the first 8 KiB.
 const BINARY_PROBE = 8192;
 
@@ -80,12 +80,13 @@ export function mobileShaped(raw) {
   if (separators.size > 1) return false;
   const groups = match.split(/[ .-]/);
   const [first, ...rest] = groups;
-  return (first === '+84' || first === '84' || first.length >= 3) && rest.every((g) => g.length >= 3);
+  // After a first group of three or more, pairs are fine too (0912 34 56 78).
+  return (first === '+84' || first === '84' || first.length >= 3) && rest.every((g) => g.length >= 2);
 }
 
 // A value made up on purpose: the digits that tell people apart (a CCCD's last six, a phone's last seven) use at most
-// two distinct digits (0900000000) or run up or down (0912345678, 0398765432), allowing one break. Write test data
-// like that and no allowlist entry is needed.
+// two distinct digits (0900000000) or run up or down (0912345678, 0398765432), allowing one break, or are repeated
+// groups (repeatedGroups). Write test data like that and no allowlist entry is needed.
 export function looksSynthetic(tail) {
   if (new Set(tail).size <= 2) return true;
   let up = 0;
@@ -98,6 +99,19 @@ export function looksSynthetic(tail) {
   return Math.max(up, down) >= tail.length - 2;
 }
 
+// Also made up: at most three runs of one repeated digit, each two long or more (0999 888 777, 112233).
+export function repeatedGroups(digits) {
+  const runs = digits.match(/(\d)\1*/g) ?? [];
+  return runs.length <= 3 && runs.every((r) => r.length >= 2);
+}
+
+// A company's tax code (10 digits, public) can start like a mobile number. On a line that names a tax code, ten
+// contiguous digits whose check digit holds are that code, not a phone.
+const TAX_CONTEXT = /\bMST\b|mã số thuế|tax[ _-]?(code|id)/i;
+function companyTaxCode(match, content) {
+  return /^\d{10}$/.test(match) && TAX_CONTEXT.test(content) && taxCheckDigitValid(match);
+}
+
 // `https://user:secret@host` is a URL with credentials, not an email address.
 const URL_USERINFO = /:\/\/[^\s/@]*:$/;
 
@@ -108,10 +122,13 @@ export function scanText(text, path = '') {
   text.split(/\r?\n/).forEach((content, index) => {
     const line = index + 1;
     for (const m of content.matchAll(CCCD)) {
-      if (PROVINCES.has(m[1]) && !looksSynthetic(m[0].slice(6))) findings.push({ line, kind: 'cccd', value: m[0] });
+      const tail = m[0].slice(6);
+      if (PROVINCES.has(m[1]) && !looksSynthetic(tail) && !repeatedGroups(tail)) findings.push({ line, kind: 'cccd', value: m[0] });
     }
     for (const m of content.matchAll(MOBILE)) {
-      if (mobileShaped(m[0]) && !looksSynthetic(digitsOnly(m[0]).slice(-7))) findings.push({ line, kind: 'mobile', value: m[0] });
+      const digits = digitsOnly(m[0]);
+      if (!mobileShaped(m[0]) || looksSynthetic(digits.slice(-7)) || repeatedGroups(digits.slice(-9)) || companyTaxCode(m[0], content)) continue;
+      findings.push({ line, kind: 'mobile', value: m[0] });
     }
     if (fixture) {
       for (const m of content.matchAll(TAX_CODE)) {
@@ -161,34 +178,51 @@ export function allowlistErrors(allowlist) {
   return errors;
 }
 
-// The findings over a set of files, the allowlist applied. `read` returns the text, or null to skip the file.
+// The findings over a set of files, the allowlist applied. `read` returns the text, or null to skip the file. Paths
+// are compared with '/' separators, so a path given on Windows matches the allowlist too.
 export function scanFiles(paths, read, allowlist) {
   const findings = [];
   const used = new Set();
-  for (const path of paths) {
-    const text = read(path);
-    if (text === null) continue;
+  let skipped = 0;
+  for (const given of paths) {
+    const path = given.replaceAll('\\', '/');
+    const text = read(given);
+    if (text === null) {
+      skipped += 1;
+      continue;
+    }
     for (const finding of scanText(text, path)) {
+      // A value an entry pins is listed in the allowlist itself; only an exact pinned value passes there.
+      if (path === ALLOWLIST_PATH && allowlist.some((e) => e.kind === finding.kind && e.values?.some((v) => v.toLowerCase() === finding.value.toLowerCase()))) continue;
       const entry = allowlist.findIndex((e) => entryAllows(e, finding, path));
       if (entry === -1) findings.push({ path, ...finding });
       else used.add(entry);
     }
   }
-  return { findings, unused: allowlist.filter((_, i) => !used.has(i)) };
+  return { findings, skipped, unused: allowlist.filter((_, i) => !used.has(i)) };
 }
 
+// A tracked symlink is not followed (it could point anywhere on the runner); its target, if tracked, is read itself.
 export function readText(path) {
   let buf;
   try {
+    if (!lstatSync(path).isFile()) return null;
     buf = readFileSync(path);
   } catch {
-    return null; // deleted in the working tree, or a submodule
+    return null; // deleted in the working tree
   }
   if (buf.subarray(0, BINARY_PROBE).includes(0)) return null;
   return buf.toString('utf8');
 }
 
 export const ALLOWLIST_FILE = new URL('pii-scan-allowlist.json', import.meta.url);
+const ALLOWLIST_PATH = 'tools/ci/pii-scan-allowlist.json';
+
+// A workflow command property (the file name) with its special characters escaped, so a crafted path cannot end the
+// command early.
+export function commandProperty(value) {
+  return value.replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A').replace(/:/g, '%3A').replace(/,/g, '%2C');
+}
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const allowlist = JSON.parse(readFileSync(ALLOWLIST_FILE, 'utf8'));
@@ -196,10 +230,10 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   for (const e of errors) console.error(`::error file=tools/ci/pii-scan-allowlist.json::${e}`);
   const args = process.argv.slice(2);
   const paths = args.length > 0 ? args : execFileSync('git', ['ls-files', '-z'], { encoding: 'utf8' }).split('\0').filter(Boolean);
-  const { findings } = scanFiles(paths, readText, allowlist);
+  const { findings, skipped } = scanFiles(paths, readText, allowlist);
   for (const f of findings) {
-    console.error(`::error file=${f.path},line=${f.line}::${f.path}:${f.line} holds what looks like personal data (${f.kind} ${mask(f.kind, f.value)}); use a synthetic value (an address at example.com, a number that fails the check), or add a reasoned entry to tools/ci/pii-scan-allowlist.json`);
+    console.error(`::error file=${commandProperty(f.path)},line=${f.line}::line ${f.line} holds what looks like personal data (${f.kind} ${mask(f.kind, f.value)}); use a synthetic value (an address at example.com, a number that fails the check), or add a reasoned entry to tools/ci/pii-scan-allowlist.json`);
   }
   if (errors.length > 0 || findings.length > 0) process.exitCode = 1;
-  else console.log(`pii-scan: ${paths.length} path(s), no personal data found`);
+  else console.log(`pii-scan: ${paths.length} path(s), ${skipped} skipped (binary, symlink or missing), no personal data found`);
 }

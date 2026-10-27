@@ -13,10 +13,12 @@ import { afterAll, describe, expect, it } from 'vitest';
 import {
   ALLOWLIST_FILE,
   allowlistErrors,
+  commandProperty,
   entryAllows,
   looksSynthetic,
   mask,
   readText,
+  repeatedGroups,
   scanFiles,
   scanText,
   taxCheckDigitValid,
@@ -112,6 +114,28 @@ describe('G5 PII scan (#1628)', () => {
     for (const text of lookAlikes) expect(scanText(text, 'apps/app/test/a.ts'), text.replace(/\d/g, '#')).toEqual([]);
   });
 
+  it('finds pairs after a first group, a code that ends a sentence, and tells a company tax code from a phone', () => {
+    const pairs = join2('09', '1', mobileTail.slice(0, 1), ' ', mobileTail.slice(1, 3), ' ', mobileTail.slice(3, 5), ' ', mobileTail.slice(5));
+    expect(scanText(`Zalo ${pairs}`).map((f) => f.kind)).toEqual(['mobile']);
+    expect(scanText(`MST: ${taxCode}.`, 'apps/app/test/a.ts').map((f) => f.kind)).toEqual(['tax-code']);
+    // Ten digits that start like a mobile number and carry a valid tax check digit.
+    let company = '';
+    while (!company) {
+      const candidate = join2('09', '1', realLooking(7));
+      if (taxCheckDigitValid(candidate)) company = candidate;
+    }
+    expect(scanText(`<MST>${company}</MST>`)).toEqual([]);
+    expect(scanText(`"taxCode": "${company}"`)).toEqual([]);
+    expect(scanText(`Hotline ${company}`).map((f) => f.kind)).toEqual(['mobile']);
+  });
+
+  it('lets repeated digit groups through as made up', () => {
+    expect(repeatedGroups('999888777')).toBe(true);
+    expect(repeatedGroups('112233')).toBe(true);
+    expect(repeatedGroups('9888777')).toBe(false);
+    expect(scanText(join2('Hotline 0', '999 888 777'))).toEqual([]);
+  });
+
   it('masks every value it reports, keeping only the prefix that says what it is', () => {
     expect(mask('cccd', cccd)).toBe(`079${'*'.repeat(9)}`);
     expect(mask('mobile', mobileIntl)).toBe(`849${'*'.repeat(8)}`);
@@ -143,6 +167,32 @@ describe('G5 PII scan (#1628)', () => {
     expect(entryAllows({ ...entry, kind: 'mobile' }, finding, 'modules/social/test/a.test.ts')).toBe(false);
     expect(entryAllows({ kind: 'email', paths: ['pnpm-lock.yaml'], reason: 'x' }, finding, 'pnpm-lock.yaml')).toBe(true);
     expect(entryAllows({ kind: 'email', paths: ['pnpm-lock.yaml'], reason: 'x' }, finding, 'sub/pnpm-lock.yaml')).toBe(false);
+  });
+
+  it('matches Windows paths, lets a pinned value through only in the allowlist itself, and counts skipped files', () => {
+    const other = join2('le.thi.', realLooking(4), '@', 'mail', '.vn');
+    const pinned = join2('pinned', '@', 'mail', '.vn');
+    const allowlist = [
+      { kind: 'email', domains: ['mail.vn'], paths: ['apps/x/test/'], reason: 'a reason that is long enough' },
+      { kind: 'email', values: [pinned], paths: ['docs/a.md'], reason: 'a reason that is long enough' },
+    ];
+    const texts: Record<string, string | null> = {
+      'apps\\x\\test\\a.ts': other,
+      'tools/ci/pii-scan-allowlist.json': `${pinned} ${other}`,
+      'docs/a.md': pinned,
+      'docs/b.md': pinned,
+      'logo.png': null,
+    };
+    const { findings, skipped } = scanFiles(Object.keys(texts), (p: string) => texts[p] ?? null, allowlist);
+    expect(findings.map((f: { path: string; value: string }) => [f.path, f.value === other ? 'other' : 'pinned'])).toEqual([
+      ['tools/ci/pii-scan-allowlist.json', 'other'],
+      ['docs/b.md', 'pinned'],
+    ]);
+    expect(skipped).toBe(1);
+  });
+
+  it('escapes the file name in the workflow command', () => {
+    expect(commandProperty('a,b:c%d\ne')).toBe('a%2Cb%3Ac%25d%0Ae');
   });
 
   it('refuses an allowlist entry without a reason, or one that names nothing and so exempts a kind everywhere', () => {
