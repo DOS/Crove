@@ -4,7 +4,7 @@
 // crove_meta is the migration runner's bookkeeping, and crove_jobs the vendored pg-boss schema (its partitions are left
 // out: pg-boss creates one per queue at runtime). The control-plane tables of crove_kernel (plan §3.6) are not listed
 // here: no source may name them (the control-plane-reads invariant), so the manifest test declares them itself.
-import { columns, defineModule } from '@crove/kernel-contract';
+import { MODULE_SCREENS, columns, defineModule } from '@crove/kernel-contract';
 
 export const kernelManifest = defineModule({
   id: 'kernel',
@@ -94,4 +94,6 @@ export const kernelManifest = defineModule({
   },
   // It owns no permission. The approval commands name finance.proposal.approve, which the finance manifest declares.
   permissions: [],
+  // Its screens in the app and its menu items (#1652), kept with the other modules' in @crove/kernel-contract.
+  ...MODULE_SCREENS.kernel,
 });
