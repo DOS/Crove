@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="vi" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Crove Ghi chú: plan</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+/* Layout: trang đọc ngắn một cột theo house style báo cáo DOS (nền tối trước), mục lục dính bên trái từ 1180px. */
+:root{
+  --bg:#101114; --surface:#16181d; --card:#1b1e25; --line:#2c303a; --fg:#eef0f4; --muted:#a3a9b6;
+  --accent:#ff2e29; --accent-ink:#ff8a85; --org:#8b93ff;
+  --ok:#34d399; --ok-bg:#0f2a21; --warn:#fbbf24; --warn-bg:#2a2110; --bad:#f87171; --bad-bg:#2d1515; --info:#60a5fa; --info-bg:#121f35;
+  --code-bg:#23262e;
+  --font-body:"Be Vietnam Pro",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){
+  :root:not([data-theme="dark"]){
+    --bg:#f5f5f7; --surface:#ffffff; --card:#ffffff; --line:#dcdfe6; --fg:#15171c; --muted:#596070;
+    --accent:#d61f1a; --accent-ink:#b02420; --org:#4f46e5;
+    --ok:#047857; --ok-bg:#e6f5ee; --warn:#9a5b06; --warn-bg:#fcf1d9; --bad:#b91c1c; --bad-bg:#fcebeb; --info:#1d4ed8; --info-bg:#e7eefc;
+    --code-bg:#eceef2; color-scheme:light;
+  }
+}
+:root[data-theme="light"]{
+  --bg:#f5f5f7; --surface:#ffffff; --card:#ffffff; --line:#dcdfe6; --fg:#15171c; --muted:#596070;
+  --accent:#d61f1a; --accent-ink:#b02420; --org:#4f46e5;
+  --ok:#047857; --ok-bg:#e6f5ee; --warn:#9a5b06; --warn-bg:#fcf1d9; --bad:#b91c1c; --bad-bg:#fcebeb; --info:#1d4ed8; --info-bg:#e7eefc;
+  --code-bg:#eceef2; color-scheme:light;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font-family:var(--font-body);font-size:16px;line-height:1.7;-webkit-font-smoothing:antialiased}
+.page{padding-block:32px 72px;padding-inline:clamp(16px,4vw,40px)}
+.layout{display:grid;grid-template-columns:minmax(0,1fr);gap:32px;max-width:1260px;margin-inline:auto}
+@media (min-width:1180px){.layout{grid-template-columns:230px minmax(0,1fr)}}
+main{min-width:0;max-width:980px}
+a{color:var(--accent-ink);text-decoration:none;overflow-wrap:anywhere}a:hover{text-decoration:underline}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+
+/* Mục lục */
+nav.toc{font-size:14px;line-height:1.5}
+nav.toc .toc-title{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600;margin:0 0 8px}
+nav.toc ol{list-style:none;margin:0;padding:0 0 6px;display:flex;flex-wrap:nowrap;overflow-x:auto;gap:6px}
+nav.toc li{flex:0 0 auto}
+nav.toc a{display:block;color:var(--muted);padding:4px 10px;border:1px solid var(--line);border-radius:999px;background:var(--surface)}
+nav.toc a:hover{color:var(--fg);text-decoration:none;border-color:var(--muted)}
+@media (min-width:1180px){
+  nav.toc{position:sticky;top:calc(env(safe-area-inset-top,0px) + 24px);align-self:start;max-height:calc(100vh - 48px);overflow:auto;padding-right:4px}
+  nav.toc ol{display:block;overflow:visible;padding:0}
+  nav.toc a{border:0;background:none;border-left:2px solid var(--line);border-radius:0;padding:5px 12px}
+  nav.toc a:hover{border-left-color:var(--accent)}
+}
+
+/* Chữ */
+.eyebrow{color:var(--accent-ink);font-weight:600;letter-spacing:.08em;text-transform:uppercase;font-size:13px;margin:0}
+h1{font-size:clamp(30px,4.6vw,44px);line-height:1.15;letter-spacing:-.015em;margin:10px 0 12px;text-wrap:balance}
+h2{font-size:24px;line-height:1.3;margin:56px 0 14px;padding-top:20px;border-top:1px solid var(--line);text-wrap:balance;scroll-margin-top:16px}
+h3{font-size:18px;line-height:1.4;margin:28px 0 10px;color:var(--accent-ink);text-wrap:balance}
+h4{font-size:16px;margin:22px 0 8px;text-wrap:balance}
+p{margin:0 0 12px;max-width:72ch}
+.lede{font-size:18px;color:var(--muted);max-width:68ch}
+.muted{color:var(--muted)}
+.small{font-size:14px}
+ul,ol{padding-left:22px;margin:0 0 12px}
+li{margin:5px 0}
+li>ul,li>ol{margin:4px 0 0}
+code{font-family:var(--font-mono);font-size:.86em;background:var(--code-bg);padding:1px 5px;border-radius:4px;overflow-wrap:anywhere}
+pre{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow-x:auto;font-family:var(--font-mono);font-size:12.5px;line-height:1.55;margin:12px 0}
+pre code{background:none;padding:0;font-size:inherit;overflow-wrap:normal}
+strong{font-weight:600}
+.meta{display:flex;flex-wrap:wrap;gap:8px 18px;color:var(--muted);font-size:14px;margin:6px 0 24px}
+.meta span{display:inline-flex;gap:6px;align-items:baseline}
+
+/* Khối */
+.callout{border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:10px;background:var(--card);padding:16px 20px;margin:18px 0}
+.callout.info{border-left-color:var(--info)}
+.callout.warn{border-left-color:var(--warn)}
+.callout>*:last-child{margin-bottom:0}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin:20px 0}
+.tile{border:1px solid var(--line);background:var(--card);border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:2px}
+.tile b{font-size:26px;line-height:1.2;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.tile span{font-size:13.5px;color:var(--muted);line-height:1.45}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin:16px 0}
+.grid>*{min-width:0}
+.card{border:1px solid var(--line);background:var(--card);border-radius:10px;padding:16px 18px}
+.card h4{margin:0 0 8px;font-size:16px}
+.card p:last-child,.card ul:last-child{margin-bottom:0}
+.card .num{font-family:var(--font-mono);font-size:12px;color:var(--muted);letter-spacing:.04em}
+.card .pick{margin:8px 0 0;font-size:14.5px}
+.col-title{font-size:13px;letter-spacing:.08em;text-transform:uppercase;font-weight:600;margin:0 0 8px}
+.c-reuse .col-title{color:var(--ok)} .c-lib .col-title{color:var(--info)} .c-new .col-title{color:var(--accent-ink)}
+
+/* Bảng */
+.table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px;margin:16px 0;background:var(--card)}
+table{border-collapse:collapse;width:100%;min-width:640px;font-size:14.5px;line-height:1.55}
+table.fit{min-width:0}table.fit td:first-child{width:30%}
+th,td{padding:10px 14px;border-bottom:1px solid var(--line);vertical-align:top;text-align:left}
+th{background:var(--surface);font-weight:600;font-size:13.5px;white-space:nowrap}
+tr:last-child td{border-bottom:0}
+td ul{margin:0;padding-left:18px}
+td li{margin:2px 0}
+.tnum{font-variant-numeric:tabular-nums;white-space:nowrap}
+
+/* Nhãn */
+.b{display:inline-block;padding:0 8px;border-radius:999px;font-size:12px;font-weight:600;line-height:20px;border:1px solid currentColor;white-space:nowrap;vertical-align:1px}
+.b-ok{color:var(--ok);background:var(--ok-bg)} .b-warn{color:var(--warn);background:var(--warn-bg)}
+.b-bad{color:var(--bad);background:var(--bad-bg)} .b-info{color:var(--info);background:var(--info-bg)}
+.b-mute{color:var(--muted);background:var(--surface)}
+td.m-allow{background:var(--ok-bg);color:var(--ok);font-weight:500}
+td.m-review{background:var(--warn-bg);color:var(--warn);font-weight:500}
+td.m-deny{background:var(--bad-bg);color:var(--bad);font-weight:500}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 14px}
+.chip{font-family:var(--font-mono);font-size:12.5px;border:1px solid var(--line);background:var(--surface);padding:2px 8px;border-radius:6px;line-height:1.6}
+.chip.later{color:var(--muted);border-style:dashed}
+.flow{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:14px 0}
+.flow .st{border:1px solid var(--line);background:var(--card);border-radius:8px;padding:6px 12px;font-size:14px}
+.flow .st.hl{border-color:var(--accent)}
+.flow .ar{color:var(--muted)}
+
+/* Hình */
+figure{margin:20px 0}
+.fig-scroll{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--surface);padding:8px}
+.fig-scroll svg{display:block;width:100%;min-width:860px;height:auto}
+figcaption{font-size:14px;color:var(--muted);margin-top:10px;max-width:80ch}
+.d-group{fill:none;stroke:var(--line);stroke-width:1.5;stroke-dasharray:6 5}
+.d-box{fill:var(--card);stroke:var(--line);stroke-width:1.5}
+.d-hl{stroke:var(--accent);stroke-width:2}
+.d-dashbox{stroke-dasharray:6 4}
+.d-t{fill:var(--fg);font:600 13px var(--font-body)}
+.d-s{fill:var(--muted);font:400 11.5px var(--font-body)}
+.d-m{font-family:var(--font-mono);font-size:11px}
+.d-a{fill:var(--accent-ink)}
+.d-ln{fill:none;stroke:var(--muted);stroke-width:1.5}
+.d-acc{stroke:var(--accent);stroke-width:2.2}
+.d-dash{stroke-dasharray:5 4}
+.d-mk{fill:var(--muted)} .d-mk-acc{fill:var(--accent)}
+
+/* Lộ trình */
+.gantt{border:1px solid var(--line);border-radius:12px;background:var(--card);padding:14px 16px;margin:16px 0}
+.g-row{display:grid;grid-template-columns:minmax(118px,200px) minmax(0,1fr);gap:12px;align-items:center;padding:5px 0}
+.g-label{font-size:13.5px;line-height:1.3}
+.g-label small{display:block;color:var(--muted);font-size:12px}
+.g-track{position:relative;height:22px;background:var(--surface);border-radius:5px}
+.g-bar{position:absolute;top:3px;bottom:3px;border-radius:4px;min-width:6px}
+.g-base{background:var(--muted)} .g-fin{background:var(--accent)} .g-mod{background:var(--org)} .g-ppl{background:var(--info)}
+.g-axis{position:relative;height:18px;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.g-axis span{position:absolute;top:0;transform:translateX(-50%);white-space:nowrap}
+.g-axis span:first-child{transform:none}
+.g-axis span:last-child{transform:translateX(-100%)}
+.legend{display:flex;flex-wrap:wrap;gap:14px;font-size:13px;color:var(--muted);margin-top:8px}
+.legend i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+.phases{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;margin:16px 0}
+.phase{border:1px solid var(--line);border-radius:10px;background:var(--card);padding:14px 16px;min-width:0}
+.phase header{display:flex;justify-content:space-between;gap:8px;align-items:baseline;margin-bottom:6px}
+.phase h4{margin:0;font-size:15.5px}
+.phase .dur{font-size:12.5px;color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
+.phase p{font-size:14.5px;margin-bottom:8px}
+.phase ul{font-size:14px;margin:0;padding-left:18px}
+.phase .ex{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:600;margin:8px 0 2px}
+
+/* Bản đầy đủ */
+.ref-tools{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 14px}
+button{font:500 14px var(--font-body);color:var(--fg);background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:6px 14px;cursor:pointer}
+button:hover{border-color:var(--muted)}
+details.ref{border:1px solid var(--line);border-radius:10px;background:var(--card);margin:10px 0}
+details.ref>summary{cursor:pointer;padding:12px 18px;font-weight:600;list-style-position:inside}
+details.ref[open]>summary{border-bottom:1px solid var(--line)}
+details.ref .body{padding:8px 20px 18px;min-width:0}
+details.ref .body h4{color:var(--accent-ink)}
+details.ref blockquote{margin:12px 0;padding:10px 16px;border-left:3px solid var(--info);background:var(--surface);border-radius:6px}
+footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-size:14px;color:var(--muted)}
+@media (prefers-reduced-motion: reduce){*{scroll-behavior:auto!important}}
+</style>
+</head>
+<body>
+<div class="page">
+<div class="layout">
+<nav class="toc" aria-label="Mục lục">
+  <p class="toc-title">Mục lục</p>
+  <ol>
+    <li><a href="#tom-tat">Tóm tắt</a></li>
+    <li><a href="#dung-the-nao">Nhân viên dùng thế nào</a></li>
+    <li><a href="#rieng-tu">Riêng tư và dùng chung</a></li>
+    <li><a href="#cach-lam">Cách làm</a></li>
+    <li><a href="#buoc">Các bước</a></li>
+    <li><a href="#quyet-dinh">Cần owner quyết</a></li>
+  </ol>
+</nav>
+<main>
+<p class="eyebrow">Crove OS · Plan module</p>
+<h1>Crove Ghi chú và Việc của tôi</h1>
+<p class="lede">Mỗi nhân viên có chỗ ghi lại điều cần nhớ về từng khách hàng và một danh sách việc riêng có hạn và nhắc việc, ngay trong Crove, cạnh hóa đơn, chứng từ và việc nhóm đã có. Ghi chú có thể để riêng cho mình hoặc dùng chung với cả văn phòng.</p>
+<div class="meta"><span>Ngày: 27/10/2026</span><span>Yêu cầu: owner, 27/10 (#1648)</span><span>Nguồn chuẩn: <a href="notes.md"><code>docs/plan/notes.md</code></a></span><span>Quyết định kiến trúc: <a href="../adr/0037-private-notes-and-todos.md">ADR-0037</a> (đang chờ duyệt)</span></div>
+
+<div class="callout warn"><p><strong>Trang tóm tắt cho owner.</strong> Nguồn chuẩn là bản tiếng Anh <a href="notes.md"><code>docs/plan/notes.md</code></a>. Khi hai bản khác nhau, bản tiếng Anh thắng. Chưa có gì được xây: owner duyệt kế hoạch này xong mới mở việc và bắt đầu làm.</p></div>
+
+<h2 id="tom-tat">Tóm tắt</h2>
+<div class="tiles">
+  <div class="tile"><b>3</b><span>thứ mới: ghi chú, danh sách việc riêng, màn hình "Việc của tôi"</span></div>
+  <div class="tile"><b>6</b><span>bước cho bản đầu (N1 đến N6), mỗi bước một PR</span></div>
+  <div class="tile"><b>7</b><span>câu owner cần quyết, mỗi câu có đề xuất sẵn</span></div>
+  <div class="tile"><b>M3</b><span>mốc đề xuất: sau phần việc gấp của vòng chốt sổ tháng (M2)</span></div>
+</div>
+<ul>
+<li><strong>Ghi chú</strong>: tiêu đề, nội dung, nhãn, ghim. Gắn với một khách hàng, một đối tác, một chứng từ hay một lịch hẹn. Ghi chú để riêng (chỉ người viết xem) hoặc dùng chung (cả văn phòng xem).</li>
+<li><strong>Việc riêng</strong> (to-do): danh sách việc của từng người, luôn riêng tư, có ngày hạn, giờ hạn, nhắc việc và các bước nhỏ cần đánh dấu. Một việc riêng có thể "giao" cho một vị trí trong sơ đồ tổ chức, lúc đó nó thành việc nhóm mà cả nhóm thấy.</li>
+<li><strong>Việc của tôi</strong>: một màn hình gom việc riêng của mình và việc nhóm của các vị trí mình giữ, xếp theo hạn: quá hạn, hôm nay, 7 ngày tới, sau đó.</li>
+<li>Chưa có trong bản đầu: AI tóm tắt ghi chú và gợi ý việc (để sau, cần quyết thêm), gắn với biên bản họp (khi có module Ghi biên bản họp, #932), cùng sửa một ghi chú theo thời gian thực.</li>
+</ul>
+
+<h2 id="dung-the-nao">Nhân viên văn phòng kế toán dùng thế nào</h2>
+<p>Ở Crove, mỗi công ty khách hàng là một tổ chức riêng, và kế toán của văn phòng là thành viên của từng tổ chức đó. Vì vậy:</p>
+<div class="grid">
+  <div class="card"><h4>Ghi chú về khách hàng</h4><p>Mở trang tổng quan của khách, bấm "Thêm ghi chú": "Giám đốc chỉ nghe máy sau 15h", "Hóa đơn điện tháng nào cũng về trễ, nhắc kế toán bên khách ngày 5". Ghi chú viết từ trang khách hàng mặc định là dùng chung, để người khác trong văn phòng cũng biết.</p></div>
+  <div class="card"><h4>Danh sách việc riêng</h4><p>"Gọi khách xin sao kê tháng 10" hạn ngày 5, "Kiểm tra lại hóa đơn của nhà cung cấp X". Đến hạn, Crove nhắc trong chuông thông báo. Làm xong thì tích.</p></div>
+  <div class="card"><h4>Một chỗ xem hết việc</h4><p>"Việc của tôi" cho thấy việc riêng lẫn việc nhóm (do người khác hoặc AI giao cho vị trí mình giữ), để đầu ngày biết hôm nay phải làm gì.</p></div>
+  <div class="card"><h4>Tìm lại nhanh</h4><p>Gõ "hoa don dien" không dấu cũng ra "hóa đơn điện". Mỗi người chỉ tìm thấy ghi chú riêng của mình và ghi chú dùng chung.</p></div>
+</div>
+<div class="callout info"><p><strong>Không lưu mật khẩu trong ghi chú.</strong> Khi nội dung trông như một dòng mật khẩu, Crove nhắc người viết. Ghi chú không phải két sắt mật khẩu.</p></div>
+
+<h2 id="rieng-tu">Riêng tư và dùng chung: ai xem được gì</h2>
+<p>Đề xuất (owner quyết ở câu N-2 đến N-5):</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Loại</th><th>Người viết</th><th>Đồng nghiệp</th><th>Chủ sở hữu, quản trị</th><th>Người chỉ xem (có thể là nhân viên của khách)</th><th>AI</th></tr></thead>
+<tbody>
+<tr><td>Ghi chú riêng, việc riêng</td><td class="m-allow">xem, sửa</td><td class="m-deny">không</td><td class="m-deny">không</td><td class="m-deny">không</td><td class="m-deny">không</td></tr>
+<tr><td>Ghi chú dùng chung</td><td class="m-allow">xem, sửa</td><td class="m-allow">xem</td><td class="m-allow">xem, lưu trữ, xóa</td><td class="m-deny">không</td><td class="m-deny">không (bản đầu)</td></tr>
+</tbody></table></div>
+<ul>
+<li><strong>Riêng tư là riêng thật:</strong> cơ sở dữ liệu chặn, không chỉ ẩn trên giao diện. Có bài kiểm thử tự động chứng minh không ai khác đọc được, kể cả chủ sở hữu tổ chức và các tác tử AI.</li>
+<li><strong>Nhật ký kiểm tra</strong> (audit, sổ ghi ai làm gì) chỉ ghi "ai tạo ghi chú nào, lúc nào", không bao giờ ghi nội dung.</li>
+<li><strong>Người nghỉ việc:</strong> ghi chú dùng chung ở lại với văn phòng. Ghi chú và việc riêng của họ bị khóa 30 ngày (lỡ xóa nhầm thì thêm lại là thấy), sau đó tự xóa. Trước khi xóa thành viên, Crove báo owner người đó còn bao nhiêu mục riêng để owner nhắc họ chia sẻ những gì văn phòng cần.</li>
+<li><strong>Khi có người yêu cầu về dữ liệu cá nhân</strong> (Luật Bảo vệ dữ liệu cá nhân): sau bước N9, công cụ tìm dữ liệu cá nhân đã có sẽ tìm được cả trong nội dung ghi chú dùng chung; với ghi chú riêng chỉ thấy "2 ghi chú riêng của 1 thành viên", không thấy nội dung, và người viết được báo để xem lại.</li>
+<li><strong>Khi tổ chức ngừng dùng Crove:</strong> bản xuất dữ liệu có ghi chú dùng chung, không có nội dung riêng tư. Khi xóa hẳn tổ chức, mọi ghi chú bị xóa.</li>
+<li>Người vận hành máy chủ về kỹ thuật vẫn đọc được cơ sở dữ liệu, như mọi dữ liệu khác. Vì vậy Crove ghi rõ: "Chỉ bạn xem được trong tổ chức này".</li>
+</ul>
+
+<h2 id="cach-lam">Cách làm (ngắn gọn)</h2>
+<div class="grid">
+  <div class="card c-new"><p class="col-title">Module riêng</p><p>Một module mới tên <code>notes</code>, bật tắt được như CRM và Social. Tắt đi thì mọi phần khác chạy như cũ.</p></div>
+  <div class="card c-reuse"><p class="col-title">Không đụng việc nhóm</p><p>Việc riêng nằm ở bảng riêng, không trộn vào bảng việc nhóm (bảng mà cả tổ chức và các tác tử AI đọc). Nhờ vậy quy tắc an toàn của AI giữ nguyên. Chỉ khi người dùng bấm "Giao cho vị trí" thì mới tạo một việc nhóm.</p></div>
+  <div class="card c-reuse"><p class="col-title">Dùng lại cái đã có</p><p>Thông báo trong ứng dụng, tìm kiếm không dấu, ô tìm nhanh <code>Ctrl K</code>, trang khách hàng, đối tác, chứng từ, quy trình xóa tổ chức.</p></div>
+</div>
+
+<h2 id="buoc">Các bước</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Bước</th><th>Làm gì</th><th>Xong khi</th><th>Mốc đề xuất</th></tr></thead>
+<tbody>
+<tr><td class="tnum">N0</td><td>Kế hoạch này và ADR-0037</td><td>Owner duyệt</td><td>Bây giờ</td></tr>
+<tr><td class="tnum">N1</td><td>Viết trước các bài kiểm thử an toàn cho bảng mới</td><td>Kiểm thử chạy xanh trên nhánh chính</td><td>M3</td></tr>
+<tr><td class="tnum">N2</td><td>Ghi chú: viết, ghim, lưu trữ, thùng rác, riêng hay dùng chung, ghi chú trên trang khách hàng và đối tác</td><td>Đồng nghiệp, owner, AI đều không đọc được ghi chú riêng; viết và tìm lại trên trang khách</td><td>M3</td></tr>
+<tr><td class="tnum">N3</td><td>Gắn ghi chú với chứng từ, bút toán, lịch hẹn</td><td>Người không có quyền xem chứng từ thì thấy "Bản ghi không mở được"</td><td>M3</td></tr>
+<tr><td class="tnum">N4</td><td>Danh sách việc riêng: hạn, các bước nhỏ, màn hình "Việc của tôi"</td><td>Không ai khác đọc được việc riêng; việc hạn hôm nay hiện ở "Hôm nay"</td><td>M3</td></tr>
+<tr><td class="tnum">N5</td><td>Gom việc nhóm vào "Việc của tôi"; giao việc riêng cho một vị trí</td><td>Việc được giao thành việc nhóm, cả nhóm thấy</td><td>M3</td></tr>
+<tr><td class="tnum">N6</td><td>Nhắc việc và tìm kiếm không dấu</td><td>Nhắc đúng giờ, một lần, không lộ nội dung; tìm "hoa don" ra "hóa đơn"</td><td>M3</td></tr>
+<tr><td class="tnum">N7</td><td>Biến một dòng ghi chú thành việc</td><td>Việc mới trỏ về ghi chú gốc</td><td>Để sau</td></tr>
+<tr><td class="tnum">N8</td><td>AI tóm tắt ghi chú, gợi ý việc</td><td>Cần quyết thêm trước khi làm; người viết bấm chấp nhận mới thành việc</td><td>Để sau</td></tr>
+<tr><td class="tnum">N9</td><td>Tìm và xóa dữ liệu cá nhân trong ghi chú theo yêu cầu</td><td>Thấy số lượng ghi chú riêng, không thấy nội dung</td><td>Cùng cổng mở đăng ký công khai (GA)</td></tr>
+<tr><td class="tnum">N10</td><td>Gắn ghi chú với biên bản họp</td><td>Khi có module Ghi biên bản họp</td><td>Để sau</td></tr>
+</tbody></table></div>
+
+<h2 id="quyet-dinh">Cần owner quyết</h2>
+<p>Mỗi câu có đề xuất. Chưa xây gì cho đến khi owner duyệt; lúc duyệt, owner có thể nhận cả 7 đề xuất một lần hoặc đổi từng câu.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>#</th><th>Câu hỏi</th><th>Các lựa chọn</th><th>Đề xuất và lý do</th></tr></thead>
+<tbody>
+<tr><td class="tnum">N-1</td><td>Khi nào xây?</td><td>(a) Trong M3, sau phần việc gấp của M2; (b) làm ngay trong M2; (c) để trong kho chờ (Icebox) đến khi khách thí điểm hỏi</td><td><strong>(a)</strong>. Nhân viên kế toán làm nhiều khách và nhiều hạn, màn hình nhiều khách và lịch thuế đã có sẵn chỗ để gắn ghi chú và việc. Nhưng khách thí điểm chưa hỏi, nên không chen trước việc chốt sổ tháng.</td></tr>
+<tr><td class="tnum">N-2</td><td>Ai được đọc ghi chú riêng và việc riêng?</td><td>(a) Chỉ người viết; (b) người viết và chủ sở hữu, quản trị luôn đọc được; (c) chủ sở hữu mở xem khi cần, có ghi lại và báo người viết</td><td><strong>(a)</strong>. "Riêng tư" phải đúng nghĩa, nếu không nhân viên sẽ không ghi gì thật vào đó. Điều văn phòng cần thì nằm ở ghi chú dùng chung hoặc việc nhóm.</td></tr>
+<tr><td class="tnum">N-3</td><td>Người nghỉ việc thì mục riêng của họ ra sao?</td><td>(a) Khóa 30 ngày rồi xóa; (b) xóa ngay; (c) chuyển cho chủ sở hữu; (d) giữ đến khi tổ chức đóng</td><td><strong>(a)</strong>. 30 ngày đủ để sửa một lần xóa nhầm; ghi chú dùng chung vẫn ở lại.</td></tr>
+<tr><td class="tnum">N-4</td><td>Ghi chú dùng chung đến tay ai?</td><td>(a) Chủ sở hữu, quản trị, thành viên; không cho người chỉ xem; (b) mọi người trong tổ chức, kể cả người chỉ xem</td><td><strong>(a)</strong>. Nhân viên của khách có thể được mời vào tổ chức của khách; ghi chú nội bộ của văn phòng về khách không dành cho họ.</td></tr>
+<tr><td class="tnum">N-5</td><td>Bản xuất dữ liệu khi tổ chức ngừng dùng có kèm mục riêng của nhân viên không?</td><td>(a) Không, chỉ ghi số lượng; (b) có</td><td><strong>(a)</strong>. Cùng lý do với N-2; mỗi người tự tải về mục của mình bất cứ lúc nào.</td></tr>
+<tr><td class="tnum">N-6</td><td>Sau này AI có được đọc ghi chú không?</td><td>(a) Chỉ khi người viết bấm yêu cầu, từng ghi chú một, các tác tử AI không bao giờ đọc; (b) không bao giờ; (c) AI đọc mọi ghi chú</td><td><strong>(a)</strong>. Ghi chú có thể chứa dữ liệu cá nhân của khách; người viết quyết từng lần.</td></tr>
+<tr><td class="tnum">N-7</td><td>Mặc định riêng hay chung?</td><td>(a) Việc luôn riêng; ghi chú viết từ màn hình Ghi chú thì riêng, viết từ trang khách hàng, đối tác, chứng từ thì chung; (b) mọi thứ mặc định riêng</td><td><strong>(a)</strong>. Đúng với mục đích của từng chỗ; ô soạn luôn hiện rõ đang là "Riêng tư" hay "Dùng chung".</td></tr>
+</tbody></table></div>
+<p class="muted small">Ai phải làm gì: owner trả lời 7 câu trên (qua điều phối viên). Không cần kế toán, luật sư hay chi tiêu mới cho bản đầu. Bước N9 dùng lại quy trình xử lý yêu cầu dữ liệu cá nhân mà luật sư xem trong #923.</p>
+
+<footer>
+  <p>Trang tóm tắt, không thay thế nguồn chuẩn <a href="notes.md"><code>docs/plan/notes.md</code></a> và <a href="../adr/0037-private-notes-and-todos.md">ADR-0037</a>.</p>
+</footer>
+</main>
+</div>
+</div>
+</body>
+</html>
