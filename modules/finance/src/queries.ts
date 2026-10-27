@@ -395,6 +395,7 @@ export const journalExport = defineCommand({
     stockLines: z.literal('excluded').optional(),
   }),
   risk: 'R0',
+  sideEffect: 'none',
   access: ALL,
   handler: async (ctx, input) => {
     // The range too, null for an open end (#878), so a document's history can name the exports it was in.

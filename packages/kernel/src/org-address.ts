@@ -1,10 +1,15 @@
 // The org's address (issue #324), as the public tax registry records it: prefilled from the tax code lookup when a
 // firm adds a client company, and changed in Settings. Owners and admins set or clear it; the runtime audits every
-// change, and the detail keeps the old and the new value (a registered address is public business data). Stored as
+// change. The detail says whether it changed and keeps a marker naming the class in place of the old and the new value
+// (a household business's address is a person's; auditValue, #1626). Stored as
 // one line: runs of whitespace (line breaks included) become one space; other control characters are refused, as the
 // column's CHECK constraint refuses them.
 import { z } from 'zod';
+import { auditValue } from '@crove/kernel-contract';
 import { DomainError, defineCommand } from '@crove/kernel-runtime';
+import { kernelManifest } from './manifest.ts';
+
+const TENANT = kernelManifest.tables.crove_kernel.tenant;
 
 export const ADDRESS_MAX_LENGTH = 500;
 
@@ -32,7 +37,8 @@ export const setAddress = defineCommand({
       await ctx.trx.updateTable('crove_kernel.tenant').set({ address }).where('org_id', '=', ctx.orgId).execute();
       await ctx.activity('kernel.tenant', ctx.orgId, 'org.address_changed', address ? `Đặt địa chỉ của tổ chức là ${address}` : 'Xóa địa chỉ của tổ chức');
     }
-    ctx.audit({ previous: before.address, address });
+    const changed = before.address !== address;
+    ctx.audit({ previous: auditValue(TENANT, 'address', before.address), address: auditValue(TENANT, 'address', address), changed });
     return { address };
   },
 });

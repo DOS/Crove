@@ -167,6 +167,8 @@ function toInboxItem(row: {
     direction,
     sellerName: payload?.seller.name ?? null,
     buyerName: direction === 'sale' ? (payload?.buyer.name ?? null) : null,
+    // The legal entity the revision names (#1543), as the list gives it.
+    legalEntityId: payload?.legalEntityId ?? voucher?.legalEntityId ?? null,
     total: payload?.invoice.total ?? voucher?.total ?? null,
     issueDate: payload?.invoice.issueDate ?? voucher?.date ?? null,
     failedChecks: countChecks(payload, 'fail'),
@@ -213,6 +215,10 @@ export const inboxList = defineQuery({
         sql<string | null>`left(payload #>> '{seller,name}', 500)`.as('seller_name'),
         sql<boolean>`coalesce(payload ->> 'direction' = 'sale', false)`.as('is_sale'),
         sql<string | null>`left(payload #>> '{buyer,name}', 500)`.as('buyer_name'),
+        // The legal entity the revision names (#1543): an invoice's from inbox.edit, a voucher's from its form. Approval
+        // records the proposal there, and in the approver's default entity when it names none. The entity stamped on the
+        // row when it was made (#1556) is not used: the edit does not move it and approval does not read it.
+        sql<string | null>`left(payload ->> 'legalEntityId', 36)`.as('legal_entity_id'),
         // A voucher (#327) and a general journal voucher (#888) keep their total and date at the top of their payload.
         sql<string | null>`left(CASE WHEN kind IN (${VOUCHER_KIND}, ${JOURNAL_VOUCHER_KIND}) THEN payload ->> 'total' ELSE payload #>> '{invoice,total}' END, 30)`.as('total'),
         sql<string | null>`left(CASE WHEN kind IN (${VOUCHER_KIND}, ${JOURNAL_VOUCHER_KIND}) THEN payload ->> 'date' ELSE payload #>> '{invoice,issueDate}' END, 10)`.as('issue_date'),
@@ -238,6 +244,7 @@ export const inboxList = defineQuery({
       revision: row.revision,
       sellerName: row.seller_name,
       buyerName: row.kind === PURCHASE_KIND && row.is_sale ? row.buyer_name : null,
+      legalEntityId: row.legal_entity_id && zId.safeParse(row.legal_entity_id).success ? row.legal_entity_id : null,
       total: row.total && zMoney.safeParse(row.total).success ? row.total : null,
       issueDate: row.issue_date && zLocalDate.safeParse(row.issue_date).success ? row.issue_date : null,
       failedChecks: Number(row.failed_checks),

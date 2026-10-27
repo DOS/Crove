@@ -97,6 +97,38 @@ export async function needsSecondFactorNow(client: Pick<Client, 'mfa'> = auth())
   return (factors.data?.all ?? []).some((factor) => factor.status === 'verified');
 }
 
+// The second-factor code this tab is verifying (enabling a factor, a step-up or the /mfa challenge). Once the server
+// has verified it, a request sent just before with the old session comes back MFA_REQUIRED, before or after this tab
+// has saved the new session; the answer waits for the verification to settle (#1611).
+// It keeps only when the verification settles, not its result (the session).
+let verifying: Promise<void> = Promise.resolve();
+
+export function verifySecondFactor(params: { factorId: string; code: string }, client: Pick<Client, 'mfa'> = auth()) {
+  const result = client.mfa.challengeAndVerify(params);
+  verifying = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
+
+// Whether a request refused with MFA_REQUIRED means the session still owes its second factor, or only that it was sent
+// before the factor this tab verified meanwhile: the refused screen stays, its next request carries the new session.
+// Each step is waited for MFA_WAIT_MS at most: a verification that never answers leaves the session to decide as it
+// is, and a check that never answers counts as owed, so /mfa opens.
+export const MFA_WAIT_MS = 10_000;
+
+function within<T>(promise: Promise<T>, fallback: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([promise, new Promise<T>((resolve) => (timer = setTimeout(() => resolve(fallback), MFA_WAIT_MS)))]).finally(() =>
+    clearTimeout(timer),
+  );
+}
+
+export async function secondFactorStillOwed(client: Pick<Client, 'mfa'> = auth()): Promise<boolean> {
+  await within(verifying, undefined);
+  return within(needsSecondFactorNow(client), true);
+}
 
 // Supabase Auth error codes with a message of their own; any other error shows the server's message.
 const AUTH_ERRORS = [

@@ -50,6 +50,7 @@ export const setMisaGoodsCode = defineCommand({
   name: 'finance.misa_goods_code.set',
   input: z.object({ accountCode: zAccountCode, itemCode: zMisaCode, warehouseCode: zMisaCode.nullable() }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MANAGERS,
   handler: async (ctx, { accountCode, itemCode, warehouseCode }): Promise<MisaGoodsCode> => {
     await assertStockAccount(ctx, accountCode);
@@ -100,6 +101,7 @@ export const removeMisaGoodsCode = defineCommand({
   name: 'finance.misa_goods_code.remove',
   input: z.object({ accountCode: zAccountCode }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MANAGERS,
   handler: async (ctx, { accountCode }) => {
     const removed = await ctx.trx

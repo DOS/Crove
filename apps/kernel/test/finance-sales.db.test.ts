@@ -223,7 +223,7 @@ suite('sales e-invoices (#313)', () => {
       async (c) =>
         (await c.query(`SELECT detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'kernel.org.set_tax_code' AND outcome = 'ok'`, [org.orgId])).rows,
     );
-    expect(audits.map((a) => a.detail)).toContainEqual({ previous: null, taxCode: SELLER_TAX_CODE });
+    expect(audits.map((a) => a.detail)).toContainEqual({ previous: null, taxCode: { redacted: 'national_id_if_individual' }, changed: true });
     // The database holds the same shape for every writer.
     await expect(admin((c) => c.query(`UPDATE crove_kernel.tenant SET tax_code = 'MST-1' WHERE org_id = $1`, [org.orgId]))).rejects.toMatchObject({ code: '23514' });
   });

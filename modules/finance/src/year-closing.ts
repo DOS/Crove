@@ -109,6 +109,7 @@ export const prepareYearClosing = defineCommand({
   name: 'finance.closing.prepare',
   input: zYearClosingRequest,
   risk: 'R1',
+  sideEffect: 'internal',
   access: REQUESTERS,
   handler: async (ctx, { year, legalEntityId: requested }) => {
     // The legal entity whose year is closed (#1280), stored with the proposal so the approver posts it there.
@@ -123,6 +124,7 @@ export const recordYearClosing = defineCommand({
   name: YEAR_CLOSING_COMMAND,
   input: z.object({ payload: zYearClosingProposal, acceptFailedChecks: z.boolean().default(false) }),
   risk: 'R3',
+  sideEffect: 'financial',
   access: 'proposal',
   proposalKind: JOURNAL_VOUCHER_KIND,
   handler: async (ctx, { payload }) => {

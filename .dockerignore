@@ -13,3 +13,6 @@ apps/web/.next
 docs
 **/*.log
 spikes
+# pgTAP tests and the vendored pgTAP (#1627, #1643) are test-only: they never reach the image.
+supabase/tests
+packages/db/test/invariant/pgtap

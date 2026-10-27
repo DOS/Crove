@@ -1,6 +1,6 @@
 // The legal entity the finance screens work in (#1486): which one, and where the switcher shows.
 import { afterEach, describe, expect, it } from 'vitest';
-import { chooseEntity, exportQuery, isEntityPath, keepEntity, keptEntity, proposalEntity, type VisibleEntity } from '../src/lib/legal-entity-choice.ts';
+import { chooseEntity, exportQuery, isEntityPath, keepEntity, keptEntity, listedEntity, proposalEntity, type VisibleEntity } from '../src/lib/legal-entity-choice.ts';
 
 const e = (id: string, isDefault = false): VisibleEntity => ({ id, name: `Pháp nhân ${id}`, isDefault });
 
@@ -52,6 +52,21 @@ describe('legal entity choice', () => {
     // A choice the caller no longer sees is never offered.
     expect(proposalEntity(all, null, 'gone')).toEqual({ effective: 'b', suggest: null });
     expect(proposalEntity([], null, null)).toEqual({ effective: null, suggest: null });
+  });
+
+  it('names the entity of each Inbox proposal only to a caller who sees several', () => {
+    const all = [e('a'), e('b', true)];
+    expect(listedEntity(all, 'a', true)?.id).toBe('a');
+    expect(listedEntity(all, 'a', false)?.id).toBe('a');
+    // Named none: an invoice or a voucher goes to the default entity; another kind has none.
+    expect(listedEntity(all, null, true)?.id).toBe('b');
+    expect(listedEntity(all, null, false)).toBeNull();
+    // The default entity out of the caller's sight: approval would not pick one of theirs, so the list names none.
+    expect(listedEntity([e('a'), e('c')], null, true)).toBeNull();
+    // An entity out of the caller's sight is not named.
+    expect(listedEntity(all, 'gone', true)).toBeNull();
+    // One entity: nothing to tell apart.
+    expect(listedEntity([e('a', true)], 'a', true)).toBeNull();
   });
 
   it('keeps one choice per org', () => {

@@ -163,8 +163,8 @@ suite('onboarding by tax code (#324)', () => {
           .rows,
     );
     expect(audit.map((r) => r.detail)).toEqual([
-      { previous: null, address: 'Số 1 Phố Huế, Quận Hai Bà Trưng, Hà Nội' },
-      { previous: 'Số 1 Phố Huế, Quận Hai Bà Trưng, Hà Nội', address: 'Tầng 2, Số 1 Phố Huế, Hà Nội' },
+      { previous: null, address: { redacted: 'contact' }, changed: true },
+      { previous: { redacted: 'contact' }, address: { redacted: 'contact' }, changed: true },
     ]);
     const activity = await asAdmin(async (c) => (await c.query(`SELECT summary FROM crove_kernel.activity WHERE org_id = $1 AND kind = 'org.address_changed'`, [org.orgId])).rows);
     expect(activity).toHaveLength(2);

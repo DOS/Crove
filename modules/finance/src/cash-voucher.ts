@@ -92,6 +92,7 @@ export const prepareVoucher = defineCommand({
   name: 'finance.voucher.prepare',
   input: zCashVoucherRequest,
   risk: 'R1',
+  sideEffect: 'internal',
   access: REQUESTERS,
   handler: async (ctx, input) => {
     const partyId = input.partyId ?? null;
@@ -144,6 +145,7 @@ export const recordVoucher = defineCommand({
   name: VOUCHER_COMMAND,
   input: z.object({ payload: zCashVoucherProposal, acceptFailedChecks: z.boolean().default(false) }),
   risk: 'R3',
+  sideEffect: 'financial',
   access: 'proposal',
   proposalKind: VOUCHER_KIND,
   handler: async (ctx, { payload }) => {

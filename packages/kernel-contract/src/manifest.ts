@@ -1,8 +1,10 @@
-// A module's manifest (plan §5.2, #1588, #1599): the module and the database tables it owns, per schema, with every
-// column of each table and its data class. A database test (apps/kernel/test/manifest.db.test.ts) checks the manifests
-// against the catalog after the migrations: every table of a crove_* schema belongs to exactly one manifest, every
-// column of it is classified, and every table and column a manifest names exists. Entities, permissions and routes
-// join the manifest later (§5.2).
+// A module's manifest (plan §5.2, #1588, #1599, #1630): the module, the database tables it owns, per schema, with every
+// column of each table and its data class, and the permissions it owns. A database test
+// (apps/kernel/test/manifest.db.test.ts) checks the manifests against the catalog after the migrations: every table of a
+// crove_* schema belongs to exactly one manifest, every column of it is classified, every table and column a manifest
+// names exists, and every permission a role grants or something checks is declared, with the roles that grant it.
+// Entities and routes join the manifest later (§5.2).
+import type { BuiltinRoleKey } from './roles.ts';
 
 // What a column holds (plan §5.2, §4.7, §4.10):
 // - internal: business data that is not about a person (amounts, dates, ids, statuses, codes, the org's own texts).
@@ -22,21 +24,57 @@ export type DataClass = (typeof DATA_CLASSES)[number];
 export type TableColumns = Readonly<Record<string, DataClass>>;
 
 // A table's columns: the listed ones are `internal`, and `classified` gives every other column its class. A column in
-// both is a mistake in the manifest, refused when the module loads.
-export function columns(internal: readonly string[], classified: Readonly<Record<string, Exclude<DataClass, 'internal'>>> = {}): TableColumns {
+// both is a mistake in the manifest, refused when the module loads. The result keeps the column names in its type, so
+// auditValue() refuses a column the table does not have at typecheck.
+export function columns<const I extends string, const C extends string = never>(
+  internal: readonly I[],
+  classified: Readonly<Record<C, Exclude<DataClass, 'internal'>>> = {} as Record<C, Exclude<DataClass, 'internal'>>,
+): Readonly<Record<I | C, DataClass>> {
   const out: Record<string, DataClass> = {};
   for (const c of internal) out[c] = 'internal';
-  for (const [c, cls] of Object.entries(classified)) {
+  for (const [c, cls] of Object.entries(classified) as Array<[string, DataClass]>) {
     if (Object.hasOwn(out, c)) throw new Error(`manifest: column ${c} is listed as internal and as ${cls}`);
     out[c] = cls;
   }
-  return Object.freeze(out);
+  return Object.freeze(out) as Readonly<Record<I | C, DataClass>>;
+}
+
+// What an audit fact keeps of a classified column's value (plan §4.10, #1626): the class, never the value. Audit rows
+// are append-only and anchored in the WORM stream, so personal data the PDPL erasure (#923) must reach can never be
+// written there; the row's input_sha256 still ties it to the command's input.
+export interface RedactedValue {
+  readonly redacted: Exclude<DataClass, 'internal'>;
+}
+
+// A column's value as an audit fact (ctx.audit, or the audit facts of a DomainError): an internal value as it is, a
+// value of any other class replaced by a marker naming the class, and an absent value (null or undefined) kept, since
+// "there was none" or "it was cleared" says nothing about a person. Every fact whose key names a classified column, or
+// that holds a classified column's value, goes through this; apps/kernel/test/audit-facts.test.ts fails on one that
+// does not. A column the table does not have throws, so a misspelt column never passes a value through.
+export function auditValue<T extends TableColumns, V>(table: T, column: keyof T & string, value: V): V | RedactedValue {
+  if (!Object.hasOwn(table, column)) throw new Error(`auditValue: the table has no column ${column}`);
+  const cls = table[column] as DataClass;
+  if (cls === 'internal' || value === null || value === undefined) return value;
+  return Object.freeze({ redacted: cls });
+}
+
+// A permission the module owns (plan §5.2, §4.6, #1630). Its key is `<module id>.<name>`. A member holds it through an
+// org-wide assignment of one of its default roles, which are the crove_kernel.role_permission rows the migrations seed
+// for it (a declaration, not a grant: the test fails when the two differ). The base roles of tenant_member.role (owner,
+// admin) are never listed: who passes a command by base role is the command's `access`, and who approves by base role
+// is the approval policy. The risk is the highest risk of the commands that name the permission.
+export interface PermissionDeclaration {
+  readonly key: string;
+  readonly risk: 'R0' | 'R1' | 'R2' | 'R3';
+  readonly defaultRoles: readonly BuiltinRoleKey[];
 }
 
 export interface ModuleManifest {
   readonly id: string;
   // Schema name -> table name (sorted) -> every column of the table with its class.
   readonly tables: Readonly<Record<string, Readonly<Record<string, TableColumns>>>>;
+  // The permissions the module owns, sorted by key; empty when it owns none.
+  readonly permissions: readonly PermissionDeclaration[];
 }
 
 // `const` keeps each manifest's lists readonly, so an importer cannot change who owns a table.
