@@ -65,40 +65,72 @@ function sources(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-// Comments blanked and the contents of '...' and "..." strings blanked (line breaks kept), so neither a comment nor a
-// string can open or close a bracket. Template literals are kept as they are: their ${...} are code.
+// Comments blanked, and the literal text of '...', "..." and `...` strings blanked, line breaks and offsets kept, so
+// neither a comment nor a string can open or close a bracket or look like a fact key. The code inside a template's
+// ${...} stays, templates nested in it included, since an interpolation can carry a classified value.
 function blank(text: string): string {
-  let out = '';
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i] as string;
-    const next = text[i + 1];
-    if (c === '/' && next === '/') {
-      while (i < text.length && text[i] !== '\n') {
-        out += ' ';
+  let i = 0;
+  // Code up to the end of the text or, inside a template's ${...}, up to the } that closes it (not consumed).
+  const code = (inTemplate: boolean): string => {
+    let out = '';
+    let depth = 0;
+    while (i < text.length) {
+      const c = text[i] as string;
+      const next = text[i + 1];
+      if (c === '/' && next === '/') {
+        while (i < text.length && text[i] !== '\n') {
+          out += ' ';
+          i++;
+        }
+      } else if (c === '/' && next === '*') {
+        const end = text.indexOf('*/', i + 2);
+        const stop = end === -1 ? text.length : end + 2;
+        out += text.slice(i, stop).replace(/[^\n]/g, ' ');
+        i = stop;
+      } else if (c === "'" || c === '"') {
+        out += c;
+        i++;
+        while (i < text.length && text[i] !== c && text[i] !== '\n') {
+          out += text[i] === '\\' ? '  ' : ' ';
+          i += text[i] === '\\' ? 2 : 1;
+        }
+        if (i < text.length) out += text[i++];
+      } else if (c === '`') {
+        out += template();
+      } else if (inTemplate && c === '}' && depth === 0) {
+        return out;
+      } else {
+        if (inTemplate && c === '{') depth++;
+        if (inTemplate && c === '}') depth--;
+        out += c;
         i++;
       }
-      out += text[i] ?? '';
-    } else if (c === '/' && next === '*') {
-      const end = text.indexOf('*/', i + 2);
-      const stop = end === -1 ? text.length : end + 2;
-      out += text.slice(i, stop).replace(/[^\n]/g, ' ');
-      i = stop - 1;
-    } else if (c === "'" || c === '"') {
-      out += c;
-      i++;
-      while (i < text.length && text[i] !== c && text[i] !== '\n') {
-        out += text[i] === '\\' ? '  ' : ' ';
-        if (text[i] === '\\') i++;
-        i++;
-      }
-      out += text[i] ?? '';
-    } else {
-      out += c;
     }
-  }
-  return out;
+    return out;
+  };
+  // A template literal from its opening backtick: its text blanked, each ${...} kept as code.
+  const template = (): string => {
+    let out = '`';
+    i++;
+    while (i < text.length && text[i] !== '`') {
+      if (text[i] === '\\') {
+        out += text[i + 1] === '\n' ? ' \n' : '  ';
+        i += 2;
+      } else if (text[i] === '$' && text[i + 1] === '{') {
+        out += '${';
+        i += 2;
+        out += code(true);
+        if (i < text.length) out += text[i++];
+      } else {
+        out += text[i] === '\n' ? '\n' : ' ';
+        i++;
+      }
+    }
+    if (i < text.length) out += text[i++];
+    return out;
+  };
+  return code(false);
 }
-
 // The text from `open` (an opening bracket) to its matching close, both included.
 function balanced(text: string, open: number): string {
   const pairs: Record<string, string> = { '(': ')', '[': ']', '{': '}' };
@@ -216,6 +248,10 @@ describe('audit facts and classified columns (#1626)', () => {
     expect(check("ctx.audit({ previous: auditValue(T, 'tax_code', before.tax_code), changed: before.tax_code !== taxCode });")).toEqual(['changed']);
     expect(check("ctx.audit({ previous: auditValue(T, 'tax_code', before.tax_code), changed });")).toEqual([]);
     expect(check("ctx.audit({ partyId: row.id, linked: [] }); // name: party.name")).toEqual([]);
+    // A template's text cannot open a bracket or pose as a key; the code in its ${...} is still scanned, nested too.
+    expect(check('ctx.audit({ msg: `) { name: x ]`, partyId });')).toEqual([]);
+    expect(check('ctx.audit({ msg: `Gộp ${party.name} vào ${`(${keep.name})`}`, partyId });')).toEqual(['msg', 'msg']);
+    expect(check('ctx.audit({ msg: `${auditValue(T, "name", party.name)}`, partyId });')).toEqual([]);
   });
 
   it('replaces a classified value with a marker naming its class, and keeps internal and absent values', () => {
