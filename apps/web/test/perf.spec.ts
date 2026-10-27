@@ -14,7 +14,7 @@ for (const path of ['/', '/en']) {
       console.log(`${path} ${profile.name}: ${summary}`);
       test.info().annotations.push({ type: 'vitals', description: `${path} ${profile.name}: ${summary}` });
       expect(problems).toEqual([]);
-      expect(vitals.interactions, 'no interaction was recorded').toBeGreaterThan(0);
+      expect(vitals.clicks, 'no interactive piece was clicked').toBeGreaterThan(0);
     });
 
     test(`${path} on ${profile.name} keeps its fonts, images and scripts in budget`, async ({ browser }) => {

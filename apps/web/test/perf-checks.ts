@@ -4,7 +4,7 @@
 import type { Browser, BrowserContext, CDPSession, Page } from '@playwright/test';
 import { BUDGET, type Profile } from './perf-budget';
 
-type Vitals = { lcp: number; cls: number; inp: number; interactions: number };
+type Vitals = { lcp: number; cls: number; inp: number; clicks: number };
 type Setup = (context: BrowserContext) => Promise<void>;
 
 // Records the vitals as the page runs, before any of its own script: the largest contentful paint, every layout shift
@@ -28,9 +28,10 @@ function observeVitals(): void {
 }
 
 // CLS as Chrome reports it: the largest session window of shifts, a window closing after a 1 s gap or at 5 s. INP is
-// the slowest interaction, as it is for a page with fewer than 50 of them. A page that painted nothing has an LCP of
-// Infinity, which fails the budget.
-async function readVitals(page: Page): Promise<Vitals> {
+// the slowest interaction, as it is for a page with fewer than 50 of them; one under 16 ms is not reported, so a page
+// whose every interaction is that fast has an INP of 0. A page that painted nothing has an LCP of Infinity, which fails
+// the budget.
+async function readVitals(page: Page): Promise<Omit<Vitals, 'clicks'>> {
   return page.evaluate(() => {
     const store = (window as unknown as { __vitals: { lcp: number | null; shifts: Array<{ t: number; v: number }>; events: Map<number, number> } }).__vitals;
     let cls = 0;
@@ -47,7 +48,7 @@ async function readVitals(page: Page): Promise<Vitals> {
       cls = Math.max(cls, windowValue);
     }
     const durations = [...store.events.values()];
-    return { lcp: store.lcp ?? Infinity, cls, inp: durations.length ? Math.max(...durations) : 0, interactions: durations.length };
+    return { lcp: store.lcp ?? Infinity, cls, inp: durations.length ? Math.max(...durations) : 0 };
   });
 }
 
@@ -77,16 +78,23 @@ async function scrollThrough(page: Page): Promise<void> {
 }
 
 // Uses each interactive piece once: every visible button and FAQ question, the phone menu opened and closed again.
-async function interact(page: Page): Promise<void> {
+// Returns the number of clicks.
+async function interact(page: Page): Promise<number> {
   await page.evaluate(() => window.scrollTo(0, 0));
   const targets = page.locator('main summary, main button:not([disabled]), header button');
+  let clicks = 0;
   for (const target of await targets.all()) {
     if (!(await target.isVisible()) || !(await target.isEnabled())) continue;
     await target.scrollIntoViewIfNeeded();
     await target.click();
-    if (await target.getAttribute('aria-controls')) await target.click();
+    clicks++;
+    if (await target.getAttribute('aria-controls')) {
+      await target.click();
+      clicks++;
+    }
   }
   await page.waitForTimeout(500);
+  return clicks;
 }
 
 // The vitals of `runs` first visits (each a new context, so an empty cache). LCP is the median of the runs, so one
@@ -105,22 +113,22 @@ export async function measureVitals(browser: Browser, path: string, profile: Pro
     // LCP stops at the first scroll or input, so it is read before either.
     const { lcp } = await readVitals(page);
     await scrollThrough(page);
-    if (run === runs - 1) await interact(page);
-    measured.push({ ...(await readVitals(page)), lcp });
+    const clicks = run === runs - 1 ? await interact(page) : 0;
+    measured.push({ ...(await readVitals(page)), lcp, clicks });
     await context.close();
   }
   const lcps = measured.map((r) => r.lcp).sort((a, b) => a - b);
   const last = measured[measured.length - 1];
-  const vitals = { lcp: lcps[Math.floor(lcps.length / 2)], cls: Math.max(...measured.map((r) => r.cls)), inp: last.inp, interactions: last.interactions };
+  const vitals = { lcp: lcps[Math.floor(lcps.length / 2)], cls: Math.max(...measured.map((r) => r.cls)), inp: last.inp, clicks: last.clicks };
   const problems: string[] = [];
   if (!(vitals.lcp < BUDGET.lcpMs)) problems.push(`LCP ${vitals.lcp} ms (median of ${lcps.join(', ')}), at most ${BUDGET.lcpMs} ms`);
   if (!(vitals.cls < BUDGET.cls)) problems.push(`CLS ${vitals.cls.toFixed(3)}, at most ${BUDGET.cls}`);
   if (profile.checksInp && !(vitals.inp < BUDGET.inpMs)) problems.push(`INP ${vitals.inp} ms, at most ${BUDGET.inpMs} ms`);
-  const summary = `LCP ${lcps.join(', ')} ms; CLS ${vitals.cls.toFixed(4)}; INP ${vitals.inp} ms over ${vitals.interactions} interactions${profile.checksInp ? '' : ' (reported only)'}`;
+  const summary = `LCP ${lcps.join(', ')} ms; CLS ${vitals.cls.toFixed(4)}; INP ${vitals.inp} ms over ${vitals.clicks} clicks${profile.checksInp ? '' : ' (reported only)'}`;
   return { vitals, problems, summary };
 }
 
-type Loaded = { url: string; type: string; contentType: string; bytes: number; encoded: number };
+type Loaded = { url: string; type: string; contentType: string; bytes: number | null; encoded: number };
 
 // What one visit downloads and what the page declares, against the budget's rules for fonts, images and scripts.
 export async function auditResources(browser: Browser, path: string, profile: Profile, setup?: Setup) {
@@ -137,7 +145,7 @@ export async function auditResources(browser: Browser, path: string, profile: Pr
           url: request.url(),
           type: request.resourceType(),
           contentType: (response.headers()['content-type'] ?? '').split(';')[0].trim(),
-          bytes: (await response.body().catch(() => Buffer.alloc(0))).length,
+          bytes: (await response.body().catch(() => null))?.length ?? null,
           encoded: (await request.sizes()).responseBodySize,
         };
       })(),
@@ -170,12 +178,17 @@ export async function auditResources(browser: Browser, path: string, profile: Pr
   for (const image of resources.filter((r) => r.type === 'image' && r.contentType !== 'image/svg+xml')) {
     if (!['image/avif', 'image/webp'].includes(image.contentType)) problems.push(`image ${pathOf(image.url)} is ${image.contentType || 'of no type'}, not AVIF or WebP`);
     // Chromium keeps no body for an image, so its size is the one sent (images are sent uncompressed).
-    const size = Math.max(image.bytes, image.encoded);
+    const size = Math.max(image.bytes ?? 0, image.encoded);
     if (size > BUDGET.imageBytes) problems.push(`image ${pathOf(image.url)} is ${kb(size)}, over ${kb(BUDGET.imageBytes)}`);
   }
-  for (const img of dom.images.filter((i) => i.raster && i.src)) {
+  // An <img> is judged by the type it was served as (next/image negotiates the format behind one URL), or by its
+  // data: URL.
+  const servedAs = new Map(resources.map((r) => [r.url, r.contentType]));
+  for (const img of dom.images.filter((i) => i.src)) {
     const name = img.src.startsWith('data:') ? img.src.slice(0, 30) : pathOf(img.src);
-    if (!/^data:image\/(avif|webp)[;,]|\.(avif|webp)(\?.*)?$/i.test(img.src)) problems.push(`<img> ${name} is not AVIF or WebP`);
+    const type = img.src.startsWith('data:') ? (/^data:([^;,]*)/.exec(img.src)?.[1] ?? '') : (servedAs.get(img.src) ?? '');
+    if (type === 'image/svg+xml') continue;
+    if (!['image/avif', 'image/webp'].includes(type)) problems.push(`<img> ${name} is not AVIF or WebP`);
     if (!img.width || !img.height) problems.push(`<img> ${name} has no width and height`);
   }
 
@@ -183,7 +196,8 @@ export async function auditResources(browser: Browser, path: string, profile: Pr
   // bytes (sent and decoded).
   const scripts = resources.filter((r) => r.type === 'script');
   const encoded = scripts.reduce((sum, s) => sum + s.encoded, 0);
-  const decoded = scripts.reduce((sum, s) => sum + s.bytes, 0);
+  const decoded = scripts.reduce((sum, s) => sum + (s.bytes ?? 0), 0);
+  for (const script of scripts.filter((s) => s.bytes === null)) problems.push(`script ${pathOf(script.url)} could not be read, so its size is unknown`);
   for (const script of scripts.filter((s) => new URL(s.url).origin !== origin)) problems.push(`script ${script.url} from another origin`);
   if (scripts.length > BUDGET.scriptFiles) problems.push(`${scripts.length} script files, at most ${BUDGET.scriptFiles}`);
   if (encoded > BUDGET.scriptBytesSent) problems.push(`${kb(encoded)} of script sent, at most ${kb(BUDGET.scriptBytesSent)}`);
@@ -193,28 +207,36 @@ export async function auditResources(browser: Browser, path: string, profile: Pr
   return { problems, summary };
 }
 
-// What the page's markup and stylesheets declare: the @font-face rules, the preloaded fonts, the images.
+// What the page's markup and stylesheets declare: the @font-face rules (also inside @media, @supports, @layer and
+// imported sheets), the preloaded fonts, the images.
 function readDocument() {
   const fontFaces: Array<{ family: string; remote: boolean; unicodeRange: string }> = [];
   const unreadableSheets: string[] = [];
-  for (const sheet of document.styleSheets) {
+  const walk = (sheet: CSSStyleSheet) => {
     let rules: CSSRuleList;
     try {
       rules = sheet.cssRules;
     } catch {
       unreadableSheets.push(sheet.href ?? '(inline)');
-      continue;
+      return;
     }
-    for (const rule of rules) {
-      if (!(rule instanceof CSSFontFaceRule)) continue;
-      const family = rule.style.getPropertyValue('font-family').replace(/^["']|["']$/g, '');
-      fontFaces.push({ family, remote: /url\(/.test(rule.style.getPropertyValue('src')), unicodeRange: rule.style.getPropertyValue('unicode-range') });
-    }
-  }
+    const visit = (list: CSSRuleList) => {
+      for (const rule of list) {
+        if (rule instanceof CSSImportRule && rule.styleSheet) walk(rule.styleSheet);
+        else if (rule instanceof CSSGroupingRule) visit(rule.cssRules);
+        else if (rule instanceof CSSFontFaceRule) {
+          const family = rule.style.getPropertyValue('font-family').replace(/^["']|["']$/g, '');
+          fontFaces.push({ family, remote: /url\(/.test(rule.style.getPropertyValue('src')), unicodeRange: rule.style.getPropertyValue('unicode-range') });
+        }
+      }
+    };
+    visit(rules);
+  };
+  for (const sheet of document.styleSheets) walk(sheet);
   const preloadedFonts = [...document.querySelectorAll<HTMLLinkElement>('link[rel="preload"][as="font"]')].map((link) => link.href);
   const images = [...document.querySelectorAll('img')].map((img) => {
     const src = img.currentSrc || img.src;
-    return { src, raster: !/^data:image\/svg\+xml[;,]|\.svg(\?.*)?$/i.test(src), width: img.getAttribute('width'), height: img.getAttribute('height') };
+    return { src, width: img.getAttribute('width'), height: img.getAttribute('height') };
   });
   return { fontFaces, unreadableSheets, preloadedFonts, images };
 }

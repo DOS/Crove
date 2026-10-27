@@ -31,7 +31,8 @@ export default defineConfig({
       // with one worker (test:perf), so no other test competes for the CPU it measures.
       name: 'perf',
       testMatch: 'perf*.spec.ts',
-      use: { ...devices['Desktop Chrome'] },
+      // No trace or screenshots: recording them runs in the throttled renderer and would add to what is measured.
+      use: { ...devices['Desktop Chrome'], trace: 'off', screenshot: 'off' },
       timeout: 120_000,
     },
   ],

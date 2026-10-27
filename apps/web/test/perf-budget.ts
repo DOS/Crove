@@ -1,7 +1,7 @@
 // The fixed numbers of the landing page's performance budget (#1655). The vitals are DESIGN.md §6.3's; the caps on
 // images and scripts are set from what the page loads today with some headroom, so growth past them is a decision
 // made in review, not a drift.
-import type { BrowserContextOptions } from '@playwright/test';
+import { devices, type BrowserContextOptions } from '@playwright/test';
 
 export const BUDGET = {
   // DESIGN.md §6.3, Core Web Vitals.
@@ -37,7 +37,7 @@ export type Profile = {
 export const PROFILES: Profile[] = [
   {
     name: 'mobile',
-    context: { viewport: { width: 412, height: 823 }, deviceScaleFactor: 1.75, isMobile: true, hasTouch: true },
+    context: { viewport: { width: 412, height: 823 }, deviceScaleFactor: 1.75, isMobile: true, hasTouch: true, userAgent: devices['Moto G4'].userAgent },
     network: { latencyMs: 562.5, downloadKbps: 1474.56, uploadKbps: 675 },
     cpuSlowdown: 4,
     checksInp: false,
