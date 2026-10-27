@@ -46,6 +46,9 @@ export const PROTECTED_PATHS = [
   // This gate itself: the detection script and the invariant suite.
   [/^tools\/ci\//, 'protected-path gate'],
   [/(^|\/)test\/invariant\//, 'invariant suite'],
+  // The pgTAP runner of the modules' tests (#1643): it decides which of them run. Its runner, TAP check and vendored
+  // pgTAP live in packages/db/test/invariant/pgtap/, covered above.
+  [/^packages\/db\/test\/pgtap\.db\.test\.ts$/, 'pgTAP runner'],
   // Context, policy and authorization: the one write path, context entry, approval policy, identity, HTTP edge.
   [/^packages\/kernel-runtime\/src\//, 'command runtime (context and authorization)'],
   [/^packages\/db\/src\/context\//, 'database context'],

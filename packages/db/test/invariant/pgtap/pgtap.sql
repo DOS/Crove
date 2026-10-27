@@ -1,6 +1,7 @@
--- Vendored pgTAP for the Crove pgTAP runner (issue #1627, plan §10 G3). Test-only: packages/db/test/pgtap.db.test.ts
--- installs it into its throwaway test database after the migrations ran. No migration installs it, and .dockerignore
--- keeps it out of the image, so it never reaches a deployed database.
+-- Vendored pgTAP for the Crove pgTAP runner (issues #1627 and #1643, plan §10 G3). Test-only: runner.ts next to this
+-- file installs it into its throwaway test database after the migrations ran. No migration installs it, and
+-- .dockerignore keeps it out of the image, so it never reaches a deployed database. It lives in the invariant suite, so
+-- on protected-path PRs the base branch's copy judges the gate files (#1643).
 --
 -- Source:   https://github.com/theory/pgtap, tag v1.3.4 (commit 968eb53a33114e83042b3bdb0c664b5b80cf8bdf, released
 --           2025-10-04), file sql/pgtap.sql.in.

@@ -1,7 +1,7 @@
-// The TAP check of the pgTAP runner (issue #1627, plan §10 G3): reads the lines a pgTAP test file printed and says
-// why the file fails, if it does. A file passes only when it planned its tests up front with plan(n), n >= 1, ran
-// exactly n tests numbered 1..n, every one `ok`, none skipped or marked TODO, and nothing bailed out. A SQL error is
-// the runner's to report: it never reaches this check.
+// The TAP check of the pgTAP runner (issues #1627 and #1643, plan §10 G3): reads the lines a pgTAP test file printed
+// and says why the file fails, if it does. A file passes only when it planned its tests up front with plan(n), n >= 1,
+// ran exactly n tests numbered 1..n, every one `ok`, none skipped or marked TODO, and nothing bailed out. A SQL error
+// is the runner's to report: it never reaches this check.
 //
 // Lines that are not TAP (the output of a setup SELECT) are ignored: they cannot hide a failure, since a failed test
 // always prints `not ok` and a test that did not run leaves the count short of the plan.
@@ -12,6 +12,17 @@ const TEST = /^(not )?ok\b(?:\s+(\d+))?(.*)$/;
 // `#` in a description, so a description holding " # todo" is refused too: strict, and never a false pass.
 const DIRECTIVE = /(?:^|\s)#\s*(SKIP|TODO)\b/i;
 const BAIL_OUT = /^Bail out!/;
+
+// A line that TAP would count: a plan, a test or a bail out. The runner refuses such a line in a result of more than one
+// column, which it does not read, so a test cannot hide there (#1643).
+export function isTapLine(line: string): boolean {
+  return PLAN.test(line) || TEST.test(line) || BAIL_OUT.test(line);
+}
+
+// The number of test lines, which the runner compares with pgTAP's own counter (#1643).
+export function testCount(lines: readonly string[]): number {
+  return lines.filter((line) => TEST.test(line)).length;
+}
 
 // Every text value of the results, split into lines: pgTAP functions return one text value per call, which may hold
 // several lines (a failed test is followed by its diagnostics).

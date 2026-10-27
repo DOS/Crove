@@ -58,7 +58,8 @@ jobs:
         run: |
           set -euo pipefail
           # NUL-separated lists throughout, so unusual file names cannot slip past rm or checkout.
-          suite_re='(^|/)test/invariant/|^vitest\.invariant\.config\.ts$'
+          # The suite: every test/invariant/ directory, its config, and the pgTAP gate files its runner runs (#1643).
+          suite_re='(^|/)test/invariant/|^vitest\.invariant\.config\.ts$|^supabase/tests/database/_[^/]*\.test\.sql$'
           base_list="$RUNNER_TEMP/invariant-base.list"
           git ls-tree -r -z --name-only "$BASE_SHA" | { grep -zE "$suite_re" || true; } | sort -z > "$base_list"
           if [ ! -s "$base_list" ]; then
@@ -71,7 +72,8 @@ jobs:
           xargs -0 -r git --literal-pathspecs checkout "$BASE_SHA" -- < "$base_list"
           # The files on disk must now be exactly the base list.
           find . -name node_modules -prune -o -name .git -prune -o -type f -regextype posix-extended \
-            -regex '\./(.*/)?test/invariant/.*|\./vitest\.invariant\.config\.ts' -printf '%P\0' | sort -z > "$RUNNER_TEMP/invariant-disk.list"
+            -regex '\./(.*/)?test/invariant/.*|\./vitest\.invariant\.config\.ts|\./supabase/tests/database/_[^/]*\.test\.sql' \
+            -printf '%P\0' | sort -z > "$RUNNER_TEMP/invariant-disk.list"
           if ! cmp -s "$base_list" "$RUNNER_TEMP/invariant-disk.list"; then
             echo "::error::The invariant files on disk do not match the base branch's list."
             diff <(tr '\0' '\n' < "$base_list") <(tr '\0' '\n' < "$RUNNER_TEMP/invariant-disk.list") || true
@@ -79,7 +81,8 @@ jobs:
           fi
           # ...with the base branch's content.
           xargs -0 git --literal-pathspecs diff --quiet "$BASE_SHA" -- < "$base_list"
-          changed=$(git -c core.quotePath=false diff --name-status "$BASE_SHA...$HEAD_SHA" -- ':(glob)**/test/invariant/**' vitest.invariant.config.ts)
+          changed=$(git -c core.quotePath=false diff --name-status "$BASE_SHA...$HEAD_SHA" -- ':(glob)**/test/invariant/**' vitest.invariant.config.ts \
+            ':(glob)supabase/tests/database/_*.test.sql')
           {
             echo "### Invariant suite: base copy (\`${BASE_SHA:0:7}\`)"
             echo
