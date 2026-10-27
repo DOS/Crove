@@ -33,6 +33,11 @@ jobs:
       - name: Path boundary (G1)
         run: node tools/ci/path-boundary.mjs
 
+      # G5 PII scan (kernel plan §10, #1628): no citizen ID, mobile number, individual tax code or personal email
+      # address in any tracked file. Reads the checkout only; the log masks every value it reports.
+      - name: PII scan (G5)
+        run: node tools/ci/pii-scan.mjs
+
       # AGENTS.md: a new migration's version is greater than every file on main. Compared against the live base
       # branch, so re-running this job after main moves catches a PR that fell behind; migration-recheck.yml does
       # that re-run after every push to main.
