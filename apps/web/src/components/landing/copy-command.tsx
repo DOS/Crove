@@ -49,7 +49,8 @@ export function CopyCommand({ command, copy, copied, copyFail }: { command: stri
           {state === 'copied' ? copied : copy}
         </button>
       </div>
-      <pre ref={pre} className="overflow-x-auto px-4 py-4 font-mono text-[13px] leading-relaxed text-fg">
+      {/* A long command scrolls sideways at phone width, so the block takes keyboard focus (WCAG 2.1.1, #1629). */}
+      <pre ref={pre} tabIndex={0} className="overflow-x-auto px-4 py-4 font-mono text-[13px] leading-relaxed text-fg">
         <code>{command}</code>
       </pre>
       <p role="status" className={`px-4 pb-3 text-xs text-warn ${state === 'failed' ? '' : 'sr-only'}`}>

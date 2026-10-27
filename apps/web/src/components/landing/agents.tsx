@@ -12,7 +12,8 @@ export function Agents({ dict }: { dict: Dictionary }) {
       <SectionHead id="agents-title" title={m.title} lead={m.lead} />
       <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_320px] lg:gap-10">
         <div className="min-w-0">
-          <div className="overflow-x-auto rounded-lg border border-line bg-surface">
+          {/* Scrolls sideways at phone width, so it takes keyboard focus to scroll with the arrow keys (WCAG 2.1.1, #1629). */}
+          <div role="group" aria-labelledby="agents-title" tabIndex={0} className="overflow-x-auto rounded-lg border border-line bg-surface">
             <table className="w-full min-w-[640px] border-collapse text-sm">
               <thead>
                 <tr className="text-left text-xs">
