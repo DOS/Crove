@@ -5,32 +5,39 @@
 // - workSites(): every boss.work() of the worker, with what its handler reaches: everything its code refers to,
 //   followed through the worker's own declarations and the kernel's own files (apps/kernel/src), and every WorkerDeps
 //   field it uses. The egress guard of @crove/kernel-runtime reaches a tenant's URL; the readers and writers of
-//   @crove/agent and the invoice reader reach the AI endpoint; a provider adapter of @crove/channel, the publishers and
-//   the mailer reach a provider; a bare fetch() is never allowed.
+//   @crove/agent and the invoice reader reach provider:ai; what @crove/channel exports beyond its pure helpers, the
+//   publishers and the mailer reach their provider; fetch() itself and Node's network modules are never allowed.
 // - sendSites(): every boss.send() and boss.schedule() of apps/kernel/src, with the queues it may name and, inside the
 //   outbox relay, the outbox events that lead to it.
 // - emittersOf(): the commands whose handler emits an event, followed through the helpers they call.
 //
 // Modules and packages/kernel never reach the network themselves (commands do no network I/O, plan §4.6): the test
-// checks that their sources name neither the guard nor fetch, so following the worker into them finds nothing.
+// runs reachOf() over each of their files and finds nothing, so following the worker into them finds nothing either.
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { parseAst } from 'vitest/node';
 
-export const ROOT = resolve(import.meta.dirname, '../../..');
+const ROOT = resolve(import.meta.dirname, '../../..');
 const KERNEL_SRC = 'apps/kernel/src';
 
 // An ESTree node.
 type N = { type: string; start: number; end: number; [key: string]: any };
 
-// What a handler reaches. 'ai': the AI endpoint. 'publishers': the channel adapters, a provider and, for the hosts a
-// tenant names, the guard.
-export type Reach = 'tenant_url' | 'ai' | 'provider' | 'publishers' | 'raw_fetch';
+// What a handler reaches: an egress target as QUEUE_EGRESS names it, 'publishers' (the channel adapters: the publish
+// queue's provider, or provider:channel, and the guard for the hosts a tenant names), or 'raw_network' (fetch() or a
+// Node network module, never allowed).
+export type Reach = 'tenant_url' | `provider:${string}` | 'publishers' | 'raw_network';
 
 // The egress guard (packages/kernel-runtime/src/egress.ts).
 const GUARDS: ReadonlySet<string> = new Set(['guardedFetch', 'guardedRequest', 'egressFetch']);
-// What calls a platform in @crove/channel: its send helpers, its publishers and its account connections.
-const PROVIDER_EXPORT = /^send[A-Z]|Publisher$|^connect[A-Z]/;
+// What @crove/channel exports that reaches no platform: its constants, its errors and these helpers. Anything else
+// (publishers, connectors, refreshers, logins, checks, send helpers) reaches one: Telegram or Discord when it names
+// them, provider:channel otherwise.
+const CHANNEL_PURE: ReadonlySet<string> = new Set(['capOptions', 'discordChatTargetOf', 'isChannelProvider', 'newOAuthAttempt', 'oauthStateHash', 'postTypeOf', 'sandbox', 'telegramChatTargetOf', 'withCallSignal']);
+const channelReach = (name: string): Reach | null =>
+  /^[A-Z][A-Z0-9_]*$/.test(name) || name.endsWith('Error') || CHANNEL_PURE.has(name) ? null : /telegram/i.test(name) ? 'provider:telegram' : /discord/i.test(name) ? 'provider:discord' : 'provider:channel';
+// Node's own network modules: a job reaches the network only through the guard or an adapter.
+const NETWORK_MODULES = /^(node:)?(http|https|http2|net|tls|dgram|dns)$|^undici$/;
 // What calls the AI endpoint in @crove/agent: its model and the readers and writers built on it.
 const AI_EXPORT = /^chatModel$|^[A-Z]\w*(Extractor|Reader|Writer)$/;
 
@@ -43,7 +50,7 @@ export const DEPS_REACH: Readonly<Record<string, readonly Reach[]>> = {
   runtime: [],
   store: [],
   // The invoice reader of packages/agent.
-  extractor: ['ai'],
+  extractor: ['provider:ai'],
   extract: [],
   inboundDomain: [],
   // Supabase Auth.
@@ -54,25 +61,25 @@ export const DEPS_REACH: Readonly<Record<string, readonly Reach[]>> = {
   exportSealer: [],
   exportRetentionDays: [],
   evidenceLockDays: [],
-  channels: ['publishers', 'provider'],
+  channels: ['publishers', 'provider:channel'],
   'channels.broker': [],
   'channels.publishers': ['publishers'],
-  'channels.refreshers': ['provider'],
+  'channels.refreshers': ['provider:channel'],
   publicUrl: [],
   brand: [],
-  mail: ['provider'],
+  mail: ['provider:mail'],
   push: ['tenant_url'],
   'push.brand': [],
   archive: [],
   usageLimits: [],
   // The operator's alert webhook.
-  securityAlerts: ['provider'],
+  securityAlerts: ['provider:alert'],
   'securityAlerts.thresholds': [],
   aiPrice: [],
   outboxLagPauseSeconds: [],
 };
 
-export interface Site {
+interface Site {
   file: string;
   line: number;
 }
@@ -82,7 +89,7 @@ export interface WorkSite extends Site {
   reaches: ReadonlySet<Reach>;
 }
 
-export interface SendSite extends Site {
+interface SendSite extends Site {
   queues: readonly string[];
   // The outbox events that lead to it, inside the relay; null outside it, or when the test cannot read its condition.
   events: readonly string[] | null;
@@ -219,7 +226,7 @@ function scopeDeclarations(scope: N): Map<string, Declaration> {
 }
 
 // The declaration an identifier refers to, by lexical scope; undefined for a global.
-export function declarationOf(id: N): Declaration | undefined {
+function declarationOf(id: N): Declaration | undefined {
   for (let node = parentOf(id); node; node = parentOf(node)) {
     const found = scopeDeclarations(node).get(id.name);
     if (found) return found;
@@ -304,7 +311,7 @@ export interface Known {
 
 // The value of a constant expression: literals, arrays, objects, `as const`, sets, conditionals (both sides, as a
 // list), constants of the same file or one it imports, and the known package imports. Throws on anything else.
-export function evaluate(expr: N, sources: Sources, known: Known): unknown {
+function evaluate(expr: N, sources: Sources, known: Known): unknown {
   const ev = (e: N): unknown => evaluate(e, sources, known);
   const fail = () => new Error(`cannot evaluate ${textOf(expr)} (${at(expr)})`);
   switch (expr.type) {
@@ -415,17 +422,32 @@ function tested(node: N, inside = false): boolean {
 export function reachOf(root: N, sources: Sources): Set<Reach> {
   const out = new Set<Reach>();
   const seen = new Set<N>();
-  const useDeps = (id: N) => {
+  // A use of WorkerDeps: at `base` for a field destructured from it, else wherever the expression points.
+  const useDeps = (id: N, base?: readonly string[]) => {
     // The longest property chain from the use: deps.channels.broker is one use of channels.broker.
     let top = id;
+    const chain: string[] = [];
     for (;;) {
       const p = parentOf(top);
-      if (p && p.type === 'MemberExpression' && p.object === top && !p.computed) top = p;
-      else if (p && (p.type === 'ChainExpression' || p.type === 'TSNonNullExpression')) top = p;
+      if (p && p.type === 'MemberExpression' && p.object === top && !p.computed) {
+        chain.push(p.property.name);
+        top = p;
+      } else if (p && (p.type === 'ChainExpression' || p.type === 'TSNonNullExpression')) top = p;
       else break;
     }
     if (tested(top)) return;
-    for (const r of depsReach(depsPath(top) as string[], id)) out.add(r);
+    for (const r of depsReach(base ? [...base, ...chain] : (depsPath(top) as string[]), id)) out.add(r);
+  };
+  // The field of WorkerDeps a name destructured from it stands for: `const { sender } = deps.push`.
+  const destructured = (decl: N, id: N): string[] | null => {
+    if (decl.type !== 'VariableDeclarator' || decl.id.type !== 'ObjectPattern' || !decl.init) return null;
+    const base = depsPath(decl.init);
+    if (base === null) return null;
+    for (const p of decl.id.properties as N[]) {
+      const value = p.type === 'Property' ? (p.value.type === 'AssignmentPattern' ? p.value.left : p.value) : null;
+      if (value?.type === 'Identifier' && value.name === id.name && !p.computed) return [...base, p.key.name];
+    }
+    throw new Error(`${at(id)}: destructure WorkerDeps one field at a time, by name`);
   };
   const follow = (node: N) => {
     if (seen.has(node)) return;
@@ -434,18 +456,27 @@ export function reachOf(root: N, sources: Sources): Set<Reach> {
       const decl = declarationOf(id);
       if (!decl) {
         const p = parentOf(id);
-        if (id.name === 'fetch' && p?.type === 'CallExpression' && p.callee === id) out.add('raw_fetch');
+        if (id.name === 'fetch' || (id.name === 'globalThis' && p?.type === 'MemberExpression' && p.property.name === 'fetch')) out.add('raw_network');
         return;
       }
       if (isDepsParam(decl) || (decl.type === 'VariableDeclarator' && decl.id.type === 'Identifier' && decl.init && depsPath(decl.init) !== null)) {
         useDeps(id);
         return;
       }
+      const field = destructured(decl, id);
+      if (field) {
+        useDeps(id, field);
+        return;
+      }
       if (isImport(decl)) {
         const target = importTarget(decl);
-        if (target.module === '@crove/kernel-runtime' && GUARDS.has(target.name)) out.add('tenant_url');
-        else if (target.module === '@crove/channel' && PROVIDER_EXPORT.test(target.name)) out.add('provider');
-        else if (target.module === '@crove/agent' && AI_EXPORT.test(target.name)) out.add('ai');
+        const whole = decl.type === 'ImportNamespaceSpecifier';
+        if (NETWORK_MODULES.test(target.module)) out.add('raw_network');
+        else if (target.module === '@crove/kernel-runtime' && (whole || GUARDS.has(target.name))) out.add('tenant_url');
+        else if (target.module === '@crove/channel') {
+          const reach = whole ? 'provider:channel' : channelReach(target.name);
+          if (reach) out.add(reach);
+        } else if (target.module === '@crove/agent' && (whole || AI_EXPORT.test(target.name))) out.add('provider:ai');
         else if (target.path?.startsWith(`${KERNEL_SRC}/`)) {
           const there = exported(sources.get(target.path), target.name);
           if (!there) throw new Error(`${target.path} exports no ${target.name} (imported at ${at(id)})`);
@@ -591,7 +622,7 @@ function enclosing(node: N, sources: Sources, known: Known): { command: string }
   return null;
 }
 
-export interface Emitters {
+interface Emitters {
   // Event type -> the commands that may emit it.
   commands: Map<string, Set<string>>;
   // Emit sites the test cannot tie to a command or read the type of.

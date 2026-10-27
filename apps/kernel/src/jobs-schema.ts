@@ -70,9 +70,9 @@ export const SOCIAL_PUBLISH_QUEUES: readonly string[] = CHANNEL_PROVIDERS.map(so
 export const MAIL_QUEUES: readonly string[] = ['kernel-mail-send', 'kernel-mail-bulk'];
 
 // What a queue's jobs reach over the network (plan §4.6 `defineJob`, §7.7, #1653):
-// - 'none': only services of the stack itself, which `docker compose up` runs beside the worker and its operator
-//   configures, and which no tenant can point elsewhere: the database, the blob store, crove-extract and Supabase Auth.
-//   Data reaching them stays inside the deployment.
+// - 'none': only services of the stack itself, which `docker compose up` runs beside the worker: the database, the blob
+//   store, crove-extract and Supabase Auth. They are infrastructure the operator configures, holding the deployment's
+//   own data, and no tenant can point them elsewhere.
 // - 'provider:<x>': a service outside the deployment through its adapter, which keeps to that service's own hosts: the
 //   AI endpoint of packages/agent ('provider:ai', where document content leaves the deployment), the channel adapters
 //   of @crove/channel, the mail provider, the chat platforms of team alerts.

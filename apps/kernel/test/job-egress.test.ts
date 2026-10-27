@@ -11,7 +11,7 @@ import { FINANCE_NOTIFYING_EVENTS, financeCommands } from '@crove/mod-finance';
 import { CHAT_ALERTING_EVENTS, CHAT_ALERT_TEST_EVENT, NOTIFYING_EVENTS, socialCommands } from '@crove/mod-social';
 import { MAIL_QUEUES, QUEUES, SOCIAL_PUBLISH_QUEUES, TENANT_HOSTED_PROVIDERS, queueEgress, socialPublishQueue, type JobEgress } from '../src/jobs-schema.ts';
 import { orgPurgeCommand } from '../src/org-purge.ts';
-import { DEPS_REACH, Sources, emittersOf, sendSites, workSites, type Known, type WorkSite } from './job-egress.ts';
+import { DEPS_REACH, Sources, emittersOf, reachOf, sendSites, workSites, type Known, type WorkSite } from './job-egress.ts';
 
 const known: Known = {
   imports: { CHAT_ALERTING_EVENTS, CHAT_ALERT_TEST_EVENT, NOTIFYING_EVENTS, KERNEL_NOTIFYING_EVENTS, FINANCE_NOTIFYING_EVENTS },
@@ -22,16 +22,13 @@ const targets = (egress: JobEgress): readonly string[] => (egress === 'none' ? [
 const hasEgress = (queue: string) => queueEgress(queue) !== 'none';
 const publishProvider = (queue: string) => CHANNEL_PROVIDERS.find((p) => socialPublishQueue(p) === queue) ?? null;
 
-type Need = 'tenant_url' | 'ai' | 'provider';
-const NEED_TEXT: Record<Need, string> = { tenant_url: 'a tenant URL', ai: 'the AI endpoint (provider:ai)', provider: 'a provider' };
-
 // What is wrong with the worker's queues: an undeclared one, a handler reaching more than its queue declares, or a
 // declaration its handler no longer needs.
 function workProblems(sites: readonly WorkSite[]): string[] {
   const out: string[] = [];
   for (const site of sites) {
     const at = `${site.file}:${site.line}`;
-    if (site.reaches.has('raw_fetch')) out.push(`${at}: the handler calls fetch() itself; reach the network through the egress guard or a provider adapter`);
+    if (site.reaches.has('raw_network')) out.push(`${at}: the handler uses fetch() or a Node network module itself; reach the network through the egress guard or a provider adapter`);
     for (const queue of site.queues) {
       let egress: JobEgress;
       try {
@@ -40,26 +37,26 @@ function workProblems(sites: readonly WorkSite[]): string[] {
         out.push(`${at}: ${(error as Error).message}`);
         continue;
       }
-      const needs = new Set<Need>();
+      const needs = new Set<string>();
       for (const r of site.reaches) {
-        if (r === 'tenant_url' || r === 'provider' || r === 'ai') needs.add(r);
+        if (r === 'tenant_url' || r.startsWith('provider:')) needs.add(r);
         if (r === 'publishers') {
-          // The channel adapters: a provider, and the guard for the hosts a tenant names. A publish queue holds one
-          // provider's jobs.
-          needs.add('provider');
+          // The channel adapters, and the guard for the hosts a tenant names. A publish queue holds one provider's jobs.
           const provider = publishProvider(queue);
+          needs.add(provider === null ? 'provider:channel' : `provider:${provider}`);
           if (provider === null || TENANT_HOSTED_PROVIDERS.includes(provider)) needs.add('tenant_url');
         }
       }
-      const declared = new Set(targets(egress).map((t): Need => (t === 'tenant_url' ? 'tenant_url' : t === 'provider:ai' ? 'ai' : 'provider')));
+      const declared = new Set<string>(targets(egress));
       const shown = egress === 'none' ? 'none' : egress.join(', ');
-      for (const n of needs) if (!declared.has(n)) out.push(`${at}: queue ${queue} reaches ${NEED_TEXT[n]} but declares egress ${shown}`);
-      for (const d of declared) if (!needs.has(d)) out.push(`${at}: queue ${queue} declares ${NEED_TEXT[d]} but its handler reaches none`);
+      for (const n of needs) if (!declared.has(n)) out.push(`${at}: queue ${queue} reaches ${n} but declares egress ${shown}`);
+      for (const d of declared) if (!needs.has(d)) out.push(`${at}: queue ${queue} declares ${d} but its handler does not reach it`);
     }
   }
   return out;
 }
 
+const RANK = { R0: 0, R1: 1, R2: 2, R3: 3 } as const;
 const all = (): Array<CommandDef<unknown, unknown>> =>
   [...kernelCommands, orgPurgeCommand({ store: {} as never }), ...financeCommands, ...socialCommands, ...crmCommands] as Array<CommandDef<unknown, unknown>>;
 
@@ -147,19 +144,20 @@ describe('job egress (#1653)', () => {
     // sender and the channel adapters.
     const reach = (queue: string) => new Set(sites.filter((s) => s.queues.includes(queue)).flatMap((s) => [...s.reaches]));
     expect(reach(QUEUES.socialLinkPreview)).toEqual(new Set(['tenant_url']));
-    expect(reach(QUEUES.socialChatAlert)).toEqual(new Set(['provider']));
-    expect(reach('kernel-mail-send')).toEqual(new Set(['provider']));
+    expect(reach(QUEUES.socialChatAlert)).toEqual(new Set(['provider:telegram', 'provider:discord']));
+    expect(reach('kernel-mail-send')).toEqual(new Set(['provider:mail']));
     expect(reach(QUEUES.socialPush)).toEqual(new Set(['tenant_url']));
     expect(reach(QUEUES.socialRemove)).toEqual(new Set(['publishers']));
-    expect(reach(QUEUES.extract)).toEqual(new Set(['ai']));
+    expect(reach(QUEUES.extract)).toEqual(new Set(['provider:ai']));
     expect(reach(QUEUES.agentWake)).toEqual(new Set());
   });
 
-  it('fails a planted queue without a declaration, and a tenant URL, a provider, the AI endpoint or a bare fetch on a none queue', () => {
+  it('fails a planted queue without a declaration, an egress beyond or short of the declaration, and a bare fetch', () => {
     const planted = new Sources({
       'apps/kernel/src/planted-worker.ts': `
         import { guardedFetch } from '@crove/kernel-runtime';
-        import { sendTelegramText } from '@crove/channel';
+        import { XRefresher, sendTelegramText } from '@crove/channel';
+        import { request } from 'node:https';
         import { QUEUES } from './jobs-schema.ts';
         import { runLinkPreviewJob } from './link-preview.ts';
         export async function startWorker(deps: WorkerDeps) {
@@ -176,19 +174,28 @@ describe('job egress (#1653)', () => {
           await boss.work(QUEUES.notify, async () => run({ ...mail }));
           await boss.work(QUEUES.socialLinkPreview, async () => {});
           await boss.work(QUEUES.portalList, async () => read({ extractor: deps.extractor }));
+          const { sender } = deps.push;
+          await boss.work(QUEUES.agentDispatch, async () => sender.send('x'));
+          await boss.work(QUEUES.signOut, async () => new XRefresher().refresh());
+          await boss.work(QUEUES.socialChatAlert, async () => sendTelegramText({ chatId: '1' }, 'hi'));
+          await boss.work(QUEUES.yearArchive, async () => request('https://example.test/'));
         }`,
     });
     const problems = workProblems(workSites(planted, known, 'apps/kernel/src/planted-worker.ts'));
     const at = (line: number) => `apps/kernel/src/planted-worker.ts:${line}`;
     expect(problems).toEqual([
-      `${at(8)}: queue kernel-undeclared declares no egress (QUEUE_EGRESS in apps/kernel/src/jobs-schema.ts)`,
-      `${at(9)}: queue ${QUEUES.retention} reaches a tenant URL but declares egress none`,
-      `${at(13)}: queue ${QUEUES.orgExport} reaches a tenant URL but declares egress none`,
-      `${at(14)}: queue ${QUEUES.inbound} reaches a provider but declares egress none`,
-      `${at(15)}: the handler calls fetch() itself; reach the network through the egress guard or a provider adapter`,
-      `${at(17)}: queue ${QUEUES.notify} reaches a provider but declares egress none`,
-      `${at(18)}: queue ${QUEUES.socialLinkPreview} declares a tenant URL but its handler reaches none`,
-      `${at(19)}: queue ${QUEUES.portalList} reaches the AI endpoint (provider:ai) but declares egress none`,
+      `${at(9)}: queue kernel-undeclared declares no egress (QUEUE_EGRESS in apps/kernel/src/jobs-schema.ts)`,
+      `${at(10)}: queue ${QUEUES.retention} reaches tenant_url but declares egress none`,
+      `${at(14)}: queue ${QUEUES.orgExport} reaches tenant_url but declares egress none`,
+      `${at(15)}: queue ${QUEUES.inbound} reaches provider:telegram but declares egress none`,
+      `${at(16)}: the handler uses fetch() or a Node network module itself; reach the network through the egress guard or a provider adapter`,
+      `${at(18)}: queue ${QUEUES.notify} reaches provider:mail but declares egress none`,
+      `${at(19)}: queue ${QUEUES.socialLinkPreview} declares tenant_url but its handler does not reach it`,
+      `${at(20)}: queue ${QUEUES.portalList} reaches provider:ai but declares egress none`,
+      `${at(22)}: queue ${QUEUES.agentDispatch} reaches tenant_url but declares egress none`,
+      `${at(23)}: queue ${QUEUES.signOut} reaches provider:channel but declares egress none`,
+      `${at(24)}: queue ${QUEUES.socialChatAlert} declares provider:discord but its handler does not reach it`,
+      `${at(25)}: the handler uses fetch() or a Node network module itself; reach the network through the egress guard or a provider adapter`,
     ]);
     // A WorkerDeps field nobody classified stops the analysis.
     const unknownField = new Sources({
@@ -211,11 +218,18 @@ describe('job egress (#1653)', () => {
     expect(topLevel.sort()).toEqual([...fields].sort());
   });
 
-  it('keeps the guard and fetch out of the modules and packages/kernel, so the worker reaches the network only from apps/kernel', () => {
+  it('keeps the network out of the modules and packages/kernel, so the worker reaches it only from apps/kernel', () => {
     const files = sources.list(['modules', 'packages/kernel/src']).filter((f) => f.includes('/src/'));
     expect(files.length).toBeGreaterThan(50);
-    const offending = files.filter((f) => /(?<![.\w])fetch\(|\b(guardedFetch|guardedRequest|egressFetch)\b/.test(sources.get(f).text));
-    expect(offending).toEqual([]);
+    const reaching = files.map((f) => [f, [...reachOf(sources.get(f).program, sources)]] as const).filter(([, reach]) => reach.length > 0);
+    expect(reaching).toEqual([]);
+    // A planted module file that checks a Telegram chat, or calls fetch through globalThis.
+    const planted = new Sources({
+      'modules/planted/src/a.ts': "import { checkTelegramChat, CHANNEL_PROVIDERS } from '@crove/channel';\nexport const a = () => checkTelegramChat(CHANNEL_PROVIDERS);",
+      'modules/planted/src/b.ts': "export const b = () => globalThis.fetch('https://example.test/');",
+    });
+    expect([...reachOf(planted.get('modules/planted/src/a.ts').program, planted)]).toEqual(['provider:telegram']);
+    expect([...reachOf(planted.get('modules/planted/src/b.ts').program, planted)]).toEqual(['raw_network']);
   });
 
   it('hands the egress guard to the adapters of the providers whose host the tenant names, and to no other', () => {
@@ -237,7 +251,8 @@ describe('job egress (#1653)', () => {
     const byName = new Map(all().map((c) => [c.name, c]));
     const external = (name: string) => {
       const def = byName.get(name);
-      return def !== undefined && def.sideEffect !== undefined && deriveRisk(def.sideEffect) >= 'R2' && def.risk >= 'R2';
+      // register() already holds the declared risk at or above the derived one.
+      return def?.sideEffect !== undefined && RANK[deriveRisk(def.sideEffect)] >= RANK.R2;
     };
     expect([...new Set(sends.filter((s) => s.within !== 'the outbox relay').map((s) => s.within))].sort()).toEqual(Object.keys(OTHER_SENDS).sort());
     for (const [site, why] of Object.entries(OTHER_SENDS)) if ('command' in why) expect(external(why.command), `${site}: ${why.command}`).toBe(true);
