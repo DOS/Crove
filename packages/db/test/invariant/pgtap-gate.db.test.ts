@@ -8,7 +8,7 @@
 // The layout test needs no database. Every other case needs CROVE_TEST_ADMIN_URL, a superuser URL; the run creates and
 // drops its own database. Without it they are skipped, which fails the invariant job.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { GATE_FILE, MODULE_FILE, listTests, pgtapDatabase, problemsOf, runTap, runTestFile, type PgtapDatabase } from './pgtap/runner.ts';
+import { GATE_FILE, layoutViolations, listTests, pgtapDatabase, problemsOf, runTap, runTestFile, type PgtapDatabase } from './pgtap/runner.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 // The gate files that must be there: removing one fails the run instead of shrinking it.
@@ -16,7 +16,7 @@ const REQUIRED = ['_conformance.test.sql', '_rls_matrix.test.sql'];
 
 it('every file under supabase/tests/database follows the layout, and the gate files are there', () => {
   const files = listTests();
-  expect(files.filter((f) => !GATE_FILE.test(f) && !MODULE_FILE.test(f))).toEqual([]);
+  expect(layoutViolations(files)).toEqual([]);
   expect(files).toEqual(expect.arrayContaining(REQUIRED));
 });
 

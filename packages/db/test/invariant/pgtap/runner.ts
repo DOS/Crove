@@ -38,15 +38,22 @@ const TOKENS = ['kernel', 'jobs', 'crm', 'service', 'social', 'email', 'sign', '
 export const GATE_FILE = /^_[a-z0-9]+(_[a-z0-9]+)*\.test\.sql$/;
 export const MODULE_FILE = new RegExp(`^(${TOKENS.join('|')})/[a-z0-9]+(_[a-z0-9]+)*\\.test\\.sql$`);
 
-// Every entry under supabase/tests/database but its directories, relative and with forward slashes, sorted: a symbolic
-// link is listed too, so it fails the layout or runs, never vanishes. Synchronous: vitest needs the cases when it
-// collects the suite, before any hook runs.
-export function listTests(): string[] {
-  return readdirSync(TESTS, { recursive: true, withFileTypes: true })
-    .filter((e) => !e.isDirectory())
-    .map((e) => `${e.parentPath}/${e.name}`.slice(TESTS.length + 1).replaceAll('\\', '/'))
+// Files an operating system's file manager leaves behind, by exact name. Only these are ignored: any other unexpected
+// file, a hidden `.x.test.sql` included, fails the layout, so nothing escapes it by its name.
+const OS_JUNK = new Set(['.DS_Store', 'Thumbs.db', 'desktop.ini']);
+
+// Every entry under `dir` (supabase/tests/database by default) but its directories and OS_JUNK, relative and with
+// forward slashes, sorted: a symbolic link is listed too, so it fails the layout or runs, never vanishes. Synchronous:
+// vitest needs the cases when it collects the suite, before any hook runs.
+export function listTests(dir: string = TESTS): string[] {
+  return readdirSync(dir, { recursive: true, withFileTypes: true })
+    .filter((e) => !e.isDirectory() && !OS_JUNK.has(e.name))
+    .map((e) => `${e.parentPath}/${e.name}`.slice(dir.length + 1).replaceAll('\\', '/'))
     .sort();
 }
+
+// The files that follow neither the gate nor the module layout.
+export const layoutViolations = (files: readonly string[]) => files.filter((f) => !GATE_FILE.test(f) && !MODULE_FILE.test(f));
 
 export interface Run {
   lines: string[];
