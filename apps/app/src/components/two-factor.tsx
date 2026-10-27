@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useId, useRef, useState, type FormEvent } from 'react';
 import { useTranslations } from 'use-intl';
 import { brandName } from '../i18n/brand.ts';
-import { auth, authErrorText, authFailure, type AuthFailure } from '../lib/auth.ts';
+import { auth, authErrorText, authFailure, type AuthFailure, verifySecondFactor } from '../lib/auth.ts';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
@@ -55,7 +55,7 @@ export function MfaChallengeForm({ onVerified }: { onVerified: () => Promise<voi
       if (listError) return setError(authFailure(listError));
       const factor = factors.totp[0];
       if (!factor) return setError('noFactor');
-      const { error: verifyError } = await auth().mfa.challengeAndVerify({ factorId: factor.id, code: code.trim() });
+      const { error: verifyError } = await verifySecondFactor({ factorId: factor.id, code: code.trim() });
       if (verifyError) {
         setCode('');
         setError(authFailure(verifyError));
@@ -140,7 +140,7 @@ export function TwoFactorCard({ onEnabled }: { onEnabled?: () => void }) {
     event.preventDefault();
     if (!enrollment) return;
     void run(async () => {
-      const { error: e } = await auth().mfa.challengeAndVerify({ factorId: enrollment.factorId, code: code.trim() });
+      const { error: e } = await verifySecondFactor({ factorId: enrollment.factorId, code: code.trim() });
       if (e) {
         setCode('');
         codeInput.current?.focus();

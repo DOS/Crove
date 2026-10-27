@@ -345,9 +345,11 @@ test('reject a proposal with a reason through the dialog', async ({ page }) => {
     await reject.click();
     await expect(dialog).toBeVisible();
     await expect(reason).toBeFocused();
+    // Tab past the last control lands on the dialog's focus guard, which hands the focus to the first one on the next
+    // animation frame, so each check waits for the focus to settle inside.
     for (let i = 0; i < 4; i++) {
       await page.keyboard.press('Tab');
-      expect(await dialog.evaluate((el) => el.contains(document.activeElement))).toBe(true);
+      await expect.poll(() => dialog.evaluate((el) => el.contains(document.activeElement))).toBe(true);
     }
     await page.keyboard.press('Escape');
     await expect(dialog).toBeHidden();
