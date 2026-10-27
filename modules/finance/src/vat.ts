@@ -464,6 +464,7 @@ export const vatExport = defineCommand({
     carryForward: z.enum(['previous', 'edited', 'none']).optional(),
   }),
   risk: 'R0',
+  sideEffect: 'none',
   access: ALL,
   handler: async (ctx, input) => {
     ctx.audit({
@@ -493,6 +494,7 @@ export const vatPaymentMark = defineCommand({
     note: z.string().trim().min(1).max(500).nullable().optional(),
   }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MARKERS,
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới đánh dấu được hóa đơn');
@@ -551,6 +553,7 @@ export const vatReturnMark = defineCommand({
   name: 'finance.vat.return_mark',
   input: zVatReturnMark,
   risk: 'R1',
+  sideEffect: 'internal',
   // Owners and admins only: the record feeds the next return. The database holds an insert to this command
   // (vat_return_filed_guard and vat_return_filed_requires_audit, 20261102070000_crove_finance_vat_return_filed.sql).
   access: FILERS,

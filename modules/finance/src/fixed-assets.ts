@@ -91,6 +91,7 @@ export const createFixedAsset = defineCommand({
   name: 'finance.fixed_asset.create',
   input: zFixedAssetCreate,
   risk: 'R1',
+  sideEffect: 'internal',
   access: REQUESTERS,
   handler: async (ctx, input) => {
     const fixed = input.kind === 'fixed_asset';
@@ -162,6 +163,7 @@ export const endFixedAsset = defineCommand({
   name: 'finance.fixed_asset.end',
   input: zFixedAssetEnd,
   risk: 'R1',
+  sideEffect: 'internal',
   access: REQUESTERS,
   target: (input) => ({ type: 'finance.fixed_asset', id: input.assetId }),
   handler: async (ctx, input) => {
@@ -297,6 +299,7 @@ export const prepareDepreciation = defineCommand({
   name: 'finance.depreciation.prepare',
   input: zDepreciationRequest,
   risk: 'R1',
+  sideEffect: 'internal',
   access: REQUESTERS,
   handler: async (ctx, { month, legalEntityId: requested }) => {
     // The legal entity whose register is depreciated (#1280), stored with the proposal so the approver posts it there.
@@ -316,6 +319,7 @@ export const recordDepreciation = defineCommand({
   name: DEPRECIATION_COMMAND,
   input: z.object({ payload: zDepreciationProposal, acceptFailedChecks: z.boolean().default(false) }),
   risk: 'R3',
+  sideEffect: 'financial',
   access: 'proposal',
   proposalKind: JOURNAL_VOUCHER_KIND,
   handler: async (ctx, { payload }) => {
@@ -344,6 +348,7 @@ export const exportFixedAssets = defineCommand({
   name: 'finance.fixed_asset.export',
   input: z.object({ assets: z.number().int().min(0), legalEntityId: zId.optional() }),
   risk: 'R0',
+  sideEffect: 'none',
   access: ALL,
   handler: async (ctx, input) => {
     ctx.audit({ assets: input.assets, ...(input.legalEntityId ? { legal_entity_id: input.legalEntityId } : {}) });

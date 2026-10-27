@@ -295,6 +295,7 @@ export const revisePurchase = defineCommand({
     legalEntityId: zId.optional(),
   }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'proposal_revision',
   revises: 'finance.purchase.record',
   handler: async (ctx, { payload: before, lineAccounts, exchangeRate, legalEntityId }) => {
@@ -360,6 +361,7 @@ export const recordPurchase = defineCommand({
     postingDate: zLocalDate.optional(),
   }),
   risk: 'R3',
+  sideEffect: 'financial',
   access: 'proposal',
   // The kind extraction gives its proposals (extract.ts).
   proposalKind: 'finance.purchase',

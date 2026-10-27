@@ -1,6 +1,6 @@
 // Every command declares what it does beyond its transaction, and its risk is at least what that derives (plan §4.2,
-// §4.7 "Derived risk", #1563). Runtime.register() refuses a declared risk below the derived one; this test keeps the
-// commands that declare no side effect yet to a list that may only shrink, module by module.
+// §4.7 "Derived risk", #1563). Runtime.register() refuses a declared risk below the derived one; this test fails when a
+// command of any module declares none.
 import { describe, expect, it } from 'vitest';
 import { kernelCommands } from '@crove/kernel';
 import type { Db } from '@crove/db';
@@ -10,15 +10,12 @@ import { financeCommands } from '@crove/mod-finance';
 import { socialCommands } from '@crove/mod-social';
 import { orgPurgeCommand } from '../src/org-purge.ts';
 
-// Commands without a side effect, per module. Annotating a module's commands shrinks its list; a new command must
-// declare one. Every kernel command declares one.
-const UNANNOTATED_KERNEL: string[] = [];
 // Commands whose R3 is policy, not side effect: who may change membership and roles (pinned so an annotation cannot
 // lower them).
 const POLICY_R3 = ['kernel.member.change_role', 'kernel.member.invite.create', 'kernel.member.remove', 'kernel.member.role.assign', 'kernel.member.role.revoke'];
-// The other modules' commands without a side effect, per module (follow-ups of #1563, one per lead): exact, so an
-// annotation lowers its module's number in the same PR and a new unannotated command fails.
-const UNANNOTATED_CEILING: Record<string, number> = { finance: 45 };
+// Finance commands whose risk is policy, above what their side effect derives (pinned so an annotation cannot lower
+// them): the period lock and unlock of ADR-0021 section 7.
+const FINANCE_POLICY = { 'finance.period.lock': 'R2', 'finance.period.unlock': 'R3' } as const;
 
 const all = (): Array<CommandDef<unknown, unknown>> =>
   [...kernelCommands, orgPurgeCommand({ store: {} as never }), ...financeCommands, ...socialCommands, ...crmCommands] as Array<CommandDef<unknown, unknown>>;
@@ -40,14 +37,12 @@ describe('declared risk and side effects (#1563)', () => {
     expect(() => new Runtime({} as Db).register({ commands: all() })).not.toThrow();
   });
 
-  it('lets the modules not annotated yet only lose unannotated commands', () => {
-    const counts: Record<string, number> = {};
-    for (const c of all()) {
-      const module = c.name.split('.')[0] as string;
-      if (c.sideEffect === undefined && module !== 'kernel') counts[module] = (counts[module] ?? 0) + 1;
-    }
-    // Lower a ceiling when a module's commands are annotated; a new command without a side effect fails here.
-    expect(counts).toEqual(UNANNOTATED_CEILING);
+  it('declares a side effect on every command of every module (#1563, #1577, #1578, #1579)', () => {
+    const missing = all()
+      .filter((c) => c.sideEffect === undefined)
+      .map((c) => c.name)
+      .sort();
+    expect(missing).toEqual([]);
   });
 
   it('declares the commands that queue mail or run an approved proposal as external effects, R2 (#1563)', () => {
@@ -112,16 +107,40 @@ describe('declared risk and side effects (#1563)', () => {
     }
   });
 
+  it('declares the finance commands that post to the ledger as financial, and the year archive as legal, R3 (#1577)', () => {
+    const byName = new Map(all().map((c) => [c.name, c]));
+    for (const name of [
+      'finance.closing.record',
+      'finance.depreciation.record',
+      'finance.journal.reverse',
+      'finance.journal_voucher.record',
+      'finance.opening_balance.post',
+      'finance.purchase.record',
+      'finance.voucher.record',
+    ]) {
+      expect(byName.get(name), name).toMatchObject({ risk: 'R3', sideEffect: 'financial' });
+    }
+    expect(byName.get('finance.archive.build')).toMatchObject({ risk: 'R3', sideEffect: 'legal' });
+  });
+
+  it('declares the finance commands that queue mail or call the tax portal as external effects, R2 (#1577)', () => {
+    const byName = new Map(all().map((c) => [c.name, c]));
+    for (const name of ['finance.missing_invoices.remind', 'finance.missing_invoices.request', 'finance.portal_sync.call']) {
+      expect(byName.get(name), name).toMatchObject({ risk: 'R2', sideEffect: 'external' });
+      // None is open to agents, so no actor's rights change.
+      expect(byName.get(name)?.agent, name).toBeUndefined();
+    }
+    // The reminder stays a system command: the runtime gates the worker by access, not risk.
+    expect(byName.get('finance.missing_invoices.remind')).toMatchObject({ access: 'system' });
+  });
+
+  it('keeps the finance period lock and unlock at their policy risk', () => {
+    const byName = new Map(all().map((c) => [c.name, c]));
+    for (const [name, risk] of Object.entries(FINANCE_POLICY)) expect(byName.get(name), name).toMatchObject({ risk, sideEffect: 'internal' });
+  });
+
   it('keeps the membership and role commands at R3', () => {
     const byName = new Map(all().map((c) => [c.name, c.risk]));
     for (const name of POLICY_R3) expect(byName.get(name), name).toBe('R3');
-  });
-
-  it('leaves only the listed kernel commands without a side effect', () => {
-    const missing = all()
-      .filter((c) => c.sideEffect === undefined && c.name.startsWith('kernel.'))
-      .map((c) => c.name)
-      .sort();
-    expect(missing).toEqual(UNANNOTATED_KERNEL);
   });
 });

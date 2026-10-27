@@ -79,6 +79,7 @@ export const openingBalancePost = defineCommand({
   name: 'finance.opening_balance.post',
   input: zOpeningBalanceImport,
   risk: 'R3',
+  sideEffect: 'financial',
   access: POSTERS,
   handler: async (ctx, input) => {
     // The opening entry of one legal entity (#1280); posts of one org and entity are serialized.
