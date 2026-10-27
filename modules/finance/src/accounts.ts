@@ -107,6 +107,7 @@ export const createAccount = defineCommand({
   name: 'finance.account.create',
   input: z.object({ parentCode: zAccountCode, code: zAccountCode, name: zName }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MANAGERS,
   handler: async (ctx, { parentCode, code, name }) => {
     const problem = subAccountCodeProblem(parentCode, code);
@@ -176,6 +177,7 @@ export const updateAccount = defineCommand({
     .object({ code: zAccountCode, name: zName.optional(), active: z.boolean().optional() })
     .refine((i) => i.name !== undefined || i.active !== undefined, 'name or active'),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MANAGERS,
   handler: async (ctx, input) => {
     const { code } = input;
@@ -266,6 +268,7 @@ export const setVendorDefaultAccount = defineCommand({
   name: 'finance.vendor.set_default_account',
   input: z.object({ partyId: zId, accountCode: zAccountCode.nullable() }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MANAGERS,
   handler: async (ctx, { partyId, accountCode }) => {
     const party = await ctx.trx

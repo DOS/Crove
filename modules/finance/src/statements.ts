@@ -166,6 +166,7 @@ export const statementsExport = defineCommand({
     warnings: z.array(z.string().max(40)).max(10).optional(),
   }),
   risk: 'R0',
+  sideEffect: 'none',
   access: ALL,
   handler: async (ctx, input) => {
     ctx.audit({ period: input.period, ...(input.legalEntityId ? { legal_entity_id: input.legalEntityId } : {}), ...(input.format ? { format: input.format } : {}), ...(input.warnings ? { warnings: input.warnings } : {}) });

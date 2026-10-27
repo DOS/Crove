@@ -1,7 +1,7 @@
 // Asking a client company for its missing purchase invoices (issue #669). The tax portal's purchase list (#465) shows,
 // per VAT period, the invoices the tax authority has that Crove lacks ('missing'). From that list the accountant sends
 // the company one email listing them, and may turn on a monthly reminder:
-// - finance.missing_invoices.request (owners, admins, members; R1) queues one mail for a period's missing invoices to
+// - finance.missing_invoices.request (owners, admins, members; R2 since #1577, as it sends mail) queues one mail for a period's missing invoices to
 //   the org's contact email (kernel.mail.contact.queue: the kernel mail pipeline, with its log row and suppression
 //   check; the worker sends it). At most one request per period an hour.
 // - finance.missing_invoices.reminder.set (owners, admins, members; R1) turns the monthly reminder on (a day of the
@@ -180,7 +180,10 @@ export const missingInvoicesRequest = defineCommand({
   name: 'finance.missing_invoices.request',
   // The purchase list of one legal entity (#1280): legalEntityId as in zLegalEntityChoice.
   input: z.object({ period: zVatPeriod, legalEntityId: zId.optional() }),
-  risk: 'R1',
+  // Queues a mail to the company through kernel.mail.contact.queue in its transaction: a send, an effect outside Crove
+  // (#1577).
+  risk: 'R2',
+  sideEffect: 'external',
   access: EDITORS,
   handler: async (ctx, input) => {
     vatPeriod(input.period);
@@ -228,6 +231,7 @@ export const missingInvoicesReminderSet = defineCommand({
   name: 'finance.missing_invoices.reminder.set',
   input: z.object({ day: z.number().int().min(1).max(REMINDER_DAY_MAX).nullable() }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: EDITORS,
   handler: async (ctx, input) => {
     const tenant = await ctx.trx
@@ -263,7 +267,10 @@ export type RemindResult =
 export const missingInvoicesRemind = defineCommand({
   name: 'finance.missing_invoices.remind',
   input: z.object({}),
-  risk: 'R1',
+  // Queues the reminder mail as request does (#1577). A system command: the runtime gates the worker by access, not
+  // risk, so the monthly run is unchanged.
+  risk: 'R2',
+  sideEffect: 'external',
   access: 'system',
   handler: async (ctx): Promise<RemindResult> => {
     if (ctx.actor.type !== 'system') throw new DomainError('FORBIDDEN', 403, 'Chỉ tiến trình hệ thống mới gửi được email nhắc');

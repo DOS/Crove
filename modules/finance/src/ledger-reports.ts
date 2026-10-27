@@ -306,6 +306,7 @@ export const ledgerExport = defineCommand({
   name: 'finance.ledger.export',
   input: zLedgerPeriodInput.extend({ lines: z.number().int().nonnegative().max(LEDGER_LINE_LIMIT) }),
   risk: 'R0',
+  sideEffect: 'none',
   access: ALL,
   handler: async (ctx, input) => {
     ctx.audit({ period: input.period, lines: input.lines, ...(input.legalEntityId ? { legal_entity_id: input.legalEntityId } : {}) });

@@ -24,6 +24,7 @@ export const notificationDispatch = defineCommand({
   name: 'finance.notification.dispatch',
   input: z.object({ eventId: zId }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   handler: async (ctx, input) => {
     const event = await outboxEvent(ctx, input.eventId);
@@ -110,6 +111,7 @@ export const periodClosingRemind = defineCommand({
   // reads the database's).
   input: z.object({ today: zLocalDate }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   handler: async (ctx, input) => {
     // Read again here: the sweep's page is only a hint.

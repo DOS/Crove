@@ -133,7 +133,9 @@ function lockRefusal(error: unknown, month: string): never {
 export const periodLock = defineCommand({
   name: 'finance.period.lock',
   input: zPeriodLockInput,
+  // A reversible write (unlock reopens the month); R2 is the policy of ADR-0021 section 7, above what it derives.
   risk: 'R2',
+  sideEffect: 'internal',
   access: LOCKERS,
   handler: async (ctx, input): Promise<PeriodLockState> => {
     const entity = await resolveLegalEntity(ctx, input.legalEntityId);
@@ -154,7 +156,10 @@ export const periodLock = defineCommand({
 export const periodUnlock = defineCommand({
   name: 'finance.period.unlock',
   input: zPeriodUnlockInput,
+  // Reopens a month for postings, a reversible write; R3 (fresh second factor, a reason) is the policy of ADR-0021
+  // section 7, above what it derives.
   risk: 'R3',
+  sideEffect: 'internal',
   access: ['owner'],
   // ADR-0021 section 3: the chief accountant reopens a period too (an org-wide finance.chief_accountant assignment,
   // #1279); unlock_period() checks the same again.

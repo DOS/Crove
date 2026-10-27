@@ -123,6 +123,7 @@ export const prepareReversal = defineCommand({
   name: 'finance.journal.prepare_reversal',
   input: zJournalReversal,
   risk: 'R1',
+  sideEffect: 'internal',
   access: ['owner', 'admin', 'member'],
   target: (input) => ({ type: 'finance.journal_entry', id: input.entryId.toLowerCase() }),
   handler: async (ctx, input) => {
@@ -138,6 +139,7 @@ export const reverseEntry = defineCommand({
   name: REVERSAL_COMMAND,
   input: z.object({ payload: zJournalReversal, acceptFailedChecks: z.boolean().default(false) }),
   risk: 'R3',
+  sideEffect: 'financial',
   access: 'proposal',
   proposalKind: REVERSAL_KIND,
   target: (input) => ({ type: 'finance.journal_entry', id: input.payload.entryId }),
