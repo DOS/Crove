@@ -33,6 +33,7 @@ export const calendarFeedCreate = defineCommand({
   name: 'social.calendar_feed.create',
   input: z.strictObject({}),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ADMINS,
   handler: async (ctx) => {
     const userId = requireUser(ctx);
@@ -50,6 +51,7 @@ export const calendarFeedRevoke = defineCommand({
   name: 'social.calendar_feed.revoke',
   input: z.strictObject({}),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ADMINS,
   handler: async (ctx) => ({ revoked: await revokeLive(ctx, requireUser(ctx)) }),
 });

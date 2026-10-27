@@ -65,6 +65,7 @@ export const snippetCreate = defineCommand({
   name: 'social.snippet.create',
   input: z.strictObject({ name: zName, body: zBody, provider: zProvider.optional(), isTemplate: z.boolean().optional() }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   handler: async (ctx, input) => {
     const userId = requireUser(ctx);
@@ -85,6 +86,7 @@ export const snippetUpdate = defineCommand({
   name: 'social.snippet.update',
   input: z.strictObject({ snippetId: zId, name: zName, body: zBody, provider: zProvider, isTemplate: z.boolean() }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   handler: async (ctx, input) => {
     const s = await own(ctx, input.snippetId);
@@ -104,6 +106,7 @@ export const snippetDelete = defineCommand({
   name: 'social.snippet.delete',
   input: z.strictObject({ snippetId: zId }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   handler: async (ctx, input) => {
     const s = await own(ctx, input.snippetId);

@@ -65,6 +65,7 @@ export const linkPreviewRequest = defineCommand({
   name: 'social.link_preview.request',
   input: z.strictObject({ url: zUrl }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ALL,
   handler: async (ctx: CommandContext, input): Promise<LinkPreview> => {
     const { url, key } = keyOf(input.url);
@@ -141,6 +142,7 @@ export const linkPreviewRecord = defineCommand({
     ]),
   }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   handler: async (ctx, input) => {
     const r = input.result;

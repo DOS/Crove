@@ -155,6 +155,7 @@ export const postArchive = defineCommand({
   name: 'social.post.archive',
   input: zSocialPostArchive,
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   target: (input) => ({ type: 'social.post', id: input.postId }),
   handler: async (ctx, input): Promise<ArchiveResult> => {
@@ -199,6 +200,7 @@ export const postRestore = defineCommand({
   name: 'social.post.restore',
   input: zSocialPostArchive,
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   target: (input) => ({ type: 'social.post', id: input.postId }),
   handler: async (ctx, input): Promise<ArchiveResult> => {
@@ -250,6 +252,7 @@ function bulk(name: 'social.post.bulk_archive' | 'social.post.bulk_restore', sin
     name,
     input: zSocialBulkArchive,
     risk: 'R1',
+    sideEffect: 'internal',
     access: MEMBERS,
     handler: async (ctx, input): Promise<BulkArchiveResult> => {
       requireUser(ctx);

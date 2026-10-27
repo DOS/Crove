@@ -133,7 +133,9 @@ export const externalPostImport = defineCommand({
     posts: z.array(zBroughtPost).max(RECENT_POSTS_MAX),
     error: z.enum(['no_answer', 'token_expired', 'permission']).optional(),
   }),
-  risk: 'R0',
+  // Writes what the platform reported into Crove: internal, so R1 (#1578).
+  risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   target: (input) => ({ type: 'kernel.channel_connection', id: input.connectionId }),
   handler: async (ctx, input) => {
@@ -200,7 +202,9 @@ export const externalPostImport = defineCommand({
 export const externalPostRecord = defineCommand({
   name: 'social.external_post.record',
   input: z.strictObject({ externalId: zId, metrics: zMetrics.optional(), gone: z.literal(true).optional() }),
-  risk: 'R0',
+  // Writes what the platform reported into Crove: internal, so R1 (#1578).
+  risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   handler: async (ctx, input) => {
     requireSystem(ctx);

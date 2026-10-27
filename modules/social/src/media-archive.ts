@@ -53,6 +53,7 @@ export const mediaArchive = defineCommand({
   name: 'social.media.archive',
   input: z.strictObject({ fileIds: zFileIds }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   handler: async (ctx, input): Promise<{ archived: string[] }> => {
     const userId = requireUser(ctx);
@@ -76,6 +77,7 @@ export const mediaRestore = defineCommand({
   name: 'social.media.restore',
   input: z.strictObject({ fileIds: zFileIds }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   handler: async (ctx, input): Promise<{ restored: string[] }> => {
     requireUser(ctx);

@@ -337,6 +337,7 @@ export const postCreate = defineCommand({
   name: 'social.post.create',
   input: zPostCreate,
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   handler: async (ctx, input) => {
     const { post, variants, media } = await createPost(ctx, input);
@@ -412,6 +413,7 @@ export const postImport = defineCommand({
     submit: z.boolean().optional(),
   }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   handler: async (ctx, input) => {
     requireUser(ctx);
@@ -476,6 +478,7 @@ export const postAddChannels = defineCommand({
   name: 'social.post.add_channels',
   input: z.strictObject({ postId: zId, channels: z.array(zChannel).min(1).max(MAX_CHANNELS_PER_POST) }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   target: (input) => ({ type: 'social.post', id: input.postId }),
   handler: async (ctx, input) => {
@@ -571,6 +574,7 @@ export const postUpdate = defineCommand({
   name: 'social.post.update',
   input: zPostUpdate,
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   target: (input) => ({ type: 'social.post', id: input.postId }),
   handler: async (ctx, input) => {
@@ -637,6 +641,7 @@ export const variantUpdate = defineCommand({
     media: zMedia.nullable().optional(),
   }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   target: (input) => ({ type: 'social.post_variant', id: input.variantId }),
   handler: async (ctx, input) => {
@@ -686,6 +691,7 @@ export const postRestoreVersion = defineCommand({
       .optional(),
   }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   target: (input) => ({ type: 'social.post', id: input.postId }),
   handler: async (ctx, input) => {
@@ -749,6 +755,7 @@ export const postSubmit = defineCommand({
   name: 'social.post.submit',
   input: z.strictObject({ postId: zId, variantIds: zVariantIds.optional() }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   target: (input) => ({ type: 'social.post', id: input.postId }),
   handler: async (ctx, input) => {
@@ -804,6 +811,7 @@ export const variantDecide = defineCommand({
       .max(MAX_CHANNELS_PER_POST),
   }),
   risk: 'R2',
+  sideEffect: 'internal',
   access: ADMINS,
   target: (input) => ({ type: 'social.post', id: input.postId }),
   handler: async (ctx, input) => {
@@ -928,6 +936,7 @@ export const variantSchedule = defineCommand({
     .refine((x) => !x.times || (!x.at && !x.queue && !x.variantIds), 'times names the variants and their times on its own')
     .refine((x) => !x.slotAt || (x.queue && x.variantIds?.length === 1), 'slotAt takes the queue and one variant'),
   risk: 'R2',
+  sideEffect: 'internal',
   access: ADMINS,
   target: (input) => ({ type: 'social.post', id: input.postId }),
   handler: async (ctx, input) => {
@@ -1039,6 +1048,7 @@ export const variantUnschedule = defineCommand({
   name: 'social.variant.unschedule',
   input: z.strictObject({ variantIds: zVariantIds }),
   risk: 'R2',
+  sideEffect: 'internal',
   access: ADMINS,
   handler: async (ctx, input) => {
     requireUser(ctx);
@@ -1064,6 +1074,7 @@ export const variantReschedule = defineCommand({
   name: 'social.variant.reschedule',
   input: z.strictObject({ variantId: zId, at: z.iso.datetime({ offset: true }), expectedAt: z.iso.datetime({ offset: true }).optional() }),
   risk: 'R2',
+  sideEffect: 'internal',
   access: ADMINS,
   handler: async (ctx, input) => {
     requireUser(ctx);
@@ -1099,6 +1110,7 @@ export const variantCancel = defineCommand({
   name: 'social.variant.cancel',
   input: z.strictObject({ variantIds: zVariantIds }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   handler: async (ctx, input) => {
     requireUser(ctx);
@@ -1136,6 +1148,7 @@ export const queueSet = defineCommand({
       .max(MAX_SLOTS),
   }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ADMINS,
   handler: async (ctx, input) => {
     requireUser(ctx);

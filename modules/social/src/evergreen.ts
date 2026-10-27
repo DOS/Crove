@@ -193,6 +193,7 @@ export const postRepost = defineCommand({
   name: 'social.post.repost',
   input: z.strictObject({ postId: zId }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   target: (input) => ({ type: 'social.post', id: input.postId }),
   handler: async (ctx, input) => {
@@ -207,6 +208,7 @@ export const postRepostEvergreen = defineCommand({
   name: 'social.post.repost_evergreen',
   input: z.strictObject({ postId: zId }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   target: (input) => ({ type: 'social.post', id: input.postId }),
   handler: async (ctx, input) => {
@@ -254,6 +256,7 @@ export const postSetEvergreen = defineCommand({
   name: 'social.post.set_evergreen',
   input: z.strictObject({ postId: zId, days: z.number().int().min(7).max(365).nullable() }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   target: (input) => ({ type: 'social.post', id: input.postId }),
   handler: async (ctx, input) => {
@@ -284,6 +287,7 @@ export const postDuplicate = defineCommand({
   name: 'social.post.duplicate',
   input: zSocialPostDuplicate,
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   target: (input) => ({ type: 'social.post', id: input.postId }),
   handler: async (ctx, input): Promise<DuplicateResult> => {
