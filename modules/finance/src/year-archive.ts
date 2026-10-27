@@ -210,6 +210,8 @@ export const yearArchiveRecord = defineCommand({
   name: 'finance.archive.record',
   input: zArchiveRecord,
   risk: 'R1',
+  // Records, as its audit row, the package the worker already wrote; the package itself is build's effect. R3 here
+  // would put the worker under P13 (a system R3 needs an approved proposal), which the plan does not call for.
   sideEffect: 'internal',
   access: 'system',
   handler: async (ctx, input): Promise<{ recorded: boolean }> => {
