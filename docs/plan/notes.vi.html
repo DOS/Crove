@@ -188,23 +188,23 @@ footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-si
     <li><a href="#rieng-tu">Riêng tư và dùng chung</a></li>
     <li><a href="#cach-lam">Cách làm</a></li>
     <li><a href="#buoc">Các bước</a></li>
-    <li><a href="#quyet-dinh">Cần owner quyết</a></li>
+    <li><a href="#quyet-dinh">Các quyết định đã duyệt</a></li>
   </ol>
 </nav>
 <main>
 <p class="eyebrow">Crove OS · Plan module</p>
 <h1>Crove Ghi chú và Việc của tôi</h1>
 <p class="lede">Mỗi nhân viên có chỗ ghi lại điều cần nhớ về từng khách hàng và một danh sách việc riêng có hạn và nhắc việc, ngay trong Crove, cạnh hóa đơn, chứng từ và việc nhóm đã có. Ghi chú có thể để riêng cho mình hoặc dùng chung với cả văn phòng.</p>
-<div class="meta"><span>Ngày: 27/10/2026</span><span>Yêu cầu: owner, 27/10 (#1648)</span><span>Nguồn chuẩn: <a href="notes.md"><code>docs/plan/notes.md</code></a></span><span>Quyết định kiến trúc: <a href="../adr/0037-private-notes-and-todos.md">ADR-0037</a> (đang chờ duyệt)</span></div>
+<div class="meta"><span>Ngày: 27/10/2026, duyệt 28/10/2026</span><span>Yêu cầu: chủ dự án, 27/10 (#1648)</span><span>Nguồn chuẩn: <a href="notes.md"><code>docs/plan/notes.md</code></a></span><span>Quyết định kiến trúc: <a href="../adr/0037-private-notes-and-todos.md">ADR-0037</a> (đã duyệt)</span></div>
 
-<div class="callout warn"><p><strong>Trang tóm tắt cho owner.</strong> Nguồn chuẩn là bản tiếng Anh <a href="notes.md"><code>docs/plan/notes.md</code></a>. Khi hai bản khác nhau, bản tiếng Anh thắng. Chưa có gì được xây: owner duyệt kế hoạch này xong mới mở việc và bắt đầu làm.</p></div>
+<div class="callout info"><p><strong>Trang tóm tắt cho chủ dự án.</strong> Nguồn chuẩn là bản tiếng Anh <a href="notes.md"><code>docs/plan/notes.md</code></a>. Khi hai bản khác nhau, bản tiếng Anh thắng. Chủ dự án đã duyệt kế hoạch này ngày 28/10/2026, nhận cả 7 đề xuất (phương án (a) ở mọi câu). Các bước N1 đến N10 giờ là việc (issue) trong epic #1648; chưa bước nào được xây xong.</p></div>
 
 <h2 id="tom-tat">Tóm tắt</h2>
 <div class="tiles">
   <div class="tile"><b>3</b><span>thứ mới: ghi chú, danh sách việc riêng, màn hình "Việc của tôi"</span></div>
   <div class="tile"><b>6</b><span>bước cho bản đầu (N1 đến N6), mỗi bước một PR</span></div>
-  <div class="tile"><b>7</b><span>câu owner cần quyết, mỗi câu có đề xuất sẵn</span></div>
-  <div class="tile"><b>M3</b><span>mốc đề xuất: sau phần việc gấp của vòng chốt sổ tháng (M2)</span></div>
+  <div class="tile"><b>7</b><span>câu hỏi đã được chủ dự án quyết, cả 7 theo đề xuất (a)</span></div>
+  <div class="tile"><b>M3</b><span>mốc đã chọn: sau phần việc gấp của vòng chốt sổ tháng (M2)</span></div>
 </div>
 <ul>
 <li><strong>Ghi chú</strong>: tiêu đề, nội dung, nhãn, ghim. Gắn với một khách hàng, một đối tác, một chứng từ hay một lịch hẹn. Ghi chú để riêng (chỉ người viết xem) hoặc dùng chung (cả văn phòng xem).</li>
@@ -224,7 +224,7 @@ footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-si
 <div class="callout info"><p><strong>Không lưu mật khẩu trong ghi chú.</strong> Khi nội dung trông như một dòng mật khẩu, Crove nhắc người viết. Ghi chú không phải két sắt mật khẩu.</p></div>
 
 <h2 id="rieng-tu">Riêng tư và dùng chung: ai xem được gì</h2>
-<p>Đề xuất (owner quyết ở câu N-2 đến N-5):</p>
+<p>Đã duyệt ngày 28/10/2026 (câu N-2 đến N-5):</p>
 <div class="table-wrap"><table>
 <thead><tr><th>Loại</th><th>Người viết</th><th>Đồng nghiệp</th><th>Chủ sở hữu, quản trị</th><th>Người chỉ xem (có thể là nhân viên của khách)</th><th>AI</th></tr></thead>
 <tbody>
@@ -234,7 +234,7 @@ footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-si
 <ul>
 <li><strong>Riêng tư là riêng thật:</strong> cơ sở dữ liệu chặn, không chỉ ẩn trên giao diện. Có bài kiểm thử tự động chứng minh không ai khác đọc được, kể cả chủ sở hữu tổ chức và các tác tử AI.</li>
 <li><strong>Nhật ký kiểm tra</strong> (audit, sổ ghi ai làm gì) chỉ ghi "ai tạo ghi chú nào, lúc nào", không bao giờ ghi nội dung.</li>
-<li><strong>Người nghỉ việc:</strong> ghi chú dùng chung ở lại với văn phòng. Ghi chú và việc riêng của họ bị khóa 30 ngày (lỡ xóa nhầm thì thêm lại là thấy), sau đó tự xóa. Trước khi xóa thành viên, Crove báo owner người đó còn bao nhiêu mục riêng để owner nhắc họ chia sẻ những gì văn phòng cần.</li>
+<li><strong>Người nghỉ việc:</strong> ghi chú dùng chung ở lại với văn phòng. Ghi chú và việc riêng của họ bị khóa 30 ngày (lỡ xóa nhầm thì thêm lại là thấy), sau đó tự xóa. Trước khi xóa thành viên, Crove báo chủ sở hữu tổ chức người đó còn bao nhiêu mục riêng để chủ sở hữu nhắc họ chia sẻ những gì văn phòng cần.</li>
 <li><strong>Khi có người yêu cầu về dữ liệu cá nhân</strong> (Luật Bảo vệ dữ liệu cá nhân): sau bước N9, công cụ tìm dữ liệu cá nhân đã có sẽ tìm được cả trong nội dung ghi chú dùng chung; với ghi chú riêng chỉ thấy "2 ghi chú riêng của 1 thành viên", không thấy nội dung, và người viết được báo để xem lại.</li>
 <li><strong>Khi tổ chức ngừng dùng Crove:</strong> bản xuất dữ liệu có ghi chú dùng chung, không có nội dung riêng tư. Khi xóa hẳn tổ chức, mọi ghi chú bị xóa.</li>
 <li>Người vận hành máy chủ về kỹ thuật vẫn đọc được cơ sở dữ liệu, như mọi dữ liệu khác. Vì vậy Crove ghi rõ: "Chỉ bạn xem được trong tổ chức này".</li>
@@ -249,11 +249,11 @@ footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-si
 
 <h2 id="buoc">Các bước</h2>
 <div class="table-wrap"><table>
-<thead><tr><th>Bước</th><th>Làm gì</th><th>Xong khi</th><th>Mốc đề xuất</th></tr></thead>
+<thead><tr><th>Bước</th><th>Làm gì</th><th>Xong khi</th><th>Mốc</th></tr></thead>
 <tbody>
-<tr><td class="tnum">N0</td><td>Kế hoạch này và ADR-0037</td><td>Owner duyệt</td><td>Bây giờ</td></tr>
+<tr><td class="tnum">N0</td><td>Kế hoạch này và ADR-0037</td><td>Chủ dự án duyệt (xong 28/10/2026)</td><td>Bây giờ</td></tr>
 <tr><td class="tnum">N1</td><td>Viết trước các bài kiểm thử an toàn cho bảng mới</td><td>Kiểm thử chạy xanh trên nhánh chính</td><td>M3</td></tr>
-<tr><td class="tnum">N2</td><td>Ghi chú: viết, ghim, lưu trữ, thùng rác, riêng hay dùng chung, ghi chú trên trang khách hàng và đối tác</td><td>Đồng nghiệp, owner, AI đều không đọc được ghi chú riêng; viết và tìm lại trên trang khách</td><td>M3</td></tr>
+<tr><td class="tnum">N2</td><td>Ghi chú: viết, ghim, lưu trữ, thùng rác, riêng hay dùng chung, ghi chú trên trang khách hàng và đối tác</td><td>Đồng nghiệp, chủ sở hữu tổ chức, AI đều không đọc được ghi chú riêng; viết và tìm lại trên trang khách</td><td>M3</td></tr>
 <tr><td class="tnum">N3</td><td>Gắn ghi chú với chứng từ, bút toán, lịch hẹn</td><td>Người không có quyền xem chứng từ thì thấy "Bản ghi không mở được"</td><td>M3</td></tr>
 <tr><td class="tnum">N4</td><td>Danh sách việc riêng: hạn, các bước nhỏ, màn hình "Việc của tôi"</td><td>Không ai khác đọc được việc riêng; việc hạn hôm nay hiện ở "Hôm nay"</td><td>M3</td></tr>
 <tr><td class="tnum">N5</td><td>Gom việc nhóm vào "Việc của tôi"; giao việc riêng cho một vị trí</td><td>Việc được giao thành việc nhóm, cả nhóm thấy</td><td>M3</td></tr>
@@ -264,10 +264,10 @@ footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-si
 <tr><td class="tnum">N10</td><td>Gắn ghi chú với biên bản họp</td><td>Khi có module Ghi biên bản họp</td><td>Để sau</td></tr>
 </tbody></table></div>
 
-<h2 id="quyet-dinh">Cần owner quyết</h2>
-<p>Mỗi câu có đề xuất. Chưa xây gì cho đến khi owner duyệt; lúc duyệt, owner có thể nhận cả 7 đề xuất một lần hoặc đổi từng câu.</p>
+<h2 id="quyet-dinh">Các quyết định đã duyệt</h2>
+<p>Chủ dự án duyệt ngày 28/10/2026: cả 7 câu theo đề xuất, tức phương án <strong>(a)</strong> ở mọi câu. Các phương án khác giữ lại bên dưới để biết vì sao không chọn.</p>
 <div class="table-wrap"><table>
-<thead><tr><th>#</th><th>Câu hỏi</th><th>Các lựa chọn</th><th>Đề xuất và lý do</th></tr></thead>
+<thead><tr><th>#</th><th>Câu hỏi</th><th>Các lựa chọn</th><th>Đã chọn và lý do</th></tr></thead>
 <tbody>
 <tr><td class="tnum">N-1</td><td>Khi nào xây?</td><td>(a) Trong M3, sau phần việc gấp của M2; (b) làm ngay trong M2; (c) để trong kho chờ (Icebox) đến khi khách thí điểm hỏi</td><td><strong>(a)</strong>. Nhân viên kế toán làm nhiều khách và nhiều hạn, màn hình nhiều khách và lịch thuế đã có sẵn chỗ để gắn ghi chú và việc. Nhưng khách thí điểm chưa hỏi, nên không chen trước việc chốt sổ tháng.</td></tr>
 <tr><td class="tnum">N-2</td><td>Ai được đọc ghi chú riêng và việc riêng?</td><td>(a) Chỉ người viết; (b) người viết và chủ sở hữu, quản trị luôn đọc được; (c) chủ sở hữu mở xem khi cần, có ghi lại và báo người viết</td><td><strong>(a)</strong>. "Riêng tư" phải đúng nghĩa, nếu không nhân viên sẽ không ghi gì thật vào đó. Điều văn phòng cần thì nằm ở ghi chú dùng chung hoặc việc nhóm.</td></tr>
@@ -277,7 +277,7 @@ footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-si
 <tr><td class="tnum">N-6</td><td>Sau này AI có được đọc ghi chú không?</td><td>(a) Chỉ khi người viết bấm yêu cầu, từng ghi chú một, các tác tử AI không bao giờ đọc; (b) không bao giờ; (c) AI đọc mọi ghi chú</td><td><strong>(a)</strong>. Ghi chú có thể chứa dữ liệu cá nhân của khách; người viết quyết từng lần.</td></tr>
 <tr><td class="tnum">N-7</td><td>Mặc định riêng hay chung?</td><td>(a) Việc luôn riêng; ghi chú viết từ màn hình Ghi chú thì riêng, viết từ trang khách hàng, đối tác, chứng từ thì chung; (b) mọi thứ mặc định riêng</td><td><strong>(a)</strong>. Đúng với mục đích của từng chỗ; ô soạn luôn hiện rõ đang là "Riêng tư" hay "Dùng chung".</td></tr>
 </tbody></table></div>
-<p class="muted small">Ai phải làm gì: owner trả lời 7 câu trên (qua điều phối viên). Không cần kế toán, luật sư hay chi tiêu mới cho bản đầu. Bước N9 dùng lại quy trình xử lý yêu cầu dữ liệu cá nhân mà luật sư xem trong #923.</p>
+<p class="muted small">Ai phải làm gì: chủ dự án đã trả lời đủ 7 câu; giờ các agent xây theo từng bước. Không cần kế toán, luật sư hay chi tiêu mới cho bản đầu. Bước N9 dùng lại quy trình xử lý yêu cầu dữ liệu cá nhân mà luật sư xem trong #923.</p>
 
 <footer>
   <p>Trang tóm tắt, không thay thế nguồn chuẩn <a href="notes.md"><code>docs/plan/notes.md</code></a> và <a href="../adr/0037-private-notes-and-todos.md">ADR-0037</a>.</p>

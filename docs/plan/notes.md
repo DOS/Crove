@@ -1,6 +1,6 @@
 # Crove Notes: notes and personal to-do lists
 
-> Plan for notes and personal to-do lists (module `notes`), 2026-10-27. Owner request of 2026-10-27 in the coordinator chat (epic [#1648](https://github.com/DOS/Crove/issues/1648)): add note-taking and to-do lists; plan it first, build only after the owner approves the plan ([#1649](https://github.com/DOS/Crove/issues/1649)). Nothing in this file is built yet, and no build issue exists until the owner approves. Architecture decision on private items: [ADR-0037](../adr/0037-private-notes-and-todos.md) (Proposed). Vietnamese page for the owner: [notes.vi.html](notes.vi.html).
+> Plan for notes and personal to-do lists (module `notes`), 2026-10-27. Owner request of 2026-10-27 in the coordinator chat (epic [#1648](https://github.com/DOS/Crove/issues/1648)): add note-taking and to-do lists; plan it first, build only after the owner approves the plan ([#1649](https://github.com/DOS/Crove/issues/1649)). The owner approved the plan on 2026-10-28 with every recommendation of section 6 (decisions N-1 to N-7, option a each); its steps (section 4) are now build issues under the epic. Architecture decision on private items: [ADR-0037](../adr/0037-private-notes-and-todos.md) (Accepted). Vietnamese page for the owner: [notes.vi.html](notes.vi.html).
 >
 > Reference products, studied for behavior only (no code copied): Odoo Notes and To-do, Notion, Google Keep, Todoist, Apple Notes, Things.
 
@@ -69,7 +69,7 @@ The epic's goal, "a to-do can later be handed to a position or an agent", holds 
 
 ### 3.3 Who sees what
 
-The recommended answer of ADR-0037 (the owner decides, decisions N-2 to N-5):
+ADR-0037's answer (decided by the owner on 2026-10-28, decisions N-2 to N-5):
 
 | Item | Its author | Other members | Owners and admins | Viewers | Members limited to some legal entities | Agents | The system (worker) |
 |---|---|---|---|---|---|---|---|
@@ -200,7 +200,7 @@ AI calls only through `packages/agent`, with an OpenAI-compatible endpoint, budg
 
 ### 3.12 Personal data, offboarding and the org purge
 
-Summary of ADR-0037 (Proposed):
+Summary of ADR-0037 (Accepted):
 - **A member leaves the org** (`kernel.member.removed`): their shared notes stay with the org, showing "Thành viên cũ" as the author; their private notes and to-dos stay sealed for 30 days (if they are added back, they find them again, since `author_user_id` has no foreign key that would cascade), then `notes.member_items.purge` deletes them. The module's subscriber to `kernel.member.removed` schedules that purge as a job 30 days later (ids only in the payload); the job checks that the user is still not a member before it deletes. Open to-dos already handed over are tasks and stay.
 - **A member asks for their own data:** they can download their notes and to-dos as Markdown and JSON at any time ("Tải về").
 - **A person asks for their data under the PDPL** (#923, built in N9): the finder learns to search free text and lists shared notes that mention the value, and for private items only how many each author has, never the text. The finder is a read-only query, so telling the authors is a separate owner action (a command whose event a system command turns into notifications). An erasure leaves shared notes for the owner to edit (the one case where someone other than the author edits a note) and deletes matching private items without showing them, after their authors were told.
@@ -209,11 +209,11 @@ Summary of ADR-0037 (Proposed):
 
 ## 4. Steps (one PR each, end to end)
 
-Epic: [#1648](https://github.com/DOS/Crove/issues/1648). Each step becomes an issue only after the owner approves this plan; milestones and priorities are the recommendation of decision N-1.
+Epic: [#1648](https://github.com/DOS/Crove/issues/1648). The owner approved this plan on 2026-10-28, so each step is an issue linked from the epic; milestones and priorities are those of decision N-1.
 
 | # | Step | Scope | Acceptance criteria | Files | Milestone, priority | Protected paths |
 |---|---|---|---|---|---|---|
-| N0 | Plan and ADR ([#1649](https://github.com/DOS/Crove/issues/1649)) | This file, ADR-0037, the owner page | Merged with `pnpm docs:check` green; ADR-0037 `Proposed` until the owner decides | `docs/plan/notes.md`, `docs/adr/0037-private-notes-and-todos.md`, `docs/plan/notes.vi.html`, `docs/plan/crove-os-kernel.md` | Icebox, P3 (this PR) | No |
+| N0 | Plan and ADR ([#1649](https://github.com/DOS/Crove/issues/1649)) | This file, ADR-0037, the owner page | Merged with `pnpm docs:check` green; the owner's decisions recorded in section 6 and ADR-0037 `Accepted` | `docs/plan/notes.md`, `docs/adr/0037-private-notes-and-todos.md`, `docs/plan/notes.vi.html`, `docs/plan/crove-os-kernel.md` | Icebox, P3 (this PR) | No |
 | N1 | Invariants first | Row factories for `crove_notes.note`, `todo`, `link` with `PENDING_TABLES` entries; the three tables in a reasoned `AUTHOR_ONLY` set with per-actor exceptions to the matrix's controls: the factories set `author_user_id` or `owner_user_id` explicitly (the matrix seeds as superuser with no context, so nothing can be taken from a context); the system context's read control is a shared note for `note` and 0 rows for `todo` and a to-do's `link`; the system context's insert and update controls, which expect success today, are replaced by the member context's, since the system writes these tables only through definers. The cross-org cases stay as they are for every actor. This removes the system actor's positive control on three tables, a reasoned exception the security review checks; private-row behavior is tested in `notes-private.db.test.ts` (N2), not in the matrix | CI green on `main` with the tables absent; the matrix names the three tables as pending | `apps/kernel/test/invariant/rls-matrix.db.test.ts` | M3, P2 | Yes (invariant suite) |
 | N2 | Notes, end to end | `modules/notes` (manifest with every column's class, `permissions: []`), `notes` in `AVAILABLE_MODULES`, migration `crove_notes` with `note` and `link` (link targets `kernel.party` and `kernel.file` first), the restrictive policies and definers of ADR-0037, the note commands and queries, audit markers, the org purge and export rules, the member-left handling (subscriber and delayed purge job), trash job, the removal warning on the members screen, the notes screen and the record panels for the org overview and parties; `notes-private.db.test.ts` in the invariant suite; the module's package and the kernel's dependency on it | A member writes a private note on a client and a shared one; another member, a viewer, an entity-limited member, an agent context and the system context read none of the private one (database tests); the audit row holds markers, not text; removing the member hides their private notes and deletes them after 30 days; the org export has the shared note and a count for the private one; the org purge deletes both; with `notes` off nothing loads; e2e: write, pin, find on the client's overview | `modules/notes/**` (with `package.json`), `supabase/migrations/<ts>_crove_notes_core.sql`, `<ts>_crove_kernel_org_purge_notes.sql` (`crove_notes` deleted before tasks), `apps/kernel/src/config.ts`, `apps/kernel/src/kernel.ts`, `apps/kernel/package.json`, `pnpm-lock.yaml`, `apps/kernel/test/manifest-permissions.ts` (`MODULE_MANIFESTS`), `packages/kernel/src/offboarding.ts` (`EXPORT_TABLES`), `docs/runbooks/org-offboarding.md`, `apps/app/src/routes/notes.tsx`, `apps/app/src/i18n/messages/{vi,en}.ts`, `apps/kernel/test/invariant/notes-private.db.test.ts`, `packages/db/src/generated/database.ts` | M3, P2 | Yes (migrations, invariant suite, `package.json`, lockfile) |
 | N3 | Links to documents, vouchers and bookings | `link` targets `finance.purchase_document`, `finance.journal_entry`, `crm.booking`, checked through each module's `get` query; panels on the document, voucher and booking pages; links to an unreadable target show as such | A note linked to a voucher of entity A shows the link to a member of A and "Bản ghi không mở được" to a member limited to B; with `finance` off the panel still works and the link shows as unavailable | `modules/notes/**`, a migration widening `target_type`, `apps/app/src/routes/documents.tsx`, `journal.tsx`, `bookings.tsx` | M3, P2 | Yes (migration) |
@@ -236,17 +236,19 @@ Order: N1, then N2; N3 and N4 can run in parallel after N2 (different files but 
 5. A reminder arrives once, at its time, in the member's time zone.
 6. With `CROVE_MODULES` excluding `notes`, nothing of it loads and every other module runs unchanged; `docker compose up` runs it with no outside account.
 
-## 6. Open decisions for the owner
+## 6. Owner decisions
 
-| # | Question | Recommendation | Why |
+Decided 2026-10-28 by the owner, in the coordinator chat, on PR [#1659](https://github.com/DOS/Crove/pull/1659): every recommendation as written (option a of each question). The "Decision" column is what is built; the "Why" column keeps the reason, and N-1 keeps the options that were not taken.
+
+| # | Question | Decision | Why |
 |---|---|---|---|
-| N-1 | When is it built? | N1 to N6 in M3 at P2, after M2's P0 and P1 work; N7, N8 and N10 in the Icebox; N9 with the GA gate | The pilot's staff juggle many clients and dates, and the multi-client view and tax calendar already exist to hang notes and to-dos on; but no pilot interview has asked for it yet and agent capacity goes to the monthly close first (backlog review D5, D11). Other options: start in M2 now (delays M2's finance work), or keep it in the Icebox until the partner asks |
-| N-2 | Who may read a private note or to-do? (ADR-0037) | The author only: not owners, not admins, not Crove staff | "Riêng tư" must mean what it says, or staff will not use it; anything the firm needs is a shared note or a task |
-| N-3 | What happens to a leaving member's private items? | Kept sealed for 30 days, then deleted; shared notes stay with the org | 30 days covers a removal by mistake; the firm keeps everything that was shared |
-| N-4 | Who sees a shared note? | Owners, admins and members; not viewers; not members limited to some legal entities, until notes carry an entity | A client's own staff may be invited into the client's org; the firm's notes about the client are not for them |
-| N-5 | Does the org's export at offboarding include members' private items? | No: shared notes yes, private items only as a count per author | Same reason as N-2; each member can download their own items |
-| N-6 | May AI read notes (later, N8)? | Only when the author asks, one note at a time, with the AI endpoint of decision D9; agents never read notes | Notes may hold personal data of clients; the author decides each time |
-| N-7 | What is private by default? | To-dos always; notes from the notes screen private, notes from a client's, party's or document's page shared | Matches what each place is for; the editor always shows which one it is |
+| N-1 | When is it built? | Decided 2026-10-28 by the owner: (a) N1 to N6 in M3 at P2, after M2's P0 and P1 work; N7, N8 and N10 in the Icebox; N9 with the GA gate | The pilot's staff juggle many clients and dates, and the multi-client view and tax calendar already exist to hang notes and to-dos on; but no pilot interview has asked for it yet and agent capacity goes to the monthly close first (backlog review D5, D11). Options not taken: start in M2 now (delays M2's finance work), or keep it in the Icebox until the partner asks |
+| N-2 | Who may read a private note or to-do? (ADR-0037) | Decided 2026-10-28 by the owner: (a) the author only: not owners, not admins, not Crove staff | "Riêng tư" must mean what it says, or staff will not use it; anything the firm needs is a shared note or a task |
+| N-3 | What happens to a leaving member's private items? | Decided 2026-10-28 by the owner: (a) kept sealed for 30 days, then deleted; shared notes stay with the org | 30 days covers a removal by mistake; the firm keeps everything that was shared |
+| N-4 | Who sees a shared note? | Decided 2026-10-28 by the owner: (a) owners, admins and members; not viewers; not members limited to some legal entities, until notes carry an entity | A client's own staff may be invited into the client's org; the firm's notes about the client are not for them |
+| N-5 | Does the org's export at offboarding include members' private items? | Decided 2026-10-28 by the owner: (a) no: shared notes yes, private items only as a count per author | Same reason as N-2; each member can download their own items |
+| N-6 | May AI read notes (later, N8)? | Decided 2026-10-28 by the owner: (a) only when the author asks, one note at a time, with the AI endpoint of decision D9; agents never read notes | Notes may hold personal data of clients; the author decides each time |
+| N-7 | What is private by default? | Decided 2026-10-28 by the owner: (a) to-dos always; notes from the notes screen private, notes from a client's, party's or document's page shared | Matches what each place is for; the editor always shows which one it is |
 
 ## 7. Risks
 
