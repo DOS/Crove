@@ -42,8 +42,8 @@ export const financeManifest = defineModule({
     // approval policy's LEDGER_APPROVE_PERMISSION, and the accountant preset's guard on the last chief accountant).
     { key: 'finance.proposal.approve', risk: 'R3', defaultRoles: ['finance.chief_accountant'] },
   ],
-  // Its entities (#1656): the record types its records go by in audit targets, numbering, activity and task references,
-  // each with its table; apps/kernel/test/manifest.db.test.ts checks them against the catalog and the commands' targets.
+  // Its entities (#1656), each with its table: every type its commands name as their audit target, the records the
+  // kernel numbers, and the records other code names by type; apps/kernel/test/manifest.db.test.ts checks them.
   entities: [
     { type: 'finance.cash_voucher', table: 'cash_voucher', legalEntityScoped: true, numbering: { docType: 'finance.cash_voucher.<voucher_type>' }, audit: 'append_only' },
     { type: 'finance.categorization_rule', table: 'categorization_rule', legalEntityScoped: true, audit: 'command' },

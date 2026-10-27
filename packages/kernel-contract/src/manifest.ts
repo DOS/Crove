@@ -111,7 +111,8 @@ export interface EntityDeclaration {
   // `<module id>.<entity>`, as commands name it in their audit target.
   readonly type: string;
   readonly table: string;
-  // The table has a legal_entity_id column: a record belongs to, or names, one legal entity of the org (§4.6).
+  // The table has a legal_entity_id column: a record belongs to, or names, one legal entity of the org (§4.6). A list
+  // of entities (member_invite.legal_entity_ids) does not make it scoped.
   readonly legalEntityScoped: boolean;
   // Records numbered by the kernel's gapless numbering (#1401): the doc type of their series, one per legal entity. A
   // doc type that ends in `<column>` takes the row's value of that column (finance.cash_voucher.<voucher_type> numbers

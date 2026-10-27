@@ -81,7 +81,8 @@ export function numberingCalls(table: string, by: string, body: string): { calls
 }
 
 // Something that answers any property, call or conversion with itself (a string when converted), as a command's input
-// to its `target`: the target's type is a literal, whatever the input.
+// to its `target`. A target's type must be a literal and its object unconditional: the proxy is always truthy, so of
+// `input.a ? { type: 'x' } : { type: 'y' }` only x would be read.
 function anyInput(): unknown {
   const proxy: unknown = new Proxy(function () {}, {
     get: (_t, key) => (key === Symbol.toPrimitive ? () => 'x' : key === 'then' ? undefined : proxy),

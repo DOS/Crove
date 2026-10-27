@@ -94,8 +94,8 @@ export const kernelManifest = defineModule({
   },
   // It owns no permission. The approval commands name finance.proposal.approve, which the finance manifest declares.
   permissions: [],
-  // Its entities (#1656): the record types its records go by in audit targets, numbering, activity and task references,
-  // each with its table; apps/kernel/test/manifest.db.test.ts checks them against the catalog and the commands' targets.
+  // Its entities (#1656), each with its table: every type its commands name as their audit target, the records the
+  // kernel numbers, and the records other code names by type; apps/kernel/test/manifest.db.test.ts checks them.
   entities: [
     { type: 'kernel.agent', table: 'agent', legalEntityScoped: false, audit: 'command' },
     { type: 'kernel.ai_run', table: 'ai_run', legalEntityScoped: false, audit: 'command' },

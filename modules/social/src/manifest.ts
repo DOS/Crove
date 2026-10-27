@@ -65,8 +65,8 @@ export const socialManifest = defineModule({
   },
   // It owns no permission: no command of the module declares one and no role grants one.
   permissions: [],
-  // Its entities (#1656): the record types its records go by in audit targets, numbering, activity and task references,
-  // each with its table; apps/kernel/test/manifest.db.test.ts checks them against the catalog and the commands' targets.
+  // Its entities (#1656), each with its table: every type its commands name as their audit target, the records the
+  // kernel numbers, and the records other code names by type; apps/kernel/test/manifest.db.test.ts checks them.
   entities: [
     { type: 'social.channel_option', table: 'channel_option', legalEntityScoped: false, audit: 'command' },
     { type: 'social.chat_alert', table: 'chat_alert', legalEntityScoped: false, audit: 'command' },

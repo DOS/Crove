@@ -13,6 +13,12 @@ describe('module manifests declare their entities (#1656)', () => {
     expect(targets.uses.length).toBeGreaterThan(50);
     expect(entityProblems(MODULE_MANIFESTS, null, targets.uses)).toEqual([]);
   });
+
+  it('marks an entity legalEntityScoped exactly when its manifest lists legal_entity_id on its table', () => {
+    for (const { manifest, file } of Object.values(MODULE_MANIFESTS)) {
+      for (const e of manifest.entities) expect(e.legalEntityScoped, `${file}: ${e.type}`).toBe(Object.hasOwn(manifest.tables[`crove_${manifest.id}`]?.[e.table] ?? {}, 'legal_entity_id'));
+    }
+  });
 });
 
 describe('numberingCalls()', () => {
