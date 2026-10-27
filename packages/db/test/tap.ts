@@ -8,7 +8,8 @@
 
 const PLAN = /^1\.\.(\d+)\b(.*)$/;
 const TEST = /^(not )?ok\b(?:\s+(\d+))?(.*)$/;
-// A SKIP or TODO directive: pgTAP prints `ok 3 # SKIP why` and `not ok 3 - name # TODO why`.
+// A SKIP or TODO directive: pgTAP prints `ok 3 # SKIP why` and `not ok 3 - name # TODO why`. pgTAP does not escape
+// `#` in a description, so a description holding " # todo" is refused too: strict, and never a false pass.
 const DIRECTIVE = /(?:^|\s)#\s*(SKIP|TODO)\b/i;
 const BAIL_OUT = /^Bail out!/;
 

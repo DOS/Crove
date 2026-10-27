@@ -61,6 +61,8 @@ async function runTap(url: string, sql: string): Promise<Run> {
   try {
     await client.query('BEGIN');
     await client.query('SET LOCAL search_path = pgtap');
+    const txid = async () => (await client.query<{ id: string }>('SELECT pg_catalog.pg_current_xact_id()::text AS id')).rows[0]?.id;
+    const before = await txid();
     let results: pg.QueryResult | pg.QueryResult[];
     try {
       // The simple query protocol: the whole file in one round trip, a result per statement.
@@ -72,11 +74,10 @@ async function runTap(url: string, sql: string): Promise<Run> {
     const values = (Array.isArray(results) ? results : [results])
       .filter((r) => r.fields?.length === 1)
       .flatMap((r) => r.rows.map((row: Record<string, unknown>) => Object.values(row)[0]));
-    // SAVEPOINT fails outside a transaction block: the file ran COMMIT or ROLLBACK itself.
-    try {
-      await client.query('SAVEPOINT pgtap_runner_check');
-    } catch {
-      return { lines: tapLines(values), error: 'the file ended the runner\'s transaction: drop its BEGIN, COMMIT and ROLLBACK' };
+    // Another transaction id: the file ran COMMIT or ROLLBACK itself, with or without a BEGIN after it (outside a
+    // transaction block, the query runs in a transaction of its own).
+    if ((await txid()) !== before) {
+      return { lines: tapLines(values), error: "the file ended the runner's transaction: drop its BEGIN, COMMIT and ROLLBACK" };
     }
     return { lines: tapLines(values), error: null };
   } finally {
@@ -87,6 +88,13 @@ async function runTap(url: string, sql: string): Promise<Run> {
 
 // Why a run fails, empty when it passes.
 const problemsOf = (run: Run) => (run.error ? [run.error] : tapProblems(run.lines));
+
+// Needs no database, so it runs without CROVE_TEST_ADMIN_URL too.
+it('every file under supabase/tests/database follows the layout, and the gate files are there', () => {
+  const files = listTests();
+  expect(files.filter((f) => !GATE_FILE.test(f) && !MODULE_FILE.test(f))).toEqual([]);
+  expect(files).toEqual(expect.arrayContaining(REQUIRED));
+});
 
 const suite = ADMIN ? describe : describe.skip;
 
@@ -122,12 +130,6 @@ suite('pgTAP tests in supabase/tests/database', () => {
     await admin?.end();
   });
 
-  it('every file follows the layout, and the gate files are there', () => {
-    const files = listTests();
-    expect(files.filter((f) => !GATE_FILE.test(f) && !MODULE_FILE.test(f))).toEqual([]);
-    expect(files).toEqual(expect.arrayContaining(REQUIRED));
-  });
-
   it('runs pgTAP 1.3 on PostgreSQL 17', async () => {
     const run = await runTap(url, `SELECT plan(2); SELECT is(pgtap_version(), 1.3, 'pgTAP 1.3'); SELECT cmp_ok(pg_version_num(), '>=', 170000, 'PostgreSQL 17 or later');`);
     expect(problemsOf(run)).toEqual([]);
@@ -142,8 +144,10 @@ suite('pgTAP tests in supabase/tests/database', () => {
     ['a skipped test', `SELECT plan(1); SELECT skip('not now', 1);`, /marked SKIP/],
     ['a TODO test', `SELECT plan(1); SELECT * FROM todo('later', 1); SELECT ok(true);`, /marked TODO/],
     ['a SQL error', `SELECT plan(1); SELECT ok(1 / 0 = 1);`, /^SQL error 22012/],
-    ['an error raised in an assertion', `SELECT plan(1); SELECT throws_ok('SELECT 1', '22012');`, /^not ok 1/],
+    ['an expected error that never comes', `SELECT plan(1); SELECT throws_ok('SELECT 1', '22012');`, /^not ok 1/],
     ['a file that commits', `SELECT plan(1); SELECT ok(true); COMMIT;`, /ended the runner's transaction/],
+    ['a file that commits and begins again', `SELECT plan(1); SELECT ok(true); COMMIT; BEGIN;`, /ended the runner's transaction/],
+    ['a file that rolls back and begins again', `SELECT plan(1); SELECT ok(true); ROLLBACK; BEGIN;`, /ended the runner's transaction/],
   ])('fails %s', async (_name, sql, problem) => {
     const problems = problemsOf(await runTap(url, sql));
     expect(problems.some((p) => problem.test(p)), problems.join('\n')).toBe(true);
