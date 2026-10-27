@@ -65,6 +65,19 @@ export const socialManifest = defineModule({
   },
   // It owns no permission: no command of the module declares one and no role grants one.
   permissions: [],
+  // Its entities (#1656): the record types its records go by in audit targets, numbering, activity and task references,
+  // each with its table; apps/kernel/test/manifest.db.test.ts checks them against the catalog and the commands' targets.
+  entities: [
+    { type: 'social.channel_option', table: 'channel_option', legalEntityScoped: false, audit: 'command' },
+    { type: 'social.chat_alert', table: 'chat_alert', legalEntityScoped: false, audit: 'command' },
+    { type: 'social.feed', table: 'feed', legalEntityScoped: false, audit: 'command' },
+    { type: 'social.idea', table: 'idea', legalEntityScoped: false, audit: 'command' },
+    { type: 'social.post', table: 'post', legalEntityScoped: false, audit: 'command' },
+    { type: 'social.post_comment', table: 'post_comment', legalEntityScoped: false, audit: 'command' },
+    { type: 'social.post_variant', table: 'post_variant', legalEntityScoped: false, audit: 'command' },
+    { type: 'social.queue', table: 'queue', legalEntityScoped: false, audit: 'command' },
+    { type: 'social.review_feedback', table: 'review_feedback', legalEntityScoped: false, audit: 'command' },
+  ],
   // Its screens in the app and its menu items (#1652), kept with the other modules' in @crove/kernel-contract.
   ...MODULE_SCREENS.social,
 });

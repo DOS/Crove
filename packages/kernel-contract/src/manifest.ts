@@ -1,10 +1,10 @@
-// A module's manifest (plan §5.2, #1588, #1599, #1630, #1652): the module, the database tables it owns, per schema, with
-// every column of each table and its data class, the permissions it owns, and its screens in the app with their menu
-// items. A database test (apps/kernel/test/manifest.db.test.ts) checks the manifests against the catalog after the
-// migrations: every table of a crove_* schema belongs to exactly one manifest, every column of it is classified, every
-// table and column a manifest names exists, and every permission a role grants or something checks is declared, with
-// the roles that grant it. apps/app/test/module-screens.test.ts checks the screens against the app's router.
-// Entities join the manifest later (§5.2).
+// A module's manifest (plan §5.2, #1588, #1599, #1630, #1652, #1656): the module, the database tables it owns, per
+// schema, with every column of each table and its data class, the permissions it owns, its screens in the app with
+// their menu items, and its entities. A database test (apps/kernel/test/manifest.db.test.ts) checks the manifests
+// against the catalog after the migrations: every table of a crove_* schema belongs to exactly one manifest, every
+// column of it is classified, every table and column a manifest names exists, every permission a role grants or
+// something checks is declared, with the roles that grant it, and every entity matches its table and numbering series.
+// apps/app/test/module-screens.test.ts checks the screens against the app's router.
 import type { BuiltinRoleKey } from './roles.ts';
 
 // What a column holds (plan §5.2, §4.7, §4.10):
@@ -97,12 +97,37 @@ export interface ModuleScreens {
   readonly nav: readonly NavDeclaration[];
 }
 
+// How an entity's changes are recorded (plan §5.2 `audit`, #1656):
+// - command: every change is a command, recorded in audit_event (and the WORM stream) with the record as its target;
+//   the row itself may be updated.
+// - append_only: as command, and the row is never updated or deleted (the table carries crove_kernel.make_append_only's
+//   trigger), so the table is its own history: a correction is a new row, such as a reversal or a void.
+export type EntityAudit = 'command' | 'append_only';
+
+// A record type the module owns (plan §5.2 `entities`, #1656): the type audit events, number allocations and activity
+// name its records by, and the table of the module's own schema (crove_<module id>) that holds them. The record,
+// timeline, files and sharing features of the plan's entity are not built yet, so those fields are not declared.
+export interface EntityDeclaration {
+  // `<module id>.<entity>`, as commands name it in their audit target.
+  readonly type: string;
+  readonly table: string;
+  // The table has a legal_entity_id column: a record belongs to, or names, one legal entity of the org (§4.6).
+  readonly legalEntityScoped: boolean;
+  // Records numbered by the kernel's gapless numbering (#1401): the doc type of their series, one per legal entity. A
+  // doc type that ends in `<column>` takes the row's value of that column (finance.cash_voucher.<voucher_type> numbers
+  // PT, PC, BC and BN apart). The reset period is the org's policy (number_series_policy), not the manifest's.
+  readonly numbering?: { readonly docType: string };
+  readonly audit: EntityAudit;
+}
+
 export interface ModuleManifest extends ModuleScreens {
   readonly id: string;
   // Schema name -> table name (sorted) -> every column of the table with its class.
   readonly tables: Readonly<Record<string, Readonly<Record<string, TableColumns>>>>;
   // The permissions the module owns, sorted by key; empty when it owns none.
   readonly permissions: readonly PermissionDeclaration[];
+  // The record types the module owns, sorted by type; empty when it owns none.
+  readonly entities: readonly EntityDeclaration[];
 }
 
 // `const` keeps each manifest's lists readonly, so an importer cannot change who owns a table.

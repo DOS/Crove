@@ -94,6 +94,23 @@ export const kernelManifest = defineModule({
   },
   // It owns no permission. The approval commands name finance.proposal.approve, which the finance manifest declares.
   permissions: [],
+  // Its entities (#1656): the record types its records go by in audit targets, numbering, activity and task references,
+  // each with its table; apps/kernel/test/manifest.db.test.ts checks them against the catalog and the commands' targets.
+  entities: [
+    { type: 'kernel.agent', table: 'agent', legalEntityScoped: false, audit: 'command' },
+    { type: 'kernel.ai_run', table: 'ai_run', legalEntityScoped: false, audit: 'command' },
+    { type: 'kernel.channel_connection', table: 'channel_connection', legalEntityScoped: false, audit: 'command' },
+    { type: 'kernel.file', table: 'file', legalEntityScoped: false, audit: 'command' },
+    { type: 'kernel.file_upload', table: 'file_upload', legalEntityScoped: false, audit: 'command' },
+    { type: 'kernel.kill_switch', table: 'kill_switch', legalEntityScoped: false, audit: 'command' },
+    { type: 'kernel.member_invite', table: 'member_invite', legalEntityScoped: false, audit: 'command' },
+    { type: 'kernel.number_allocation', table: 'number_allocation', legalEntityScoped: true, audit: 'append_only' },
+    { type: 'kernel.party', table: 'party', legalEntityScoped: false, audit: 'command' },
+    { type: 'kernel.position', table: 'position', legalEntityScoped: false, audit: 'command' },
+    { type: 'kernel.proposal', table: 'proposal', legalEntityScoped: true, audit: 'command' },
+    { type: 'kernel.role_assignment', table: 'role_assignment', legalEntityScoped: true, audit: 'command' },
+    { type: 'kernel.task', table: 'task', legalEntityScoped: false, audit: 'command' },
+  ],
   // Its screens in the app and its menu items (#1652), kept with the other modules' in @crove/kernel-contract.
   ...MODULE_SCREENS.kernel,
 });

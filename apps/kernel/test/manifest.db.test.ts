@@ -1,16 +1,19 @@
-// Module manifests against the catalog (plan §10 G3 "manifest matches catalog", §5.2; #1588, #1599, #1630) on
+// Module manifests against the catalog (plan §10 G3 "manifest matches catalog", §5.2; #1588, #1599, #1630, #1656) on
 // PostgreSQL 17: after every migration, each table of a crove_* schema belongs to exactly one module manifest, under that
 // manifest's schema, each table a manifest names exists, every column of those tables has a data class and every
 // classified column exists, personal data the PDPL registry (#923) erases or keeps is not classified internal, and every
 // permission a crove_kernel.role_permission row grants, a command or the approval policy names, or a database function
-// or policy checks is declared, with exactly the seeded rows as its default roles (manifest-permissions.ts). Set
-// CROVE_TEST_ADMIN_URL to a superuser URL; each run makes its own database.
+// or policy checks is declared, with exactly the seeded rows as its default roles (manifest-permissions.ts), and every
+// entity matches its table's legal_entity_id column and append-only trigger and the numbering series its table's
+// triggers allocate, and every command's audit target is an entity (manifest-entities.ts). Set CROVE_TEST_ADMIN_URL to a
+// superuser URL; each run makes its own database.
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { migrate } from '@crove/db/migrate';
 import { PERSONAL_DATA_COLUMNS, type PersonalDataColumn, type PersonalDataHandling, type PersonalDataKind } from '@crove/kernel';
 import { DATA_CLASSES, columns, type DataClass, type ModuleManifest } from '@crove/kernel-contract';
+import { commandTargetTypes, entityProblems, numberingCalls, type NumberingCall } from './manifest-entities.ts';
 import { MODULE_MANIFESTS, permissionProblems, sqlPermissionUses, staticPermissionUses, type Grant, type Manifests, type PermissionUse } from './manifest-permissions.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
@@ -33,6 +36,7 @@ const CONTROL_PLANE: ModuleManifest = {
   permissions: [],
   routes: [],
   nav: [],
+  entities: [],
 };
 // The control plane's owner and every module manifest (manifest-permissions.ts lists them).
 const MANIFESTS: Manifests = {
@@ -72,6 +76,10 @@ suite('module manifests against the catalog (#1588, #1599)', () => {
   let columnRows: Array<{ schema: string; table: string; column: string }> = [];
   let grants: Grant[] = [];
   let sqlUses: PermissionUse[] = [];
+  let appendOnly = new Set<string>();
+  let numbering: NumberingCall[] = [];
+  let numberingProblems: string[] = [];
+  let allocators: string[] = [];
 
   beforeAll(async () => {
     const root = new pg.Client({ connectionString: ADMIN });
@@ -117,6 +125,45 @@ suite('module manifests against the catalog (#1588, #1599)', () => {
         )
       ).rows;
       sqlUses = texts.flatMap((t) => sqlPermissionUses(t.source, t.text));
+      // The tables crove_kernel.make_append_only() guards: its row trigger refuses every UPDATE and DELETE.
+      appendOnly = new Set(
+        (
+          await c.query<{ table: string }>(
+            `SELECT n.nspname || '.' || c.relname AS table
+               FROM pg_catalog.pg_trigger t
+               JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
+               JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+               JOIN pg_catalog.pg_proc p ON p.oid = t.tgfoid
+               JOIN pg_catalog.pg_namespace pn ON pn.oid = p.pronamespace
+              WHERE t.tgname = 'append_only_row' AND pn.nspname = 'crove_kernel' AND p.proname = 'reject_mutation' AND n.nspname LIKE 'crove\\_%'`,
+          )
+        ).rows.map((r) => r.table),
+      );
+      // The numbering series (#1401) the triggers on crove_* tables allocate their rows' numbers in.
+      const triggers = (
+        await c.query<{ table: string; by: string; body: string }>(
+          `SELECT n.nspname || '.' || c.relname AS table, 'trigger ' || t.tgname || ' (' || pn.nspname || '.' || p.proname || ')' AS by, p.prosrc AS body
+             FROM pg_catalog.pg_trigger t
+             JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
+             JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+             JOIN pg_catalog.pg_proc p ON p.oid = t.tgfoid
+             JOIN pg_catalog.pg_namespace pn ON pn.oid = p.pronamespace
+            WHERE NOT t.tgisinternal AND n.nspname LIKE 'crove\\_%' AND p.prosrc LIKE '%crove\\_kernel.number\\_allocate(%'
+            ORDER BY 1, 2`,
+        )
+      ).rows;
+      for (const t of triggers) {
+        const found = numberingCalls(t.table, t.by, t.body);
+        numbering.push(...found.calls);
+        numberingProblems.push(...found.problems);
+      }
+      // Every other function that allocates numbers: the commands' definer only (ctx.numbering.allocate).
+      allocators = (
+        await c.query<{ fn: string }>(
+          `SELECT n.nspname || '.' || p.proname AS fn FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+            WHERE p.prosrc LIKE '%crove\\_kernel.number\\_allocate(%' AND p.prorettype <> 'pg_catalog.trigger'::pg_catalog.regtype ORDER BY 1`,
+        )
+      ).rows.map((r) => r.fn);
     } finally {
       await c.end();
     }
@@ -193,9 +240,31 @@ suite('module manifests against the catalog (#1588, #1599)', () => {
     ).toEqual([]);
   });
 
+  it('declares every entity as its table, its numbering series and the commands name it (#1656)', () => {
+    expect(numberingProblems).toEqual([]);
+    // The voucher triggers number on main (#1401); a series numbered through ctx.numbering.allocate has no trigger, and
+    // its first command extends this check.
+    expect(numbering.map((n) => `${n.table} ${n.docType} ${n.targetType}`)).toEqual([
+      'crove_finance.cash_voucher finance.cash_voucher.<voucher_type> finance.cash_voucher',
+      'crove_finance.journal_voucher finance.journal_voucher finance.journal_voucher',
+    ]);
+    expect(allocators).toEqual(['crove_kernel.allocate_number']);
+    expect(appendOnly.has('crove_finance.journal_entry')).toBe(true);
+    const cols = new Map<string, Set<string>>();
+    for (const r of columnRows) cols.set(`${r.schema}.${r.table}`, (cols.get(`${r.schema}.${r.table}`) ?? new Set()).add(r.column));
+    const targets = commandTargetTypes();
+    expect(targets.problems).toEqual([]);
+    expect(
+      entityProblems(MANIFESTS, { columns: cols, appendOnly, numbering }, targets.uses),
+      'entities that do not match the catalog or the commands (plan §5.2): change the manifest',
+    ).toEqual([]);
+  });
+
   it('keeps each manifest sorted, one schema per module except the kernel infrastructure', () => {
     for (const { manifest, file } of Object.values(MANIFESTS)) {
       for (const tables of Object.values(manifest.tables)) expect(Object.keys(tables), file).toEqual(Object.keys(tables).sort());
+      const types = manifest.entities.map((e) => e.type);
+      expect(types, file).toEqual([...types].sort());
     }
     for (const id of ['finance', 'social', 'crm']) expect(Object.keys(MANIFESTS[id]!.manifest.tables), id).toEqual([`crove_${id}`]);
   });
