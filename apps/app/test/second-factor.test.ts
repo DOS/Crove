@@ -2,7 +2,7 @@
 // is missing from the cached session until the token refreshes, and the cached answer alone loops between /mfa and the
 // app (the kernel refuses with MFA_REQUIRED, which opens /mfa again).
 import { describe, expect, it, vi } from 'vitest';
-import { needsSecondFactorNow, secondFactorStillOwed, VERIFY_WAIT_MS, verifySecondFactor } from '../src/lib/auth.ts';
+import { needsSecondFactorNow, secondFactorStillOwed, MFA_WAIT_MS, verifySecondFactor } from '../src/lib/auth.ts';
 
 type Level = { currentLevel: string | null; nextLevel: string | null } | null;
 type Factor = { id: string; status: 'verified' | 'unverified' };
@@ -99,7 +99,29 @@ describe('secondFactorStillOwed', () => {
       const { client } = verifyingClient();
       void verifySecondFactor({ factorId: 'f1', code: '123456' }, client);
       const owed = secondFactorStillOwed(client);
-      await vi.advanceTimersByTimeAsync(VERIFY_WAIT_MS);
+      await vi.advanceTimersByTimeAsync(MFA_WAIT_MS);
+      expect(await owed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// A check that never answers (Supabase Auth hangs) counts as owed (coordinator review of #1611): /mfa opens, and the
+// tab is never left waiting with every later MFA_REQUIRED ignored.
+describe('secondFactorStillOwed when Supabase Auth hangs', () => {
+  it('counts a check that never answers as owed', async () => {
+    vi.useFakeTimers();
+    try {
+      const hanging = {
+        mfa: {
+          getAuthenticatorAssuranceLevel: () => new Promise(() => {}),
+          listFactors: () => new Promise(() => {}),
+        },
+      } as unknown as Parameters<typeof secondFactorStillOwed>[0];
+      const owed = secondFactorStillOwed(hanging);
+      // Past both steps: a verification an earlier test left unanswered is waited for first.
+      await vi.advanceTimersByTimeAsync(2 * MFA_WAIT_MS);
       expect(await owed).toBe(true);
     } finally {
       vi.useRealTimers();

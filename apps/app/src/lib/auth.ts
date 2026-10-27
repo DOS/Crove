@@ -100,24 +100,34 @@ export async function needsSecondFactorNow(client: Pick<Client, 'mfa'> = auth())
 // The second-factor code this tab is verifying (enabling a factor, a step-up or the /mfa challenge). Once the server
 // has verified it, a request sent just before with the old session comes back MFA_REQUIRED, before or after this tab
 // has saved the new session; the answer waits for the verification to settle (#1611).
-let verifying: Promise<unknown> = Promise.resolve();
+// It keeps only when the verification settles, not its result (the session).
+let verifying: Promise<void> = Promise.resolve();
 
 export function verifySecondFactor(params: { factorId: string; code: string }, client: Pick<Client, 'mfa'> = auth()) {
   const result = client.mfa.challengeAndVerify(params);
-  verifying = result.catch(() => undefined);
+  verifying = result.then(
+    () => undefined,
+    () => undefined,
+  );
   return result;
 }
 
 // Whether a request refused with MFA_REQUIRED means the session still owes its second factor, or only that it was sent
 // before the factor this tab verified meanwhile: the refused screen stays, its next request carries the new session.
-// A verification that never answers is waited for VERIFY_WAIT_MS at most, then the session decides as it is.
-export const VERIFY_WAIT_MS = 10_000;
+// Each step is waited for MFA_WAIT_MS at most: a verification that never answers leaves the session to decide as it
+// is, and a check that never answers counts as owed, so /mfa opens.
+export const MFA_WAIT_MS = 10_000;
+
+function within<T>(promise: Promise<T>, fallback: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([promise, new Promise<T>((resolve) => (timer = setTimeout(() => resolve(fallback), MFA_WAIT_MS)))]).finally(() =>
+    clearTimeout(timer),
+  );
+}
 
 export async function secondFactorStillOwed(client: Pick<Client, 'mfa'> = auth()): Promise<boolean> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  await Promise.race([verifying, new Promise((resolve) => (timer = setTimeout(resolve, VERIFY_WAIT_MS)))]);
-  clearTimeout(timer);
-  return needsSecondFactorNow(client);
+  await within(verifying, undefined);
+  return within(needsSecondFactorNow(client), true);
 }
 
 export type { Session };
