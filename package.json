@@ -13,7 +13,7 @@
     "dev": "pnpm --parallel --filter @crove/kernel-server --filter @crove/extract --filter @crove/app dev",
     "dev:web": "pnpm --filter @crove/web dev",
     "build": "pnpm -r --filter=!@crove/web build",
-    "typecheck": "pnpm -r --filter=!@crove/web typecheck && tsc --noEmit -p tools/tsconfig.json",
+    "typecheck": "pnpm -r typecheck && tsc --noEmit -p tools/tsconfig.json",
     "lint": "oxlint --deny-warnings apps/kernel apps/extract apps/app packages modules e2e && node tools/ui-colors.mjs",
     "knip": "knip --no-progress",
     "test": "vitest run --project unit",

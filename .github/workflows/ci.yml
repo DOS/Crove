@@ -41,9 +41,10 @@ jobs:
       - name: Install pnpm
         run: npm install -g pnpm@10.34.7 --no-fund --no-audit
 
-      # Every module, also one the kernel does not import yet: typecheck and unit tests run over all of them.
+      # Every module, also one the kernel does not import yet: typecheck and unit tests run over all of them, and the
+      # marketing site, which pnpm typecheck covers with its tests (#1629).
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile --filter "@crove/kernel-server..." --filter "@crove/app..." --filter "./modules/*" --filter "@crove/e2e" --filter "crove-monorepo"
+        run: pnpm install --frozen-lockfile --filter "@crove/kernel-server..." --filter "@crove/app..." --filter "./modules/*" --filter "@crove/e2e" --filter "@crove/web" --filter "crove-monorepo"
 
       - name: Lint
         run: pnpm lint
@@ -176,23 +177,75 @@ jobs:
       - name: knip
         run: pnpm knip
 
-  # The required check: it passes only when the static job, knip and every database part passed, so a failed,
-  # cancelled or skipped part fails it.
+  # The marketing site (#1629; DESIGN.md §7, §8, §10): its production image, built and started as it ships, then axe
+  # (WCAG 2.2 AA, landmarks and headings) on / and /en in both themes at 360px and on a desktop, no sideways scroll, and
+  # no Vietnamese on the English page but the allowed example names. The image build downloads the fonts.
+  web:
+    name: Marketing site (image, axe, language)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '26'
+
+      - name: Install pnpm
+        run: npm install -g pnpm@10.34.7 --no-fund --no-audit
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --filter "@crove/web"
+
+      - name: Build the apps/web image
+        run: docker build -f apps/web/Dockerfile -t crove-web:ci .
+
+      - name: Start it on the loopback interface
+        run: |
+          docker run -d --name crove-web -p 127.0.0.1:3000:3000 crove-web:ci
+          curl --silent --fail --output /dev/null --retry 30 --retry-all-errors --retry-delay 1 http://127.0.0.1:3000/
+
+      - name: Install Chromium
+        run: pnpm --filter @crove/web exec playwright install --with-deps chromium
+
+      - name: axe and language checks
+        env:
+          WEB_BASE_URL: http://127.0.0.1:3000
+        run: pnpm --filter @crove/web test:a11y
+
+      - name: Server log
+        if: failure()
+        run: docker logs crove-web
+
+      - name: Traces of the failed tests
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: web-playwright-traces
+          path: apps/web/test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # The required check: it passes only when the static job, knip, the marketing site and every database part passed, so
+  # a failed, cancelled or skipped part fails it.
   check:
     name: Lint, typecheck, test
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [static, knip, db]
+    needs: [static, knip, web, db]
     if: always()
     steps:
       - name: Every part passed
         env:
           STATIC: ${{ needs.static.result }}
           KNIP: ${{ needs.knip.result }}
+          WEB: ${{ needs.web.result }}
           DB: ${{ needs.db.result }}
         run: |
-          echo "static: $STATIC, knip: $KNIP, database tests: $DB"
-          test "$STATIC" = success && test "$KNIP" = success && test "$DB" = success
+          echo "static: $STATIC, knip: $KNIP, marketing site: $WEB, database tests: $DB"
+          test "$STATIC" = success && test "$KNIP" = success && test "$WEB" = success && test "$DB" = success
 
   # The migrations and the definer hardening guard (External-tenant gate T17) on the Supabase Postgres image that
   # hosted Supabase runs (issue #179): its extensions, its roles and the supautils hooks, with migrations run as
