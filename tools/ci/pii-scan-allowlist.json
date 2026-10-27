@@ -1,0 +1,72 @@
+[
+  {
+    "kind": "email",
+    "domains": ["users.noreply.github.com"],
+    "reason": "GitHub's no-reply commit addresses are public by design; the agents commit under one to keep the private address out of history"
+  },
+  {
+    "kind": "email",
+    "paths": ["pnpm-lock.yaml"],
+    "reason": "the lockfile is generated from package metadata the public npm registry publishes (deprecation notices name the maintainer's address), not written here"
+  },
+  {
+    "kind": "email",
+    "domains": ["crove.local"],
+    "reason": "the dev stack's sender domain (docker-compose SMTP_FROM default, Mailpit tests); .local is special-use (RFC 6762) and reaches no mailbox"
+  },
+  {
+    "kind": "email",
+    "domains": ["congty.vn", "company.vn", "company.com"],
+    "paths": ["apps/app/src/i18n/messages/", "apps/app/test/field.test.tsx", "docs/design/mockups/", "e2e/tests/"],
+    "reason": "the placeholder 'company' domain of the sign-in and invite hints, the design mockups and the e2e users; no reserved example domain reads naturally to a Vietnamese user"
+  },
+  {
+    "kind": "email",
+    "domains": ["example.vn"],
+    "paths": ["apps/app/test/", "apps/kernel/test/"],
+    "reason": "synthetic recipients in report, mail and personal-data tests; .vn has no reserved example domain, and new tests use example.com"
+  },
+  {
+    "kind": "email",
+    "domains": ["gmail.com", "googlemail.com"],
+    "paths": [
+      "apps/kernel/test/auth-signup-policy.test.ts",
+      "apps/kernel/test/invite-limits.db.test.ts",
+      "apps/kernel/test/invite-mail.db.test.ts",
+      "apps/kernel/test/mail.db.test.ts",
+      "apps/kernel/test/social-report-schedule.db.test.ts",
+      "docs/runbooks/pilot-readiness.md",
+      "supabase/migrations/20261018130000_crove_kernel_invite_mail_limit_followups.sql"
+    ],
+    "reason": "Gmail's dot, plus-tag and googlemail.com aliasing is the behavior under test or explained; the local parts are made up (single letters, a dotted name, a tag)"
+  },
+  {
+    "kind": "email",
+    "domains": ["partner.vn"],
+    "paths": ["apps/kernel/test/auth-signup-policy.test.ts", "apps/kernel/test/signup-policy-proxy.db.test.ts", "docs/runbooks/pilot-readiness.md"],
+    "reason": "the example partner domain of AUTH_SIGNUP_ALLOWED_DOMAINS in the sign-up policy tests and the pilot runbook that explains it"
+  },
+  {
+    "kind": "email",
+    "domains": ["b.vn", "crove.vn", "lan.vn", "shop.vn", "tiem.vn", "tiembanh.vn", "vi-du.vn"],
+    "paths": ["modules/social/test/"],
+    "reason": "a shop's contact address inside sample post text, to test that mentions, links, styling and thread splits leave it whole"
+  },
+  {
+    "kind": "email",
+    "domains": ["tiemcuaban.vn"],
+    "paths": ["packages/agent/test/proofread.test.ts"],
+    "reason": "a shop's contact address inside sample post text, to test that proofreading keeps it unchanged"
+  },
+  {
+    "kind": "email",
+    "domains": ["b.co", "x.co", "-b.vn"],
+    "paths": ["apps/kernel/test/auth-email-limit.test.ts", "apps/app/test/field.test.tsx"],
+    "reason": "minimal addresses for the email-budget key and the address validator, including one with an invalid domain on purpose"
+  },
+  {
+    "kind": "mobile",
+    "paths": ["apps/kernel/test/social-signature.db.test.ts"],
+    "reason": "a made-up hotline of repeated digit groups in a sample signature; looksSynthetic does not recognize that pattern"
+  }
+]
