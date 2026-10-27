@@ -465,6 +465,9 @@ export const zInboxItem = z.object({
   sellerName: z.string().nullable(),
   // The customer of a sale (the seller is the org itself); null otherwise.
   buyerName: z.string().nullable(),
+  // The legal entity the revision names (#1543); null when it names none, and approval then records it in the
+  // approver's default entity.
+  legalEntityId: zId.nullable(),
   total: zMoney.nullable(),
   issueDate: zLocalDate.nullable(),
   failedChecks: z.number().int(),

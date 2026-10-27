@@ -1694,6 +1694,7 @@ export const en = {
       document: 'Document',
       issueDate: 'Invoice date',
       total: 'Total',
+      entity: 'Entity',
       checks: 'Checks',
       received: 'Received',
     },

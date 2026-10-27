@@ -1692,6 +1692,7 @@ export const vi = {
       document: 'Chứng từ',
       issueDate: 'Ngày HĐ',
       total: 'Tổng tiền',
+      entity: 'Pháp nhân',
       checks: 'Kiểm tra',
       received: 'Nhận lúc',
     },
