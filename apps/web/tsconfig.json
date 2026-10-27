@@ -24,7 +24,6 @@
   },
   "include": [
     "next-env.d.ts",
-    "test",
     "**/*.ts",
     "**/*.tsx",
     "**/*.js",
@@ -32,6 +31,8 @@
     ".next/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    "test",
+    "playwright.config.ts"
   ]
 }
