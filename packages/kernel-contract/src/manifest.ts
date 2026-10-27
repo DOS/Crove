@@ -1,8 +1,10 @@
-// A module's manifest (plan §5.2, #1588, #1599): the module and the database tables it owns, per schema, with every
-// column of each table and its data class. A database test (apps/kernel/test/manifest.db.test.ts) checks the manifests
-// against the catalog after the migrations: every table of a crove_* schema belongs to exactly one manifest, every
-// column of it is classified, and every table and column a manifest names exists. Entities, permissions and routes
-// join the manifest later (§5.2).
+// A module's manifest (plan §5.2, #1588, #1599, #1630): the module, the database tables it owns, per schema, with every
+// column of each table and its data class, and the permissions it owns. A database test
+// (apps/kernel/test/manifest.db.test.ts) checks the manifests against the catalog after the migrations: every table of a
+// crove_* schema belongs to exactly one manifest, every column of it is classified, every table and column a manifest
+// names exists, and every permission a role grants or something checks is declared, with the roles that grant it.
+// Entities and routes join the manifest later (§5.2).
+import type { BuiltinRoleKey } from './roles.ts';
 
 // What a column holds (plan §5.2, §4.7, §4.10):
 // - internal: business data that is not about a person (amounts, dates, ids, statuses, codes, the org's own texts).
@@ -56,10 +58,23 @@ export function auditValue<T extends TableColumns, V>(table: T, column: keyof T 
   return Object.freeze({ redacted: cls });
 }
 
+// A permission the module owns (plan §5.2, §4.6, #1630). Its key is `<module id>.<name>`. A member holds it through an
+// org-wide assignment of one of its default roles, which are the crove_kernel.role_permission rows the migrations seed
+// for it (a declaration, not a grant: the test fails when the two differ). The base roles of tenant_member.role (owner,
+// admin) are never listed: who passes a command by base role is the command's `access`, and who approves by base role
+// is the approval policy. The risk is the highest risk of the commands that name the permission.
+export interface PermissionDeclaration {
+  readonly key: string;
+  readonly risk: 'R0' | 'R1' | 'R2' | 'R3';
+  readonly defaultRoles: readonly BuiltinRoleKey[];
+}
+
 export interface ModuleManifest {
   readonly id: string;
   // Schema name -> table name (sorted) -> every column of the table with its class.
   readonly tables: Readonly<Record<string, Readonly<Record<string, TableColumns>>>>;
+  // The permissions the module owns, sorted by key; empty when it owns none.
+  readonly permissions: readonly PermissionDeclaration[];
 }
 
 // `const` keeps each manifest's lists readonly, so an importer cannot change who owns a table.

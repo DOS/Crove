@@ -12,4 +12,6 @@ export const crmManifest = defineModule({
       event_type: columns(['org_id', 'id', 'slug', 'title', 'description', 'duration_min', 'buffer_before_min', 'buffer_after_min', 'min_notice_min', 'horizon_days', 'daily_limit', 'location_kind', 'location_value', 'host_user_id', 'active', 'created_by', 'created_at', 'updated_by', 'updated_at', 'assignment', 'co_host_user_ids']),
     },
   },
+  // It owns no permission: no command of the module declares one and no role grants one.
+  permissions: [],
 });

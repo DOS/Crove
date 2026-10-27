@@ -1,17 +1,17 @@
-// Module manifests against the catalog (plan §10 G3 "manifest matches catalog", §5.2; #1588, #1599) on PostgreSQL 17:
-// after every migration, each table of a crove_* schema belongs to exactly one module manifest, under that manifest's
-// schema, each table a manifest names exists, every column of those tables has a data class and every classified column
-// exists, and personal data the PDPL registry (#923) erases or keeps is not classified internal. Set
+// Module manifests against the catalog (plan §10 G3 "manifest matches catalog", §5.2; #1588, #1599, #1630) on
+// PostgreSQL 17: after every migration, each table of a crove_* schema belongs to exactly one module manifest, under that
+// manifest's schema, each table a manifest names exists, every column of those tables has a data class and every
+// classified column exists, personal data the PDPL registry (#923) erases or keeps is not classified internal, and every
+// permission a crove_kernel.role_permission row grants, a command or the approval policy names, or a database function
+// or policy checks is declared, with exactly the seeded rows as its default roles (manifest-permissions.ts). Set
 // CROVE_TEST_ADMIN_URL to a superuser URL; each run makes its own database.
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { migrate } from '@crove/db/migrate';
-import { PERSONAL_DATA_COLUMNS, kernelManifest, type PersonalDataColumn, type PersonalDataHandling, type PersonalDataKind } from '@crove/kernel';
+import { PERSONAL_DATA_COLUMNS, type PersonalDataColumn, type PersonalDataHandling, type PersonalDataKind } from '@crove/kernel';
 import { DATA_CLASSES, columns, type DataClass, type ModuleManifest } from '@crove/kernel-contract';
-import { crmManifest } from '@crove/mod-crm';
-import { financeManifest } from '@crove/mod-finance';
-import { socialManifest } from '@crove/mod-social';
+import { MODULE_MANIFESTS, permissionProblems, sqlPermissionUses, staticPermissionUses, type Grant, type Manifests, type PermissionUse } from './manifest-permissions.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -30,13 +30,12 @@ const CONTROL_PLANE: ModuleManifest = {
       user_account: columns(['id', 'issuer', 'created_at', 'last_seen_at', 'disabled_at'], { subject: 'pii', email: 'contact', display_name: 'pii' }),
     },
   },
+  permissions: [],
 };
-const MANIFESTS: Record<string, { manifest: ModuleManifest; file: string }> = {
+// The control plane's owner and every module manifest (manifest-permissions.ts lists them).
+const MANIFESTS: Manifests = {
   'control-plane': { manifest: CONTROL_PLANE, file: 'apps/kernel/test/manifest.db.test.ts (CONTROL_PLANE)' },
-  kernel: { manifest: kernelManifest, file: 'packages/kernel/src/manifest.ts' },
-  finance: { manifest: financeManifest, file: 'modules/finance/src/manifest.ts' },
-  social: { manifest: socialManifest, file: 'modules/social/src/manifest.ts' },
-  crm: { manifest: crmManifest, file: 'modules/crm/src/manifest.ts' },
+  ...MODULE_MANIFESTS,
 };
 const suite = ADMIN ? describe : describe.skip;
 
@@ -69,6 +68,8 @@ suite('module manifests against the catalog (#1588, #1599)', () => {
   const dbName = `crove_test_manifest_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
   let catalog: Array<{ schema: string; table: string }> = [];
   let columnRows: Array<{ schema: string; table: string; column: string }> = [];
+  let grants: Grant[] = [];
+  let sqlUses: PermissionUse[] = [];
 
   beforeAll(async () => {
     const root = new pg.Client({ connectionString: ADMIN });
@@ -99,6 +100,21 @@ suite('module manifests against the catalog (#1588, #1599)', () => {
             ORDER BY 1, 2, a.attnum`,
         )
       ).rows;
+      grants = (await c.query<Grant>('SELECT role_key, permission FROM crove_kernel.role_permission ORDER BY 1, 2')).rows;
+      // The bodies of every function of a crove_* schema and the expressions of every row-level security policy on its
+      // tables, for the permissions they check.
+      const texts = (
+        await c.query<{ source: string; text: string }>(
+          `SELECT 'function ' || n.nspname || '.' || p.proname AS source, p.prosrc AS text
+             FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname LIKE 'crove\\_%' AND p.prosrc IS NOT NULL
+           UNION ALL
+           SELECT 'policy ' || schemaname || '.' || tablename || '.' || policyname, COALESCE(qual, '') || ' ' || COALESCE(with_check, '')
+             FROM pg_catalog.pg_policies WHERE schemaname LIKE 'crove\\_%'
+           ORDER BY 1`,
+        )
+      ).rows;
+      sqlUses = texts.flatMap((t) => sqlPermissionUses(t.source, t.text));
     } finally {
       await c.end();
     }
@@ -161,6 +177,18 @@ suite('module manifests against the catalog (#1588, #1599)', () => {
       if (!CLASS_OF_KIND[entry.kind].includes(cls)) wrong.push(`${key}: ${cls}, but the registry holds it as ${entry.kind} (${entry.handling}); expected ${CLASS_OF_KIND[entry.kind].join(' or ')}`);
     }
     expect(wrong, 'personal data classified as something else').toEqual([]);
+  });
+
+  it('declares every permission a role grants or something checks, with the seeded rows as its default roles (#1630)', () => {
+    const { uses, problems } = staticPermissionUses();
+    expect(problems).toEqual([]);
+    // The database names both permissions on main: unlock_period() and the accountant preset's chief accountant guard.
+    expect([...new Set(sqlUses.map((u) => u.permission))].sort()).toEqual(['finance.period.unlock', 'finance.proposal.approve']);
+    expect(grants.length).toBeGreaterThan(0);
+    expect(
+      permissionProblems(MANIFESTS, { uses: [...uses, ...sqlUses], grants }),
+      'permissions the manifests do not declare as the migrations grant and the code checks them',
+    ).toEqual([]);
   });
 
   it('keeps each manifest sorted, one schema per module except the kernel infrastructure', () => {

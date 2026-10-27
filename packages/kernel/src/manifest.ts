@@ -92,4 +92,6 @@ export const kernelManifest = defineModule({
       warning: columns(['id', 'type', 'message', 'data', 'created_on']),
     },
   },
+  // It owns no permission. The approval commands name finance.proposal.approve, which the finance manifest declares.
+  permissions: [],
 });
