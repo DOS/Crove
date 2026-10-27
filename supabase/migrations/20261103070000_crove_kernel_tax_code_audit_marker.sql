@@ -7,7 +7,9 @@
 -- row naming the new value. That row no longer names it, so the trigger also accepts the marker when the new code is
 -- set. Everything else it checks is unchanged: the command, the outcome, a user actor who is an owner or admin of the
 -- org, the transaction's own row; a row naming another value is still refused, and a cleared code still needs a row
--- with a null taxCode. The body is the newest one on main with only that alternative added. Idempotent.
+-- with a null taxCode. The class in the marker is tenant.tax_code's in packages/kernel/src/manifest.ts: if that class
+-- changes, the marker changes and every set is refused until this check follows (it fails closed). The body is the
+-- newest one on main with only that alternative added. Idempotent.
 SET LOCAL lock_timeout = '2s';
 
 CREATE OR REPLACE FUNCTION crove_kernel.tenant_tax_code_requires_audit()

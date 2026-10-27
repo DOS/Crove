@@ -3,9 +3,10 @@
 // - a fact's key names a column some manifest classifies (anything but internal: pii, contact, payment, national_id,
 //   national_id_if_individual, sensitive), in snake_case or camelCase, and its value is not auditValue(...), or
 // - a fact's value reads such a column (`before.tax_code`, `party.name`) outside auditValue(...).
-// auditValue (@crove/kernel-contract) replaces a classified value with a marker naming its class. The scan reads the
-// call's text, so facts built elsewhere and passed in by name (`previous`, built in a loop) are checked only where they
-// are built: wrap each value there. Column names that are also ordinary words of internal data (an account's name, a
+// auditValue (@crove/kernel-contract) replaces a classified value with a marker naming its class. The scan reads only the
+// call's text: facts built elsewhere and passed in by name (`previous`, built in a loop), spreads (`...row`) and other
+// names for a classified value (`{ code: taxCode }`) are not checked here, so wrap each value where it is built; the db
+// tests (audit-facts.db.test.ts and each command's own) check what the rows hold. Column names that are also ordinary words of internal data (an account's name, a
 // command's name) are listed below with their reason, per file; adding one says that value is not a person's.
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
