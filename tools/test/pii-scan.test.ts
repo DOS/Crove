@@ -14,6 +14,7 @@ import {
   ALLOWLIST_FILE,
   allowlistErrors,
   commandProperty,
+  decodeText,
   companyTaxCode,
   entryAllows,
   loadAllowlist,
@@ -205,7 +206,31 @@ describe('G5 PII scan (#1628)', () => {
       ['tools/ci/pii-scan-allowlist.json', 'other'],
       ['docs/b.md', 'pinned'],
     ]);
-    expect(skipped).toBe(1);
+    expect(skipped).toEqual(['logo.png']);
+  });
+
+  it('decodes UTF-16 with a byte order mark (an Excel "Unicode text" export) and scans it', () => {
+    const text = `Họ tên\tCCCD\nA\t${cccd}\n`;
+    const le = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, 'utf16le')]);
+    const be = Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from(text, 'utf16le').swap16()]);
+    for (const [name, bytes] of [['export-le.txt', le], ['export-be.txt', be]] as const) {
+      const file = join(dir, name);
+      writeFileSync(file, bytes);
+      expect(readText(file), name).toBe(text);
+      expect(scanFiles([file], readText, []).findings.map((f: { kind: string; line: number }) => [f.kind, f.line]), name).toEqual([['cccd', 2]]);
+    }
+    expect(decodeText(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01]))).toBeNull();
+  });
+
+  it('lists each skipped file by path in the log, so a skipped sample is visible', () => {
+    const binary = join(dir, 'sample.bin');
+    writeFileSync(binary, Buffer.from([0x00, 0x01, 0x02, 0x03]));
+    const clean = join(dir, 'clean.txt');
+    writeFileSync(clean, 'a@example.com');
+    const run = spawnSync(process.execPath, [SCRIPT, binary, clean], { encoding: 'utf8' });
+    expect(run.status).toBe(0);
+    expect(run.stdout).toContain(`pii-scan: skipped ${binary.replaceAll('\\', '/')} (binary, symlink or missing)`);
+    expect(run.stdout).toContain('2 path(s), 1 skipped, no personal data found');
   });
 
   it('escapes the file name in the workflow command', () => {
@@ -227,6 +252,8 @@ describe('G5 PII scan (#1628)', () => {
       { kind: 'mobile', domains: ['x.vn'], reason: 'a reason that is long enough' },
       { kind: 'email', paths: [], reason: 'a reason that is long enough' },
       { kind: 'email', path: 'a', reason: 'a reason that is long enough' },
+      { kind: 'email', domains: ['vn', '.vn', 'example.'], reason: 'a reason that is long enough' },
+      { kind: 'email', paths: ['apps/', 'apps/kernel/test/', 'pnpm-lock.yaml'], reason: 'a reason that is long enough' },
     ])).toEqual([
       'entry 0: names no paths, domains or values',
       'entry 1: needs a reason',
@@ -235,6 +262,10 @@ describe('G5 PII scan (#1628)', () => {
       'entry 4: paths must be a non-empty list of strings',
       'entry 5: unknown field path',
       'entry 5: names no paths, domains or values',
+      'entry 6: domain vn must have a dot (no bare TLD)',
+      'entry 6: domain .vn must have a dot (no bare TLD)',
+      'entry 6: domain example. must have a dot (no bare TLD)',
+      'entry 7: path prefix apps/ must name at least two directories',
     ]);
   });
 

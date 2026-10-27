@@ -42,7 +42,8 @@ const EMAIL = /(?<![\w.%])[A-Za-z0-9_][A-Za-z0-9._%+-]*@((?:[A-Za-z0-9-]+\.)+[A-
 const RESERVED_DOMAIN = /(^|\.)(example\.(com|net|org)|test|example|invalid|localhost)$/i;
 // Where test data lives: an individual's tax code is only looked for there (a company's is public).
 const FIXTURE_PATH = /(^|\/)(test|tests|__tests__|fixtures|__fixtures__|testdata|mocks|__mocks__|e2e|seed|seeds)\/|\.(test|spec)\.([cm]?[jt]sx?|sql)$|(fixture|seed)[^/]*$/i;
-// Files that are not text are skipped: a NUL byte in the first 8 KiB.
+// Files that are not text are skipped: a NUL byte in the first 8 KiB, unless the file starts with a UTF-16 byte order
+// mark (an Excel "Unicode text" export, for one), which is decoded and scanned.
 const BINARY_PROBE = 8192;
 
 const WEIGHTS = [31, 29, 23, 19, 17, 13, 7, 5, 3];
@@ -177,6 +178,13 @@ export function allowlistErrors(allowlist) {
       if (!Array.isArray(entry[k]) || entry[k].length === 0 || !entry[k].every((v) => typeof v === 'string' && v.length > 0)) errors.push(`entry ${i}: ${k} must be a non-empty list of strings`);
     }
     if (entry.domains !== undefined && entry.kind !== 'email') errors.push(`entry ${i}: domains apply to email only`);
+    // A bare TLD ("vn") or a top-level directory ("apps/") would exempt far more than one reason can cover.
+    for (const d of Array.isArray(entry.domains) ? entry.domains : []) {
+      if (typeof d === 'string' && !/^[^.]+\.[^.]/.test(d.replace(/^\./, ''))) errors.push(`entry ${i}: domain ${d} must have a dot (no bare TLD)`);
+    }
+    for (const path of Array.isArray(entry.paths) ? entry.paths : []) {
+      if (typeof path === 'string' && path.endsWith('/') && path.split('/').filter(Boolean).length < 2) errors.push(`entry ${i}: path prefix ${path} must name at least two directories`);
+    }
     if (typeof entry.reason !== 'string' || entry.reason.trim().length < 20) errors.push(`entry ${i}: needs a reason`);
   });
   return errors;
@@ -187,12 +195,12 @@ export function allowlistErrors(allowlist) {
 export function scanFiles(paths, read, allowlist) {
   const findings = [];
   const used = new Set();
-  let skipped = 0;
+  const skipped = [];
   for (const given of paths) {
     const path = given.replaceAll('\\', '/');
     const text = read(given);
     if (text === null) {
-      skipped += 1;
+      skipped.push(path);
       continue;
     }
     for (const finding of scanText(text, path)) {
@@ -214,6 +222,17 @@ export function readText(path) {
     buf = readFileSync(path);
   } catch {
     return null; // deleted in the working tree
+  }
+  return decodeText(buf);
+}
+
+// The text of a file's bytes, or null when it is binary. UTF-16 with a byte order mark is decoded (big-endian by
+// swapping each pair); UTF-8 is the default.
+export function decodeText(buf) {
+  if (buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe) return buf.subarray(2).toString('utf16le');
+  if (buf.length >= 2 && buf[0] === 0xfe && buf[1] === 0xff) {
+    const body = Buffer.from(buf.subarray(2, 2 + ((buf.length - 2) & ~1)));
+    return body.swap16().toString('utf16le');
   }
   if (buf.subarray(0, BINARY_PROBE).includes(0)) return null;
   return buf.toString('utf8');
@@ -248,9 +267,11 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const args = process.argv.slice(2);
   const paths = args.length > 0 ? args : execFileSync('git', ['ls-files', '-z'], { encoding: 'utf8' }).split('\0').filter(Boolean);
   const { findings, skipped } = scanFiles(paths, readText, allowlist);
+  // Paths only, so a skipped file that should have been scanned is visible in the log.
+  for (const path of skipped) console.log(`pii-scan: skipped ${path} (binary, symlink or missing)`);
   for (const f of findings) {
     console.error(`::error file=${commandProperty(f.path)},line=${f.line}::line ${f.line} holds what looks like personal data (${f.kind} ${mask(f.kind, f.value)}); use a synthetic value (an address at example.com, a number that fails the check), or add a reasoned entry to tools/ci/pii-scan-allowlist.json`);
   }
   if (findings.length > 0) process.exitCode = 1;
-  else console.log(`pii-scan: ${paths.length} path(s), ${skipped} skipped (binary, symlink or missing), no personal data found`);
+  else console.log(`pii-scan: ${paths.length} path(s), ${skipped.length} skipped, no personal data found`);
 }
