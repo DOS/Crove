@@ -114,6 +114,7 @@ export const bankImport = defineCommand({
   name: 'finance.bank.import',
   input: zBankStatementImport,
   risk: 'R1',
+  sideEffect: 'internal',
   access: IMPORTERS,
   handler: async (ctx, input): Promise<BankImportResult> => {
     await bankAccount(ctx, input.bankAccount, true);

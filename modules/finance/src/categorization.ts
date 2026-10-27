@@ -172,6 +172,7 @@ export const createCategorizationRule = defineCommand({
     legalEntityId: zId.optional(),
   }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MANAGERS,
   handler: async (ctx, input) => {
     const text = keywordRuleText(input.keyword);
@@ -217,6 +218,7 @@ export const removeCategorizationRule = defineCommand({
   name: 'finance.categorization_rule.remove',
   input: z.object({ id: zId }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MANAGERS,
   target: (input) => ({ type: 'finance.categorization_rule', id: input.id }),
   handler: async (ctx, { id }) => {

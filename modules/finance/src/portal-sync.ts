@@ -1,7 +1,7 @@
 // The assisted purchase-invoice sync from the tax portal (issue #325, ADR-0036): the finance side. The API logs in to
 // the portal with what the accountant typed (apps/kernel/src/portal-sync.ts) and fetches the period's purchase list as
 // JSON; the rules that read it are in domain/portal-api.ts.
-// - finance.portal_sync.call / call_end (owners, admins, members; R1) record each call to the portal in
+// - finance.portal_sync.call / call_end (owners, admins, members; call R2 since #1577, call_end R1) record each call to the portal in
 //   crove_kernel.external_call before and after it is made (ADR-0025 decision 5): who, which step, the outcome class.
 //   Never a password, a CAPTCHA answer, a token or a response body. The login step is refused after repeated wrong
 //   passwords for the org, so Crove never locks the client's portal account by retrying.
@@ -74,7 +74,11 @@ export const portalSyncCall = defineCommand({
     z.object({ step: z.literal('list'), period: zVatPeriod }),
     z.object({ step: z.literal('xml'), listId: zId, invoice: zInvoiceKey }),
   ]),
-  risk: 'R1',
+  // Commits the call to the tax portal that the API makes next, with the client's portal account (a login attempt
+  // counts toward the portal's own lockout): an effect outside Crove (#1577). call_end and list only record what came
+  // back.
+  risk: 'R2',
+  sideEffect: 'external',
   access: EDITORS,
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới lấy được dữ liệu từ cổng thuế');
@@ -166,6 +170,7 @@ export const portalSyncCallEnd = defineCommand({
     externalRef: z.string().regex(/^[0-9a-zA-Z:-]{1,100}$/).optional(),
   }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: EDITORS,
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới lấy được dữ liệu từ cổng thuế');
@@ -199,6 +204,7 @@ export const portalSyncList = defineCommand({
   name: 'finance.portal_sync.list',
   input: z.object({ period: zVatPeriod, fileId: zId }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: EDITORS,
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới lấy được dữ liệu từ cổng thuế');

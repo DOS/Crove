@@ -95,6 +95,8 @@ export const yearArchiveBuild = defineCommand({
   name: 'finance.archive.build',
   input: z.object({ year: zArchiveYear }),
   risk: 'R3',
+  // Asks for the year's legal retention package (Accounting Law Art. 41), built once and never deleted by Crove.
+  sideEffect: 'legal',
   access: OWNERS,
   handler: async (ctx, input): Promise<YearArchive> => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu mới đóng gói lưu trữ được');
@@ -208,6 +210,7 @@ export const yearArchiveRecord = defineCommand({
   name: 'finance.archive.record',
   input: zArchiveRecord,
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   handler: async (ctx, input): Promise<{ recorded: boolean }> => {
     if (input.manifestKey !== archiveKey(ctx.orgId, input.year, input.manifestSha256)) {

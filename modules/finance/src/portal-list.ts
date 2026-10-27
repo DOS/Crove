@@ -63,6 +63,7 @@ export const portalListImport = defineCommand({
   // The list of one legal entity's period (#1280): legalEntityId as in zLegalEntityChoice.
   input: z.object({ period: zVatPeriod, fileId: zId, legalEntityId: zId.optional() }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: EDITORS,
   handler: async (ctx, input) => {
     vatPeriod(input.period);
@@ -124,6 +125,7 @@ export const portalListRemove = defineCommand({
   name: 'finance.portal_list.remove',
   input: z.object({ listId: zId }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: EDITORS,
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới gỡ được danh sách');
@@ -207,6 +209,7 @@ export const portalListRecord = defineCommand({
     z.object({ listId: zId, status: z.literal('failed'), error: z.string().min(1).max(2000) }),
   ]),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   handler: async (ctx, input) => {
     const list = await ctx.trx

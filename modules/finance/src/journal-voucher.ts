@@ -66,6 +66,7 @@ export const prepareJournalVoucher = defineCommand({
   name: 'finance.journal_voucher.prepare',
   input: zJournalVoucherRequest,
   risk: 'R1',
+  sideEffect: 'internal',
   access: REQUESTERS,
   handler: async (ctx, input) => {
     const lines = input.lines.map((l) => ({ ...l, partyId: l.partyId ?? null }));
@@ -162,6 +163,7 @@ export const recordJournalVoucher = defineCommand({
   name: JOURNAL_VOUCHER_COMMAND,
   input: z.object({ payload: zJournalVoucherProposal, acceptFailedChecks: z.boolean().default(false) }),
   risk: 'R3',
+  sideEffect: 'financial',
   access: 'proposal',
   proposalKind: JOURNAL_VOUCHER_KIND,
   handler: async (ctx, { payload }) => {
