@@ -2,7 +2,8 @@
 // started before the switch holds a version 3 batch; the first version 4 batch takes in every number allocation, void
 // and voucher number made before it, later ones their own window, and every batch verifies with its own version. The
 // database owner (here a superuser) disables the triggers and rewrites a void's reason, deletes a void, renumbers an
-// allocation and moves a voucher to another number period: the verifier fails on each, on the version 4 batches only.
+// allocation, moves a series to another legal entity and moves a voucher to another number period: the verifier fails
+// on each, on the version 4 batches only.
 // Only the worker may run the allocation hashes.
 // Part of the invariant suite: CI runs this file from the base branch on protected-path PRs (AGENTS.md).
 // Set CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
@@ -258,18 +259,31 @@ suite('WORM fact stream: number allocations and voids on PostgreSQL (#1594, #159
     expect(await verifyArchive(worker, store)).toMatchObject({ ok: true, problems: [] });
   });
 
-  it('fails the verifier on the version 4 batches when the database owner rewrites a void, deletes one, renumbers an allocation or moves a voucher to another period', async () => {
-    const [[, rewritten], [, deleted]] = voids as [[string, string], [string, string]];
+  it('fails the verifier on the version 4 batches when the database owner rewrites a void, deletes one, renumbers an allocation, moves a series to another entity or moves a voucher to another period', async () => {
+    const [[firstVoided, rewritten], [secondVoided, deleted]] = voids as [[string, string], [string, string]];
     const [[movedVoucher, renumbered]] = vouchers as [[string, string]];
+    const tables = ['crove_kernel.number_void', 'crove_kernel.number_allocation', 'crove_kernel.number_series', 'crove_finance.journal_voucher'];
     await admin(async (c) => {
-      for (const table of ['crove_kernel.number_void', 'crove_kernel.number_allocation', 'crove_finance.journal_voucher']) {
+      const branch = (
+        await c.query<{ id: string }>(`INSERT INTO crove_kernel.legal_entity (org_id, name, kind, created_by) VALUES ($1, 'Chi nhánh Cần Thơ', 'branch', $2) RETURNING id`, [
+          orgId,
+          userId,
+        ])
+      ).rows[0]?.id;
+      for (const table of tables) {
         await c.query(`ALTER TABLE ${table} DISABLE TRIGGER USER`);
       }
       await c.query(`UPDATE crove_kernel.number_void SET reason = 'không có gì' WHERE org_id = $1 AND id = $2`, [orgId, rewritten]);
       await c.query(`DELETE FROM crove_kernel.number_void WHERE org_id = $1 AND id = $2`, [orgId, deleted]);
       await c.query(`UPDATE crove_kernel.number_allocation SET number = number + 100 WHERE org_id = $1 AND id = $2`, [orgId, renumbered]);
       await c.query(`UPDATE crove_finance.journal_voucher SET number_period = '2025' WHERE org_id = $1 AND id = $2`, [orgId, movedVoucher]);
-      for (const table of ['crove_kernel.number_void', 'crove_kernel.number_allocation', 'crove_finance.journal_voucher']) {
+      // The series of the voided numbers moves to the branch; the allocations keep their own entity.
+      await c.query(
+        `UPDATE crove_kernel.number_series SET legal_entity_id = $3
+         WHERE org_id = $1 AND id = (SELECT series_id FROM crove_kernel.number_allocation WHERE org_id = $1 AND id = $2)`,
+        [orgId, firstVoided, branch],
+      );
+      for (const table of tables) {
         await c.query(`ALTER TABLE ${table} ENABLE TRIGGER USER`);
       }
     });
@@ -281,6 +295,8 @@ suite('WORM fact stream: number allocations and voids on PostgreSQL (#1594, #159
         ['row_missing', `number_void:${orgId}:${deleted}`],
         ['row_changed', `number:${orgId}:${renumbered}`],
         ['row_changed', `voucher_number:journal_voucher:${orgId}:${movedVoucher}`],
+        ['row_changed', `number:${orgId}:${firstVoided}`],
+        ['row_changed', `number:${orgId}:${secondVoided}`],
       ]),
     );
     // The version 3 batch, which predates the number rows, still verifies as written.

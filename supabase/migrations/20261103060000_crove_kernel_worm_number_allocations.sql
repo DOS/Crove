@@ -6,8 +6,8 @@
 -- their number (number_period) and their allocation (number_allocation_id). Version 2 row hashes (20261026230000)
 -- cover a voucher's number but not its period or allocation, and nothing anchored the allocations or the voids. This
 -- adds three kinds of rows, with their own references:
---   number:<org_id>:<id>                       an allocation: its series (entity, doc type, period key), its number and
---                                              the record it went to
+--   number:<org_id>:<id>                       an allocation: its legal entity, its series (the series' own legal
+--                                              entity, doc type and period key), its number and the record it went to
 --   number_void:<org_id>:<id>                  a void: its legal entity, the allocation, the reason, who and when
 --   voucher_number:<type>:<org_id>:<id>        a cash or journal voucher's number, number period and allocation
 --
@@ -34,7 +34,7 @@ BEGIN
   SELECT 'number:' || a.org_id::text || ':' || a.id::text,
          pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.jsonb_build_object(
            'org_id', a.org_id, 'id', a.id, 'legal_entity_id', a.legal_entity_id, 'series_id', a.series_id,
-           'doc_type', s.doc_type, 'period_key', s.period_key, 'number', a.number::text,
+           'series_legal_entity_id', s.legal_entity_id, 'doc_type', s.doc_type, 'period_key', s.period_key, 'number', a.number::text,
            'target_type', a.target_type, 'target_id', a.target_id, 'allocated_by', a.allocated_by,
            'allocated_at', crove_kernel.archive_ts(a.allocated_at))::text, 'UTF8')), 'hex')
   FROM crove_kernel.number_allocation a
