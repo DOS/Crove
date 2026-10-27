@@ -5487,6 +5487,768 @@ export const vi = {
       before_opening_later_date: 'Ngày này trùng hoặc trước ngày số dư đầu kỳ nên không ghi sổ được; hãy chọn một ngày sau ngày số dư đầu kỳ',
     },
   },
+  // The label of every registered command and query, by its name (#1654), for the audit log and its export.
+  // apps/kernel/test/command-labels.test.ts fails on a registered name without one.
+  commands: {
+    crm: {
+      booking: {
+        cancel: 'Hủy lịch hẹn',
+        confirm: 'Xác nhận lịch hẹn',
+        list: 'Xem danh sách lịch hẹn',
+        mail_data: 'Lấy thông tin cho thư về lịch hẹn',
+        manage: 'Thực hiện yêu cầu đổi hoặc hủy lịch hẹn của khách',
+        move: 'Dời lịch hẹn',
+        next_slots: 'Xem các khung giờ trống sắp tới',
+        remind: 'Gửi thư nhắc lịch hẹn',
+        suggest_slots: 'Gợi ý khung giờ hẹn cho khách',
+      },
+      booking_feed: {
+        create: 'Tạo địa chỉ theo dõi lịch hẹn',
+        get: 'Xem địa chỉ theo dõi lịch hẹn',
+        revoke: 'Thu hồi địa chỉ theo dõi lịch hẹn',
+        revoke_for_member: 'Thu hồi địa chỉ theo dõi lịch hẹn của thành viên đã mất quyền',
+      },
+      event_type: {
+        create: 'Tạo loại lịch hẹn',
+        list: 'Xem danh sách loại lịch hẹn',
+        set_active: 'Bật hoặc tắt loại lịch hẹn',
+        update: 'Sửa loại lịch hẹn',
+      },
+    },
+    finance: {
+      account: {
+        create: 'Thêm tài khoản kế toán',
+        update: 'Sửa tài khoản kế toán',
+      },
+      accounts: {
+        list: 'Xem hệ thống tài khoản',
+      },
+      archive: {
+        build: 'Lập bộ lưu trữ chứng từ',
+        get: 'Xem bộ lưu trữ chứng từ',
+        list: 'Xem danh sách bộ lưu trữ chứng từ',
+        record: 'Ghi kết quả lập bộ lưu trữ chứng từ',
+        source: 'Đọc dữ liệu để lập bộ lưu trữ',
+      },
+      bank: {
+        import: 'Nhập sao kê ngân hàng',
+        line_voucher: 'Xem chứng từ của dòng sao kê',
+        lines: 'Xem các dòng sao kê',
+        open_lines: 'Xem các dòng sao kê chưa đối chiếu',
+        preview: 'Xem trước sao kê ngân hàng',
+        suggestions: 'Xem gợi ý đối chiếu sao kê',
+      },
+      categorization_rule: {
+        create: 'Thêm quy tắc định khoản',
+        remove: 'Xóa quy tắc định khoản',
+      },
+      categorization_rules: {
+        list: 'Xem các quy tắc định khoản',
+      },
+      closing: {
+        prepare: 'Chuẩn bị đề xuất kết chuyển cuối năm',
+        record: 'Ghi sổ kết chuyển cuối năm',
+      },
+      customers: {
+        list: 'Xem danh sách khách hàng',
+      },
+      depreciation: {
+        prepare: 'Chuẩn bị đề xuất khấu hao và phân bổ',
+        record: 'Ghi sổ khấu hao và phân bổ',
+      },
+      document: {
+        exports: 'Xem các lần xuất của chứng từ',
+      },
+      documents: {
+        list: 'Xem danh sách chứng từ',
+        voided_proposals: 'Tìm đề xuất có chứng từ đã hủy',
+      },
+      extraction: {
+        file: 'Đọc tệp cần trích xuất',
+        lookup: 'Tìm hóa đơn gốc của hóa đơn thay thế hoặc điều chỉnh',
+      },
+      fixed_asset: {
+        create: 'Thêm tài sản cố định hoặc chi phí trả trước',
+        end: 'Kết thúc tài sản cố định hoặc chi phí trả trước',
+        export: 'Xuất sổ tài sản cố định',
+      },
+      fixed_assets: {
+        list: 'Xem sổ tài sản cố định và chi phí trả trước',
+      },
+      journal: {
+        export: 'Xuất sổ nhật ký chung',
+        get: 'Xem bút toán',
+        list: 'Xem sổ nhật ký chung',
+        prepare_reversal: 'Chuẩn bị đề xuất đảo bút toán',
+        reverse: 'Đảo bút toán',
+      },
+      journal_voucher: {
+        prepare: 'Chuẩn bị đề xuất phiếu kế toán',
+        record: 'Ghi sổ phiếu kế toán',
+      },
+      ledger: {
+        account: 'Xem sổ chi tiết tài khoản',
+        book: 'Xem sổ kế toán',
+        export: 'Xuất sổ kế toán',
+        period: 'Xem số liệu sổ kế toán theo kỳ',
+      },
+      legal_entities: {
+        list: 'Xem danh sách pháp nhân',
+      },
+      misa_goods_code: {
+        remove: 'Xóa mã hàng MISA',
+        set: 'Đặt mã hàng MISA',
+      },
+      misa_goods_codes: {
+        list: 'Xem các mã hàng MISA',
+      },
+      missing_invoices: {
+        remind: 'Gửi thư nhắc hóa đơn còn thiếu',
+        reminder: {
+          set: 'Đặt lịch nhắc hóa đơn còn thiếu',
+        },
+        request: 'Gửi thư xin hóa đơn còn thiếu',
+        status: 'Xem tình trạng hóa đơn còn thiếu',
+      },
+      notification: {
+        dispatch: 'Gửi thông báo kế toán',
+      },
+      opening_balance: {
+        post: 'Ghi sổ số dư đầu kỳ',
+        preview: 'Xem trước số dư đầu kỳ',
+      },
+      period: {
+        closing_remind: 'Nhắc khóa sổ kỳ kế toán',
+        lock: 'Khóa sổ kỳ kế toán',
+        lock_state: 'Xem tình trạng khóa sổ',
+        unlock: 'Mở khóa sổ kỳ kế toán',
+      },
+      portal_list: {
+        import: 'Nhập danh sách hóa đơn từ cổng thuế',
+        reconcile: 'Đối chiếu danh sách hóa đơn của cổng thuế',
+        record: 'Ghi danh sách hóa đơn từ cổng thuế',
+        remove: 'Xóa danh sách hóa đơn từ cổng thuế',
+        source: 'Đọc danh sách hóa đơn chờ xử lý',
+      },
+      portal_sync: {
+        call: 'Ghi một lần gọi cổng thuế',
+        call_end: 'Ghi kết quả một lần gọi cổng thuế',
+        check: 'Kiểm tra quyền đồng bộ với cổng thuế',
+        list: 'Đồng bộ danh sách hóa đơn từ cổng thuế',
+        xml_plan: 'Lập kế hoạch tải XML hóa đơn',
+      },
+      purchase: {
+        record: 'Ghi sổ hóa đơn mua vào',
+        revise: 'Sửa chứng từ mua vào đã ghi sổ',
+      },
+      search: 'Tìm kiếm trong kế toán',
+      statements: {
+        export: 'Xuất báo cáo tài chính',
+        htkk: 'Lập tệp báo cáo tài chính cho HTKK',
+        htkk_check: 'Kiểm tra báo cáo tài chính trước khi nộp HTKK',
+        period: 'Xem báo cáo tài chính theo kỳ',
+      },
+      vat: {
+        declaration: 'Xem tờ khai thuế GTGT',
+        export: 'Xuất bảng kê thuế GTGT',
+        payment_mark: 'Đánh dấu đã nộp thuế GTGT',
+        period: 'Xem thuế GTGT theo kỳ',
+        return_mark: 'Đánh dấu đã nộp tờ khai thuế GTGT',
+      },
+      vendor: {
+        set_default_account: 'Đặt tài khoản mặc định cho nhà cung cấp',
+      },
+      vendors: {
+        list: 'Xem danh sách nhà cung cấp',
+      },
+      voucher: {
+        prepare: 'Chuẩn bị đề xuất phiếu thu, phiếu chi',
+        record: 'Ghi sổ phiếu thu, phiếu chi',
+      },
+      vouchers: {
+        cash: 'Xem sổ quỹ',
+        list: 'Xem danh sách chứng từ ghi sổ',
+        purchases: 'Xem chứng từ mua vào',
+        sales: 'Xem chứng từ bán ra',
+      },
+    },
+    kernel: {
+      agent: {
+        budget: {
+          set: 'Đặt ngân sách AI',
+        },
+        budgets: {
+          list: 'Xem ngân sách AI',
+        },
+        dispatch_event: 'Giao việc cho tác tử AI theo sự kiện',
+        kill_switch: {
+          engage: 'Dừng AI',
+          release: 'Cho AI chạy lại',
+        },
+        proposal: {
+          approve: 'Thực hiện lượt duyệt của tác tử AI',
+          create: 'Tạo đề xuất theo yêu cầu của tác tử AI',
+        },
+        run: {
+          finish: 'Kết thúc lượt chạy của tác tử AI',
+          start: 'Bắt đầu lượt chạy của tác tử AI',
+        },
+        template: {
+          install: 'Cài tác tử AI từ mẫu',
+        },
+        templates: {
+          list: 'Xem các mẫu tác tử AI',
+        },
+        update: 'Sửa tác tử AI',
+      },
+      audit: {
+        commands: 'Xem các lệnh trong nhật ký hoạt động',
+        export: 'Xuất nhật ký hoạt động',
+        list: 'Xem nhật ký hoạt động',
+      },
+      calendar: {
+        event: {
+          add: 'Thêm sự kiện vào lịch',
+          cancel: 'Hủy sự kiện trên lịch',
+        },
+        get: 'Xem lịch',
+        hours: {
+          save: 'Lưu giờ làm việc',
+        },
+        slots: 'Xem khung giờ trống',
+      },
+      channel: {
+        connect: 'Kết nối kênh',
+        credential: 'Đọc thông tin đăng nhập của kênh',
+        disconnect: 'Ngắt kết nối kênh',
+        list: 'Xem danh sách kênh đã kết nối',
+        mark_expired: 'Đánh dấu kết nối kênh đã hết hạn',
+        oauth_begin: 'Bắt đầu đăng nhập để kết nối kênh',
+        oauth_consume: 'Hoàn tất đăng nhập để kết nối kênh',
+        refresh: 'Làm mới thông tin đăng nhập của kênh',
+        reseal: 'Mã hóa lại thông tin đăng nhập của kênh',
+      },
+      chart: {
+        get: 'Xem sơ đồ tổ chức',
+      },
+      extraction: {
+        record: 'Ghi kết quả đọc tệp',
+      },
+      file: {
+        archive: {
+          record: 'Ghi kết quả mở tệp nén',
+          source: 'Đọc tệp nén cần mở',
+        },
+        get: 'Xem tệp',
+        hold: {
+          record: 'Ghi trạng thái giữ tệp làm bằng chứng',
+        },
+        image_size: {
+          record: 'Ghi kích thước ảnh',
+        },
+        ingest: 'Nhận tệp',
+        reextract: 'Đọc lại tệp',
+        upload: {
+          begin: 'Bắt đầu tải tệp lên',
+          claim: 'Hoàn tất tải tệp lên',
+        },
+      },
+      files: {
+        batch: 'Xem các tệp của một lần tải lên',
+        recent: 'Xem các tệp gần đây',
+      },
+      inbound: {
+        receive: 'Nhận thư gửi đến',
+        recent: 'Xem thư gửi đến gần đây',
+        rotate: 'Đổi địa chỉ email nhận chứng từ',
+        text: 'Đọc nội dung thư gửi đến',
+      },
+      inbox: {
+        get: 'Xem một mục trong hộp thư chứng từ',
+        list: 'Xem hộp thư chứng từ',
+      },
+      legal_entity: {
+        create: 'Thêm pháp nhân',
+        list: 'Xem danh sách pháp nhân',
+        update: 'Sửa pháp nhân',
+      },
+      mail: {
+        contact: {
+          queue: 'Xếp thư gửi liên hệ vào hàng đợi',
+        },
+        direct: {
+          get: 'Đọc thư vừa soạn để gửi ngay',
+        },
+        event: {
+          record: 'Ghi sự kiện gửi thư',
+        },
+        queue: {
+          begin: 'Bắt đầu gửi thư trong hàng đợi',
+          record: 'Ghi kết quả gửi thư trong hàng đợi',
+        },
+        record_direct: 'Ghi kết quả gửi thư ngay',
+        suppression: {
+          add: 'Chặn gửi thư đến một địa chỉ',
+          lift: 'Bỏ chặn gửi thư đến một địa chỉ',
+        },
+      },
+      member: {
+        change_role: 'Đổi vai trò thành viên',
+        invite: {
+          accept: 'Nhận lời mời vào tổ chức',
+          create: 'Mời thành viên',
+          revoke: 'Thu hồi lời mời',
+        },
+        invites: {
+          list: 'Xem danh sách lời mời',
+        },
+        remove: 'Xóa thành viên khỏi tổ chức',
+        role: {
+          assign: 'Giao vai trò cho thành viên',
+          revoke: 'Bỏ vai trò của thành viên',
+        },
+        roles: {
+          list: 'Xem vai trò của thành viên',
+        },
+      },
+      notification: {
+        dispatch: 'Gửi thông báo',
+        list: 'Xem thông báo',
+        mute: 'Bật hoặc tắt một loại thông báo',
+        read: 'Đánh dấu đã đọc thông báo',
+      },
+      number: {
+        allocations: 'Xem các số chứng từ đã cấp',
+        policy: {
+          set: 'Đặt cách đánh số chứng từ',
+        },
+        void: 'Hủy số chứng từ',
+      },
+      org: {
+        create: 'Tạo tổ chức',
+        export: {
+          current: 'Đọc bản xuất dữ liệu mới nhất',
+          get: 'Xem bản xuất dữ liệu của tổ chức',
+          live_keys: 'Liệt kê các bản xuất dữ liệu còn hạn',
+          record: 'Ghi bản xuất dữ liệu',
+          snapshot: 'Đọc dữ liệu để xuất',
+        },
+        get: 'Xem thông tin tổ chức',
+        offboard: 'Ngừng dùng và xuất dữ liệu tổ chức',
+        overview: 'Xem tổng quan tổ chức',
+        purge: 'Xóa hẳn dữ liệu tổ chức',
+        set_address: 'Đặt địa chỉ tổ chức',
+        set_approval_preset: 'Đặt cách duyệt của tổ chức',
+        set_contact_email: 'Đặt email liên hệ của tổ chức',
+        set_tax_code: 'Đặt mã số thuế',
+        set_vat_filing_period: 'Đặt kỳ khai thuế GTGT',
+      },
+      party: {
+        duplicate_hints: 'Xem các đối tác có thể trùng',
+        link_entity: 'Gắn đối tác với pháp nhân',
+        link_for_tax_code: 'Tìm hoặc gắn đối tác theo mã số thuế',
+        mark_duplicate: 'Gộp đối tác trùng',
+        unlink_entity: 'Bỏ gắn đối tác khỏi pháp nhân',
+        unmark_duplicate: 'Tách đối tác đã gộp',
+        update: 'Sửa đối tác',
+      },
+      personal_data: {
+        erase: 'Xóa dữ liệu cá nhân',
+        find: 'Tìm dữ liệu cá nhân',
+      },
+      position: {
+        assign: 'Giao vị trí cho thành viên hoặc tác tử AI',
+        create: 'Thêm vị trí vào sơ đồ tổ chức',
+        update: 'Sửa vị trí trong sơ đồ tổ chức',
+      },
+      proposal: {
+        approve: 'Duyệt đề xuất',
+        approve_many: 'Duyệt nhiều đề xuất',
+        edit: 'Sửa đề xuất',
+        expire: 'Đánh dấu đề xuất quá hạn',
+        reject: 'Từ chối đề xuất',
+        remind: 'Nhắc duyệt đề xuất',
+        request: 'Yêu cầu lập đề xuất',
+        resubmit: 'Gửi lại đề xuất',
+        timeline: 'Xem diễn biến của đề xuất',
+      },
+      proposal_policy: {
+        get: 'Xem quy định duyệt đề xuất',
+        save: 'Lưu quy định duyệt đề xuất',
+      },
+      session: {
+        revoke: 'Đăng xuất phiên đăng nhập',
+      },
+      sessions: {
+        list: 'Xem các phiên đăng nhập',
+      },
+      stream: {
+        check: 'Kiểm tra lại kết nối cập nhật trực tiếp',
+      },
+      task: {
+        approve_proposal: 'Tác tử AI duyệt đề xuất',
+        checkout: 'Nhận việc',
+        comment: 'Bình luận về việc',
+        create: 'Giao việc',
+        delegate: 'Giao lại một phần việc',
+        escalate: 'Chuyển việc lên cấp trên',
+        get: 'Xem việc',
+        list: 'Xem danh sách việc',
+        propose: 'Đề xuất thay vì tự làm',
+        set_status: 'Đổi trạng thái việc',
+      },
+      tax_obligation: {
+        done: 'Đánh dấu đã hoàn thành nghĩa vụ thuế',
+        undo: 'Bỏ đánh dấu hoàn thành nghĩa vụ thuế',
+      },
+      tax_profile: {
+        get: 'Xem thông tin thuế',
+        save: 'Lưu thông tin thuế',
+      },
+      usage: {
+        defer: 'Hoãn việc vì vượt hạn mức',
+        over: 'Kiểm tra hạn mức sử dụng',
+        record: 'Ghi mức sử dụng',
+      },
+      user: {
+        status_note: 'Ghi nhận khóa hoặc mở khóa tài khoản',
+      },
+    },
+    social: {
+      account: {
+        audience_due: 'Kiểm tra đến hạn đọc người theo dõi',
+        connection_version: 'Đọc phiên bản kết nối kênh',
+        record: 'Ghi số liệu tăng trưởng của kênh',
+        trends: 'Xem tăng trưởng của kênh',
+      },
+      attention: {
+        inbox: 'Xem các bài cần xử lý',
+      },
+      auto_reply: {
+        begin: 'Bắt đầu tự trả lời bình luận',
+        record: 'Ghi kết quả tự trả lời bình luận',
+      },
+      banned_word: {
+        add: 'Thêm từ cấm',
+        list: 'Xem danh sách từ cấm',
+        remove: 'Xóa từ cấm',
+      },
+      bio: {
+        get: 'Xem trang link bio',
+        save: 'Lưu trang link bio',
+      },
+      brand_voice: {
+        list: 'Xem giọng văn thương hiệu',
+        remove: 'Xóa giọng văn thương hiệu',
+        save: 'Lưu giọng văn thương hiệu',
+      },
+      calendar_feed: {
+        create: 'Tạo địa chỉ theo dõi lịch đăng',
+        get: 'Xem địa chỉ theo dõi lịch đăng',
+        revoke: 'Thu hồi địa chỉ theo dõi lịch đăng',
+      },
+      calendar_note: {
+        list: 'Xem ghi chú trên lịch',
+        remove: 'Xóa ghi chú trên lịch',
+        save: 'Lưu ghi chú trên lịch',
+      },
+      channel: {
+        policies: 'Xem cài đặt đăng của các kênh',
+        set_client_approval: 'Đặt khách hàng duyệt bài trên kênh',
+        set_four_eyes: 'Đặt người khác duyệt bài trên kênh',
+        set_policy: 'Đặt quy tắc đăng của kênh',
+        set_reminders: 'Đặt lời nhắc của kênh',
+        set_short_links: 'Bật hoặc tắt liên kết rút gọn của kênh',
+        set_signature: 'Đặt chữ ký của kênh',
+        waiting: 'Xem các bài chờ đăng của kênh',
+      },
+      channel_access: {
+        list: 'Xem quyền theo kênh của thành viên',
+        mine: 'Xem các kênh mình được dùng',
+        set: 'Đặt các kênh thành viên được dùng',
+      },
+      channel_option: {
+        get: 'Xem tùy chọn đăng của kênh',
+        load: 'Đọc yêu cầu tải tùy chọn của kênh',
+        record: 'Ghi tùy chọn đăng của kênh',
+        request: 'Tải tùy chọn đăng của kênh',
+      },
+      channel_set: {
+        list: 'Xem các bộ kênh',
+        remove: 'Xóa bộ kênh',
+        save: 'Lưu bộ kênh',
+      },
+      chat_alert: {
+        get: 'Xem cài đặt báo qua chat',
+        prepare: 'Soạn dòng báo qua chat',
+        remove: 'Xóa báo qua chat',
+        reseal: 'Mã hóa lại thông tin báo qua chat',
+        save: 'Lưu cài đặt báo qua chat',
+        target: 'Đọc nơi nhận báo qua chat',
+        test: 'Gửi thử báo qua chat',
+        tested: 'Ghi kết quả gửi thử báo qua chat',
+      },
+      comment: {
+        begin: 'Bắt đầu đăng bình luận đầu tiên',
+        record: 'Ghi kết quả đăng bình luận đầu tiên',
+        retry: 'Đăng lại bình luận đầu tiên',
+      },
+      digest: {
+        send: 'Gửi thư tóm tắt',
+      },
+      edit: {
+        begin: 'Bắt đầu sửa bài đã đăng trên kênh',
+        record: 'Ghi kết quả sửa bài đã đăng',
+      },
+      external_post: {
+        channel: 'Đọc quyền của kênh để lấy bài',
+        import: 'Lấy các bài đăng thẳng trên kênh',
+        record: 'Ghi số liệu bài đăng thẳng trên kênh',
+        target: 'Đọc bài đăng thẳng trên kênh cần hỏi số liệu',
+      },
+      feed: {
+        add: 'Thêm nguồn tin',
+        list: 'Xem danh sách nguồn tin',
+        load: 'Đọc nguồn tin cần cập nhật',
+        record: 'Ghi bài mới từ nguồn tin',
+        remove: 'Xóa nguồn tin',
+        update: 'Sửa nguồn tin',
+      },
+      gate: {
+        begin: 'Bắt đầu đặt giới hạn trả lời trên Bluesky',
+        record: 'Ghi kết quả đặt giới hạn trả lời trên Bluesky',
+      },
+      goal: {
+        progress: 'Xem tiến độ mục tiêu tháng',
+        remove: 'Xóa mục tiêu tháng',
+        set: 'Đặt mục tiêu tháng',
+      },
+      idea: {
+        create: 'Thêm ý tưởng',
+        get: 'Xem ý tưởng',
+        list: 'Xem danh sách ý tưởng',
+        move: 'Chuyển ý tưởng',
+        update: 'Sửa ý tưởng',
+      },
+      label: {
+        create: 'Tạo nhãn bài đăng',
+        delete: 'Xóa nhãn bài đăng',
+        list: 'Xem danh sách nhãn',
+        update: 'Sửa nhãn bài đăng',
+      },
+      late_id: {
+        record: 'Ghi mã bài TikTok trả về muộn',
+        target: 'Đọc bài TikTok đang chờ mã',
+      },
+      link_preview: {
+        get: 'Xem bản xem trước liên kết',
+        load: 'Đọc yêu cầu xem trước liên kết',
+        record: 'Ghi bản xem trước liên kết',
+        request: 'Yêu cầu xem trước liên kết',
+      },
+      links: {
+        revoke_for_member: 'Thu hồi liên kết của thành viên đã mất quyền',
+      },
+      media: {
+        archive: 'Lưu trữ tệp trong thư viện',
+        draft_images: 'Đọc ảnh để AI soạn bài',
+        file: 'Đọc nơi lưu ảnh của bài',
+        list: 'Xem thư viện',
+        resolve: 'Tìm tệp thư viện theo tên hoặc mã',
+        restore: 'Khôi phục tệp trong thư viện',
+        save_stock: 'Lưu ảnh từ kho ảnh',
+        stored: 'Đọc tệp thư viện để gợi ý mô tả ảnh',
+        tag: 'Gắn thẻ cho tệp',
+        tags: 'Xem các thẻ của thư viện',
+        untag: 'Bỏ thẻ khỏi tệp',
+        usage: 'Xem tệp được dùng ở bài nào',
+      },
+      metrics: {
+        check_outperforming: 'Kiểm tra bài hiệu quả hơn thường lệ',
+        export: 'Xuất số liệu bài đăng',
+        external: 'Xem số liệu bài đăng thẳng trên kênh',
+        insights: 'Xem nhận định về số liệu',
+        record: 'Ghi số liệu bài đăng',
+        summary: 'Xem tóm tắt số liệu',
+        summary_figures: 'Đọc số liệu cho bản tóm tắt',
+        target: 'Đọc bài cần hỏi số liệu',
+        totals: 'Xem tổng số liệu',
+      },
+      notification: {
+        dispatch: 'Gửi thông báo mạng xã hội',
+        list: 'Xem thông báo mạng xã hội',
+        mail: 'Gửi thư thông báo',
+        mute: 'Bật hoặc tắt thông báo mạng xã hội',
+        read: 'Đánh dấu đã đọc thông báo mạng xã hội',
+      },
+      overview: {
+        figures: 'Đọc số liệu mạng xã hội cho trang tổng quan',
+      },
+      pin: {
+        begin: 'Bắt đầu ghim bài',
+        record: 'Ghi kết quả ghim bài',
+      },
+      plan: {
+        export: 'Xuất kế hoạch đăng bài',
+      },
+      playlist: {
+        begin: 'Bắt đầu thêm video vào danh sách phát',
+        record: 'Ghi kết quả thêm video vào danh sách phát',
+      },
+      post: {
+        activity: 'Xem hoạt động của bài',
+        add_channels: 'Thêm kênh cho bài',
+        archive: 'Lưu trữ bài',
+        assign: 'Giao bài cho người phụ trách',
+        bulk_add_channel: 'Thêm kênh cho nhiều bài',
+        bulk_archive: 'Lưu trữ nhiều bài',
+        bulk_assign: 'Giao nhiều bài',
+        bulk_labels: 'Gắn nhãn cho nhiều bài',
+        bulk_replace: 'Tìm và thay trong nhiều bài',
+        bulk_replace_preview: 'Xem trước tìm và thay',
+        bulk_restore: 'Khôi phục nhiều bài',
+        create: 'Tạo bài',
+        create_from_media: 'Tạo bài từ ảnh hoặc video',
+        duplicate: 'Nhân bản bài',
+        get: 'Xem bài',
+        import: 'Nhập bài từ tệp CSV',
+        list: 'Xem danh sách bài',
+        pre_review: 'Kiểm tra bài trước khi duyệt',
+        recurrence_clear: 'Bỏ lịch lặp lại của bài',
+        recurrence_set: 'Đặt lịch lặp lại cho bài',
+        remind_due: 'Nhắc hạn bài',
+        repost: 'Đăng lại bài',
+        repost_evergreen: 'Tự đăng lại bài dùng lâu dài',
+        restore: 'Đưa bài ra khỏi lưu trữ',
+        restore_version: 'Khôi phục phiên bản cũ của bài',
+        review_diff: 'Xem thay đổi từ lần duyệt trước',
+        set_evergreen: 'Đặt cài đặt đăng lại',
+        set_labels: 'Gắn nhãn cho bài',
+        set_text_variations: 'Lưu các cách viết khác của bài',
+        submit: 'Gửi duyệt bài',
+        update: 'Sửa bài',
+        versions: 'Xem các phiên bản của bài',
+      },
+      post_comment: {
+        accept: 'Nhận đề xuất sửa',
+        add: 'Bình luận về bài',
+        edit: 'Sửa bình luận',
+        reopen: 'Mở lại bình luận',
+        resolve: 'Đánh dấu bình luận đã xử lý',
+        skip: 'Bỏ qua đề xuất sửa',
+        suggest: 'Đề xuất sửa bài',
+      },
+      publish: {
+        begin: 'Bắt đầu đăng bài lên kênh',
+        record: 'Ghi kết quả đăng bài lên kênh',
+      },
+      publishing: {
+        hold: 'Tạm dừng mọi bài đăng',
+        hold_get: 'Xem tình trạng tạm dừng đăng',
+        release: 'Tiếp tục đăng bài',
+      },
+      push: {
+        devices: 'Xem thiết bị nhận thông báo',
+        record: 'Ghi kết quả gửi thông báo đẩy',
+        subscribe: 'Bật thông báo đẩy trên thiết bị',
+        targets: 'Đọc nơi nhận thông báo đẩy',
+        unsubscribe: 'Tắt thông báo đẩy trên thiết bị',
+      },
+      queue: {
+        check_low: 'Kiểm tra hàng đợi sắp hết bài',
+        get: 'Xem hàng đợi',
+        move_to_front: 'Đưa bài lên đầu hàng đợi',
+        open_slots: 'Xem khung giờ còn trống trong hàng đợi',
+        set: 'Đặt khung giờ của hàng đợi',
+        shuffle: 'Xáo trộn hàng đợi',
+      },
+      recurring: {
+        next: 'Tạo bản tiếp theo của bài lặp lại',
+      },
+      remove: {
+        begin: 'Bắt đầu gỡ bài khỏi kênh',
+        record: 'Ghi kết quả gỡ bài khỏi kênh',
+        schedule: 'Gỡ bài theo lịch',
+        watch: 'Kiểm tra việc gỡ bài theo lịch',
+      },
+      report_branding: {
+        get: 'Xem thương hiệu trên báo cáo',
+        remove: 'Xóa thương hiệu trên báo cáo',
+        save: 'Lưu thương hiệu trên báo cáo',
+      },
+      report_link: {
+        create: 'Tạo liên kết báo cáo',
+        list: 'Xem danh sách liên kết báo cáo',
+        revoke: 'Thu hồi liên kết báo cáo',
+      },
+      report_schedule: {
+        defer: 'Hoãn lần gửi báo cáo định kỳ bị lỗi',
+        list: 'Xem lịch gửi báo cáo',
+        mint_link: 'Tạo liên kết cho báo cáo định kỳ',
+        remove: 'Xóa lịch gửi báo cáo',
+        run: 'Gửi báo cáo định kỳ',
+        save: 'Lưu lịch gửi báo cáo',
+        test: 'Gửi thử báo cáo',
+      },
+      repost: {
+        begin: 'Bắt đầu tự đăng lại bài',
+        record: 'Ghi kết quả tự đăng lại bài',
+      },
+      review: {
+        client_settle: 'Áp dụng ý kiến duyệt của khách hàng',
+        inbox: 'Xem các bài chờ duyệt',
+        remind: 'Nhắc duyệt bài',
+        reply: 'Trả lời khách hàng về bài duyệt',
+      },
+      review_check: {
+        list: 'Xem danh sách cần kiểm tra khi duyệt',
+        set: 'Lưu danh sách cần kiểm tra khi duyệt',
+      },
+      review_link: {
+        create: 'Tạo liên kết duyệt bài',
+        create_plan: 'Tạo liên kết duyệt kế hoạch',
+        list: 'Xem danh sách liên kết duyệt bài',
+        list_plans: 'Xem danh sách liên kết duyệt kế hoạch',
+        revoke: 'Thu hồi liên kết duyệt',
+      },
+      saved_view: {
+        delete: 'Xóa bộ lọc đã lưu',
+        list: 'Xem các bộ lọc đã lưu',
+        save: 'Lưu bộ lọc',
+      },
+      snippet: {
+        create: 'Thêm đoạn mẫu',
+        delete: 'Xóa đoạn mẫu',
+        list: 'Xem danh sách đoạn mẫu',
+        update: 'Sửa đoạn mẫu',
+      },
+      team: {
+        report: 'Xem báo cáo của nhóm',
+      },
+      thread: {
+        begin: 'Bắt đầu đăng phần tiếp theo của chuỗi bài',
+        record: 'Ghi kết quả đăng phần tiếp theo của chuỗi bài',
+        retry: 'Đăng lại phần còn thiếu của chuỗi bài',
+      },
+      variant: {
+        cancel: 'Hủy bài trên một kênh',
+        decide: 'Duyệt hoặc từ chối bài trên một kênh',
+        edit_published: 'Sửa bài đã đăng trên một kênh',
+        remove: 'Gỡ bài khỏi một kênh',
+        reschedule: 'Đổi giờ đăng trên một kênh',
+        resolve: 'Xác nhận bài đã lên kênh hay chưa',
+        retry: 'Đăng lại bài trên một kênh',
+        schedule: 'Lên lịch đăng trên một kênh',
+        unschedule: 'Bỏ lịch đăng trên một kênh',
+        update: 'Sửa bài trên một kênh',
+      },
+      watermark: {
+        get: 'Xem logo đóng lên ảnh',
+        remove: 'Xóa logo đóng lên ảnh',
+        save: 'Lưu logo đóng lên ảnh',
+      },
+    },
+  },
 } as const;
 
 export type Messages = typeof vi;
