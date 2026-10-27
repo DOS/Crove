@@ -1,7 +1,7 @@
 // The G5 PII scan (#1628): planted personal data fails, look-alikes and synthetic values pass, the log masks what it
 // found, and the tree as it is passes with every allowlist entry in use.
 //
-// The planted values never appear in this file as one string: they are joined, or drawn at random, at run time, so the
+// The planted values never appear in this file as one string: they are joined, or drawn from a fixed-seed generator, at run time, so the
 // scan of this file finds nothing and the repository holds no value that could be a real person's. The planted citizen
 // ID has birth year 2099, so no one holds it.
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -29,12 +29,21 @@ import {
 
 const SCRIPT = fileURLToPath(new URL('../ci/pii-scan.mjs', import.meta.url));
 const join2 = (...parts: string[]) => parts.join('');
-const randomDigits = (n: number) => Array.from({ length: n }, () => String(Math.floor(Math.random() * 10))).join('');
-// Random digits that do not look made up, so the scan must report them.
+// A fixed-seed generator (mulberry32): the planted digits are the same on every run, so the tests are deterministic,
+// yet no planted value is written in this file.
+let seed = 1628;
+function nextDigit(): number {
+  seed = (seed + 0x6d2b79f5) | 0;
+  let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+  return ((t ^ (t >>> 14)) >>> 0) % 10;
+}
+const randomDigits = (n: number) => Array.from({ length: n }, () => String(nextDigit())).join('');
+// Digits that look like nobody made them up (neither looksSynthetic nor repeatedGroups), so the scan must report them.
 function realLooking(n: number): string {
   for (;;) {
     const d = randomDigits(n);
-    if (!looksSynthetic(d)) return d;
+    if (!looksSynthetic(d) && !repeatedGroups(d)) return d;
   }
 }
 
