@@ -41,20 +41,91 @@ export interface Grant {
 
 const APPROVAL_SOURCE = new URL('../../../packages/kernel/src/approval.ts', import.meta.url);
 
+// The source with every comment blanked out (newlines kept), so a `permission:` in a comment is not read as code. A
+// small scanner rather than a regex: it skips string and template literals (and the code inside `${...}`), so a `//`
+// or `/*` inside a string, such as a URL, stays. It does not parse regular expression literals; approval.ts has none
+// with a quote or a comment marker in it.
+export function stripComments(source: string): string {
+  let out = '';
+  // Open template literals and, inside each `${`, the depth of braces since it opened.
+  const stack: Array<'template' | number> = [];
+  const blank = (text: string) => text.replace(/[^\n]/g, ' ');
+  let i = 0;
+  while (i < source.length) {
+    const ch = source[i] as string;
+    const next = source[i + 1];
+    const top = stack.at(-1);
+    if (top === 'template') {
+      if (ch === '\\') {
+        out += source.slice(i, i + 2);
+        i += 2;
+      } else if (ch === '`') {
+        stack.pop();
+        out += ch;
+        i += 1;
+      } else if (ch === '$' && next === '{') {
+        stack.push(0);
+        out += '${';
+        i += 2;
+      } else {
+        out += ch;
+        i += 1;
+      }
+      continue;
+    }
+    if (ch === '/' && next === '/') {
+      const stop = source.indexOf('\n', i);
+      const until = stop === -1 ? source.length : stop;
+      out += blank(source.slice(i, until));
+      i = until;
+    } else if (ch === '/' && next === '*') {
+      const stop = source.indexOf('*/', i + 2);
+      const until = stop === -1 ? source.length : stop + 2;
+      out += blank(source.slice(i, until));
+      i = until;
+    } else if (ch === "'" || ch === '"') {
+      let j = i + 1;
+      while (j < source.length && source[j] !== ch && source[j] !== '\n') j += source[j] === '\\' ? 2 : 1;
+      out += source.slice(i, j + 1);
+      i = j + 1;
+    } else if (ch === '`') {
+      stack.push('template');
+      out += ch;
+      i += 1;
+    } else {
+      if (typeof top === 'number') {
+        if (ch === '{') stack[stack.length - 1] = top + 1;
+        else if (ch === '}') {
+          if (top === 0) stack.pop();
+          else stack[stack.length - 1] = top - 1;
+        }
+      }
+      out += ch;
+      i += 1;
+    }
+  }
+  return out;
+}
+
 // What names a permission in TypeScript: every command the deployment registers with every module on (and the purge
-// command the kernel registers on its own), and every CommandPolicy of the approval policy. The policy table is not
-// exported (approval.ts is a protected path), so its source is read: every `permission:` in it, in any field order or
-// after a spread, is the type `string` (the interface field and a parameter), null, a quoted key or a string constant
-// @crove/kernel exports; anything else is a problem, so a new one cannot slip past.
+// command the kernel registers on its own), and every CommandPolicy of the approval policy (approvalPolicyUses()).
 export function staticPermissionUses(): { uses: PermissionUse[]; problems: string[] } {
   const uses: PermissionUse[] = [];
-  const problems: string[] = [];
   const config = loadConfig({ DATABASE_URL: 'postgres://localhost/x', AUTH_JWT_SECRET: 'unit-test-jwt-secret-0123456789abcdef', AUTH_ISSUER: 'crove-auth' });
   const commands = [...moduleDefinitions(config).commands, orgPurgeCommand({ store: {} as never })];
   for (const c of commands) if (c.permission !== undefined) uses.push({ permission: c.permission, by: `command ${c.name}`, risk: c.risk });
+  const policy = approvalPolicyUses(readFileSync(APPROVAL_SOURCE, 'utf8'));
+  return { uses: [...uses, ...policy.uses], problems: policy.problems };
+}
 
-  const source = readFileSync(APPROVAL_SOURCE, 'utf8');
-  const values = [...source.matchAll(/\bpermission:\s*([^\s,;)}]+)/g)].map((m) => m[1] as string).filter((v) => v !== 'string');
+// The permissions the approval policy's source names. The policy table is not exported (approval.ts is a protected
+// path), so its source is read: every `permission:` in its code (comments are skipped), in any field order or after a
+// spread, is the type `string` (the interface field and a parameter), null, a quoted key or a string constant
+// @crove/kernel exports; anything else is a problem, so a new one cannot slip past.
+export function approvalPolicyUses(source: string): { uses: PermissionUse[]; problems: string[] } {
+  const uses: PermissionUse[] = [];
+  const problems: string[] = [];
+  const values = [...stripComments(source).matchAll(/\bpermission:\s*([^\s,;)}]+)/g)].map((m) => m[1] as string).filter((v) => v !== 'string');
   if (values.length < 2) problems.push(`packages/kernel/src/approval.ts: found ${values.length} CommandPolicy permissions, expected the ledger's and NOBODY's; update staticPermissionUses()`);
   for (const value of values) {
     if (value === 'null') continue;
@@ -66,7 +137,7 @@ export function staticPermissionUses(): { uses: PermissionUse[]; problems: strin
     }
     uses.push({ permission: resolved, by: `the approval policy (${value})` });
   }
-  if (!uses.some((u) => u.permission === LEDGER_APPROVE_PERMISSION && u.by.startsWith('the approval policy'))) {
+  if (!uses.some((u) => u.permission === LEDGER_APPROVE_PERMISSION)) {
     problems.push(`packages/kernel/src/approval.ts: no CommandPolicy names LEDGER_APPROVE_PERMISSION (${LEDGER_APPROVE_PERMISSION}); update staticPermissionUses()`);
   }
   return { uses, problems };

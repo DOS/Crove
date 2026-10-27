@@ -4,7 +4,7 @@
 // database's functions are checked in manifest.db.test.ts. Planted mismatches show each check fails.
 import { describe, expect, it } from 'vitest';
 import { ROLE_PERMISSIONS, columns, defineModule, type ModuleManifest } from '@crove/kernel-contract';
-import { MODULE_MANIFESTS, permissionProblems, sqlPermissionUses, staticPermissionUses, type Manifests, type PermissionUse } from './manifest-permissions.ts';
+import { MODULE_MANIFESTS, approvalPolicyUses, permissionProblems, sqlPermissionUses, staticPermissionUses, stripComments, type Manifests, type PermissionUse } from './manifest-permissions.ts';
 
 describe('module manifests declare their permissions (#1630)', () => {
   it('declares every permission a command or the approval policy names, with the risk of its commands', () => {
@@ -89,5 +89,44 @@ describe('permissionProblems() on planted mismatches', () => {
       'finance.period.unlock',
       'finance.proposal.approve',
     ]);
+  });
+});
+
+describe('reading the approval policy source', () => {
+  const policy = [
+    'interface CommandPolicy {',
+    '  permission: string | null;',
+    '}',
+    "const LEDGER: CommandPolicy = { roles: ['owner', 'admin'], permission: LEDGER_APPROVE_PERMISSION, fourEyes: true };",
+    'const NOBODY: CommandPolicy = { roles: [], permission: null, fourEyes: true };',
+  ].join('\n');
+  const ledger = { permission: 'finance.proposal.approve', by: 'the approval policy (LEDGER_APPROVE_PERMISSION)' };
+
+  it('does not count a permission in a comment', () => {
+    const commented = [
+      policy,
+      "// const DRAFT: CommandPolicy = { roles: [], permission: 'finance.invoice.post', fourEyes: true };",
+      "/* const OLD = { permission: 'finance.bank.export' }; */",
+      "const LINK = 'https://example.test/a//b'; // permission: 'finance.after.url'",
+    ].join('\n');
+    expect(approvalPolicyUses(commented)).toEqual({ uses: [ledger], problems: [] });
+  });
+
+  it('counts a permission in code, in any field order or after a spread', () => {
+    const more = [policy, "const P = { ...LEDGER, permission: 'finance.invoice.post' };", 'const Q = { fourEyes: true, permission: SOMETHING_UNEXPORTED, roles: [] };'].join('\n');
+    expect(approvalPolicyUses(more)).toEqual({
+      uses: [ledger, { permission: 'finance.invoice.post', by: "the approval policy ('finance.invoice.post')" }],
+      problems: ["packages/kernel/src/approval.ts: a CommandPolicy's permission SOMETHING_UNEXPORTED is neither a string, null, nor a string constant @crove/kernel exports"],
+    });
+  });
+
+  it('blanks comments but keeps strings and template literals that hold comment markers', () => {
+    const source = ["a = 'x//y'; // gone", 'b = "/*keep*/"; /* gone', "too */ c = `t // ${d /* gone */ + '}'} //t`;"].join('\n');
+    const stripped = stripComments(source);
+    expect(stripped.split('\n')).toHaveLength(3);
+    expect(stripped).toContain("a = 'x//y';");
+    expect(stripped).toContain('b = "/*keep*/";');
+    expect(stripped).toContain("c = `t // ${d            + '}'} //t`;");
+    expect(stripped).not.toContain('gone');
   });
 });
