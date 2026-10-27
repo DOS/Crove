@@ -13,7 +13,7 @@ import { loadConfig } from '../src/config.ts';
 import { moduleDefinitions } from '../src/kernel.ts';
 import { orgPurgeCommand } from '../src/org-purge.ts';
 
-export type Risk = PermissionDeclaration['risk'];
+type Risk = PermissionDeclaration['risk'];
 const RANK: Record<Risk, number> = { R0: 0, R1: 1, R2: 2, R3: 3 };
 // The shape crove_kernel.role_permission's CHECK and the runtime's register() accept.
 const KEY = /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/;
@@ -42,9 +42,10 @@ export interface Grant {
 const APPROVAL_SOURCE = new URL('../../../packages/kernel/src/approval.ts', import.meta.url);
 
 // What names a permission in TypeScript: every command the deployment registers with every module on (and the purge
-// command the kernel registers on its own), and every CommandPolicy literal of the approval policy. The policy table is
-// not exported (approval.ts is a protected path), so its literals are read from the source: each permission there is
-// null or an exported constant of @crove/kernel; anything else is a problem, so a new one cannot slip past.
+// command the kernel registers on its own), and every CommandPolicy of the approval policy. The policy table is not
+// exported (approval.ts is a protected path), so its source is read: every `permission:` in it, in any field order or
+// after a spread, is the type `string` (the interface field and a parameter), null, a quoted key or a string constant
+// @crove/kernel exports; anything else is a problem, so a new one cannot slip past.
 export function staticPermissionUses(): { uses: PermissionUse[]; problems: string[] } {
   const uses: PermissionUse[] = [];
   const problems: string[] = [];
@@ -53,9 +54,9 @@ export function staticPermissionUses(): { uses: PermissionUse[]; problems: strin
   for (const c of commands) if (c.permission !== undefined) uses.push({ permission: c.permission, by: `command ${c.name}`, risk: c.risk });
 
   const source = readFileSync(APPROVAL_SOURCE, 'utf8');
-  const literals = [...source.matchAll(/\broles:\s*\[[^\]]*\],\s*permission:\s*([^,}\s]+)/g)].map((m) => m[1] as string);
-  if (literals.length < 2) problems.push(`packages/kernel/src/approval.ts: found ${literals.length} CommandPolicy literals ({ roles: [...], permission: ... }), expected the ledger's and NOBODY; update staticPermissionUses()`);
-  for (const value of literals) {
+  const values = [...source.matchAll(/\bpermission:\s*([^\s,;)}]+)/g)].map((m) => m[1] as string).filter((v) => v !== 'string');
+  if (values.length < 2) problems.push(`packages/kernel/src/approval.ts: found ${values.length} CommandPolicy permissions, expected the ledger's and NOBODY's; update staticPermissionUses()`);
+  for (const value of values) {
     if (value === 'null') continue;
     const quoted = /^'([^']*)'$/.exec(value);
     const resolved = quoted ? quoted[1] : (kernel as Record<string, unknown>)[value];
@@ -66,7 +67,7 @@ export function staticPermissionUses(): { uses: PermissionUse[]; problems: strin
     uses.push({ permission: resolved, by: `the approval policy (${value})` });
   }
   if (!uses.some((u) => u.permission === LEDGER_APPROVE_PERMISSION && u.by.startsWith('the approval policy'))) {
-    problems.push(`packages/kernel/src/approval.ts: no CommandPolicy literal names LEDGER_APPROVE_PERMISSION (${LEDGER_APPROVE_PERMISSION}); update staticPermissionUses()`);
+    problems.push(`packages/kernel/src/approval.ts: no CommandPolicy names LEDGER_APPROVE_PERMISSION (${LEDGER_APPROVE_PERMISSION}); update staticPermissionUses()`);
   }
   return { uses, problems };
 }

@@ -9,12 +9,9 @@ import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { migrate } from '@crove/db/migrate';
-import { PERSONAL_DATA_COLUMNS, kernelManifest, type PersonalDataColumn, type PersonalDataHandling, type PersonalDataKind } from '@crove/kernel';
+import { PERSONAL_DATA_COLUMNS, type PersonalDataColumn, type PersonalDataHandling, type PersonalDataKind } from '@crove/kernel';
 import { DATA_CLASSES, columns, type DataClass, type ModuleManifest } from '@crove/kernel-contract';
-import { crmManifest } from '@crove/mod-crm';
-import { financeManifest } from '@crove/mod-finance';
-import { socialManifest } from '@crove/mod-social';
-import { permissionProblems, sqlPermissionUses, staticPermissionUses, type Grant, type PermissionUse } from './manifest-permissions.ts';
+import { MODULE_MANIFESTS, permissionProblems, sqlPermissionUses, staticPermissionUses, type Grant, type Manifests, type PermissionUse } from './manifest-permissions.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -35,12 +32,10 @@ const CONTROL_PLANE: ModuleManifest = {
   },
   permissions: [],
 };
-const MANIFESTS: Record<string, { manifest: ModuleManifest; file: string }> = {
+// The control plane's owner and every module manifest (manifest-permissions.ts lists them).
+const MANIFESTS: Manifests = {
   'control-plane': { manifest: CONTROL_PLANE, file: 'apps/kernel/test/manifest.db.test.ts (CONTROL_PLANE)' },
-  kernel: { manifest: kernelManifest, file: 'packages/kernel/src/manifest.ts' },
-  finance: { manifest: financeManifest, file: 'modules/finance/src/manifest.ts' },
-  social: { manifest: socialManifest, file: 'modules/social/src/manifest.ts' },
-  crm: { manifest: crmManifest, file: 'modules/crm/src/manifest.ts' },
+  ...MODULE_MANIFESTS,
 };
 const suite = ADMIN ? describe : describe.skip;
 
