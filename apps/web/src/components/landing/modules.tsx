@@ -196,8 +196,10 @@ export function Modules({ dict }: { dict: Dictionary }) {
         <Card className="lg:col-span-2">
           <div className="grid gap-5 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)] lg:gap-8">
             <CardHead name={social.name} body={social.body} people={social.people} deptLabel={modules.deptLabel} />
-            <div className="min-w-0 overflow-x-auto">
-              <ol className="grid min-w-[640px] grid-cols-7 gap-1.5" aria-label={social.weekLabel}>
+            {/* Scrolls sideways at phone width, so it takes keyboard focus to scroll with the arrow keys (WCAG 2.1.1,
+                #1629). It carries the week's name, which the list inside had. */}
+            <div role="group" aria-label={social.weekLabel} tabIndex={0} className="min-w-0 overflow-x-auto">
+              <ol className="grid min-w-[640px] grid-cols-7 gap-1.5">
                 {social.days.map((day) => {
                   const Art = day.post ? (ART[day.post.art as keyof typeof ART] ?? Wheat) : null;
                   return (

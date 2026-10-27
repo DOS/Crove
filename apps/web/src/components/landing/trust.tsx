@@ -19,8 +19,11 @@ export function Trust({ dict }: { dict: Dictionary }) {
 
       <div className="mt-14 grid gap-8 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)] lg:gap-10">
         <div className="min-w-0 rounded-lg border border-line bg-surface">
-          <h3 className="border-b border-line px-4 py-3 text-sm font-semibold">{trust.logTitle}</h3>
-          <div className="overflow-x-auto">
+          <h3 id="trust-log-title" className="border-b border-line px-4 py-3 text-sm font-semibold">
+            {trust.logTitle}
+          </h3>
+          {/* Scrolls sideways at phone width, so it takes keyboard focus to scroll with the arrow keys (WCAG 2.1.1, #1629). */}
+          <div role="group" aria-labelledby="trust-log-title" tabIndex={0} className="overflow-x-auto">
             <table className="w-full min-w-[520px] border-collapse text-[13px]">
               <thead>
                 <tr className="border-b border-line text-left text-xs text-subtle">
