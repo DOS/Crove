@@ -1,8 +1,8 @@
 // /mfa decides from the server when the session says no second factor is due (#345): a factor enabled on another device
 // is missing from the cached session until the token refreshes, and the cached answer alone loops between /mfa and the
 // app (the kernel refuses with MFA_REQUIRED, which opens /mfa again).
-import { describe, expect, it } from 'vitest';
-import { needsSecondFactorNow, secondFactorStillOwed, verifySecondFactor } from '../src/lib/auth.ts';
+import { describe, expect, it, vi } from 'vitest';
+import { needsSecondFactorNow, secondFactorStillOwed, VERIFY_WAIT_MS, verifySecondFactor } from '../src/lib/auth.ts';
 
 type Level = { currentLevel: string | null; nextLevel: string | null } | null;
 type Factor = { id: string; status: 'verified' | 'unverified' };
@@ -91,5 +91,18 @@ describe('secondFactorStillOwed', () => {
     const refused = { mfa: { ...client?.mfa, challengeAndVerify: async () => ({ data: null, error: new Error('mfa_verification_failed') }) } };
     await verifySecondFactor({ factorId: 'f1', code: '000000' }, refused as unknown as typeof client);
     expect(await secondFactorStillOwed(refused as unknown as typeof client)).toBe(true);
+  });
+
+  it('decides from the session as it is when the verification never answers', async () => {
+    vi.useFakeTimers();
+    try {
+      const { client } = verifyingClient();
+      void verifySecondFactor({ factorId: 'f1', code: '123456' }, client);
+      const owed = secondFactorStillOwed(client);
+      await vi.advanceTimersByTimeAsync(VERIFY_WAIT_MS);
+      expect(await owed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

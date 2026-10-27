@@ -110,8 +110,13 @@ export function verifySecondFactor(params: { factorId: string; code: string }, c
 
 // Whether a request refused with MFA_REQUIRED means the session still owes its second factor, or only that it was sent
 // before the factor this tab verified meanwhile: the refused screen stays, its next request carries the new session.
+// A verification that never answers is waited for VERIFY_WAIT_MS at most, then the session decides as it is.
+export const VERIFY_WAIT_MS = 10_000;
+
 export async function secondFactorStillOwed(client: Pick<Client, 'mfa'> = auth()): Promise<boolean> {
-  await verifying;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([verifying, new Promise((resolve) => (timer = setTimeout(resolve, VERIFY_WAIT_MS)))]);
+  clearTimeout(timer);
   return needsSecondFactorNow(client);
 }
 
