@@ -133,7 +133,7 @@ suite('duplicate parties (#887)', () => {
     const audit = await admin(
       async (c) => (await c.query(`SELECT actor_id, detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'kernel.party.mark_duplicate' AND outcome = 'ok'`, [o.orgId])).rows,
     );
-    expect(audit).toEqual([{ actor_id: o.admin, detail: expect.objectContaining({ partyId: duplicate, keepId: kept, name: 'CONG TY TNHH DICH VU MAU', keepName: 'Công ty TNHH Dịch vụ Mẫu' }) }]);
+    expect(audit).toEqual([{ actor_id: o.admin, detail: expect.objectContaining({ partyId: duplicate, keepId: kept, name: { redacted: 'pii' }, keepName: { redacted: 'pii' } }) }]);
     const activity = await admin(async (c) => (await c.query(`SELECT summary FROM crove_kernel.activity WHERE org_id = $1 AND record_id = $2 AND kind = 'party.marked_duplicate'`, [o.orgId, duplicate])).rows);
     expect(activity).toEqual([{ summary: 'Gộp CONG TY TNHH DICH VU MAU vào Công ty TNHH Dịch vụ Mẫu' }]);
     // Marking the same pair again changes nothing.

@@ -904,6 +904,7 @@ wake: LISTEN crove_outbox (per-statement NOTIFY) + poll every 500 ms
   - `activity`: user-facing projection; the system kind is written only via a definer.
 - **PII:**
   - `input_redacted` drops fields classified `pii` or `national_id`, keeping only `input_sha256`.
+    - On `main` (#1626): the audit row stores no input, only `input_sha256`, and the facts a command adds (`ctx.audit`, a refusal's audit facts) keep no value of a column classified anything but `internal` (§5.2). `auditValue(table, column, value)` (`@crove/kernel-contract`) puts a marker naming the class in place of the value (`{ "redacted": "pii" }`), keeping the key and a null; `apps/kernel/test/audit-facts.test.ts` scans every fact for a key or a value that names a classified column without it. Why every class and not only `pii` and `national_id`: a contact detail, a payment account and a secret are personal or secret data too, and an audit row can never be erased. The org's tax code guard (`tenant_tax_code_requires_audit`) accepts the marker for a code that is set (20261103070000). Rows written before stay as they are.
   - Immutable stores that need PII use crypto-shredding: a per-subject key in `subject_key`; deleting the key deletes the data.
 - **Immutability triggers:**
   - `make_append_only(regclass)` raises on BEFORE UPDATE/DELETE/TRUNCATE, for every role including `service_role`.
@@ -1022,7 +1023,7 @@ defineModule({ id: 'finance', version: '0.1.0', dependsOn: ['kernel'], dbSchema:
 
 Every column of an entity table must have a `classify` entry; the default is `internal`. CI fails if one is missing.
 
-On `main` (#1599): every column of every `crove_*` table is classified in its module manifest, `columns([...internal], { column: class })` per table, with the classes `internal`, `pii`, `contact`, `payment`, `national_id`, `national_id_if_individual` and `sensitive` (`DATA_CLASSES` in `@crove/kernel-contract`, defined there; `sensitive` also covers secrets such as sealed credentials and bearer tokens). `apps/kernel/test/manifest.db.test.ts` fails on a column with no class or a classified column that does not exist, and when personal data the PDPL registry (#923) erases or keeps is classified `internal` or against its kind. Not built yet: the consumers (dropping `pii` and `national_id` fields from audit input, the search projector, P04 on writes of `contact` or `payment`).
+On `main` (#1599): every column of every `crove_*` table is classified in its module manifest, `columns([...internal], { column: class })` per table, with the classes `internal`, `pii`, `contact`, `payment`, `national_id`, `national_id_if_individual` and `sensitive` (`DATA_CLASSES` in `@crove/kernel-contract`, defined there; `sensitive` also covers secrets such as sealed credentials and bearer tokens). `apps/kernel/test/manifest.db.test.ts` fails on a column with no class or a classified column that does not exist, and when personal data the PDPL registry (#923) erases or keeps is classified `internal` or against its kind. The first consumer is on `main` (#1626): audit facts keep a marker naming the class in place of any classified value (§4.10). Not built yet: the search projector, P04 on writes of `contact` or `payment`.
 
 ### 5.3 Naming rules
 

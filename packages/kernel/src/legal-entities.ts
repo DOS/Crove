@@ -1,9 +1,10 @@
 // The legal entities of an org (issue #1278, plan §4.6): the companies, branches and household businesses it keeps
 // books for (crove_kernel.legal_entity). Every org has one default entity, created with the org by
 // crove_kernel.create_or_replay_org and backfilled for older orgs from the tenant row. Owners and admins list them, add
-// one and change one; the runtime audits every change, and the detail keeps the old and the new values (a legal
-// entity's name and tax code are public business data). Entities are never deleted: the books will reference them
-// (ADR-0021).
+// one and change one; the runtime audits every change, and the detail keeps which fields changed and the old and the new
+// values of the internal ones (the kind, the parent). The name and the tax code are classified (a household business is
+// a person, and its tax code is the owner's national id), so the detail keeps a marker in their place (auditValue,
+// #1626). Entities are never deleted: the books will reference them (ADR-0021).
 //
 // The org's tax code lives on the tenant row too, where Finance reads it (a sale or a purchase, #313) and locks the row
 // while it posts, and only kernel.org.set_tax_code changes it (tenant_tax_code_guard, #430). The default entity's tax
@@ -11,11 +12,13 @@
 // #1316, so a staff fix on the tenant row moves it too), kernel.legal_entity.update refuses to change it, and the
 // database refuses a default entity whose code is not the tenant's (legal_entity_default_tax_code).
 import { z } from 'zod';
-import { LEGAL_ENTITY_NAME_MAX, normalizeTaxCode, zLegalEntityInput, type LegalEntity, type LegalEntityKind } from '@crove/kernel-contract';
+import { LEGAL_ENTITY_NAME_MAX, auditValue, normalizeTaxCode, zLegalEntityInput, type LegalEntity, type LegalEntityKind } from '@crove/kernel-contract';
 import type { LegalEntityKind as StoredKind, MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext, type QueryContext } from '@crove/kernel-runtime';
+import { kernelManifest } from './manifest.ts';
 
 const ADMINS: readonly MemberRole[] = ['owner', 'admin'];
+const ENTITY = kernelManifest.tables.crove_kernel.legal_entity;
 
 // The contract's kinds and the database's are one list (a compile error if they drift).
 const sameKinds: [LegalEntityKind, StoredKind] extends [StoredKind, LegalEntityKind] ? true : never = true;
@@ -181,7 +184,10 @@ export const legalEntityCreate = defineCommand({
       .returning(COLUMNS)
       .executeTakeFirstOrThrow()
       .catch(onWrite(taxCode));
-    ctx.audit({ legalEntityId: row.id, entity: { name, kind: input.kind, taxCode, parentId: input.parentId } });
+    ctx.audit({
+      legalEntityId: row.id,
+      entity: { name: auditValue(ENTITY, 'name', name), kind: input.kind, taxCode: auditValue(ENTITY, 'tax_code', taxCode), parentId: input.parentId },
+    });
     await ctx.activity('kernel.legal_entity', row.id, 'legal_entity.created', `Thêm pháp nhân ${name} (${KIND_LABELS[input.kind]})`);
     return view(row);
   },
@@ -228,11 +234,11 @@ export const legalEntityUpdate = defineCommand({
       .catch(onWrite(taxCode));
 
     const field = { name: 'name', kind: 'kind', tax_code: 'taxCode', parent_id: 'parentId' } as const;
-    const previous: Record<string, string | null> = {};
-    const values: Record<string, string | null> = {};
+    const previous: Record<string, unknown> = {};
+    const values: Record<string, unknown> = {};
     for (const key of changed) {
-      previous[field[key]] = before[key];
-      values[field[key]] = next[key];
+      previous[field[key]] = auditValue(ENTITY, key, before[key]);
+      values[field[key]] = auditValue(ENTITY, key, next[key]);
     }
     ctx.audit({ legalEntityId: before.id, isDefault: before.is_default, changed: changed.map((k) => field[k]), previous, values });
     await ctx.activity('kernel.legal_entity', before.id, 'legal_entity.updated', `Sửa pháp nhân ${name}`);

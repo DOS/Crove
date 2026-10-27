@@ -1,15 +1,18 @@
 // A party, a vendor or a customer (#887): its name and contact details corrected by hand. Owners, admins and members
 // edit them (R1). The editor sends the version it read: when someone else saved in between, the edit is refused
-// rather than silently overwriting theirs. The runtime audits every edit; the detail keeps the old and the new name,
-// tax code and address (public business data) and only the names of the other fields that changed (an email or a
-// phone may be a person's).
+// rather than silently overwriting theirs. The runtime audits every edit; the detail keeps the names of the fields that
+// changed, and a marker naming the class in place of the old and the new name, tax code and address (a party may be a
+// person, and its tax code that person's national id; auditValue, #1626).
 // The tax code is how an e-invoice finds its party (finance's upsertParty), so it can be added to a party without one
 // but never changed or removed: a party recorded under a wrong tax code is merged with "mark duplicate" (#887).
 import { sql } from 'kysely';
 import { z } from 'zod';
-import { normalizeTaxCode, zId } from '@crove/kernel-contract';
+import { auditValue, normalizeTaxCode, zId } from '@crove/kernel-contract';
 import { DomainError, defineCommand, defineQuery, type CommandContext } from '@crove/kernel-runtime';
+import { kernelManifest } from './manifest.ts';
 import { normalizeAddress } from './org-address.ts';
+
+const PARTY = kernelManifest.tables.crove_kernel.party;
 
 export const PARTY_NAME_MAX_LENGTH = 300;
 const EMAIL_MAX_LENGTH = 254;
@@ -108,13 +111,13 @@ export const updateParty = defineCommand({
         throw error;
       });
     const publicFields = { name: 'name', tax_code: 'taxCode', address: 'address' } as const;
-    const previous: Record<string, string | null> = {};
-    const values: Record<string, string | null> = {};
+    const previous: Record<string, unknown> = {};
+    const values: Record<string, unknown> = {};
     for (const key of changed) {
       if (key in publicFields) {
         const field = publicFields[key as keyof typeof publicFields];
-        previous[field] = before[key];
-        values[field] = next[key];
+        previous[field] = auditValue(PARTY, key, before[key]);
+        values[field] = auditValue(PARTY, key, next[key]);
       }
     }
     ctx.audit({ partyId: before.id, changed: changed.map((key) => (key === 'tax_code' ? 'taxCode' : key)), previous, next: values });
@@ -172,7 +175,7 @@ export const markDuplicate = defineCommand({
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', partyId)
       .execute();
-    ctx.audit({ partyId, keepId, name: party.name, keepName: keep.name });
+    ctx.audit({ partyId, keepId, name: auditValue(PARTY, 'name', party.name), keepName: auditValue(PARTY, 'name', keep.name) });
     await ctx.activity('kernel.party', partyId, 'party.marked_duplicate', `Gộp ${party.name} vào ${keep.name}`);
     return { partyId, keepId };
   },
@@ -206,7 +209,7 @@ export const unmarkDuplicate = defineCommand({
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', partyId)
       .execute();
-    ctx.audit({ partyId, keepId: party.duplicate_of, name: party.name, keepName: keep.name });
+    ctx.audit({ partyId, keepId: party.duplicate_of, name: auditValue(PARTY, 'name', party.name), keepName: auditValue(PARTY, 'name', keep.name) });
     await ctx.activity('kernel.party', partyId, 'party.unmarked_duplicate', `Tách ${party.name} khỏi ${keep.name}`);
     return { partyId };
   },
@@ -429,7 +432,7 @@ export const linkPartyForTaxCode = defineCommand({
         throw error;
       });
     const row = found.rows[0];
-    ctx.audit({ taxCode, partyId: row?.party_id ?? null, linked: row?.linked ?? [] });
+    ctx.audit({ taxCode: auditValue(PARTY, 'tax_code', taxCode), partyId: row?.party_id ?? null, linked: row?.linked ?? [] });
     return { partyId: row?.party_id ?? null };
   },
 });

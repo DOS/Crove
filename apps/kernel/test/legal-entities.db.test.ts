@@ -135,18 +135,20 @@ suite('legal entities on PostgreSQL (#1278)', () => {
       ).rows,
     );
     expect(audit).toEqual([
-      { command: 'kernel.legal_entity.create', detail: expect.objectContaining({ legalEntityId: branch.id, entity: { name: 'Chi nhánh Hà Nội', kind: 'branch', taxCode: '0101234567-001', parentId: main!.id } }) },
+      { command: 'kernel.legal_entity.create', detail: expect.objectContaining({ legalEntityId: branch.id, entity: { name: { redacted: 'pii' }, kind: 'branch', taxCode: { redacted: 'national_id_if_individual' }, parentId: main!.id } }) },
       {
         command: 'kernel.legal_entity.update',
         detail: expect.objectContaining({
           legalEntityId: branch.id,
           isDefault: false,
           changed: ['name', 'parentId'],
-          previous: { name: 'Chi nhánh Hà Nội', parentId: main!.id },
-          values: { name: 'Chi nhánh Hà Nội 2', parentId: null },
+          previous: { name: { redacted: 'pii' }, parentId: main!.id },
+          values: { name: { redacted: 'pii' }, parentId: null },
         }),
       },
     ]);
+    // The name and the tax code are classified (#1626): the rows keep a marker naming the class, never the value.
+    for (const value of ['Chi nhánh Hà Nội', '0101234567']) expect(JSON.stringify(audit)).not.toContain(value);
     // The refusals are audited as refused, not as done.
     const refused = await admin(async (c) =>
       (await c.query<{ n: number }>(`SELECT count(*)::int AS n FROM crove_kernel.audit_event WHERE org_id = $1 AND command LIKE 'kernel.legal_entity.%' AND outcome <> 'ok'`, [o.orgId])).rows[0]?.n,

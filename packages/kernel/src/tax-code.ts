@@ -1,14 +1,18 @@
 // The org's own tax code (MST, issue #313). Finance compares it with the seller of an e-invoice to tell a sale (the org
 // issued the invoice) from a purchase. Optional: an org without one records every invoice as a purchase, as before.
 // Stored normalized (normalizeTaxCode; the column's CHECK constraint holds the same shape). Owners and admins set or
-// clear it; the runtime audits every change, and the detail keeps the old and the new value (a tax code is public
-// business data, not a secret). The org's default legal entity (#1278) keeps the same tax code: the database writes it
-// with the tenant row (tenant_default_entity_tax_code, #1316), and a code another legal entity of the org holds is
-// refused.
+// clear it; the runtime audits every change. The detail says whether it changed and keeps a marker naming the class in
+// place of the old and the new value: a household business's tax code is its owner's national id (auditValue, #1626),
+// and tenant_tax_code_requires_audit accepts that marker for a code that is set (20261103070000). The org's default
+// legal entity (#1278) keeps the same tax code: the database writes it with the tenant row
+// (tenant_default_entity_tax_code, #1316), and a code another legal entity of the org holds is refused.
 import { z } from 'zod';
-import { VAT_FILING_PERIODS, normalizeTaxCode } from '@crove/kernel-contract';
+import { VAT_FILING_PERIODS, auditValue, normalizeTaxCode } from '@crove/kernel-contract';
 import { DomainError, defineCommand } from '@crove/kernel-runtime';
 import { assertOrgTaxCodeFree, onWrite, setDefaultEntityTaxCode } from './legal-entities.ts';
+import { kernelManifest } from './manifest.ts';
+
+const TENANT = kernelManifest.tables.crove_kernel.tenant;
 
 export const setTaxCode = defineCommand({
   name: 'kernel.org.set_tax_code',
@@ -33,7 +37,8 @@ export const setTaxCode = defineCommand({
     // After the tenant row, as kernel.legal_entity.update takes them. A no-op unless the default entity was left on an
     // old code before #1316.
     await setDefaultEntityTaxCode({ trx: ctx.trx, orgId: ctx.orgId, now: ctx.now, userId: ctx.actor.type === 'user' ? ctx.actor.userId : null }, taxCode);
-    ctx.audit({ previous: before.tax_code, taxCode });
+    const changed = before.tax_code !== taxCode;
+    ctx.audit({ previous: auditValue(TENANT, 'tax_code', before.tax_code), taxCode: auditValue(TENANT, 'tax_code', taxCode), changed });
     return { taxCode };
   },
 });
