@@ -5593,7 +5593,7 @@ export const en = {
         period: 'Read the ledger for a period',
       },
       legal_entities: {
-        list: 'List legal entities',
+        list: 'List legal entities for the finance screens',
       },
       misa_goods_code: {
         remove: 'Remove a MISA item code',
@@ -5607,7 +5607,7 @@ export const en = {
         reminder: {
           set: 'Set the missing invoice reminder',
         },
-        request: 'Request missing invoices by mail',
+        request: 'Ask for the missing invoices by mail',
         status: 'Read the missing invoice status',
       },
       notification: {
@@ -5954,8 +5954,8 @@ export const en = {
       },
       channel: {
         policies: "Read the channels' settings",
-        set_client_approval: 'Set client approval for a channel',
-        set_four_eyes: 'Set four-eyes review for a channel',
+        set_client_approval: 'Turn client approval on or off for a channel',
+        set_four_eyes: 'Turn four-eyes review on or off for a channel',
         set_policy: "Set a channel's posting rules",
         set_reminders: "Set a channel's reminders",
         set_short_links: "Turn a channel's short links on or off",

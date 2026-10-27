@@ -5503,10 +5503,10 @@ export const vi = {
         suggest_slots: 'Gợi ý khung giờ hẹn cho khách',
       },
       booking_feed: {
-        create: 'Tạo địa chỉ theo dõi lịch hẹn',
-        get: 'Xem địa chỉ theo dõi lịch hẹn',
-        revoke: 'Thu hồi địa chỉ theo dõi lịch hẹn',
-        revoke_for_member: 'Thu hồi địa chỉ theo dõi lịch hẹn của thành viên đã mất quyền',
+        create: 'Tạo địa chỉ đăng ký lịch hẹn',
+        get: 'Xem địa chỉ đăng ký lịch hẹn',
+        revoke: 'Thu hồi địa chỉ đăng ký lịch hẹn',
+        revoke_for_member: 'Thu hồi địa chỉ đăng ký lịch hẹn của thành viên đã mất quyền',
       },
       event_type: {
         create: 'Tạo loại lịch hẹn',
@@ -5593,7 +5593,7 @@ export const vi = {
         period: 'Xem số liệu sổ kế toán theo kỳ',
       },
       legal_entities: {
-        list: 'Xem danh sách pháp nhân',
+        list: 'Xem pháp nhân cho màn hình kế toán',
       },
       misa_goods_code: {
         remove: 'Xóa mã hàng MISA',
@@ -5607,7 +5607,7 @@ export const vi = {
         reminder: {
           set: 'Đặt lịch nhắc hóa đơn còn thiếu',
         },
-        request: 'Gửi thư xin hóa đơn còn thiếu',
+        request: 'Gửi thư đề nghị bổ sung hóa đơn còn thiếu',
         status: 'Xem tình trạng hóa đơn còn thiếu',
       },
       notification: {
@@ -5829,7 +5829,7 @@ export const vi = {
         export: {
           current: 'Đọc bản xuất dữ liệu mới nhất',
           get: 'Xem bản xuất dữ liệu của tổ chức',
-          live_keys: 'Liệt kê các bản xuất dữ liệu còn hạn',
+          live_keys: 'Xem các bản xuất dữ liệu còn hạn',
           record: 'Ghi bản xuất dữ liệu',
           snapshot: 'Đọc dữ liệu để xuất',
         },
@@ -5916,7 +5916,7 @@ export const vi = {
     },
     social: {
       account: {
-        audience_due: 'Kiểm tra đến hạn đọc người theo dõi',
+        audience_due: 'Kiểm tra đã đến lúc cập nhật số người theo dõi chưa',
         connection_version: 'Đọc phiên bản kết nối kênh',
         record: 'Ghi số liệu tăng trưởng của kênh',
         trends: 'Xem tăng trưởng của kênh',
@@ -5943,9 +5943,9 @@ export const vi = {
         save: 'Lưu giọng văn thương hiệu',
       },
       calendar_feed: {
-        create: 'Tạo địa chỉ theo dõi lịch đăng',
-        get: 'Xem địa chỉ theo dõi lịch đăng',
-        revoke: 'Thu hồi địa chỉ theo dõi lịch đăng',
+        create: 'Tạo địa chỉ đăng ký lịch đăng bài',
+        get: 'Xem địa chỉ đăng ký lịch đăng bài',
+        revoke: 'Thu hồi địa chỉ đăng ký lịch đăng bài',
       },
       calendar_note: {
         list: 'Xem ghi chú trên lịch',
@@ -5954,8 +5954,8 @@ export const vi = {
       },
       channel: {
         policies: 'Xem cài đặt đăng của các kênh',
-        set_client_approval: 'Đặt khách hàng duyệt bài trên kênh',
-        set_four_eyes: 'Đặt người khác duyệt bài trên kênh',
+        set_client_approval: 'Bật hoặc tắt khách hàng duyệt bài trên kênh',
+        set_four_eyes: 'Bật hoặc tắt duyệt bởi người thứ hai trên kênh',
         set_policy: 'Đặt quy tắc đăng của kênh',
         set_reminders: 'Đặt lời nhắc của kênh',
         set_short_links: 'Bật hoặc tắt liên kết rút gọn của kênh',
@@ -6002,9 +6002,9 @@ export const vi = {
       },
       external_post: {
         channel: 'Đọc quyền của kênh để lấy bài',
-        import: 'Lấy các bài đăng thẳng trên kênh',
-        record: 'Ghi số liệu bài đăng thẳng trên kênh',
-        target: 'Đọc bài đăng thẳng trên kênh cần hỏi số liệu',
+        import: 'Lấy các bài đăng trực tiếp trên kênh',
+        record: 'Ghi số liệu bài đăng trực tiếp trên kênh',
+        target: 'Đọc bài đăng trực tiếp trên kênh cần hỏi số liệu',
       },
       feed: {
         add: 'Thêm nguồn tin',
@@ -6066,7 +6066,7 @@ export const vi = {
       metrics: {
         check_outperforming: 'Kiểm tra bài hiệu quả hơn thường lệ',
         export: 'Xuất số liệu bài đăng',
-        external: 'Xem số liệu bài đăng thẳng trên kênh',
+        external: 'Xem số liệu bài đăng trực tiếp trên kênh',
         insights: 'Xem nhận định về số liệu',
         record: 'Ghi số liệu bài đăng',
         summary: 'Xem tóm tắt số liệu',
@@ -6122,7 +6122,7 @@ export const vi = {
         restore: 'Đưa bài ra khỏi lưu trữ',
         restore_version: 'Khôi phục phiên bản cũ của bài',
         review_diff: 'Xem thay đổi từ lần duyệt trước',
-        set_evergreen: 'Đặt cài đặt đăng lại',
+        set_evergreen: 'Đặt chế độ tự đăng lại cho bài',
         set_labels: 'Gắn nhãn cho bài',
         set_text_variations: 'Lưu các cách viết khác của bài',
         submit: 'Gửi duyệt bài',

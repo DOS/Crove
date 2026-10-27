@@ -75,7 +75,7 @@ function csvRows(body: string): string[][] {
       i++;
     }
   }
-  if (start < body.length) rows.push([...row, body.slice(start)]);
+  if (start < body.length || row.length > 0) rows.push([...row, body.slice(start)]);
   return rows;
 }
 

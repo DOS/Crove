@@ -48,5 +48,7 @@ describe('audit filter', () => {
         "2026-10-02T00:00:00.000Z,'=1+1,kernel.retired,,failed,\r\n",
     );
     expect(withCommandLabels('a,b\r\n1,2\r\n', labels)).toBe('a,b\r\n1,2\r\n');
+    // A last line without its line break, ending in an empty cell, is kept.
+    expect(withCommandLabels('command,detail\r\nkernel.x,', labels)).toBe('command,command_label,detail\r\nkernel.x,,\r\n');
   });
 });
