@@ -47,6 +47,7 @@ Install these once on each machine that runs agents, and check them before the f
    ```text
    /plugin marketplace add openai/codex-plugin-cc
    /plugin install codex@openai-codex
+   /reload-plugins
    /codex:setup
    ```
 
@@ -109,7 +110,7 @@ Crove has M0 Decisions and discovery, M1 Pilot deploy, M2 Monthly close loop, M3
 
 **The coordinator log.** Open one issue titled "Coordinator log" and pin it. The coordinator posts its lock and each cycle there (Crove: https://github.com/DOS/Crove/issues/1210).
 
-**Reading IDs.** Recent `gh` edits items by name, which is the simplest route:
+**Reading IDs.** `gh` 2.103 edits items by issue URL and field name, which is the simplest route (older versions need `--id`, `--field-id` and `--project-id`, read with the commands after it):
 
 ```bash
 gh project item-edit <n> --owner <org> --url https://github.com/<org>/<repo>/issues/<issue> --field Status --value "In progress"
@@ -139,8 +140,8 @@ Issues are added to the board when created: `gh issue create ... --project "<Pro
 | [AGENTS.md](https://github.com/DOS/Crove/blob/main/AGENTS.md), "Protected paths" | The idea: a list of paths whose change needs a security review and runs the base branch's invariant tests | Your own list (CI workflows, hooks, agent policy, dependency files, auth and money code). Drop Crove's invariant inventory |
 | [AGENTS.md](https://github.com/DOS/Crove/blob/main/AGENTS.md), "Commands" and "Rules" | Shape only | Your commands and your architecture rules; keep "code and commits in English" and "no secrets in a public repo" |
 | [.claude/skills/project-coordinator-cycle/SKILL.md](https://github.com/DOS/Crove/blob/main/.claude/skills/project-coordinator-cycle/SKILL.md) | The coordinator cycle (lock, read state, review workers, keep them busy, log), the team lead procedure (section 6), the worker brief template (section 5), "Limits learned the hard way" | Skill name and description, repository and project number, coordinator log issue, team lead areas, migration steps (drop them if your repository has no ordered migrations), commit email |
-| [.github/workflows/docs-check.yml](https://github.com/DOS/Crove/blob/main/.github/workflows/docs-check.yml) with [tools/docs-check.mjs](https://github.com/DOS/Crove/blob/main/tools/docs-check.mjs) | Optional. A fast check that replaces agent review for docs-only PRs (dashes, balanced HTML, relative links) | Drop the Crove steps (path boundary, migration order) |
-| [.github/workflows/protected.yml](https://github.com/DOS/Crove/blob/main/.github/workflows/protected.yml) with [tools/ci/protected-paths.mjs](https://github.com/DOS/Crove/blob/main/tools/ci/protected-paths.mjs) | Optional. On protected-path PRs: the base branch's tests against the PR's code, and a security reviewer agent that needs an `ANTHROPIC_API_KEY` secret (an owner action) | Your path list and test command. Without the secret the job passes with a notice and the session writes its own security review |
+| [.github/workflows/docs-check.yml](https://github.com/DOS/Crove/blob/main/.github/workflows/docs-check.yml) with [tools/docs-check.mjs](https://github.com/DOS/Crove/blob/main/tools/docs-check.mjs) | Optional. A fast check that replaces agent review for docs-only PRs (dashes, balanced HTML, relative links) | Keep only the docs check step: the path boundary, migration order and migration lint steps call Crove-only scripts and apply Crove's policy |
+| [.github/workflows/protected.yml](https://github.com/DOS/Crove/blob/main/.github/workflows/protected.yml) with [tools/ci/protected-paths.mjs](https://github.com/DOS/Crove/blob/main/tools/ci/protected-paths.mjs) | Optional. On protected-path PRs: the base branch's tests against the PR's code, and a security reviewer agent that needs an `ANTHROPIC_API_KEY` secret (an owner action) | Your path list and test command. Without the secret, a same-repository PR passes with a notice and the session writes its own security review; a fork PR on protected paths fails with "Maintainer security review required", since forks never get the secret |
 | [.github/workflows/migration-recheck.yml](https://github.com/DOS/Crove/blob/main/.github/workflows/migration-recheck.yml), [tools/ci/migration-order.mjs](https://github.com/DOS/Crove/blob/main/tools/ci/migration-order.mjs), [tools/migration-rebase.mjs](https://github.com/DOS/Crove/blob/main/tools/migration-rebase.mjs) | Optional, only for timestamped SQL migrations. Fails a PR whose migration fell behind `main`, re-checks open PRs after each push to `main`, and renames a branch's migrations at merge time | Migration directory and file pattern |
 | [.github/workflows/gitleaks.yml](https://github.com/DOS/Crove/blob/main/.github/workflows/gitleaks.yml) | Optional. Secret scan on every PR | Nothing, usually |
 
@@ -158,7 +159,7 @@ Rules for the copy:
 
    > You are the coordinator (Agent 0) of `<repo>`. Run the `<your coordinator skill>` skill, then keep cycling with `/loop` and no interval.
 
-3. The coordinator locks the coordinator log, reads the board, open PRs and sessions, and starts up to 3 workers. Team leads are started only on a turn the owner typed (the app refuses `start_session` on automated turns); give each one the `Agent <n>: <area>` brief from the skill's section 6. When a start is refused, the coordinator runs the same brief as a background subagent in its own worktree.
+3. The coordinator locks the coordinator log, reads the board, open PRs and sessions, and keeps the team leads busy; for work outside every team lead's area it starts up to 3 workers of its own. Team leads are started only on a turn the owner typed (the app refuses `start_session` on automated turns); give each one the `Agent <n>: <area>` brief from the skill's section 6. When a start is refused, the coordinator runs the same brief as a background subagent in its own worktree.
 4. Workers on protected paths end with `READY FOR COORDINATOR REVIEW: <PR url> head <sha>` and wait for `approved, merge head <sha>`; the others merge when green and report `MERGED <PR url> <merge commit>`.
 5. After two compactions, or after a day, the coordinator asks the owner to open a fresh coordinator session. State is on GitHub, so nothing is lost.
 
