@@ -227,15 +227,17 @@ describe('job egress (#1653)', () => {
     const planted = new Sources({
       'modules/planted/src/a.ts': "import { checkTelegramChat, CHANNEL_PROVIDERS } from '@crove/channel';\nexport const a = () => checkTelegramChat(CHANNEL_PROVIDERS);",
       'modules/planted/src/b.ts': "export const b = () => globalThis.fetch('https://example.test/');",
+      'modules/planted/src/c.ts': "export const c = () => window['fetch']('https://example.test/');",
     });
     expect([...reachOf(planted.get('modules/planted/src/a.ts').program, planted)]).toEqual(['provider:telegram']);
     expect([...reachOf(planted.get('modules/planted/src/b.ts').program, planted)]).toEqual(['raw_network']);
+    expect([...reachOf(planted.get('modules/planted/src/c.ts').program, planted)]).toEqual(['raw_network']);
   });
 
   it('hands the egress guard to the adapters of the providers whose host the tenant names, and to no other', () => {
     const kernel = sources.get('apps/kernel/src/kernel.ts').text;
     const body = kernel.slice(kernel.indexOf('export function channelPublishers('), kernel.indexOf('return publishers;', kernel.indexOf('export function channelPublishers(')));
-    const guarded = [...body.matchAll(/publishers\.(\w+) = new \w+\(([^;]*)\);/g)].filter((m) => (m[2] ?? '').includes('egressFetch(')).map((m) => m[1]);
+    const guarded = [...body.matchAll(/publishers\.(\w+) = new \w+\(([^;]*)\);/g)].filter((m) => (m[2] ?? '').includes('egressFetch')).map((m) => m[1]);
     expect(guarded.sort()).toEqual([...TENANT_HOSTED_PROVIDERS].sort());
   });
 

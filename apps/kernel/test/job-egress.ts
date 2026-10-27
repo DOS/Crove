@@ -36,6 +36,7 @@ const GUARDS: ReadonlySet<string> = new Set(['guardedFetch', 'guardedRequest', '
 const CHANNEL_PURE: ReadonlySet<string> = new Set(['capOptions', 'discordChatTargetOf', 'isChannelProvider', 'newOAuthAttempt', 'oauthStateHash', 'postTypeOf', 'sandbox', 'telegramChatTargetOf', 'withCallSignal']);
 const channelReach = (name: string): Reach | null =>
   /^[A-Z][A-Z0-9_]*$/.test(name) || name.endsWith('Error') || CHANNEL_PURE.has(name) ? null : /telegram/i.test(name) ? 'provider:telegram' : /discord/i.test(name) ? 'provider:discord' : 'provider:channel';
+const GLOBAL_OBJECTS: ReadonlySet<string> = new Set(['globalThis', 'global', 'window', 'self']);
 // Node's own network modules: a job reaches the network only through the guard or an adapter.
 const NETWORK_MODULES = /^(node:)?(http|https|http2|net|tls|dgram|dns)$|^undici$/;
 // What calls the AI endpoint in @crove/agent: its model and the readers and writers built on it.
@@ -456,7 +457,10 @@ export function reachOf(root: N, sources: Sources): Set<Reach> {
       const decl = declarationOf(id);
       if (!decl) {
         const p = parentOf(id);
-        if (id.name === 'fetch' || (id.name === 'globalThis' && p?.type === 'MemberExpression' && p.property.name === 'fetch')) out.add('raw_network');
+        // fetch itself, or through a global object (globalThis.fetch, window.fetch).
+        if (id.name === 'fetch' || (GLOBAL_OBJECTS.has(id.name) && p?.type === 'MemberExpression' && p.object === id && (p.computed ? p.property.value : p.property.name) === 'fetch')) {
+          out.add('raw_network');
+        }
         return;
       }
       if (isDepsParam(decl) || (decl.type === 'VariableDeclarator' && decl.id.type === 'Identifier' && decl.init && depsPath(decl.init) !== null)) {
@@ -650,7 +654,10 @@ export function emittersOf(events: readonly string[], sources: Sources, known: K
       else ok = false;
     };
     if (decl.init) add(decl.init);
-    each(parentOf(parentOf(decl) as N) as N, (n) => {
+    // The block the variable is declared in (past an export), where every assignment to it is.
+    let scope = parentOf(decl) as N;
+    while (!['Program', 'BlockStatement', 'StaticBlock', 'SwitchCase'].includes(scope.type)) scope = parentOf(scope) as N;
+    each(scope, (n) => {
       if (n.type === 'AssignmentExpression' && n.operator === '=' && n.left.type === 'Identifier' && declarationOf(n.left) === decl) add(n.right);
     });
     return ok ? values : null;
