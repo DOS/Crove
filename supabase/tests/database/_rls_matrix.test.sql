@@ -18,12 +18,16 @@ INSERT INTO crove_kernel.party (org_id, id, name) VALUES
 
 SET LOCAL ROLE crove_app;
 
+-- The refused inserts name the message, not only 42501, so a lost INSERT grant ("permission denied", also 42501)
+-- cannot pass for row-level security. PostgreSQL names a policy in that message only when a RESTRICTIVE one fails;
+-- tenant_isolation is PERMISSIVE, so the message names the table alone.
+
 -- No context: nothing is visible and nothing can be written.
 SELECT is((SELECT pg_catalog.count(*) FROM crove_kernel.party), 0::bigint, 'without a context crove_app sees no party');
 SELECT throws_ok($$
   INSERT INTO crove_kernel.party (org_id, id, name)
   VALUES (current_setting('test.org_a')::uuid, '00000000-0000-7000-8000-0000000000a1', 'No context')$$,
-  '42501', NULL, 'without a context crove_app inserts no party');
+  '42501', 'new row violates row-level security policy for table "party"', 'without a context crove_app inserts no party');
 
 -- Org A's context: its own party only.
 SELECT is(crove_kernel.enter_context(current_setting('test.user_a')::uuid, current_setting('test.org_a')::uuid), 'owner',
@@ -35,7 +39,7 @@ SELECT is((SELECT pg_catalog.count(*) FROM crove_kernel.party WHERE org_id <> cu
 SELECT throws_ok($$
   INSERT INTO crove_kernel.party (org_id, id, name)
   VALUES (current_setting('test.org_b')::uuid, '00000000-0000-7000-8000-0000000000a2', 'Planted by A')$$,
-  '42501', NULL, 'org A inserts no party into org B');
+  '42501', 'new row violates row-level security policy for table "party"', 'org A inserts no party into org B');
 SELECT lives_ok($$UPDATE crove_kernel.party SET name = 'Renamed by A' WHERE org_id = current_setting('test.org_b')::uuid$$,
   'an update aimed at org B runs');
 SELECT lives_ok($$DELETE FROM crove_kernel.party WHERE org_id = current_setting('test.org_b')::uuid$$,
