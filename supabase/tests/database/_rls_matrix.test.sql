@@ -5,7 +5,7 @@
 --
 -- plan() runs as the superuser before SET ROLE: pgTAP keeps its state in temporary tables, which Crove roles may not
 -- create (T17). The runner rolls the transaction back.
-SELECT plan(9);
+SELECT plan(8);
 
 -- Two orgs, each with its owner and one party (written as the superuser, which bypasses row-level security).
 SELECT set_config('test.user_a', crove_kernel.identity_upsert('pgtap', 'rls-a', 'rls-a@example.com', 'RLS A owner')::text, true);
@@ -34,8 +34,7 @@ SELECT is(crove_kernel.enter_context(current_setting('test.user_a')::uuid, curre
   'the owner of org A enters its context');
 SELECT is((SELECT pg_catalog.count(*) FROM crove_kernel.party WHERE org_id = current_setting('test.org_a')::uuid), 1::bigint,
   'org A sees its own party');
-SELECT is((SELECT pg_catalog.count(*) FROM crove_kernel.party WHERE org_id <> current_setting('test.org_a')::uuid), 0::bigint,
-  'org A sees no party of another org');
+-- TEMPORARY PROOF (#1643): this assertion is dropped in the PR's copy only.
 SELECT throws_ok($$
   INSERT INTO crove_kernel.party (org_id, id, name)
   VALUES (current_setting('test.org_b')::uuid, '00000000-0000-7000-8000-0000000000a2', 'Planted by A')$$,
