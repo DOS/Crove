@@ -105,11 +105,15 @@ export function repeatedGroups(digits) {
   return runs.length <= 3 && runs.every((r) => r.length >= 2);
 }
 
-// A company's tax code (10 digits, public) can start like a mobile number. On a line that names a tax code, ten
-// contiguous digits whose check digit holds are that code, not a phone.
+// A company's tax code (10 digits, public) can start like a mobile number. When a tax code is named close to it (within
+// TAX_WINDOW characters either side, not anywhere on a long SQL, CSV or JSON line), ten contiguous digits whose check
+// digit holds are that code, not a phone.
 const TAX_CONTEXT = /\bMST\b|mã số thuế|tax[ _-]?(code|id)/i;
-function companyTaxCode(match, content) {
-  return /^\d{10}$/.test(match) && TAX_CONTEXT.test(content) && taxCheckDigitValid(match);
+export const TAX_WINDOW = 40;
+export function companyTaxCode(match, content, index) {
+  if (!/^\d{10}$/.test(match) || !taxCheckDigitValid(match)) return false;
+  const around = content.slice(Math.max(0, index - TAX_WINDOW), index + match.length + TAX_WINDOW);
+  return TAX_CONTEXT.test(around);
 }
 
 // `https://user:secret@host` is a URL with credentials, not an email address.
@@ -127,7 +131,7 @@ export function scanText(text, path = '') {
     }
     for (const m of content.matchAll(MOBILE)) {
       const digits = digitsOnly(m[0]);
-      if (!mobileShaped(m[0]) || looksSynthetic(digits.slice(-7)) || repeatedGroups(digits.slice(-9)) || companyTaxCode(m[0], content)) continue;
+      if (!mobileShaped(m[0]) || looksSynthetic(digits.slice(-7)) || repeatedGroups(digits.slice(-9)) || companyTaxCode(m[0], content, m.index)) continue;
       findings.push({ line, kind: 'mobile', value: m[0] });
     }
     if (fixture) {
@@ -224,16 +228,29 @@ export function commandProperty(value) {
   return value.replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A').replace(/:/g, '%3A').replace(/,/g, '%2C');
 }
 
+// The allowlist from its JSON text: { allowlist, errors }. Invalid JSON is an error, not an exception, so its message
+// (which can quote the file) never reaches the log.
+export function loadAllowlist(text) {
+  let allowlist;
+  try {
+    allowlist = JSON.parse(text);
+  } catch {
+    return { allowlist: [], errors: ['the allowlist is not valid JSON'] };
+  }
+  return { allowlist, errors: allowlistErrors(allowlist) };
+}
+
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
-  const allowlist = JSON.parse(readFileSync(ALLOWLIST_FILE, 'utf8'));
-  const errors = allowlistErrors(allowlist);
-  for (const e of errors) console.error(`::error file=tools/ci/pii-scan-allowlist.json::${e}`);
+  const { allowlist, errors } = loadAllowlist(readFileSync(ALLOWLIST_FILE, 'utf8'));
+  // A malformed allowlist stops the step before any scan: its entries cannot be trusted to exempt anything.
+  for (const e of errors) console.error(`::error file=${ALLOWLIST_PATH}::${e}`);
+  if (errors.length > 0) process.exit(1);
   const args = process.argv.slice(2);
   const paths = args.length > 0 ? args : execFileSync('git', ['ls-files', '-z'], { encoding: 'utf8' }).split('\0').filter(Boolean);
   const { findings, skipped } = scanFiles(paths, readText, allowlist);
   for (const f of findings) {
     console.error(`::error file=${commandProperty(f.path)},line=${f.line}::line ${f.line} holds what looks like personal data (${f.kind} ${mask(f.kind, f.value)}); use a synthetic value (an address at example.com, a number that fails the check), or add a reasoned entry to tools/ci/pii-scan-allowlist.json`);
   }
-  if (errors.length > 0 || findings.length > 0) process.exitCode = 1;
+  if (findings.length > 0) process.exitCode = 1;
   else console.log(`pii-scan: ${paths.length} path(s), ${skipped} skipped (binary, symlink or missing), no personal data found`);
 }

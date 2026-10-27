@@ -14,13 +14,16 @@ import {
   ALLOWLIST_FILE,
   allowlistErrors,
   commandProperty,
+  companyTaxCode,
   entryAllows,
+  loadAllowlist,
   looksSynthetic,
   mask,
   readText,
   repeatedGroups,
   scanFiles,
   scanText,
+  TAX_WINDOW,
   taxCheckDigitValid,
 } from '../ci/pii-scan.mjs';
 
@@ -127,6 +130,11 @@ describe('G5 PII scan (#1628)', () => {
     expect(scanText(`<MST>${company}</MST>`)).toEqual([]);
     expect(scanText(`"taxCode": "${company}"`)).toEqual([]);
     expect(scanText(`Hotline ${company}`).map((f) => f.kind)).toEqual(['mobile']);
+    // Only a tax keyword near the digits counts: on a long SQL or CSV line, one far away does not hide a phone.
+    const far = `INSERT INTO party (tax_code, note, phone) VALUES ('x', '${'a'.repeat(TAX_WINDOW)}', '${company}');`;
+    expect(scanText(far).map((f) => f.kind)).toEqual(['mobile']);
+    expect(companyTaxCode(company, `MST ${company}`, 4)).toBe(true);
+    expect(companyTaxCode(company, `${'a'.repeat(TAX_WINDOW)} ${company} MST`, TAX_WINDOW + 1)).toBe(true);
   });
 
   it('lets repeated digit groups through as made up', () => {
@@ -193,6 +201,12 @@ describe('G5 PII scan (#1628)', () => {
 
   it('escapes the file name in the workflow command', () => {
     expect(commandProperty('a,b:c%d\ne')).toBe('a%2Cb%3Ac%25d%0Ae');
+  });
+
+  it('reads a malformed allowlist as errors, without quoting the file', () => {
+    expect(loadAllowlist('[{"kind": "email",')).toEqual({ allowlist: [], errors: ['the allowlist is not valid JSON'] });
+    expect(loadAllowlist('[{"kind": "email"}]').errors).toEqual(['entry 0: names no paths, domains or values', 'entry 0: needs a reason']);
+    expect(loadAllowlist(readFileSync(ALLOWLIST_FILE, 'utf8')).errors).toEqual([]);
   });
 
   it('refuses an allowlist entry without a reason, or one that names nothing and so exempts a kind everywhere', () => {
