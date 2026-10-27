@@ -125,6 +125,7 @@ export const policySet = defineCommand({
   name: 'social.channel.set_policy',
   input: z.strictObject({ connectionId: zId, approvalsRequired: z.number().int().min(1).max(MAX_APPROVALS) }),
   risk: 'R2',
+  sideEffect: 'internal',
   access: ADMINS,
   target: (input) => ({ type: 'kernel.channel_connection', id: input.connectionId }),
   handler: async (ctx, input) => {
@@ -213,6 +214,7 @@ export const remindersSet = defineCommand({
   name: 'social.channel.set_reminders',
   input: z.strictObject({ connectionId: zId, reviewReminders: z.boolean() }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ADMINS,
   target: (input) => ({ type: 'kernel.channel_connection', id: input.connectionId }),
   handler: async (ctx, input) => {
@@ -243,6 +245,7 @@ export const fourEyesSet = defineCommand({
   name: 'social.channel.set_four_eyes',
   input: z.strictObject({ connectionId: zId, fourEyes: z.boolean() }),
   risk: 'R2',
+  sideEffect: 'internal',
   access: OWNERS,
   target: (input) => ({ type: 'kernel.channel_connection', id: input.connectionId }),
   handler: async (ctx, input) => {
@@ -272,6 +275,7 @@ export const shortLinksSet = defineCommand({
   name: 'social.channel.set_short_links',
   input: z.strictObject({ connectionId: zId, shortLinks: z.boolean() }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ADMINS,
   target: (input) => ({ type: 'kernel.channel_connection', id: input.connectionId }),
   handler: async (ctx, input) => {
@@ -301,6 +305,7 @@ export const signatureSet = defineCommand({
   name: 'social.channel.set_signature',
   input: z.strictObject({ connectionId: zId, signature: zSignature.nullable() }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ADMINS,
   target: (input) => ({ type: 'kernel.channel_connection', id: input.connectionId }),
   handler: async (ctx, input) => {
@@ -374,6 +379,7 @@ export const clientApprovalSet = defineCommand({
   name: 'social.channel.set_client_approval',
   input: z.strictObject({ connectionId: zId, clientApproval: z.boolean() }),
   risk: 'R2',
+  sideEffect: 'internal',
   access: OWNERS,
   target: (input) => ({ type: 'kernel.channel_connection', id: input.connectionId }),
   handler: async (ctx, input) => {

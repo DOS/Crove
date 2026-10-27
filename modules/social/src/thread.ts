@@ -104,7 +104,9 @@ export const threadBegin = defineCommand({
   name: 'social.thread.begin',
   // retry: a person asked again, after the call with this key (null: no call was made).
   input: z.strictObject({ variantId: zId, provider: z.string().min(1).max(32), retry: z.strictObject({ after: z.string().min(1).max(300).nullable() }).optional() }),
-  risk: 'R1',
+  // Commits the provider call as started; the worker then makes it, an effect outside Crove (#1578).
+  risk: 'R2',
+  sideEffect: 'external',
   access: 'system',
   handler: async (ctx, input): Promise<ThreadWork> => {
     requireSystem(ctx);
@@ -153,6 +155,7 @@ export const threadRecord = defineCommand({
   name: 'social.thread.record',
   input: z.strictObject({ variantId: zId, callKey: z.string().min(1).max(300), result: zPartResult }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   handler: async (ctx, input) => {
     requireSystem(ctx);
@@ -186,6 +189,7 @@ export const threadRetry = defineCommand({
   name: 'social.thread.retry',
   input: z.strictObject({ variantId: zId }),
   risk: 'R2',
+  sideEffect: 'internal',
   access: ADMINS,
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');

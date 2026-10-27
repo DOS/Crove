@@ -66,7 +66,9 @@ const requireSystem = (ctx: CommandContext) => {
 export const gateBegin = defineCommand({
   name: 'social.gate.begin',
   input: z.strictObject({ variantId: zId, provider: z.string().min(1).max(32) }),
-  risk: 'R1',
+  // Commits the provider call as started; the worker then makes it, an effect outside Crove (#1578).
+  risk: 'R2',
+  sideEffect: 'external',
   access: 'system',
   target: (input) => ({ type: 'social.post_variant', id: input.variantId }),
   handler: async (ctx, input): Promise<GateWork> => {
@@ -101,6 +103,7 @@ export const gateRecord = defineCommand({
   name: 'social.gate.record',
   input: z.strictObject({ variantId: zId, callKey: z.string().min(1).max(300), result: zGateResult }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   target: (input) => ({ type: 'social.post_variant', id: input.variantId }),
   handler: async (ctx, input) => {

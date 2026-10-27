@@ -21,6 +21,7 @@ export const postAssign = defineCommand({
     bulk: z.literal(true).optional(),
   }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   target: (input) => ({ type: 'social.post', id: input.postId }),
   handler: async (ctx, input) => {

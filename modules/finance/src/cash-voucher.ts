@@ -3,7 +3,8 @@
 // - finance.voucher.prepare: a user enters a voucher through kernel.proposal.request, which runs this to check it and
 //   build the proposal (the party as found, the total). It writes nothing. Owners, admins and members may ask.
 // - finance.voucher.record: runs only through kernel.proposal.approve, on the stored payload. It checks everything
-//   again, inserts the voucher (the database numbers it per org and type, PT00001, PC00001 ...) and, in the same
+//   again, inserts the voucher (the database numbers it from the kernel's series per
+//   legal entity, type and year, PT00001, PC00001 ..., 20261103030000) and, in the same
 //   transaction, posts its journal entry through the posting path, linked by source_type 'finance.cash_voucher'.
 //   The database checks at commit (a deferred constraint trigger, 20261019270000) that the voucher has such an entry,
 //   dated the voucher's date, that moves its cash account by its amount; it refuses the voucher otherwise. That check
@@ -333,6 +334,8 @@ export const cashVouchers = defineQuery({
       .where('v.voucher_type', '=', input.type)
       .where('r.id', 'is', null)
       .orderBy('v.voucher_date')
+      // Two series of one type may share a number once a series resets (yearly by default, #1401): the period first.
+      .orderBy('v.number_period')
       .orderBy('v.number')
       .limit(input.limit ?? 1000);
     if (input.from) query = query.where('v.voucher_date', '>=', input.from);

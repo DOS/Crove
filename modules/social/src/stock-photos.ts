@@ -39,6 +39,7 @@ export const mediaSaveStock = defineCommand({
   name: 'social.media.save_stock',
   input: z.strictObject({ file: zStoredPhoto, credit: zStockCredit }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   handler: async (ctx, input): Promise<{ fileId: string; duplicate: boolean; credited: boolean }> => {
     // The member who saved it, from the sealed context; never from the input.

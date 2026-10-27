@@ -46,11 +46,7 @@ const MACHINERY = new Set([
 // until the table exists, neither its factory nor its MACHINERY entry is stale. Remove an entry once its table is on
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
-  // Gapless numbering (ADR-0021 §2, #1401): the factories land first, the tables with the next migration.
-  'crove_kernel.number_allocation',
-  'crove_kernel.number_series',
-  'crove_kernel.number_series_policy',
-  'crove_kernel.number_void',
+  // 'crove_schema.table_name',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 // The RESTRICTIVE legal-entity policy (20261030001000, 20261102140000), as pg_get_expr prints it for column c.

@@ -83,6 +83,7 @@ export const postSetTextVariations = defineCommand({
   name: 'social.post.set_text_variations',
   input: z.strictObject({ postId: zId, variations: zSocialTextVariations }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   target: (input) => ({ type: 'social.post', id: input.postId }),
   handler: async (ctx, input): Promise<TextVariationsResult> => {

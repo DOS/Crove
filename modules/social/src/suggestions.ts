@@ -42,6 +42,7 @@ export const commentSuggest = defineCommand({
   name: 'social.post_comment.suggest',
   input: z.strictObject({ postId: zId, variantId: zId.optional(), body: zNote.optional(), suggestion: zSocialSuggestion }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   target: (input) => ({ type: 'social.post', id: input.postId }),
   handler: async (ctx, input) => {
@@ -159,6 +160,7 @@ export const commentAccept = defineCommand({
   // own text (the timeline gives it).
   input: z.strictObject({ commentId: zId, revision: z.number().int().positive() }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   target: (input) => ({ type: 'social.post_comment', id: input.commentId }),
   handler: async (ctx, input) => {
@@ -199,6 +201,7 @@ export const commentSkip = defineCommand({
   name: 'social.post_comment.skip',
   input: z.strictObject({ commentId: zId }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   target: (input) => ({ type: 'social.post_comment', id: input.commentId }),
   handler: async (ctx, input) => {

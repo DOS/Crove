@@ -176,6 +176,7 @@ export const queueShuffle = defineCommand({
     .strictObject({ connectionId: zId, from: zInstant.optional(), to: zInstant.optional() })
     .refine((x) => !x.from || !x.to || Date.parse(x.from) < Date.parse(x.to), 'the range ends after it starts'),
   risk: 'R2',
+  sideEffect: 'internal',
   access: ADMINS,
   target: (input) => ({ type: 'kernel.channel_connection', id: input.connectionId }),
   handler: async (ctx, input) => {
@@ -204,6 +205,7 @@ export const queueMoveToFront = defineCommand({
   // expectedAt: the slot time the person saw; the move is refused when the post's time changed since.
   input: z.strictObject({ variantId: zId, expectedAt: zInstant.optional() }),
   risk: 'R2',
+  sideEffect: 'internal',
   access: ADMINS,
   target: (input) => ({ type: 'social.post_variant', id: input.variantId }),
   handler: async (ctx, input) => {

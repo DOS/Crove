@@ -86,6 +86,7 @@ export const postCreateFromMedia = defineCommand({
   name: 'social.post.create_from_media',
   input: zSocialDraftsFromMedia,
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   handler: async (ctx, input): Promise<DraftsFromMediaResult> => {
     requireUser(ctx);

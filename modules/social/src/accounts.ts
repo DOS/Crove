@@ -54,6 +54,7 @@ export const accountRecord = defineCommand({
     error: z.enum(['no_answer', 'token_expired', 'permission']).optional(),
   }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   handler: async (ctx, input) => {
     const connection = await ctx.trx.selectFrom('crove_kernel.channel_connection').select('id').where('org_id', '=', ctx.orgId).where('id', '=', input.connectionId).executeTakeFirst();

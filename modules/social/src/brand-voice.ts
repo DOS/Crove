@@ -42,6 +42,7 @@ export const brandVoiceSave = defineCommand({
   name: 'social.brand_voice.save',
   input: zBrandVoiceSave,
   risk: 'R1',
+  sideEffect: 'internal',
   access: ADMINS,
   handler: async (ctx, input) => {
     const userId = requireUser(ctx);
@@ -77,6 +78,7 @@ export const brandVoiceRemove = defineCommand({
   name: 'social.brand_voice.remove',
   input: z.strictObject({ connectionId: zId.nullable().optional() }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ADMINS,
   handler: async (ctx, input) => {
     requireUser(ctx);
