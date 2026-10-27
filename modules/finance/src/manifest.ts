@@ -2,7 +2,7 @@
 // permissions it owns. A migration that adds or drops a table or column of these schemas, or a role_permission row,
 // changes this list in the same PR; apps/kernel/test/manifest.db.test.ts checks it against the catalog. A column is
 // internal unless the second argument of columns() classifies it.
-import { columns, defineModule } from '@crove/kernel-contract';
+import { MODULE_SCREENS, columns, defineModule } from '@crove/kernel-contract';
 
 export const financeManifest = defineModule({
   id: 'finance',
@@ -42,4 +42,6 @@ export const financeManifest = defineModule({
     // approval policy's LEDGER_APPROVE_PERMISSION, and the accountant preset's guard on the last chief accountant).
     { key: 'finance.proposal.approve', risk: 'R3', defaultRoles: ['finance.chief_accountant'] },
   ],
+  // Its screens in the app and its menu items (#1652), kept with the other modules' in @crove/kernel-contract.
+  ...MODULE_SCREENS.finance,
 });

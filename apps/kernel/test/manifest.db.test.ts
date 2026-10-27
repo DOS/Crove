@@ -31,6 +31,8 @@ const CONTROL_PLANE: ModuleManifest = {
     },
   },
   permissions: [],
+  routes: [],
+  nav: [],
 };
 // The control plane's owner and every module manifest (manifest-permissions.ts lists them).
 const MANIFESTS: Manifests = {

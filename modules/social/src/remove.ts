@@ -85,8 +85,9 @@ const requireSystem = (ctx: CommandContext) => {
 export const variantRemove = defineCommand({
   name: 'social.variant.remove',
   input: z.strictObject({ variantId: zId, reason: z.string().trim().max(REMOVE_REASON_MAX).optional() }),
+  // The worker takes the post down from its event: an effect outside Crove (#1653).
   risk: 'R2',
-  sideEffect: 'internal',
+  sideEffect: 'external',
   access: ADMINS,
   target: (input) => ({ type: 'social.post_variant', id: input.variantId }),
   handler: async (ctx, input) => {

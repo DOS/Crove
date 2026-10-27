@@ -1,9 +1,10 @@
-// A module's manifest (plan §5.2, #1588, #1599, #1630): the module, the database tables it owns, per schema, with every
-// column of each table and its data class, and the permissions it owns. A database test
-// (apps/kernel/test/manifest.db.test.ts) checks the manifests against the catalog after the migrations: every table of a
-// crove_* schema belongs to exactly one manifest, every column of it is classified, every table and column a manifest
-// names exists, and every permission a role grants or something checks is declared, with the roles that grant it.
-// Entities and routes join the manifest later (§5.2).
+// A module's manifest (plan §5.2, #1588, #1599, #1630, #1652): the module, the database tables it owns, per schema, with
+// every column of each table and its data class, the permissions it owns, and its screens in the app with their menu
+// items. A database test (apps/kernel/test/manifest.db.test.ts) checks the manifests against the catalog after the
+// migrations: every table of a crove_* schema belongs to exactly one manifest, every column of it is classified, every
+// table and column a manifest names exists, and every permission a role grants or something checks is declared, with
+// the roles that grant it. apps/app/test/module-screens.test.ts checks the screens against the app's router.
+// Entities join the manifest later (§5.2).
 import type { BuiltinRoleKey } from './roles.ts';
 
 // What a column holds (plan §5.2, §4.7, §4.10):
@@ -69,7 +70,34 @@ export interface PermissionDeclaration {
   readonly defaultRoles: readonly BuiltinRoleKey[];
 }
 
-export interface ModuleManifest {
+// A screen of the app under /o/$slug (plan §5.2 `routes`, ADR-0031 §3, #1652). A deployment without the module sends
+// the screen to the inbox, and every /o/$slug route of the app's router belongs to exactly one manifest.
+export interface RouteDeclaration {
+  // The path under /o/$slug, as the router writes it: 'journal', 'inbox/$id', 'social/new'.
+  readonly path: string;
+  // A permission the screen needs beyond membership, declared by some manifest. Absent when the queries the screen
+  // loads decide who sees it, which the server checks on every query and command; no screen names one yet.
+  readonly permission?: string;
+  // The app of a screen no menu item names, reached from inside that app (the guide), so a deep link opens with it.
+  readonly app?: string;
+}
+
+// A menu item of the app's shell (plan §5.2 `nav`, DESIGN.md §9, #1652): one of the module's routes, in a group of an
+// app's menu or, with `app: null`, among the org's own screens at the foot of the app switcher. The label is a key
+// under `nav` in the app's messages, in Vietnamese and English; apps are listed, and their groups ordered, in the order
+// their items first appear.
+export type NavDeclaration =
+  | { readonly app: string; readonly group: string; readonly path: string; readonly label: string }
+  | { readonly app: null; readonly path: string; readonly label: string };
+
+// A module's screens and menu items. They are data with no server code, so the app's bundle reads them from
+// @crove/kernel-contract (MODULE_SCREENS in screens.ts) and each module's manifest names its own entry there.
+export interface ModuleScreens {
+  readonly routes: readonly RouteDeclaration[];
+  readonly nav: readonly NavDeclaration[];
+}
+
+export interface ModuleManifest extends ModuleScreens {
   readonly id: string;
   // Schema name -> table name (sorted) -> every column of the table with its class.
   readonly tables: Readonly<Record<string, Readonly<Record<string, TableColumns>>>>;

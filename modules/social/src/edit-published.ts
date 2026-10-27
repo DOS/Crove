@@ -149,8 +149,9 @@ export const variantEditPublished = defineCommand({
     body: z.string().max(EDIT_BODY_MAX),
     checks: z.array(zId).max(SOCIAL_REVIEW_CHECKS_MAX).optional(),
   }),
+  // The worker corrects the published text from its event: an effect outside Crove (#1653).
   risk: 'R2',
-  sideEffect: 'internal',
+  sideEffect: 'external',
   access: ADMINS,
   target: (input) => ({ type: 'social.post_variant', id: input.variantId }),
   handler: async (ctx, input) => {

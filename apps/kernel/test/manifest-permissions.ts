@@ -143,6 +143,15 @@ export function approvalPolicyUses(source: string): { uses: PermissionUse[]; pro
   return { uses, problems };
 }
 
+// The permissions the manifests' screens name (#1652): a screen that needs one beyond membership. They are not
+// checks (the server checks every query and command the screen calls), so they stay out of staticPermissionUses(), where
+// they would count as a use of a permission nothing enforces.
+export function routePermissionUses(manifests: Manifests): PermissionUse[] {
+  return Object.values(manifests).flatMap(({ manifest }) =>
+    manifest.routes.flatMap((route) => (route.permission === undefined ? [] : [{ permission: route.permission, by: `screen /o/$slug/${route.path} of ${manifest.id}` }])),
+  );
+}
+
 // The permissions a database function's body or a row-level security policy names, through
 // crove_kernel.ctx_has_permission('...') or a comparison with role_permission.permission.
 export function sqlPermissionUses(by: string, text: string): PermissionUse[] {

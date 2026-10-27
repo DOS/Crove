@@ -32,8 +32,8 @@ describe('module manifests declare their permissions (#1630)', () => {
 
 describe('permissionProblems() on planted mismatches', () => {
   const finance = (permissions: ModuleManifest['permissions']): Manifests => ({
-    finance: { manifest: defineModule({ id: 'finance', tables: { crove_finance: { t: columns(['id']) } }, permissions }), file: 'finance.ts' },
-    kernel: { manifest: defineModule({ id: 'kernel', tables: {}, permissions: [] }), file: 'kernel.ts' },
+    finance: { manifest: defineModule({ id: 'finance', tables: { crove_finance: { t: columns(['id']) } }, permissions, routes: [], nav: [] }), file: 'finance.ts' },
+    kernel: { manifest: defineModule({ id: 'kernel', tables: {}, permissions: [], routes: [], nav: [] }), file: 'kernel.ts' },
   });
   const unlock = { key: 'finance.period.unlock', risk: 'R3', defaultRoles: ['finance.chief_accountant'] } as const;
   const use: PermissionUse = { permission: 'finance.period.unlock', by: 'command finance.period.unlock', risk: 'R3' };
@@ -71,7 +71,7 @@ describe('permissionProblems() on planted mismatches', () => {
     expect(permissionProblems(finance([{ ...unlock, risk: 'R2' }]), { uses: [use] })).toEqual([
       'finance.ts: finance.period.unlock is declared R2, but the highest risk of the commands that name it is R3',
     ]);
-    const kernelHoldsIt: Manifests = { ...finance([unlock]), kernel: { manifest: defineModule({ id: 'kernel', tables: {}, permissions: [unlock] }), file: 'kernel.ts' } };
+    const kernelHoldsIt: Manifests = { ...finance([unlock]), kernel: { manifest: defineModule({ id: 'kernel', tables: {}, permissions: [unlock], routes: [], nav: [] }), file: 'kernel.ts' } };
     expect(permissionProblems(kernelHoldsIt, { uses: [use] })).toEqual([
       'kernel.ts: finance.period.unlock belongs to the manifest of module finance, not kernel',
       'finance.period.unlock is declared in finance.ts and in kernel.ts',

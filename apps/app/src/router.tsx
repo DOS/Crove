@@ -4,6 +4,7 @@ import { Button } from '@crove/ui/components/button';
 import { errorMessage, getCurrentOrg, isUnauthenticated, orpc, queryClient, setCurrentOrg } from './lib/api.ts';
 import { accessToken, auth, getConfig, needsSecondFactor, needsSecondFactorNow } from './lib/auth.ts';
 import { landingFor } from './lib/clients.ts';
+import { screenInstalled } from './lib/modules.ts';
 import { pendingInvite, rememberInvite, takeTokenFromHash } from './lib/invite.ts';
 import { signOut } from './lib/session-actions.ts';
 import { AgentsPage } from './routes/agents.tsx';
@@ -207,10 +208,21 @@ async function enterOrg(slug: string) {
   }
 }
 
+// A screen of a module this deployment leaves out (CROVE_MODULES) sends you to the inbox (ADR-0031 §3). The module of
+// every screen comes from the manifests (#1652), so a new module's screens are guarded without a line here. The screen
+// is the matched route's own path ('/o/$slug/journal' for /o/acme/JOURNAL), not the address as typed.
+function requireInstalledScreen(slug: string, matches: readonly { fullPath: unknown }[]) {
+  const screen = matches.at(-1)?.fullPath;
+  if (typeof screen === 'string' && !screenInstalled(getConfig().modules, screen)) throw redirect({ to: '/o/$slug/inbox', params: { slug } });
+}
+
 export const orgRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/o/$slug',
-  beforeLoad: ({ params }) => enterOrg(params.slug),
+  beforeLoad: async ({ params, matches }) => {
+    await enterOrg(params.slug);
+    requireInstalledScreen(params.slug, matches);
+  },
   component: OrgLayout,
 });
 
@@ -227,39 +239,33 @@ const overviewRoute = createRoute({ getParentRoute: () => orgRoute, path: 'overv
 // ?status= keeps the Inbox tab other than pending (#1513).
 export const inboxRoute = createRoute({ getParentRoute: () => orgRoute, path: 'inbox', validateSearch: parseInboxSearch, component: InboxPage });
 export const inboxDetailRoute = createRoute({ getParentRoute: () => orgRoute, path: 'inbox/$id', component: InboxDetailPage });
-// Screens of the finance module; a deployment without it (CROVE_MODULES) sends them to the inbox.
-const requireFinance = ({ params }: { params: { slug: string } }) => {
-  if (!getConfig().modules.includes('finance')) throw redirect({ to: '/o/$slug/inbox', params: { slug: params.slug } });
-};
 // ?q= starts the documents and vendors filters, and ?from=&to= sets the journal's range: where the command palette's
 // search results go (#673).
-const documentsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'documents', beforeLoad: requireFinance, validateSearch: parseTextSearch, component: DocumentsPage });
-const vendorsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'vendors', beforeLoad: requireFinance, validateSearch: parseTextSearch, component: VendorsPage });
+const documentsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'documents', validateSearch: parseTextSearch, component: DocumentsPage });
+const vendorsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'vendors', validateSearch: parseTextSearch, component: VendorsPage });
 // Customers of sales invoices and receivables (issue #670); ?q= opens it on a search (a tax code or a name).
 const customersRoute = createRoute({
   getParentRoute: () => orgRoute,
   path: 'customers',
-  beforeLoad: requireFinance,
   validateSearch: parseTextSearch,
   component: CustomersPage,
 });
-const journalRoute = createRoute({ getParentRoute: () => orgRoute, path: 'journal', beforeLoad: requireFinance, validateSearch: parseJournalSearch, component: JournalPage });
+const journalRoute = createRoute({ getParentRoute: () => orgRoute, path: 'journal', validateSearch: parseJournalSearch, component: JournalPage });
 // Cash and bank vouchers (issue #327); ?type=&from=&to= keep the list's filters (#1513).
-const vouchersRoute = createRoute({ getParentRoute: () => orgRoute, path: 'vouchers', beforeLoad: requireFinance, validateSearch: parseVouchersSearch, component: VouchersPage });
+const vouchersRoute = createRoute({ getParentRoute: () => orgRoute, path: 'vouchers', validateSearch: parseVouchersSearch, component: VouchersPage });
 // The register of fixed assets and prepaid costs (issue #919).
-const fixedAssetsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'fixed-assets', beforeLoad: requireFinance, component: FixedAssetsPage });
+const fixedAssetsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'fixed-assets', component: FixedAssetsPage });
 // VAT working per month or quarter (issue #316); ?period= keeps the one picked (#1513), as on the portal list.
-const vatRoute = createRoute({ getParentRoute: () => orgRoute, path: 'vat', beforeLoad: requireFinance, validateSearch: parsePeriodSearch, component: VatPage });
+const vatRoute = createRoute({ getParentRoute: () => orgRoute, path: 'vat', validateSearch: parsePeriodSearch, component: VatPage });
 // Reconciliation with the tax portal's purchase list (issue #465).
-const portalListRoute = createRoute({ getParentRoute: () => orgRoute, path: 'portal-invoices', beforeLoad: requireFinance, validateSearch: parsePeriodSearch, component: PortalListPage });
+const portalListRoute = createRoute({ getParentRoute: () => orgRoute, path: 'portal-invoices', validateSearch: parsePeriodSearch, component: PortalListPage });
 // Ledger reports per month, quarter or year (issue #321); ?period=&report=&account= keep what is shown (#1513).
-const ledgerRoute = createRoute({ getParentRoute: () => orgRoute, path: 'ledger', beforeLoad: requireFinance, validateSearch: parseLedgerSearch, component: LedgerPage });
+const ledgerRoute = createRoute({ getParentRoute: () => orgRoute, path: 'ledger', validateSearch: parseLedgerSearch, component: LedgerPage });
 // Bank statements per bank account (issue #326). ?account=1121&month=2026-09 opens that account and month (the Inbox
 // links its open lines here).
 const bankRoute = createRoute({
   getParentRoute: () => orgRoute,
   path: 'bank',
-  beforeLoad: requireFinance,
   // The router reads a digits-only value (a hand-typed ?account=1121) as a number, so a whole number counts as its code.
   validateSearch: (search: Record<string, unknown>): { account?: string; month?: string } => {
     const account = typeof search.account === 'number' && Number.isSafeInteger(search.account) ? String(search.account) : search.account;
@@ -271,18 +277,13 @@ const bankRoute = createRoute({
   component: BankPage,
 });
 // Opening balances from Excel (#320), reached from the journal.
-const openingBalanceRoute = createRoute({ getParentRoute: () => orgRoute, path: 'journal/opening-balances', beforeLoad: requireFinance, component: OpeningBalancePage });
+const openingBalanceRoute = createRoute({ getParentRoute: () => orgRoute, path: 'journal/opening-balances', component: OpeningBalancePage });
 // The Vietnamese quick guide (issue #310), linked from the empty Inbox; it walks through finance screens.
-const guideRoute = createRoute({ getParentRoute: () => orgRoute, path: 'guide', beforeLoad: requireFinance, component: GuidePage });
-// Screens of the social module; without it (CROVE_MODULES) they send you to the inbox.
-const requireSocial = ({ params }: { params: { slug: string } }) => {
-  if (!getConfig().modules.includes('social')) throw redirect({ to: '/o/$slug/inbox', params: { slug: params.slug } });
-};
+const guideRoute = createRoute({ getParentRoute: () => orgRoute, path: 'guide', component: GuidePage });
 // Every Social page shows the org's publishing hold (#946) above it while one is on.
 const socialRoute = createRoute({
   getParentRoute: () => orgRoute,
   path: 'social',
-  beforeLoad: requireSocial,
   component: () => (
     <>
       <PublishHoldBanner />
@@ -323,9 +324,9 @@ const socialPostRoute = createRoute({ getParentRoute: () => socialRoute, path: '
 const socialPlanPrintRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/o/$slug/print/social-plan',
-  beforeLoad: async ({ params }) => {
+  beforeLoad: async ({ params, matches }) => {
     await enterOrg(params.slug);
-    requireSocial({ params });
+    requireInstalledScreen(params.slug, matches);
   },
   validateSearch: parsePlanSearch,
   component: SocialPlanPrintPage,
@@ -346,15 +347,8 @@ const notificationsRoute = createRoute({ getParentRoute: () => orgRoute, path: '
 const agentsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'agents', component: AgentsPage });
 // ?filter= keeps the tab of the tasks list (#1513).
 const tasksRoute = createRoute({ getParentRoute: () => orgRoute, path: 'tasks', validateSearch: parseTasksSearch, component: TasksPage });
-// The bookings of the public booking page (#1320), with the crm module; a deployment without it goes to the inbox.
-const bookingsRoute = createRoute({
-  getParentRoute: () => orgRoute,
-  path: 'bookings',
-  beforeLoad: ({ params }) => {
-    if (!getConfig().modules.includes('crm')) throw redirect({ to: '/o/$slug/inbox', params: { slug: params.slug } });
-  },
-  component: BookingsPage,
-});
+// The bookings of the public booking page (#1320), with the crm module.
+const bookingsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'bookings', component: BookingsPage });
 const taskDetailRoute = createRoute({ getParentRoute: () => orgRoute, path: 'tasks/$id', component: TaskDetailPage });
 
 const routeTree = rootRoute.addChildren([
