@@ -16,9 +16,9 @@
 // Each file runs on a fresh connection as the superuser, inside a transaction the runner opens and rolls back, with
 // search_path = pgtap (pg_catalog and pg_temp stay implicit, so Crove objects are named with their schema). A file holds
 // no transaction control of its own: the runner fails a file that ended its transaction. It fails a file that raises a
-// SQL error, one that prints a TAP line in a result of more than one column (which it does not read), and one whose TAP
-// output does not pass the check in tap.ts: no plan(n) up front, a count that differs from the plan, a test that is not
-// ok, a SKIP or a TODO. pgTAP keeps its state in temporary tables that plan() creates with grants to PUBLIC, so call
+// SQL error, one that prints a TAP line in a result of more than one column (which it does not read), one whose TAP
+// output does not pass the check in tap.ts (no plan(n) up front, a count that differs from the plan, a test that is not
+// ok, a SKIP or a TODO), and one where pgTAP's own counters disagree with what it read (more tests run, or a failure). pgTAP keeps its state in temporary tables that plan() creates with grants to PUBLIC, so call
 // plan() before any SET ROLE: Crove roles may not create temporary objects (T17).
 import { randomBytes } from 'node:crypto';
 import { readdirSync } from 'node:fs';
@@ -26,22 +26,24 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { migrate } from '../../../src/migrate.ts';
-import { isTapLine, tapLines, tapProblems } from './tap.ts';
+import { isTapLine, tapLines, tapProblems, testCount } from './tap.ts';
 
 const MIGRATIONS = fileURLToPath(new URL('../../../../../supabase/migrations', import.meta.url));
 export const TESTS = fileURLToPath(new URL('../../../../../supabase/tests/database', import.meta.url));
 const PGTAP = fileURLToPath(new URL('./pgtap.sql', import.meta.url));
 
-// Module ids of the migration naming rule (§5.3), the directories a module's tests live in.
+// Module ids of the migration naming rule (§5.3), the directories a module's tests live in. The layout test runs from
+// the base branch on protected-path PRs, so a new module id lands on main before the first test file under it.
 const TOKENS = ['kernel', 'jobs', 'crm', 'service', 'social', 'email', 'sign', 'finance', 'hr', 'projects'];
 export const GATE_FILE = /^_[a-z0-9]+(_[a-z0-9]+)*\.test\.sql$/;
 export const MODULE_FILE = new RegExp(`^(${TOKENS.join('|')})/[a-z0-9]+(_[a-z0-9]+)*\\.test\\.sql$`);
 
-// Every file under supabase/tests/database, relative and with forward slashes, sorted. Synchronous: vitest needs the
-// cases when it collects the suite, before any hook runs.
+// Every entry under supabase/tests/database but its directories, relative and with forward slashes, sorted: a symbolic
+// link is listed too, so it fails the layout or runs, never vanishes. Synchronous: vitest needs the cases when it
+// collects the suite, before any hook runs.
 export function listTests(): string[] {
   return readdirSync(TESTS, { recursive: true, withFileTypes: true })
-    .filter((e) => e.isFile())
+    .filter((e) => !e.isDirectory())
     .map((e) => `${e.parentPath}/${e.name}`.slice(TESTS.length + 1).replaceAll('\\', '/'))
     .sort();
 }
@@ -61,27 +63,40 @@ export async function runTap(url: string, sql: string): Promise<Run> {
     await client.query('SET LOCAL search_path = pgtap');
     const txid = async () => (await client.query<{ id: string }>('SELECT pg_catalog.pg_current_xact_id()::text AS id')).rows[0]?.id;
     const before = await txid();
-    let results: pg.QueryResult | pg.QueryResult[];
+    let results: pg.QueryArrayResult | pg.QueryArrayResult[];
     try {
-      // The simple query protocol: the whole file in one round trip, a result per statement.
-      results = (await client.query(sql)) as unknown as pg.QueryResult | pg.QueryResult[];
+      // The simple query protocol (no parameters): the whole file in one round trip, a result per statement. Rows come
+      // as arrays, so two columns of the same name cannot hide one another.
+      results = (await client.query({ text: sql, rowMode: 'array' })) as unknown as pg.QueryArrayResult | pg.QueryArrayResult[];
     } catch (error) {
       const e = error as Error & { code?: string; where?: string };
       return { lines: [], error: `SQL error${e.code ? ` ${e.code}` : ''}: ${e.message}${e.where ? `\n${e.where}` : ''}` };
     }
     const all = Array.isArray(results) ? results : [results];
-    const values = all.filter((r) => r.fields?.length === 1).flatMap((r) => r.rows.map((row: Record<string, unknown>) => Object.values(row)[0]));
-    const lines = tapLines(values);
+    const lines = tapLines(all.filter((r) => r.fields?.length === 1).flatMap((r) => r.rows.map((row) => row[0])));
     // A result of several columns is not read, so a TAP line there could hide a test from the count: refuse it.
     const hidden = all
       .filter((r) => (r.fields?.length ?? 0) > 1)
-      .flatMap((r) => tapLines(r.rows.flatMap((row: Record<string, unknown>) => Object.values(row))))
+      .flatMap((r) => tapLines(r.rows.flat()))
       .find(isTapLine);
     if (hidden !== undefined) return { lines, error: `a TAP line in a result of more than one column, which the runner does not read: ${hidden}` };
     // Another transaction id: the file ran COMMIT or ROLLBACK itself, with or without a BEGIN after it (outside a
     // transaction block, the query runs in a transaction of its own).
     if ((await txid()) !== before) {
       return { lines, error: "the file ended the runner's transaction: drop its BEGIN, COMMIT and ROLLBACK" };
+    }
+    // pgTAP's own counters, read in the same transaction: a test whose line never reached a result the runner reads
+    // (inside an array, a row value or a DO block) still counts there, as does its failure. Only for output that
+    // passes so far: without a plan, pgTAP's tables do not exist, and the output fails anyway.
+    if (tapProblems(lines).length === 0) {
+      // The file may have changed the role or the search path; pgTAP's functions name each other without a schema.
+      await client.query('RESET ROLE');
+      await client.query('SET LOCAL search_path = pgtap');
+      const counters = await client.query<{ run: number | null; failed: number | null }>("SELECT _get('curr_test') AS run, num_failed() AS failed");
+      const run = counters.rows[0]?.run ?? null;
+      const failed = counters.rows[0]?.failed ?? null;
+      if (run !== testCount(lines)) return { lines, error: `pgTAP ran ${run} tests but the runner read ${testCount(lines)}: a test hides in a result it does not read` };
+      if (failed !== 0) return { lines, error: `pgTAP counts ${failed} failed tests that the runner did not read` };
     }
     return { lines, error: null };
   } finally {

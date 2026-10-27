@@ -57,6 +57,9 @@ suite('pgTAP gate files in supabase/tests/database', () => {
     ['a file that rolls back and begins again', `SELECT plan(1); SELECT ok(true); ROLLBACK; BEGIN;`, /ended the runner's transaction/],
     ['a test hidden in a result of two columns', `SELECT plan(1); SELECT ok(true); SELECT ok(false, 'hidden'), 1;`, /^a TAP line in a result of more than one column.*: not ok 2 - hidden$/],
     ['a plan hidden in a result of two columns', `SELECT 1, plan(1); SELECT ok(true);`, /^a TAP line in a result of more than one column.*: 1\.\.1$/],
+    ['a test hidden behind a column of the same name', `SELECT plan(1); SELECT ok(true); SELECT ok(false, 'hidden') AS x, 1 AS x;`, /^a TAP line in a result of more than one column.*: not ok 2 - hidden$/],
+    ['a test hidden in an array', `SELECT plan(1); SELECT ok(true); SELECT ARRAY[ok(false)];`, /^pgTAP ran 2 tests but the runner read 1/],
+    ['a failure hidden in a DO block behind a forged line', `SELECT plan(2); SELECT ok(true); SELECT 'ok 2'; DO $$ BEGIN PERFORM ok(false); END $$;`, /^pgTAP counts 1 failed tests/],
   ])('fails %s', async (_name, sql, problem) => {
     const problems = problemsOf(await runTap(url(), sql));
     expect(problems.some((p) => problem.test(p)), problems.join('\n')).toBe(true);

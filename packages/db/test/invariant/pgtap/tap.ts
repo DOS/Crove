@@ -19,6 +19,11 @@ export function isTapLine(line: string): boolean {
   return PLAN.test(line) || TEST.test(line) || BAIL_OUT.test(line);
 }
 
+// The number of test lines, which the runner compares with pgTAP's own counter (#1643).
+export function testCount(lines: readonly string[]): number {
+  return lines.filter((line) => TEST.test(line)).length;
+}
+
 // Every text value of the results, split into lines: pgTAP functions return one text value per call, which may hold
 // several lines (a failed test is followed by its diagnostics).
 export function tapLines(values: readonly unknown[]): string[] {
