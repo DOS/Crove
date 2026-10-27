@@ -110,6 +110,7 @@ export const pushSubscribe = defineCommand({
   name: 'social.push.subscribe',
   input: z.strictObject({ endpoint: zPushEndpoint, p256dh: zPushP256dh, auth: zPushAuth, label: zDeviceLabel }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ALL,
   handler: async (ctx, input): Promise<{ id: string }> => {
     const me = requireUser(ctx);
@@ -137,6 +138,7 @@ export const pushUnsubscribe = defineCommand({
   name: 'social.push.unsubscribe',
   input: z.union([z.strictObject({ endpoint: z.string().min(1).max(PUSH_ENDPOINT_MAX) }), z.strictObject({ id: zId })]),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ALL,
   handler: async (ctx, input): Promise<{ removed: number }> => {
     const me = requireUser(ctx);
@@ -235,6 +237,7 @@ export const pushRecord = defineCommand({
   name: 'social.push.record',
   input: z.strictObject({ results: z.array(z.strictObject({ id: zId, outcome: z.enum(['sent', 'gone', 'failed']) })).min(1).max(PUSH_DEVICE_LIMIT) }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   handler: async (ctx: CommandContext, input): Promise<{ sent: number; removed: number; failed: number }> => {
     const ids = (outcome: string) => input.results.filter((r) => r.outcome === outcome).map((r) => r.id);

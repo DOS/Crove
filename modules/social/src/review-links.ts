@@ -33,6 +33,7 @@ export const reviewLinkCreate = defineCommand({
   name: 'social.review_link.create',
   input: z.strictObject({ postId: zId, days: z.number().int().min(1).max(REVIEW_LINK_MAX_DAYS).optional() }),
   risk: 'R2',
+  sideEffect: 'internal',
   access: ADMINS,
   target: (input) => ({ type: 'social.post', id: input.postId }),
   handler: async (ctx, input) => {
@@ -69,6 +70,7 @@ export const reviewLinkRevoke = defineCommand({
   name: 'social.review_link.revoke',
   input: z.strictObject({ linkId: zId }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ADMINS,
   handler: async (ctx, input) => {
     const userId = requireUser(ctx);
@@ -121,6 +123,7 @@ export const reviewPlanCreate = defineCommand({
     days: z.number().int().min(1).max(REVIEW_LINK_MAX_DAYS).optional(),
   }),
   risk: 'R2',
+  sideEffect: 'internal',
   access: ADMINS,
   handler: async (ctx, input) => {
     const userId = requireUser(ctx);
@@ -215,6 +218,7 @@ export const linksRevokeForMember = defineCommand({
   name: 'social.links.revoke_for_member',
   input: z.strictObject({ eventId: zId }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'system') throw new DomainError('FORBIDDEN', 403, 'Chỉ tiến trình nền mới thực hiện được việc này');
@@ -452,7 +456,9 @@ const zReply = z
 export const reviewReply = defineCommand({
   name: 'social.review.reply',
   input: z.strictObject({ feedbackId: zId, body: zReply.nullable() }),
-  risk: 'R1',
+  // The client sees the reply on the review link's page at once: an effect outside Crove (#1578).
+  risk: 'R2',
+  sideEffect: 'external',
   access: MEMBERS,
   target: (input) => ({ type: 'social.review_feedback', id: input.feedbackId }),
   handler: async (ctx, input): Promise<{ feedbackId: string; postId: string; reply: ReviewReplyView | null }> => {

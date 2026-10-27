@@ -9,6 +9,7 @@ import { useRef, useState } from 'react';
 import { useTranslations } from 'use-intl';
 import { Button } from '@crove/ui/components/button';
 import { cn } from '@crove/ui/lib/utils';
+import { scrollBehavior } from '../lib/media.ts';
 import { useImageUrl } from './social-media.tsx';
 import { Spinner } from './ui.tsx';
 
@@ -85,7 +86,7 @@ export const markerAnchor = (commentId: string) => `pin-${commentId}`;
 function reveal(id: string) {
   const el = typeof document === 'undefined' ? null : document.getElementById(id);
   if (!el) return;
-  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  el.scrollIntoView({ behavior: scrollBehavior(), block: 'center' });
   el.focus({ preventScroll: true });
 }
 export const revealComment = (commentId: string) => reveal(commentAnchor(commentId));

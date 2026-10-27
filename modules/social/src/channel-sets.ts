@@ -27,6 +27,7 @@ export const channelSetSave = defineCommand({
     connectionIds: z.array(zId).min(1).max(CHANNEL_SET_MAX),
   }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ADMINS,
   handler: async (ctx, input) => {
     const userId = requireUser(ctx);
@@ -73,6 +74,7 @@ export const channelSetRemove = defineCommand({
   name: 'social.channel_set.remove',
   input: z.strictObject({ setId: zId }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ADMINS,
   handler: async (ctx, input) => {
     requireUser(ctx);

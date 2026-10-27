@@ -73,6 +73,10 @@ export interface CroveKernelSchema {
   'crove_kernel.member_invite': KernelMemberInviteTable;
   'crove_kernel.notification': KernelNotificationTable;
   'crove_kernel.notification_mute': KernelNotificationMuteTable;
+  'crove_kernel.number_allocation': KernelNumberAllocationTable;
+  'crove_kernel.number_series': KernelNumberSeriesTable;
+  'crove_kernel.number_series_policy': KernelNumberSeriesPolicyTable;
+  'crove_kernel.number_void': KernelNumberVoidTable;
   'crove_kernel.org_usage': KernelOrgUsageTable;
   'crove_kernel.outbox_event': KernelOutboxEventTable;
   'crove_kernel.party': KernelPartyTable;
@@ -256,6 +260,8 @@ export interface FinanceCashVoucherTable {
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
   bank_line_id: ColumnType<string | null, string | null, NotGranted>;
   legal_entity_id: ColumnType<string, string, NotGranted>;
+  number_period: ColumnType<string, string | undefined, NotGranted>;
+  number_allocation_id: ColumnType<string | null, string | null, NotGranted>;
 }
 
 /** crove_finance.categorization_rule */
@@ -381,6 +387,8 @@ export interface FinanceJournalVoucherTable {
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
   closing_year: ColumnType<number | null, number | null, NotGranted>;
   legal_entity_id: ColumnType<string, string, NotGranted>;
+  number_period: ColumnType<string, string | undefined, NotGranted>;
+  number_allocation_id: ColumnType<string | null, string | null, NotGranted>;
 }
 
 /** crove_finance.legal_entity_books */
@@ -965,6 +973,52 @@ export interface KernelNotificationTable {
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
   read_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   legal_entity_id: ColumnType<string, string, NotGranted>;
+}
+
+/** crove_kernel.number_allocation */
+export interface KernelNumberAllocationTable {
+  org_id: ColumnType<string, NotGranted, NotGranted>;
+  id: ColumnType<string, NotGranted, NotGranted>;
+  series_id: ColumnType<string, NotGranted, NotGranted>;
+  legal_entity_id: ColumnType<string, NotGranted, NotGranted>;
+  number: ColumnType<string, NotGranted, NotGranted>;
+  target_type: ColumnType<string, NotGranted, NotGranted>;
+  target_id: ColumnType<string, NotGranted, NotGranted>;
+  allocated_by: ColumnType<string | null, NotGranted, NotGranted>;
+  allocated_at: ColumnType<Date, NotGranted, NotGranted>;
+}
+
+/** crove_kernel.number_series_policy */
+export interface KernelNumberSeriesPolicyTable {
+  org_id: ColumnType<string, NotGranted, NotGranted>;
+  id: ColumnType<string, NotGranted, NotGranted>;
+  legal_entity_id: ColumnType<string, NotGranted, NotGranted>;
+  doc_type: ColumnType<string, NotGranted, NotGranted>;
+  reset: ColumnType<string, NotGranted, NotGranted>;
+  updated_by: ColumnType<string | null, NotGranted, NotGranted>;
+  updated_at: ColumnType<Date, NotGranted, NotGranted>;
+}
+
+/** crove_kernel.number_series */
+export interface KernelNumberSeriesTable {
+  org_id: ColumnType<string, NotGranted, NotGranted>;
+  id: ColumnType<string, NotGranted, NotGranted>;
+  legal_entity_id: ColumnType<string, NotGranted, NotGranted>;
+  doc_type: ColumnType<string, NotGranted, NotGranted>;
+  period_key: ColumnType<string, NotGranted, NotGranted>;
+  next_number: ColumnType<string, NotGranted, NotGranted>;
+  created_at: ColumnType<Date, NotGranted, NotGranted>;
+}
+
+/** crove_kernel.number_void */
+export interface KernelNumberVoidTable {
+  org_id: ColumnType<string, NotGranted, NotGranted>;
+  id: ColumnType<string, NotGranted, NotGranted>;
+  allocation_id: ColumnType<string, NotGranted, NotGranted>;
+  legal_entity_id: ColumnType<string, NotGranted, NotGranted>;
+  reason: ColumnType<string, NotGranted, NotGranted>;
+  voided_by: ColumnType<string | null, NotGranted, NotGranted>;
+  voided_at: ColumnType<Date, NotGranted, NotGranted>;
 }
 
 /** crove_kernel.org_usage */

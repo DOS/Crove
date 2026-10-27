@@ -87,6 +87,7 @@ export const planExport = defineCommand({
     format: z.enum(['csv', 'print']).optional(),
   }),
   risk: 'R1',
+  sideEffect: 'none',
   access: MEMBERS,
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');

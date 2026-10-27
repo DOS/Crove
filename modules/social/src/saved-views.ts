@@ -70,6 +70,7 @@ export const savedViewSave = defineCommand({
   name: 'social.saved_view.save',
   input: zSocialSavedViewSave,
   risk: 'R1',
+  sideEffect: 'internal',
   access: ALL,
   handler: async (ctx, input): Promise<{ viewId: string }> => {
     const me = requireUser(ctx);
@@ -131,6 +132,7 @@ export const savedViewDelete = defineCommand({
   name: 'social.saved_view.delete',
   input: z.strictObject({ viewId: zId }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ALL,
   handler: async (ctx, input): Promise<{ viewId: string }> => {
     const me = requireUser(ctx);

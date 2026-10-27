@@ -11,6 +11,10 @@ import { createOrg, newEmail, signInNewUser, signUp } from '../lib/session.ts';
 
 test.use({ viewport: { width: 1280, height: 600 } });
 
+// The landmark and heading rules of axe (best-practice): one <main>, all content inside a landmark, landmarks told apart,
+// one h1, and no heading that skips a level.
+const STRUCTURE_RULES = ['landmark-one-main', 'region', 'landmark-unique', 'page-has-heading-one', 'heading-order'];
+
 test('the sidebar keeps sign-out and Settings in view on a short window, and each app has its own short menu', async ({ page }) => {
   const violations = await collectCspViolations(page);
   await signUp(page, newEmail('layout'));
@@ -93,6 +97,10 @@ test('every sidebar screen fits 360px with no horizontal scroll and passes an ax
       for (const v of scan.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')) {
         problems.push(`${theme} ${path}: ${v.impact} ${v.id} on ${v.nodes.map((n) => n.target.join(' ')).slice(0, 3).join(', ')}`);
       }
+      // Landmarks and heading order (DESIGN.md §7, #1593): axe files these under best-practice, not WCAG, so they are
+      // asked for by id, and any violation counts whatever its impact.
+      const structure = await new AxeBuilder({ page }).withRules(STRUCTURE_RULES).analyze();
+      for (const v of structure.violations) problems.push(`${theme} ${path}: ${v.id} on ${v.nodes.map((n) => n.target.join(' ')).slice(0, 3).join(', ')}`);
     }
   }
   expect(problems).toEqual([]);

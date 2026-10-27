@@ -48,7 +48,7 @@ export function BookingFeedCard() {
   return (
     <Card className="mb-4 block space-y-3 p-4" data-testid="booking-feed">
       <div>
-        <h3 className="text-sm font-medium text-foreground">{t('title')}</h3>
+        <h2 className="text-sm font-medium text-foreground">{t('title')}</h2>
         <p className="text-xs text-subtle-foreground">{t('hint')}</p>
       </div>
       {feed.error ? (

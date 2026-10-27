@@ -468,7 +468,9 @@ async function mailNotifications(ctx: CommandContext, plan: Plan, created: reado
 export const notificationDispatch = defineCommand({
   name: 'social.notification.dispatch',
   input: z.object({ eventId: zId }),
-  risk: 'R1',
+  // Queues mail through the kernel pipeline in its transaction: a send, an effect outside Crove (#1578).
+  risk: 'R2',
+  sideEffect: 'external',
   access: 'system',
   handler: async (ctx, input): Promise<{ sent: number; mailed: number; push: string[] }> => {
     const event = await ctx.trx
@@ -632,6 +634,7 @@ export const notificationRead = defineCommand({
   name: 'social.notification.read',
   input: z.union([z.strictObject({ ids: z.array(zId).min(1).max(100) }), z.strictObject({ all: z.literal(true) })]),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ALL,
   handler: async (ctx, input) => {
     const me = requireUser(ctx);
@@ -647,6 +650,7 @@ export const notificationMute = defineCommand({
   name: 'social.notification.mute',
   input: z.strictObject({ kind: z.enum(SOCIAL_NOTIFICATION_KINDS), muted: z.boolean() }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ALL,
   handler: async (ctx, input) => {
     const me = requireUser(ctx);
@@ -668,6 +672,7 @@ export const notificationMail = defineCommand({
   name: 'social.notification.mail',
   input: z.strictObject({ enabled: z.boolean() }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ALL,
   handler: async (ctx, input) => {
     const me = requireUser(ctx);

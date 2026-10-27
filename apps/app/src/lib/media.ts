@@ -20,3 +20,13 @@ export function useMediaQuery(query: string): boolean {
 
 // Tailwind's `sm` breakpoint (40rem).
 export const SM_UP = '(min-width: 40rem)';
+
+// Wide enough for a list beside its detail (DESIGN.md §3.4, #1514) once the app rail and the menu take their 18rem: a
+// 1366 px laptop and up. Below it, list and detail stay separate pages.
+export const SPLIT_UP = '(min-width: 84rem)';
+
+// How a script scrolls something into view: smoothly, unless the system asks for reduced motion (DESIGN.md §7, #1605).
+// The stylesheet's reduced-motion rule cannot reach a scroll whose behavior the script names.
+export function scrollBehavior(): ScrollBehavior {
+  return typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+}

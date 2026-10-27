@@ -86,6 +86,7 @@ export const variantRemove = defineCommand({
   name: 'social.variant.remove',
   input: z.strictObject({ variantId: zId, reason: z.string().trim().max(REMOVE_REASON_MAX).optional() }),
   risk: 'R2',
+  sideEffect: 'internal',
   access: ADMINS,
   target: (input) => ({ type: 'social.post_variant', id: input.variantId }),
   handler: async (ctx, input) => {
@@ -115,7 +116,9 @@ export const removeBegin = defineCommand({
   name: 'social.remove.begin',
   // after: the last remove call the ask saw (null: none was made).
   input: z.strictObject({ variantId: zId, provider: z.string().min(1).max(32), after: z.string().min(1).max(300).nullable() }),
-  risk: 'R1',
+  // Commits the provider call as started; the worker then makes it, an effect outside Crove (#1578).
+  risk: 'R2',
+  sideEffect: 'external',
   access: 'system',
   target: (input) => ({ type: 'social.post_variant', id: input.variantId }),
   handler: async (ctx, input): Promise<RemoveWork> => {
@@ -153,6 +156,7 @@ export const removeRecord = defineCommand({
   name: 'social.remove.record',
   input: z.strictObject({ variantId: zId, callKey: z.string().min(1).max(300), result: zRemoveResult }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   target: (input) => ({ type: 'social.post_variant', id: input.variantId }),
   handler: async (ctx, input) => {
@@ -203,6 +207,7 @@ export const removeSchedule = defineCommand({
   name: 'social.remove.schedule',
   input: z.strictObject({ variantId: zId }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   target: (input) => ({ type: 'social.post_variant', id: input.variantId }),
   handler: async (ctx, input): Promise<{ queued: boolean; reason?: string }> => {
@@ -237,6 +242,7 @@ export const removeWatch = defineCommand({
   name: 'social.remove.watch',
   input: z.strictObject({ variantId: zId, after: z.string().min(1).max(300).nullable() }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   target: (input) => ({ type: 'social.post_variant', id: input.variantId }),
   handler: async (ctx, input): Promise<RemoveWatch> => {

@@ -261,6 +261,43 @@ export interface CommandContext extends QueryContext {
   // original error) nor the nested handler can change it afterwards. A command can make a command it runs refuse,
   // which is that command's own refusal, but it cannot write a refusal row for a command it did not run, nor an ok row.
   tryRun<O>(name: string, input: unknown, options: TryRunOptions): Promise<TryRunResult<O>>;
+  // Gapless numbering (ADR-0021 section 2, #1401), on this command's transaction.
+  numbering: Numbering;
+}
+
+// Thin wrappers over the numbering definers (migration 20261103030000): the database checks the context, the legal
+// entity's scope and the actor, and refuses with SQL errors the command maps or lets toDomainError map.
+export interface Numbering {
+  // crove_kernel.allocate_number: the next number of the series of (legal entity, docType) and the period the
+  // document date falls in, recorded as given to (targetType, targetId). The counter row stays locked until the command
+  // commits (a rollback gives the number back), so call it as the last step before the document's insert. legalEntityId
+  // null: the org's default entity. Refused: LEGAL_ENTITY_NOT_ALLOWED and NUMBER_SERIES_RESERVED (42501), a second
+  // number for one target (23505).
+  allocate(input: NumberAllocateInput): Promise<NumberAllocated>;
+  // crove_kernel.void_number: declares an allocated number void (owners and admins; the R2 command kernel.number.void).
+  // Refused: NUMBER_FORBIDDEN (42501), NUMBER_ALLOCATION_NOT_FOUND (23503), NUMBER_VOID_REASON (22023), already void
+  // (23505).
+  void(input: NumberVoidInput): Promise<{ voidId: string }>;
+}
+
+export interface NumberAllocateInput {
+  legalEntityId: string | null;
+  docType: string;
+  // YYYY-MM-DD, in the legal entity's calendar.
+  documentDate: string;
+  targetType: string;
+  targetId: string;
+}
+
+export interface NumberAllocated {
+  periodKey: string;
+  number: number;
+  allocationId: string;
+}
+
+export interface NumberVoidInput {
+  allocationId: string;
+  reason: string;
 }
 
 export interface TryRunOptions {
@@ -1071,6 +1108,25 @@ export class Runtime {
         if (closed) return Promise.reject(new Error(`command ${def.name}: ctx.tryRun after the handler returned`));
         if (running.size > 0) return Promise.reject(new Error(`command ${def.name}: ctx.tryRun runs only while no other nested command runs`));
         return tracked(() => tryNested<R>(name, nestedInput, options));
+      },
+      numbering: {
+        allocate: async (n) => {
+          refuseClosed('ctx.numbering.allocate');
+          const { rows } = await sql<{ period_key: string; number: string; allocation_id: string }>`
+            SELECT a.period_key, a.number::text AS number, a.allocation_id
+            FROM crove_kernel.allocate_number(${n.legalEntityId}::uuid, ${n.docType}::text, ${n.documentDate}::date, ${n.targetType}::text, ${n.targetId}::uuid) a`.execute(trx);
+          const row = rows[0];
+          const number = Number(row?.number);
+          if (!row || !Number.isSafeInteger(number) || number < 1) throw new Error(`command ${def.name}: allocate_number answered no number`);
+          return { periodKey: row.period_key, number, allocationId: row.allocation_id };
+        },
+        void: async (n) => {
+          refuseClosed('ctx.numbering.void');
+          const { rows } = await sql<{ id: string }>`SELECT crove_kernel.void_number(${n.allocationId}::uuid, ${n.reason}::text) AS id`.execute(trx);
+          const voidId = rows[0]?.id;
+          if (!voidId) throw new Error(`command ${def.name}: void_number answered no void`);
+          return { voidId };
+        },
       },
     };
     // ctx.run and ctx.tryRun call these only while the handler runs, after both are defined.

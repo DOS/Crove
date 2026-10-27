@@ -63,6 +63,7 @@ export const commentAdd = defineCommand({
   name: 'social.post_comment.add',
   input: z.strictObject({ postId: zId, variantId: zId.optional(), body: zBody, pin: zSocialCommentPin.optional() }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   target: (input) => ({ type: 'social.post', id: input.postId }),
   handler: async (ctx, input) => {
@@ -115,6 +116,7 @@ export const commentEdit = defineCommand({
   name: 'social.post_comment.edit',
   input: z.strictObject({ commentId: zId, body: zBody }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   handler: async (ctx, input) => {
     const userId = requireUser(ctx);
@@ -188,6 +190,7 @@ export const commentResolve = defineCommand({
   name: 'social.post_comment.resolve',
   input: z.strictObject({ commentId: zId }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   target: (input) => ({ type: 'social.post_comment', id: input.commentId }),
   handler: (ctx, input) => setResolved(ctx, input.commentId, true),
@@ -197,6 +200,7 @@ export const commentReopen = defineCommand({
   name: 'social.post_comment.reopen',
   input: z.strictObject({ commentId: zId }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   target: (input) => ({ type: 'social.post_comment', id: input.commentId }),
   handler: (ctx, input) => setResolved(ctx, input.commentId, false),

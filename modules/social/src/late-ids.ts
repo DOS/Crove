@@ -112,7 +112,9 @@ export type LateIdRecord = z.infer<typeof zLateResult>;
 export const lateIdRecord = defineCommand({
   name: 'social.late_id.record',
   input: z.strictObject({ variantId: zId, publishId: z.string().min(1).max(500), result: zLateResult }),
-  risk: 'R0',
+  // Writes what the platform reported into Crove: internal, so R1 (#1578).
+  risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   handler: async (ctx, input) => {
     requireSystem(ctx);

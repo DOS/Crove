@@ -101,6 +101,7 @@ export const ideaCreate = defineCommand({
   // no update.
   input: z.strictObject({ ...zFields, stage: z.enum(['new', 'planned']).optional(), origin: z.literal('ai').optional() }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   handler: async (ctx, input) => {
     const userId = requireUser(ctx);
@@ -131,6 +132,7 @@ export const ideaUpdate = defineCommand({
   name: 'social.idea.update',
   input: z.strictObject({ ideaId: zId, ...zFields }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   target: (input) => ({ type: 'social.idea', id: input.ideaId }),
   handler: async (ctx, input) => {
@@ -161,6 +163,7 @@ export const ideaMove = defineCommand({
   name: 'social.idea.move',
   input: z.strictObject({ ideaId: zId, stage: z.enum(['new', 'planned', 'archived']) }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   target: (input) => ({ type: 'social.idea', id: input.ideaId }),
   handler: async (ctx, input) => {

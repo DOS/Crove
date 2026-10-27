@@ -44,7 +44,7 @@ catalog:
   knip: 6.43.0
   kysely: 0.29.6
   lucide-react: 1.56.0
-  next: 16.4.0
+  next: 16.4.3
   nodemailer: 10.1.1
   oxlint: 1.88.0
   pg-boss: 12.38.0

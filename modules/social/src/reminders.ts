@@ -44,6 +44,7 @@ export const reviewRemind = defineCommand({
   name: 'social.review.remind',
   input: z.strictObject({ postId: zId }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   target: (input) => ({ type: 'social.post', id: input.postId }),
   handler: async (ctx, input): Promise<{ stage: ReminderStage | null }> => {
