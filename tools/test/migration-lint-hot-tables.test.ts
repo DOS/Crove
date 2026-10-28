@@ -112,6 +112,7 @@ describe('migration lint: hot-table-retry', () => {
     expect(rules(String.raw`DO $$ BEGIN EXECUTE E'ALTER\x20TABLE crove_kernel.audit_event ADD COLUMN y int'; END $$;`)).toEqual([1]);
     expect(rules(String.raw`DO $$ BEGIN EXECUTE U&'\0041LTER TABLE crove_kernel.audit_event ADD COLUMN y int'; END $$;`)).toEqual([1]);
     expect(rules(String.raw`ALTER TABLE U&"crove\005fkernel".audit_event ADD COLUMN y int;`)).toEqual([1]);
+    expect(rules('ALTER\vTABLE crove_kernel.audit_event ADD COLUMN y int;')).toEqual([1]);
   });
 
   it('refuses a block that does not retry, does not bound, sets no timeout or never exits', () => {

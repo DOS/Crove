@@ -104,6 +104,7 @@ describe('migration lint: contract-header', () => {
       String.raw`DO $$ BEGIN EXECUTE E'\x44ROP TABLE crove_social.sample'; END $$;`,
       String.raw`DO $$ BEGIN EXECUTE U&'DROP \0054ABLE crove_social.sample'; END $$;`,
       "DO $$ BEGIN EXECUTE 'ALTER TABLE crove_social.sample '\n  'RENAME TO other'; END $$;",
+      'ALTER TABLE crove_social.sample\vRENAME TO other;',
     ]) {
       expect(rules(sql), sql).toEqual([1]);
       expect(rules(`-- crove:contract adr=0028\n${sql}`), sql).toEqual([]);

@@ -110,7 +110,7 @@ function decodeU(raw, quote, escape) {
 
 // After a literal's closing quote: whitespace holding a newline (with comments), then the next piece's quote. Each
 // comment runs to its line's end, so the pattern cannot backtrack.
-const QUOTE_CONTINUE = /[ \t\f]*(?:--[^\n\r]*)?[\n\r](?:[ \t\n\r\f\v]|--[^\n\r]*[\n\r])*'/y;
+const QUOTE_CONTINUE = /[ \t\f\v]*(?:--[^\n\r]*)?[\n\r](?:[ \t\n\r\f\v]|--[^\n\r]*[\n\r])*'/y;
 
 const codePoint = (cp) => (cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : '\ufffd');
 
@@ -132,7 +132,8 @@ export function lex(sql, firstLine = 1, comments = undefined, afterCode = false)
     const c = sql[i];
     const next = sql[i + 1];
     const before = tokens.length;
-    if (c === '\n' || c === ' ' || c === '\t' || c === '\r' || c === '\f') {
+    // PostgreSQL 16 and later count a vertical tab as whitespace too (ALTER\vTABLE is ALTER TABLE).
+    if (c === '\n' || c === ' ' || c === '\t' || c === '\r' || c === '\f' || c === '\v') {
       advance(i + 1);
     } else if (c === '-' && next === '-') {
       const end = sql.indexOf('\n', i);
