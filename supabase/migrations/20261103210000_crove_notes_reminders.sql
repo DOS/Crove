@@ -46,7 +46,7 @@ BEGIN
     SELECT t.org_id, t.id FROM crove_notes.todo t
     WHERE t.remind_at IS NOT NULL AND t.reminded_at IS NULL AND t.status = 'open' AND t.deleted_at IS NULL
       AND t.remind_at <= pg_catalog.now()
-    ORDER BY t.remind_at
+    ORDER BY t.remind_at, t.id
     LIMIT LEAST(GREATEST(p_limit, 1), 1000)
     FOR UPDATE SKIP LOCKED
   )

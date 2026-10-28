@@ -58,7 +58,7 @@ export const QUEUES = {
   // Created by the notes core migration (20261103130000).
   notesMemberPurge: 'notes-member-purge',
   notesTrash: 'notes-trash',
-  // Created by the notes reminders migration (20261103200000).
+  // Created by the notes reminders migration (20261103210000).
   notesRemind: 'notes-reminders',
   // Created by the dead letter migration (20261103150000): every other queue's dead letters (#1720, dead-letter.ts).
   deadLetter: 'kernel-job.dlq',
