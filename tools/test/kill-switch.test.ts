@@ -1,6 +1,6 @@
 // The operator's kill-switch script (#886): what it accepts before it touches the database.
 import { describe, expect, it } from 'vitest';
-import { GUARDED_RELAY_TYPES, parseArgs } from '../ops/kill-switch.mjs';
+import { GUARDED_RELAY_TYPES, parseArgs, runSwitch, SET_SQL, STATUS_SQL, statusLine } from '../ops/kill-switch.mjs';
 
 describe('ops kill-switch arguments', () => {
   it('reads status and a change with who and why', () => {
@@ -57,5 +57,27 @@ describe('ops kill-switch arguments', () => {
     ]) {
       expect(() => parseArgs(argv), JSON.stringify(argv)).toThrow();
     }
+  });
+
+  it('runs a change then the status on the client it is given, and prints each switch (#1718)', async () => {
+    const asked: Array<[string, unknown[]]> = [];
+    const rows = [{ key: 'ai', engaged: true, last: { changed_at: '2026-10-28T01:00:00Z', changed_by: 'Trực ca', reason: 'diễn tập' }, held: null }];
+    const client = {
+      query: async (text: string, values: unknown[]) => {
+        asked.push([text, values]);
+        return { rows: text === STATUS_SQL ? rows : [] };
+      },
+    };
+    expect(await runSwitch(client, parseArgs(['ai', 'on', '--reason', 'diễn tập', '--by', 'Trực ca']))).toEqual(rows);
+    expect(asked).toEqual([
+      [SET_SQL, ['ai', true, 'diễn tập', 'Trực ca']],
+      [STATUS_SQL, [['ai', 'mail']]],
+    ]);
+    asked.length = 0;
+    await runSwitch(client, parseArgs(['status']));
+    expect(asked.map(([text]) => text)).toEqual([STATUS_SQL]);
+    expect(statusLine(rows[0] as never)).toBe('ai: ON (stopped) since 2026-10-28T01:00:00Z by Trực ca (diễn tập)');
+    expect(statusLine({ key: 'relay:crm.booking.requested', engaged: true, last: null, held: 3 })).toBe('relay:crm.booking.requested: ON (stopped), holding 3 event(s)');
+    expect(statusLine({ key: 'mail', engaged: false, last: null, held: null })).toBe('mail: off');
   });
 });

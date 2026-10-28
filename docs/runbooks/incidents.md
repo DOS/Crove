@@ -270,7 +270,12 @@ Keep a relay hold short and narrow. Every relay pass walks past the held events 
 
 Hold them only when relaying them is itself the incident, and release them first. Holding `kernel.proposal.created` or a notification type delays agents' review tasks and people's notices.
 
-While a relay switch is engaged the held events still count in the prober's outbox age (§2, "Outbox lag"), so that alert keeps firing as a reminder to release it; the worker's back-pressure ignores them, so agents and bulk mail keep running. The flood query in §2 (back-pressure) lists the waiting events by org and type, held ones included. To rehearse it (Phase 1 exit criterion 8), engage `ai` on a staging deployment and check two things: an agent wake-up is refused, and a new PDF in the Inbox shows "AI đang tạm dừng". Then release it.
+While a relay switch is engaged the held events still count in the prober's outbox age (§2, "Outbox lag"), so that alert keeps firing as a reminder to release it; the worker's back-pressure ignores them, so agents and bulk mail keep running. The flood query in §2 (back-pressure) lists the waiting events by org and type, held ones included. **Rehearsal (Phase 1 exit criterion 8, #1718).** `e2e/tests/kill-switches.spec.ts` rehearses the switches on the compose stack in the e2e job of every pull request:
+- the org switch, engaged from the Agents page with a reason: an agent wake-up (a task given to its position) is refused (`kernel.agent.run.start` answers `kill_switch`, no run starts), then an owner with a fresh second factor releases it from the same page;
+- `ai`, through the script's own checks and SQL (`parseArgs` and `runSwitch` in `tools/ops/kill-switch.mjs`, as the database owner): an agent wake-up is refused, and a new PDF in the Inbox shows "AI đang tạm dừng"; the switch's history keeps who engaged it and why, then who released it;
+- `relay:crm.booking.requested` and `mail`: a visitor's booking waits unconfirmed while its request is held, `status` counts it as held, and once released it is confirmed; its confirmation mail stays queued past a mail sweep with nothing in Mailpit, and goes out to Mailpit once `mail` is released.
+
+Every deployment switch is released after each test and after the file, pass or fail, so the shared stack is never left stopped. On a staging or production deployment, rehearse by hand: engage `ai`, check that an agent wake-up is refused and that a new PDF in the Inbox shows "AI đang tạm dừng", then release it.
 
 **Other deployment-wide levers**, applied with `docker compose up -d` after editing `.env`:
 

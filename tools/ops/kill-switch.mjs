@@ -12,8 +12,10 @@
 // crove_kernel.global_kill_switch_set, which only the database owner may run, so it needs the admin URL the migrations
 // use; no Crove login can flip it. Every change is a row of the switch's append-only history, with when, who and why:
 // that row is its audit trail.
+//
+// The e2e rehearsal (e2e/tests/kill-switches.spec.ts, Phase 1 exit criterion 8) runs the same steps through runSwitch
+// on its own client, so this module loads pg only in main: the e2e job installs no pg.
 import { pathToFileURL } from 'node:url';
-import pg from 'pg';
 
 const KEYS = ['ai', 'mail'];
 // The shape the table's CHECK constraint accepts (20261103110000_crove_kernel_relay_kill_switch.sql).
@@ -74,21 +76,36 @@ export const STATUS_SQL = `
         UNION SELECT DISTINCT g.key FROM crove_kernel.global_kill_switch g WHERE g.key LIKE 'relay:%') k
   ORDER BY k.key LIKE 'relay:%', k.key`;
 
+export const SET_SQL = 'SELECT crove_kernel.global_kill_switch_set($1, $2, $3, $4)';
+
+/**
+ * @typedef {{ key: string, engaged: boolean, last: { changed_at: string, changed_by: string, reason: string | null } | null, held: number | null }} SwitchStatus
+ * @typedef {{ query(text: string, values: unknown[]): Promise<{ rows: any[] }> }} Queryable
+ */
+
+// A parsed command on a connection as the database owner: the change, if any, then every switch's status.
+/** @param {Queryable} client @param {ReturnType<typeof parseArgs>} command @returns {Promise<SwitchStatus[]>} */
+export async function runSwitch(client, command) {
+  if (command.action === 'set') await client.query(SET_SQL, [command.key, command.engaged, command.reason, command.by]);
+  const { rows } = await client.query(STATUS_SQL, [KEYS]);
+  return rows;
+}
+
+/** @param {SwitchStatus} status */
+export function statusLine({ key, engaged, last, held }) {
+  const holding = held === null || held === undefined ? '' : `, holding ${held >= 10000 ? '10000+' : held} event(s)`;
+  return `${key}: ${engaged ? 'ON (stopped)' : 'off'}${holding}${last ? ` since ${last.changed_at} by ${last.changed_by}${last.reason ? ` (${last.reason})` : ''}` : ''}`;
+}
+
 async function main() {
   const command = parseArgs(process.argv.slice(2));
   const url = process.env.ADMIN_DATABASE_URL;
   if (!url) throw new Error('set ADMIN_DATABASE_URL (the database owner, as for the migrations)');
+  const { default: pg } = await import('pg');
   const client = new pg.Client({ connectionString: url });
   await client.connect();
   try {
-    if (command.action === 'set') {
-      await client.query('SELECT crove_kernel.global_kill_switch_set($1, $2, $3, $4)', [command.key, command.engaged, command.reason, command.by]);
-    }
-    const { rows } = await client.query(STATUS_SQL, [KEYS]);
-    for (const { key, engaged, last, held } of rows) {
-      const holding = held === null || held === undefined ? '' : `, holding ${held >= 10000 ? '10000+' : held} event(s)`;
-      console.log(`${key}: ${engaged ? 'ON (stopped)' : 'off'}${holding}${last ? ` since ${last.changed_at} by ${last.changed_by}${last.reason ? ` (${last.reason})` : ''}` : ''}`);
-    }
+    for (const status of await runSwitch(client, command)) console.log(statusLine(status));
   } finally {
     await client.end();
   }
