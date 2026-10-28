@@ -19,7 +19,7 @@ import { financeCommands, financeQueries } from '@crove/mod-finance';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
-const THIS_VERSION = '20261103110000';
+const THIS_VERSION = '20261103120000';
 const suite = ADMIN ? describe : describe.skip;
 
 suite('activity per legal entity on PostgreSQL (#1716)', () => {
@@ -257,7 +257,7 @@ suite('activity per legal entity on PostgreSQL (#1716)', () => {
       (await rt.query<{ lastActivityAt: string | null }>('kernel.org.overview', {}, { actor: asUser(userId), orgId })).lastActivityAt;
     const newest = (
       await admin((c) =>
-        c.query<{ at: Date; e: string | null }>('SELECT occurred_at AS at, legal_entity_id AS e FROM crove_kernel.activity WHERE org_id = $1 ORDER BY occurred_at DESC LIMIT 1', [orgId]),
+        c.query<{ at: Date; e: string | null }>('SELECT occurred_at AS at, legal_entity_id AS e FROM crove_kernel.activity WHERE org_id = $1 ORDER BY occurred_at DESC, id DESC LIMIT 1', [orgId]),
       )
     ).rows[0];
     if (!newest) throw new Error('no activity row');
