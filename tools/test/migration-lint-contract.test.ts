@@ -72,6 +72,34 @@ describe('migration lint: contract-header', () => {
       'ALTER TYPE crove_social.t ALTER ATTRIBUTE a SET DATA TYPE text;',
       "DO $$ BEGIN EXECUTE 'ALTER TABLE crove_social.sample DROP COLUMN x'; END $$;",
       "DO $$ BEGIN EXECUTE format('DROP TABLE IF EXISTS crove_social.%I', 'x'); END $$;",
+      // #1709: every DROP but the schema's internals, and RENAME or SET SCHEMA wherever an ALTER of another kind puts it.
+      'DROP OWNED BY crove_old CASCADE;',
+      'DROP COLLATION IF EXISTS crove_social.c;',
+      'DROP CAST IF EXISTS (text AS crove_social.t);',
+      'DROP CONVERSION crove_social.c;',
+      'DROP TEXT SEARCH CONFIGURATION crove_social.ts;',
+      'DROP OPERATOR CLASS crove_social.oc USING btree;',
+      'DROP OPERATOR FAMILY crove_social.of USING btree;',
+      'DROP OPERATOR crove_social.=== (int, int);',
+      'DROP SERVER IF EXISTS crove_s;',
+      'DROP FOREIGN DATA WRAPPER crove_w;',
+      'DROP USER MAPPING FOR crove_x SERVER crove_s;',
+      'DROP PUBLICATION crove_p;',
+      'DROP SUBSCRIPTION crove_s;',
+      'DROP LANGUAGE plx;',
+      'DROP TRANSFORM FOR int LANGUAGE plx;',
+      'DROP ACCESS METHOD crove_am;',
+      'DROP USER crove_u;',
+      'DROP GROUP crove_g;',
+      'DROP TABLESPACE crove_t;',
+      'DROP DATABASE crove_d;',
+      'ALTER COLLATION crove_social.c RENAME TO d;',
+      'ALTER OPERATOR CLASS crove_social.oc USING btree RENAME TO oc2;',
+      'ALTER OPERATOR crove_social.=== (int, int) SET SCHEMA crove_kernel;',
+      'ALTER CONVERSION crove_social.c SET SCHEMA crove_kernel;',
+      'ALTER SEQUENCE IF EXISTS crove_social.s RENAME TO s2;',
+      'ALTER ROLE crove_old RENAME TO crove_new;',
+      'ALTER TEXT SEARCH DICTIONARY crove_social.d RENAME TO d2;',
     ]) {
       expect(rules(sql), sql).toEqual([1]);
       expect(rules(`-- crove:contract adr=0028\n${sql}`), sql).toEqual([]);
@@ -98,6 +126,12 @@ describe('migration lint: contract-header', () => {
       "COMMENT ON TABLE crove_social.sample IS 'DROP TABLE x; ALTER TABLE y RENAME TO z';",
       "CREATE OR REPLACE FUNCTION crove_social.f() RETURNS void LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $f$ BEGIN DROP TABLE crove_social.x; END $f$;",
       'REVOKE ALL ON FUNCTION crove_social.f() FROM PUBLIC;',
+      'DROP STATISTICS IF EXISTS crove_social.s;',
+      'DROP EVENT TRIGGER IF EXISTS crove_social_watch;',
+      'ALTER DOMAIN crove_social.d RENAME CONSTRAINT a TO b;',
+      'ALTER SEQUENCE crove_social.s RESTART WITH 1;',
+      'ALTER FUNCTION crove_social.f(rename int) SET search_path = pg_catalog, pg_temp;',
+      'ALTER STATISTICS crove_social.s RENAME TO s2;',
     ].join('\n'))).toEqual([]);
   });
 
@@ -117,6 +151,23 @@ describe('migration lint: contract-header', () => {
     expect(rules('DO $$ BEGIN IF false THEN CREATE TABLE crove_social.t (id int); END IF; END $$;\nDROP TABLE crove_social.t CASCADE;')).toEqual([2]);
     // The helper must be of the kind dropped.
     expect(rules('CREATE TYPE crove_social.t AS (a int);\nDROP TABLE crove_social.t;')).toEqual([2]);
+  });
+
+  it('matches a dropped helper routine by its arguments, not its name alone (#1709)', () => {
+    const create = (args: string) => `CREATE FUNCTION crove_social.h(${args}) RETURNS void LANGUAGE sql SET search_path = pg_catalog, pg_temp AS $$ SELECT 1 $$;`;
+    const drop = (args: string, header = '') => rules(`${create('p_org uuid, p_n int DEFAULT 1, OUT done boolean')}\n${header}DROP FUNCTION crove_social.h${args};`);
+    // The one this file created, however its arguments are written.
+    for (const args of ['(uuid, int)', '(p_org uuid, p_n int)', '(IN uuid, integer)', '(uuid, int4, OUT boolean)', '(pg_catalog.uuid, int)', '']) expect(drop(args), args).toEqual([]);
+    // Another overload of the same name: an existing routine as far as the lint knows (one made in a DO, say).
+    for (const args of ['(text, int)', '(uuid)', '(uuid, int, int)', '(uuid, bigint)', '()', '(p_n int, p_org uuid)']) {
+      expect(drop(args), args).toEqual([2]);
+      expect(drop(args, '-- crove:contract adr=0028\n'), args).toEqual([]);
+    }
+    // Each overload the file created counts, and a list of several drops needs every one to be a helper.
+    expect(rules(`${create('int')}\n${create('text')}\nDROP FUNCTION crove_social.h(text), crove_social.h(integer);`)).toEqual([]);
+    expect(rules(`${create('int')}\nDROP FUNCTION crove_social.h(int), crove_social.h(text);`)).toEqual([2]);
+    expect(rules(`${create('VARIADIC a int[]')}\nDROP FUNCTION crove_social.h(VARIADIC integer[]);`)).toEqual([]);
+    expect(rules(`${create('ts timestamptz, x double precision')}\nDROP FUNCTION crove_social.h(timestamp with time zone, float8);`)).toEqual([]);
   });
 
   it('needs the header on the comment lines right before the statement, one statement per header', () => {

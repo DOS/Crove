@@ -151,6 +151,11 @@ describe('migration lint: the schema of the module', () => {
     expect(rules("DO $$ BEGIN\n  EXECUTE format('ALTER TABLE crove_kernel.%I ADD COLUMN x text', 'tenant');\nEND $$;")).toEqual(['2 module-schema']);
     const purge = 'CREATE OR REPLACE FUNCTION crove_kernel.org_purge(p_min_days integer) RETURNS void LANGUAGE sql AS $$ SELECT 1 $$;\nREVOKE ALL ON FUNCTION crove_kernel.org_purge(integer) FROM PUBLIC;';
     expect(rules(purge)).toEqual(['1 module-schema', '2 module-schema']);
+    // A rule's table follows TO, not ON (#1709): ON is followed by the event.
+    const rule = lint('CREATE OR REPLACE RULE r AS ON INSERT TO crove_kernel.tenant DO INSTEAD NOTHING;');
+    expect(rule.map((f) => `${f.line} ${f.rule}`)).toEqual(['1 module-schema']);
+    expect(rule[0]!.message).toContain('touches schema crove_kernel');
+    expect(rules('CREATE RULE r AS ON UPDATE TO crove_social.sample DO INSTEAD NOTHING;')).toEqual([]);
   });
 
   it('accepts a cross-module statement with a reasoned waiver on the line before it, and lists the waiver', () => {
