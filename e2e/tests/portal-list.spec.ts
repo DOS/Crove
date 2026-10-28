@@ -122,7 +122,7 @@ test('import the tax portal purchase list and see which invoices Crove lacks', a
     await expect(page.getByText('DANH SÁCH HÓA ĐƠN.xlsx: 1 dòng ghi người mua là doanh nghiệp khác')).toBeVisible();
     await expect(page.getByRole('cell', { name: '01/09/2026 đến 30/09/2026', exact: true })).toBeVisible();
 
-    const missing = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Cơ quan thuế có, Crove chưa có (1)' }) });
+    const missing = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Cơ quan thuế có, Ludy chưa có (1)' }) });
     await expect(missing.getByRole('row').filter({ hasText: '1C26TAB-5555' })).toContainText('CÔNG TY TNHH BÊN BÁN KHÁC');
     await expect(missing.getByText('Hãy xin người bán tệp XML', { exact: false })).toBeVisible();
 

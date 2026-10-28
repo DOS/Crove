@@ -24,7 +24,7 @@ test('the overview counts what waits and opens the screen that clears it', async
   await test.step('one card per installed app links into it (#1528)', async () => {
     const apps = page.getByRole('region', { name: 'Ứng dụng' });
     await expect(apps.getByText('Chưa chọn kỳ khai GTGT')).toBeVisible();
-    await apps.getByRole('link', { name: 'Mở Kế toán' }).click();
+    await apps.getByRole('link', { name: 'Mở Ludy Kế toán' }).click();
     await expect(page).toHaveURL(/\/vat$/);
     // Home opens on the overview.
     await page.getByRole('navigation').getByRole('link', { name: 'Trang chủ', exact: true }).click();

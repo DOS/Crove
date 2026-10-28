@@ -1,22 +1,32 @@
-# Crove design system and UI/UX guidelines
+# Ludy design system and UI/UX guidelines
 
 Version 3.0 (2026-10-18). Applies to the marketing site (`apps/web`), the web app (`apps/app`) and the component package (`packages/ui`). Written for engineers, designers and coding agents.
 
 Version 2 described a glow-and-gradient landing style and an older stack (SWR, Next.js links in the app). Both are gone: this version replaces it entirely. The research behind each rule, with sources and measurements, is summarized in [docs/design/ui-ux-research-2026-10.vi.html](docs/design/ui-ux-research-2026-10.vi.html).
 
-**Visual direction (picked 2026-10-18).** From the mockups in [docs/design/mockups/](docs/design/mockups/), the owner picked a composition: the frame of B (the product UI is the hero, keyboard-first, graphite neutrals), the agents section of E (org chart and R0 to R3 matrix), the phone section of D and the ledger of A. Option C (paper invoice, seal and routing slip) was dropped on 2026-10-19. On 2026-10-19 the owner then picked per element from one page: the hero of E (the headline centered on top, the live org chart at full width under it), the how-it-works pipeline of E (four stages of equal height, each with a small piece of the app) and the module grid of E (Finance, Agents, Tasks, Social, each with its people and agents). Crove violet is the single, restrained accent, and teal marks done and approved states (`ok` on the marketing site, `success` in `packages/ui`); controls use a 6px radius. Type: Be Vietnam Pro for headings, body and UI, JetBrains Mono for amounts and codes. The marketing site implements it in `apps/web` (tokens in `apps/web/src/app/globals.css`); the web app's `packages/ui` tokens use the same values, with `--radius: 0.375rem` (controls 6px, cards about 8px) and the `proposal` token for AI proposals nobody has approved yet.
+**Visual direction (picked 2026-10-18).** From the mockups in [docs/design/mockups/](docs/design/mockups/), the owner picked a composition: the frame of B (the product UI is the hero, keyboard-first, graphite neutrals), the agents section of E (org chart and R0 to R3 matrix), the phone section of D and the ledger of A. Option C (paper invoice, seal and routing slip) was dropped on 2026-10-19. On 2026-10-19 the owner then picked per element from one page: the hero of E (the headline centered on top, the live org chart at full width under it), the how-it-works pipeline of E (four stages of equal height, each with a small piece of the app) and the module grid of E (Finance, Agents, Tasks, Social, each with its people and agents). The brand violet is the single, restrained accent, and teal marks done and approved states (`ok` on the marketing site, `success` in `packages/ui`); controls use a 6px radius. Type: Be Vietnam Pro for headings, body and UI, JetBrains Mono for amounts and codes. The marketing site implements it in `apps/web` (tokens in `apps/web/src/app/globals.css`); the web app's `packages/ui` tokens use the same values, with `--radius: 0.375rem` (controls 6px, cards about 8px) and the `proposal` token for AI proposals nobody has approved yet.
 
 ---
 
 ## 1. What we are designing
 
-Crove is an open-source, AI-native Business OS for solo founders and SMEs, Vietnam first. The first job it does well: purchase invoices come in, Crove reads and checks them, proposes a TT133 journal entry, and a person approves it. Modules (finance, tasks, agents, social) share one kernel, one approval model and one audit log.
+Ludy is an open-source, AI-native Business OS for solo founders and SMEs, Vietnam first. The first job it does well: purchase invoices come in, Ludy reads and checks them, proposes a TT133 journal entry, and a person approves it. Modules (finance, tasks, agents, social) share one kernel, one approval model and one audit log.
 
 The people using it:
 
 - **Owners of small companies and shops.** Not accountants. Often on a phone. They need to know what needs them today and to trust what the system did.
 - **Accountants and bookkeepers** (in-house or at a service firm). Daily, heavy use, keyboard-first, many organizations. They need density, exact numbers and fast review.
 - **Technical founders** who self-host. They need to see that it runs with `docker compose up` and that the code is open.
+
+### 1.1 Names
+
+The owner renamed the product on 2026-10-28 ([#1682](https://github.com/DOS/Crove/issues/1682)); what users see follows it ([#1683](https://github.com/DOS/Crove/issues/1683)).
+
+- **Ludy** is the suite, the Business OS. It is the default of `BRAND_NAME`; a deployment that sets its own name shows that name everywhere instead, and no screen names both.
+- **Vy** is the AI assistant. Copy names Vy wherever the AI is the one acting: Vy reads, proposes, suggests, drafts and rewrites. The first mention on a screen says what Vy is ("Vy, the AI assistant", "trợ lý AI Vy"). App messages write `{assistant}`, never the name itself (`apps/app/src/i18n/brand.ts`).
+- "AI" stays where it labels the technology rather than the assistant: the badges and marks on AI-written content, the kill switch, AI budgets, a server's AI configuration, the "AI agent" label every agent in the org chart carries, and platform labels such as TikTok's AI-generated content.
+- Products are named "Ludy" and the area: **Ludy CRM**, **Ludy Accounting** (Vietnamese: **Ludy Kế toán**, the word the app's menu and its users already say), **Ludy Notes**. App messages write `{brand} CRM`, so a deployment's own name carries over. The short label under an app's icon stays the area alone.
+- Domains, email addresses, the repository URL, legal text and code identifiers (`@crove/*`, `crove_*`, `CROVE_*`, file names) still say Crove until the owner's later steps of #1682.
 
 ## 2. Principles
 
@@ -79,7 +89,7 @@ Weights: 400 body, 500 UI labels, 600 headings. 800 is not used; size and spacin
 
 ### 3.3 Shape (radius)
 
-Feedback on v2 was that controls looked dated because they were too round. Measured on 2026-10-18: Stripe primary buttons 4px, Raycast 6px, Attio 10px, Linear and Vercel pill only for small marketing nav buttons. A July 2026 survey of 514 design systems found pills most common overall (32 percent) but concentrated in consumer products; finance and B2B tools sit at 4 to 12px. Crove is a finance tool.
+Feedback on v2 was that controls looked dated because they were too round. Measured on 2026-10-18: Stripe primary buttons 4px, Raycast 6px, Attio 10px, Linear and Vercel pill only for small marketing nav buttons. A July 2026 survey of 514 design systems found pills most common overall (32 percent) but concentrated in consumer products; finance and B2B tools sit at 4 to 12px. Ludy is a finance tool.
 
 | Element | Radius |
 | :--- | :--- |

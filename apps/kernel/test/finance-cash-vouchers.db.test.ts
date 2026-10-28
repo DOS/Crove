@@ -647,8 +647,8 @@ suite('cash and bank vouchers (#327)', () => {
 
     // Viewers may download (same roles as the other exports); each download writes its audit row first.
     for (const [path, name, format, entries] of [
-      ['receipts', 'crove-misa-phieu-thu-', 'misa_sme_cash_receipts', 1],
-      ['payments', 'crove-misa-phieu-chi-', 'misa_sme_cash_payments', 1],
+      ['receipts', 'ludy-misa-phieu-thu-', 'misa_sme_cash_receipts', 1],
+      ['payments', 'ludy-misa-phieu-chi-', 'misa_sme_cash_payments', 1],
     ] as const) {
       const response = await app.request(`/api/export/misa/${path}.xlsx?from=2026-11-01&to=2026-11-30`, { headers: { authorization: `Bearer ${await tokenFor(viewer)}`, 'x-crove-org': org.slug } });
       expect(response.status).toBe(200);

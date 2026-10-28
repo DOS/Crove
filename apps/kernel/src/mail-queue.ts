@@ -10,6 +10,7 @@ import type { QueuedMailBegin } from '@crove/kernel';
 import type { Runtime } from '@crove/kernel-runtime';
 import type { MailAttachment, MailErrorKind, MailProvider, OutboundMail, SendResult } from '@crove/mail';
 import { bounceAddress } from './invite-mail.ts';
+import { DEFAULT_BRAND_NAME } from './config.ts';
 
 export const MAIL_SEND_QUEUE = 'kernel-mail-send';
 export const MAIL_BULK_QUEUE = 'kernel-mail-bulk';
@@ -58,7 +59,7 @@ export interface MailQueueDeps {
   // INBOUND_DOMAIN when mail reaches this deployment (INBOUND_SECRET set): the Return-Path of each mail, and the domain
   // of the org's inbound address a template may name as the Reply-To.
   bounceDomain: string | null;
-  // BRAND_NAME (#1040); "Crove" when not given.
+  // BRAND_NAME (#1040); "Ludy" when not given.
   brand?: string;
   sleep?: (ms: number) => Promise<void>;
   sendTimeoutMs?: number;
@@ -139,7 +140,7 @@ async function sendOne(deps: MailQueueDeps, job: MailJob, mail: Extract<QueuedMa
       subject: mail.subject,
       payload: mail.payload,
       publicUrl: deps.publicUrl,
-      brand: deps.brand ?? 'Crove',
+      brand: deps.brand ?? DEFAULT_BRAND_NAME,
       inboundAddress: deps.bounceDomain ? `${mail.inboundToken}@${deps.bounceDomain.toLowerCase()}` : null,
       execute: <T>(command: string, input: unknown) => deps.runtime.execute<T>(command, input, { actor: ACTOR, orgId: job.orgId }),
     });

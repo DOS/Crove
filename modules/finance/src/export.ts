@@ -86,7 +86,7 @@ export function setTextCell(cell: ExcelJS.Cell, value: string | null | undefined
 }
 
 // brand: the product name users see (BRAND_NAME, #1045), as the file's creator.
-export async function buildJournalWorkbook(entries: JournalEntryView[], orgName: string, brand = 'Crove'): Promise<Uint8Array> {
+export async function buildJournalWorkbook(entries: JournalEntryView[], orgName: string, brand = 'Ludy'): Promise<Uint8Array> {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = brand;
   const sheet = workbook.addWorksheet('Bút toán');

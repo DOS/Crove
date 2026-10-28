@@ -6,6 +6,7 @@
 import { sql } from 'kysely';
 import type { Runtime } from '@crove/kernel-runtime';
 import { escapeText, foldLine, icsTime } from './calendar-feed.ts';
+import { DEFAULT_BRAND_NAME } from './config.ts';
 
 const TOKEN = /^[A-Za-z0-9_-]{43}$/;
 
@@ -45,7 +46,7 @@ const oneLine = (text: string) => [...text.replace(/\s+/g, ' ').trim()].slice(0,
 // brand: the product name users see (BRAND_NAME, #1045). PRODID and UID keep "Crove": they identify the software. The
 // UID differs from the one in the booking's mails (booking-<id>@crove), so a host who also added the mail's event keeps
 // two entries in two calendars instead of one entry the calendar app may refuse as a duplicate.
-export function renderBookingFeedIcs(feed: BookingFeed, publicUrl: string, now: Date, brand = 'Crove'): string {
+export function renderBookingFeedIcs(feed: BookingFeed, publicUrl: string, now: Date, brand = DEFAULT_BRAND_NAME): string {
   const base = publicUrl.replace(/\/+$/, '');
   const stamp = icsTime(now);
   const url = `${base}/o/${feed.slug}/bookings`;

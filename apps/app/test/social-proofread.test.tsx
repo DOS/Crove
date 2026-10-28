@@ -45,15 +45,15 @@ describe('AI proofread proposal', () => {
 
   it('says there is nothing to fix, with nothing to apply', () => {
     const html = render({ before, after: { ...before, text: `${before.text}\n` } });
-    expect(html).toContain('AI không thấy lỗi chính tả hay dấu câu nào cần sửa.');
+    expect(html).toContain('Vy không thấy lỗi chính tả hay dấu câu nào cần sửa.');
     expect(html).not.toContain('Áp dụng');
-    expect(render({ before, after: before }, 'en')).toContain('AI found no spelling or punctuation to fix.');
+    expect(render({ before, after: before }, 'en')).toContain('Vy found no spelling or punctuation to fix.');
   });
 
   it('offers no Áp dụng once the text changed after the ask', () => {
     const html = render({ before, after, outdated: true });
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Áp dụng<\/button>/);
-    expect(html).toContain('Nội dung đã đổi sau khi nhờ AI');
+    expect(html).toContain('Nội dung đã đổi sau khi nhờ Vy');
   });
 
   it('diffs the title on its own, and only what changed', () => {

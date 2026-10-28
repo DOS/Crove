@@ -462,7 +462,7 @@ function invoiceLine(item: Item): string {
  * name users see (BRAND_NAME, #1040).
  */
 export function renderMissingInvoiceMail(raw: unknown, context: { replyTo: string | null; brand?: string }): RenderedMail {
-  const brand = context.brand ?? 'Crove';
+  const brand = context.brand ?? 'Ludy';
   const mail = zMissingInvoiceMail.parse(raw);
   const org = oneLine(mail.orgName);
   const shown = mail.periods.reduce((n, p) => n + p.items.length, 0);

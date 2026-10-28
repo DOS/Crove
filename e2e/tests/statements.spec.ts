@@ -17,7 +17,7 @@ test('shows the draft B01 and B02 of a period and exports them', async ({ page }
   await expect(page.getByRole('cell', { name: 'TỔNG CỘNG TÀI SẢN' })).toBeVisible();
   const download = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Xuất Excel báo cáo tài chính' }).click();
-  expect((await download).suggestedFilename()).toMatch(new RegExp(`^crove-bao-cao-tai-chinh-\\d{4}-\\d{2}-${slug}\\.xlsx$`));
+  expect((await download).suggestedFilename()).toMatch(new RegExp(`^ludy-bao-cao-tai-chinh-\\d{4}-\\d{2}-${slug}\\.xlsx$`));
 
   // The period and the tab live in the address (#1513): a reload keeps them, and Back returns to the previous period.
   await page.getByLabel('Kỳ báo cáo').selectOption('quarter');

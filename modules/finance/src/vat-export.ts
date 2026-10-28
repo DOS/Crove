@@ -76,7 +76,7 @@ function invoiceSheet(workbook: ExcelJS.Workbook, name: string, side: VatSide, p
 }
 
 // brand: the product name users see (BRAND_NAME, #1045), as the file's creator and in its notes.
-export async function buildVatWorkbook(report: VatReport, orgName: string, brand = 'Crove'): Promise<Uint8Array> {
+export async function buildVatWorkbook(report: VatReport, orgName: string, brand = 'Ludy'): Promise<Uint8Array> {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = brand;
   workbook.title = `Tờ khai GTGT ${report.period.period} ${orgName}`;

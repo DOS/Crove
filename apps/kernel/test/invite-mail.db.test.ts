@@ -228,9 +228,9 @@ suite('invite mail on PostgreSQL', () => {
     expect(sent).toHaveLength(1);
     const [mail] = sent;
     expect(mail?.to).toBe(invitee.email);
-    expect(mail?.subject).toBe(`Lời mời tham gia ${org.name} trên Crove`);
+    expect(mail?.subject).toBe(`Lời mời tham gia ${org.name} trên Ludy`);
     expect(mail?.text).toContain(`${PUBLIC_URL}/-/invite#${token}`);
-    expect(mail?.text).toContain(`Chủ Lan (${owner.email}) mời bạn tham gia tổ chức "${org.name}" trên Crove với vai trò thành viên.`);
+    expect(mail?.text).toContain(`Chủ Lan (${owner.email}) mời bạn tham gia tổ chức "${org.name}" trên Ludy với vai trò thành viên.`);
     expect(mail?.html).toContain(`href="${PUBLIC_URL}/-/invite#${token}"`);
     // Its row: sent, by the owner, under the Message-ID the mail carried, with the provider that took it and the id
     // it gave it (#539: delivery events find the row by them); never the body.
@@ -374,7 +374,7 @@ suite('invite mail on PostgreSQL', () => {
     const off = appWith(createLogProvider((l) => lines.push(l)));
     const created = await rpc('org/invite', await tokenFor(owner, { mfa: true }), { email: 'someone@mail.test', role: 'viewer' }, org.slug, off);
     expect(created).toMatchObject({ status: 200 });
-    expect(lines).toEqual([`[mail] not sent, SMTP_HOST is not set: "Lời mời tham gia ${org.name} trên Crove"`]);
+    expect(lines).toEqual([`[mail] not sent, SMTP_HOST is not set: "Lời mời tham gia ${org.name} trên Ludy"`]);
     expect(lines.join('\n')).not.toContain(tokenOf(created.body?.acceptPath));
     // No sender at all (an embedder without mail) works too.
     const none = await rpc('org/invite', await tokenFor(owner, { mfa: true }), { email: 'other@mail.test', role: 'viewer' }, org.slug, appWith());
