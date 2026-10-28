@@ -7,6 +7,7 @@ import { Button, buttonVariants } from '@crove/ui/components/button';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { TableCell, TableRow } from '@crove/ui/components/table';
+import { RecordNotesPanel, notesInstalled } from '../components/notes-panel.tsx';
 import { EditParty, MergeParty, PartyDuplicates, refreshParties } from '../components/party-edit.tsx';
 import { DataTable, Empty, ErrorText, PageHeader, TableSkeleton } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
@@ -90,6 +91,9 @@ function VendorRow({
   const t = useTranslations('vendors');
   const f = useFormat();
   const [editing, setEditing] = useState(false);
+  const tn = useTranslations('notes');
+  const { slug } = useParams({ strict: false }) as { slug: string };
+  const [notesOpen, setNotesOpen] = useState(false);
   return (
     <>
       <TableRow>
@@ -97,6 +101,11 @@ function VendorRow({
           <p className="font-medium text-foreground">{vendor.name}</p>
           {(vendor.email || vendor.phone) && <p className="text-xs text-subtle-foreground">{[vendor.phone, vendor.email].filter(Boolean).join(' · ')}</p>}
           <PartyDuplicates party={vendor} canManage={canManage} ns="vendors" />
+          {notesInstalled() && (
+            <Button variant="link" size="sm" className="h-auto px-0 text-xs" onClick={() => setNotesOpen((o) => !o)} aria-expanded={notesOpen} aria-label={tn('panel.toggleOf', { name: vendor.name })}>
+              {tn('panel.title')}
+            </Button>
+          )}
         </TableCell>
         <TableCell className="px-4 py-3 font-mono text-xs text-muted-foreground">{vendor.taxCode}</TableCell>
         <TableCell className="px-4 py-3 text-subtle-foreground">{vendor.address}</TableCell>
@@ -123,6 +132,13 @@ function VendorRow({
                 <MergeParty party={vendor} others={others} ns="vendors" />
               </div>
             )}
+          </TableCell>
+        </TableRow>
+      )}
+      {notesOpen && (
+        <TableRow>
+          <TableCell colSpan={6} className="px-4 py-3">
+            <RecordNotesPanel slug={slug} target={{ targetType: 'kernel.party', targetId: vendor.id }} headingId={`notes-${vendor.id}`} />
           </TableCell>
         </TableRow>
       )}

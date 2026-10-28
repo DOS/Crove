@@ -10,6 +10,7 @@ import type { Customer, CustomerCursor } from '@crove/kernel-contract';
 import { Button } from '@crove/ui/components/button';
 import { Input } from '@crove/ui/components/input';
 import { TableCell, TableRow } from '@crove/ui/components/table';
+import { RecordNotesPanel, notesInstalled } from '../components/notes-panel.tsx';
 import { EditParty, MergeParty, PartyDuplicates } from '../components/party-edit.tsx';
 import { DataTable, Empty, ErrorText, PageHeader, TableSkeleton } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
@@ -32,8 +33,11 @@ function CustomerRow({
   canEdit: boolean;
 }) {
   const t = useTranslations('customers');
+  const tn = useTranslations('notes');
   const f = useFormat();
+  const { slug } = useParams({ strict: false }) as { slug: string };
   const [editing, setEditing] = useState(false);
+  const [notesOpen, setNotesOpen] = useState(false);
   const contact = [customer.phone, customer.email].filter(Boolean).join(' · ');
   return (
     <>
@@ -43,6 +47,11 @@ function CustomerRow({
           {customer.address && <p className="text-xs text-subtle-foreground">{customer.address}</p>}
           {contact && <p className="text-xs text-subtle-foreground">{contact}</p>}
           <PartyDuplicates party={customer} canManage={canManage} ns="customers" />
+          {notesInstalled() && (
+            <Button variant="link" size="sm" className="h-auto px-0 text-xs" onClick={() => setNotesOpen((o) => !o)} aria-expanded={notesOpen} aria-label={tn('panel.toggleOf', { name: customer.name })}>
+              {tn('panel.title')}
+            </Button>
+          )}
         </TableCell>
         <TableCell className="px-4 py-3 font-mono text-xs text-muted-foreground">{customer.taxCode ?? ''}</TableCell>
         <TableCell className={`${NUM} text-muted-foreground`}>{f.number(customer.invoiceCount)}</TableCell>
@@ -67,6 +76,13 @@ function CustomerRow({
                 <MergeParty party={customer} others={others} ns="customers" />
               </div>
             )}
+          </TableCell>
+        </TableRow>
+      )}
+      {notesOpen && (
+        <TableRow>
+          <TableCell colSpan={columns} className="px-4 py-3">
+            <RecordNotesPanel slug={slug} target={{ targetType: 'kernel.party', targetId: customer.id }} headingId={`notes-${customer.id}`} />
           </TableCell>
         </TableRow>
       )}
