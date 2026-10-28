@@ -191,7 +191,9 @@ export const changeMemberRole = defineCommand({
 
 // Removes a member. Deleting the tenant_member row is the revocation: enter_context and my_orgs read membership
 // in every transaction, so the member's next request is refused, with any token or session. An owner cannot
-// remove themselves, and the org always keeps an owner.
+// remove themselves, and the org always keeps an owner. Its audit row (outcome ok, target the user) starts the 30 days
+// before crove_notes.member_items_purge removes their private notes (#1733): another way to end a membership must
+// record the same row.
 export const removeMember = defineCommand({
   name: 'kernel.member.remove',
   input: z.object({ userId: zId }),

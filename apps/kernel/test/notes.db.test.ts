@@ -13,6 +13,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove
 import type { Note, NoteRecordPanel, NoteSummary, NoteWritten } from '@crove/kernel-contract';
 import { Runtime } from '@crove/kernel-runtime';
 import { notesCommands, notesQueries } from '@crove/mod-notes';
+import { sweepNotesFormerMembers } from '../src/notes-worker.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -72,6 +73,19 @@ suite('notes on PostgreSQL (#1671)', () => {
           )
         ).rows[0]?.id as string,
     );
+
+  // Moves a user's recorded removals from an org 31 days back, as if the purge delay had passed (#1733). The audit
+  // trail is append-only, so its trigger is set aside for this one statement.
+  const ageRemovals = (orgId: string, userId: string) =>
+    admin(async (c) => {
+      await c.query('BEGIN');
+      await c.query('SET LOCAL session_replication_role = replica');
+      await c.query(`UPDATE crove_kernel.audit_event SET occurred_at = occurred_at - interval '31 days' WHERE org_id = $1 AND command = 'kernel.member.remove' AND target_id = $2`, [
+        orgId,
+        userId,
+      ]);
+      await c.query('COMMIT');
+    });
 
   // The author's private note and shared note, both on the client.
   async function written(o: Awaited<ReturnType<typeof org>>) {
@@ -257,6 +271,9 @@ suite('notes on PostgreSQL (#1671)', () => {
     await expect(o.list(o.author, 'mine')).rejects.toMatchObject({ status: 403 });
     expect(await o.list(o.owner, 'shared')).toEqual([n.shared]);
     const eventId = await removalEvent(o.orgId, o.author);
+    // Run before the 30 days are over (a job started early, a system command), it removes nothing (#1733).
+    expect(await worker.execute('notes.member_items.purge', { userId: o.author, eventId }, { actor: SYSTEM, orgId: o.orgId })).toEqual({ removed: 0 });
+    await ageRemovals(o.orgId, o.author);
     expect(await worker.execute('notes.member_items.purge', { userId: o.author, eventId }, { actor: SYSTEM, orgId: o.orgId })).toEqual({ removed: 1 });
     const left = await admin((c) => c.query<{ id: string }>('SELECT id FROM crove_notes.note WHERE org_id = $1', [o.orgId]));
     expect(left.rows.map((r) => r.id)).toEqual([n.shared]);
@@ -272,7 +289,32 @@ suite('notes on PostgreSQL (#1671)', () => {
     await app.execute('kernel.member.remove', { userId: p.author }, { actor: asMfa(p.owner), orgId: p.orgId });
     const second = await removalEvent(p.orgId, p.author);
     expect(second).not.toBe(first);
+    await ageRemovals(p.orgId, p.author);
     expect(await worker.execute('notes.member_items.purge', { userId: p.author, eventId: first }, { actor: SYSTEM, orgId: p.orgId })).toEqual({ removed: 0 });
     expect(await worker.execute('notes.member_items.purge', { userId: p.author, eventId: second }, { actor: SYSTEM, orgId: p.orgId })).toEqual({ removed: 1 });
+  });
+
+  it("sweeps a former member whose removal queued no purge, once 30 days have passed (#1733)", async () => {
+    const o = await org();
+    const n = await written(o);
+    await app.execute('kernel.member.remove', { userId: o.author }, { actor: asMfa(o.owner), orgId: o.orgId });
+    const workerDb = createDb(pools[1] as pg.Pool);
+    const notesOf = () => admin(async (c) => (await c.query<{ id: string }>('SELECT id FROM crove_notes.note WHERE org_id = $1 ORDER BY id', [o.orgId])).rows.map((r) => r.id));
+    // Removed today: neither the sweep nor the command without an event purges yet.
+    await sweepNotesFormerMembers({ runtime: worker, workerDb });
+    expect(await worker.execute('notes.member_items.purge', { userId: o.author }, { actor: SYSTEM, orgId: o.orgId })).toEqual({ removed: 0 });
+    expect(await notesOf()).toEqual([n.priv, n.shared].sort());
+    await ageRemovals(o.orgId, o.author);
+    expect(await sweepNotesFormerMembers({ runtime: worker, workerDb })).toBeGreaterThanOrEqual(1);
+    expect(await notesOf()).toEqual([n.shared]);
+    // A member of the org is never swept.
+    const kept = await o.exec<NoteWritten>(o.other, 'notes.note.create', { title: PRIVATE_TITLE });
+    await sweepNotesFormerMembers({ runtime: worker, workerDb });
+    expect(await notesOf()).toEqual([kept.noteId, n.shared].sort());
+    // Nor one whose membership ended with no removal in the audit trail (an SQL delete): no date to count from, so the
+    // sweep keeps their items (fails closed).
+    await admin((c) => c.query('DELETE FROM crove_kernel.tenant_member WHERE org_id = $1 AND user_id = $2', [o.orgId, o.other]));
+    await sweepNotesFormerMembers({ runtime: worker, workerDb });
+    expect(await notesOf()).toEqual([kept.noteId, n.shared].sort());
   });
 });

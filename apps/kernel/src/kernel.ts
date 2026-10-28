@@ -45,8 +45,9 @@ import {
   type Refresher,
 } from '@crove/channel';
 import { createExtractClient } from '@crove/extract-contract';
+import type { ModuleManifest } from '@crove/kernel-contract';
 import { assertRlsEnforced, assertSystemContextAccess, createDb, createPool, singleCell, type Db } from '@crove/db';
-import { buildKernelCommands, kernelQueries, setMessageIdDomain, type OverviewContribution } from '@crove/kernel';
+import { buildKernelCommands, kernelManifest, kernelQueries, setMessageIdDomain, type OverviewContribution } from '@crove/kernel';
 import {
   LocalDiskStore,
   egressFetch,
@@ -58,10 +59,10 @@ import {
   type QueryDef,
   type SessionStatusSource,
 } from '@crove/kernel-runtime';
-import { financeAgentPrograms, financeCommands, financeQueries } from '@crove/mod-finance';
-import { socialAgentPrograms, socialCommands, socialOverviewContributions, socialQueries } from '@crove/mod-social';
-import { crmAgentPrograms, crmCommands, crmQueries } from '@crove/mod-crm';
-import { notesCommands, notesQueries } from '@crove/mod-notes';
+import { financeAgentPrograms, financeCommands, financeManifest, financeQueries } from '@crove/mod-finance';
+import { socialAgentPrograms, socialCommands, socialManifest, socialOverviewContributions, socialQueries } from '@crove/mod-social';
+import { crmAgentPrograms, crmCommands, crmManifest, crmQueries } from '@crove/mod-crm';
+import { notesCommands, notesManifest, notesQueries } from '@crove/mod-notes';
 import { createAuthenticator, type Authenticate } from './auth.ts';
 import { AVAILABLE_MODULES, assertExportKey, usageLimits, type Config, type ModuleId } from './config.ts';
 import { createCredentialBroker, noCredentialBroker } from './credentials.ts';
@@ -197,6 +198,20 @@ export function moduleDefinitions(config: Config): ModuleDefinitions {
   return { commands: enabled.flatMap((m) => m.commands), queries: enabled.flatMap((m) => m.queries) };
 }
 
+// The manifests of the modules CROVE_MODULES enables (plan §5.2). The runtime checks every command's declared writes
+// against their tables when the command registers (#1710), so P04 rests on the manifests' column classes.
+const MODULE_MANIFESTS: Record<ModuleId, ModuleManifest> = {
+  kernel: kernelManifest,
+  finance: financeManifest,
+  social: socialManifest,
+  crm: crmManifest,
+  notes: notesManifest,
+};
+
+export function moduleManifests(config: Pick<Config, 'CROVE_MODULES'>): ModuleManifest[] {
+  return config.CROVE_MODULES.map((module) => MODULE_MANIFESTS[module]);
+}
+
 // OAuth connectors of the providers this deployment has app credentials for (Social plan S6); a provider without
 // them is not offered.
 type ChannelConfig = Pick<Config, 'CHANNEL_SANDBOX' | 'CHANNEL_BLUESKY' | 'CHANNEL_TELEGRAM' | 'CHANNEL_MASTODON' | 'CHANNEL_DISCORD' | 'CHANNEL_WORDPRESS' | 'CHANNEL_THREADS_APP_ID' | 'CHANNEL_THREADS_APP_SECRET' | 'CHANNEL_LINKEDIN_CLIENT_ID' | 'CHANNEL_LINKEDIN_CLIENT_SECRET' | 'CHANNEL_GOOGLE_CLIENT_ID' | 'CHANNEL_GOOGLE_CLIENT_SECRET' | 'CHANNEL_GOOGLE_BUSINESS' | 'CHANNEL_TIKTOK_CLIENT_KEY' | 'CHANNEL_TIKTOK_CLIENT_SECRET' | 'CHANNEL_TIKTOK_VIDEO_LIST' | 'CHANNEL_TIKTOK_INBOX' | 'CHANNEL_X_CLIENT_ID' | 'CHANNEL_X_CLIENT_SECRET' | 'CHANNEL_PINTEREST_APP_ID' | 'CHANNEL_PINTEREST_APP_SECRET' | 'CHANNEL_META_APP_ID' | 'CHANNEL_META_APP_SECRET' | 'CHANNEL_META_GRAPH_VERSION' | 'CHANNEL_ZALO_APP_ID' | 'CHANNEL_ZALO_APP_SECRET'> &
@@ -328,6 +343,8 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
       // Audit and idempotency rows hash a command's input under the deployment's key (#1732), so an exported or
       // archived row never confirms a guessed input.
       inputHash: 'keyed',
+      // Every declared write must name a manifest table with that manifest's column classes (P04, #1710).
+      manifests: moduleManifests(config).map((manifest) => manifest.tables),
       // Every user request is checked against its session (ADR-0028); the identity port never resolves to "no check".
       sessions: resolved.identity.sessions,
       stepUp: config.AUTH_STEP_UP,

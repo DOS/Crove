@@ -35,7 +35,7 @@ import { runPushJob, type PushSender } from './web-push.ts';
 import { DEFAULT_EXPORT_RETENTION_DAYS, runOrgExport } from './org-export.ts';
 import { archiveOutbox } from './outbox-retention.ts';
 import { RETENTION_CRON, RETENTION_TZ, expireExports, runRetention, sweepInboundBlobs, sweepStaging } from './retention.ts';
-import { NOTES_REMIND_CRON, NOTES_TRASH_CRON, NOTES_TRASH_TZ, queueNotesMemberPurge, runNotesMemberPurge, sweepNotesReminders, sweepNotesTrash, type NotesMemberPurgeJob } from './notes-worker.ts';
+import { NOTES_REMIND_CRON, NOTES_TRASH_CRON, NOTES_TRASH_TZ, queueNotesMemberPurge, runNotesMemberPurge, sweepNotesFormerMembers, sweepNotesReminders, sweepNotesTrash, type NotesMemberPurgeJob } from './notes-worker.ts';
 import { PERIOD_BALANCE_VERIFY_CRON, runPeriodBalanceReconciliation } from './period-balance.ts';
 import { runYearArchive } from './year-archive.ts';
 import { ARCHIVE_VERIFY_CRON, ARCHIVE_WRITE_CRON, runArchiveVerification, writeArchive, type ArchiveStore } from './worm.ts';
@@ -728,6 +728,9 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     });
     await boss.work(QUEUES.notesTrash, { batchSize: 1 }, async () => {
       console.log(`[notes-trash] removed ${await sweepNotesTrash({ runtime: deps.runtime, workerDb: deps.workerDb })}`);
+      // Then the former members whose removal queued no purge (#1733).
+      const purged = await sweepNotesFormerMembers({ runtime: deps.runtime, workerDb: deps.workerDb });
+      if (purged > 0) console.log(`[notes-member-purge] swept ${purged}`);
     });
     await boss.schedule(QUEUES.notesTrash, NOTES_TRASH_CRON, null, { tz: NOTES_TRASH_TZ, missed: 'once' });
     // To-do reminders (#1675): every 5 minutes; a missed tick needs no catching up, the next one claims what is due.
