@@ -50,6 +50,7 @@ const MACHINERY = new Set([
 // until the table exists, neither its factory nor its MACHINERY entry is stale. Remove an entry once its table is on
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
+  'crove_kernel.inbox_item',
   'crove_notes.link',
   'crove_notes.note',
   'crove_notes.todo',
@@ -677,6 +678,14 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
     },
   },
   'crove_kernel.inbound_message': { make: (o) => ({ row: { org_id: o.id, message_id: `<${randomUUID()}@rls.test>` } }) },
+  // Inbox items the system raises (#1720), one per kind and key: a job that failed its last retry. Only the system
+  // context adds rows (a RESTRICTIVE insert policy refuses member contexts), so the own-org control, which also runs in
+  // member contexts, is skipped. Tenant roles update only the dismissal columns (a column grant) and delete none.
+  'crove_kernel.inbox_item': {
+    noInsertControl: 'only the system context raises items (the worker taking a dead letter); a member context is refused',
+    update: { set: 'dismissed_at = dismissed_at' },
+    make: (o) => ({ row: { org_id: o.id, id: randomUUID(), kind: 'kernel.job.dead_lettered', dedupe_key: `rls-${tag()}` } }),
+  },
   // One active switch per (org, scope, target), so every row stops its own agent id.
   'crove_kernel.kill_switch': { make: (o) => ({ row: { org_id: o.id, scope: 'agent', target: randomUUID(), engaged_by: o.owner } }) },
   // A legal entity of the org (#1278): a branch beside the default entity every org gets with it (one default per org),

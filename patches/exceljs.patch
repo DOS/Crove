@@ -1,0 +1,16 @@
+diff --git a/lib/utils/parse-sax.js b/lib/utils/parse-sax.js
+index 14c682a731b5e51f999859a03ce4dd4e0bfcbb26..ba0269bf139a60952ea38752d7b118de6df01bac 100644
+--- a/lib/utils/parse-sax.js
++++ b/lib/utils/parse-sax.js
+@@ -1,8 +1,10 @@
+-const {SaxesParser} = require('saxes');
+ const {PassThrough} = require('readable-stream');
+ const {bufferToString} = require('./browser-buffer-decode');
+ 
++// Crove patch (#1719): saxes, the XML reader, is loaded only when a workbook is read. Crove's kernel only writes
++// workbooks, and its image is built without saxes (External-tenant gate T12).
+ module.exports = async function* (iterable) {
++  const {SaxesParser} = require('saxes');
+   // TODO: Remove once node v8 is deprecated
+   // Detect and upgrade old streams
+   if (iterable.pipe && !iterable[Symbol.asyncIterator]) {
