@@ -343,8 +343,11 @@ export const receiveInbound = defineCommand({
     text: z.string().min(1).max(INBOUND_TEXT_MAX).nullable().optional(),
     files: z.array(zIngestFile).max(20),
   }),
-  risk: 'R1',
-  sideEffect: 'internal',
+  // Each attachment runs kernel.file.ingest nested, whose event queues the extraction job that sends the file to the
+  // AI endpoint (plan §4.7: a job with egress derives R2, through a nested run too; #1698). A system command, so the
+  // worker runs it as before.
+  risk: 'R2',
+  sideEffect: 'external',
   access: 'system',
   handler: async (ctx, input) => {
     const message = await ctx.trx

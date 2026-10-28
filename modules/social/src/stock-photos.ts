@@ -38,8 +38,11 @@ const zStoredPhoto = z.strictObject({
 export const mediaSaveStock = defineCommand({
   name: 'social.media.save_stock',
   input: z.strictObject({ file: zStoredPhoto, credit: zStockCredit }),
-  risk: 'R1',
-  sideEffect: 'internal',
+  // It runs kernel.file.ingest nested, which can queue the extraction job that sends a file to the AI endpoint (plan
+  // §4.7: a job with egress derives R2, through a nested run too; #1698). A photo saved with source 'social' queues
+  // none, but the check counts a nested run whatever its input, so this command is R2 with the ones that do.
+  risk: 'R2',
+  sideEffect: 'external',
   access: MEMBERS,
   handler: async (ctx, input): Promise<{ fileId: string; duplicate: boolean; credited: boolean }> => {
     // The member who saved it, from the sealed context; never from the input.
