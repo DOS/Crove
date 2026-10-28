@@ -59,7 +59,8 @@ const PARSER_PACKAGES = [
   'emailjs-mime-parser',
 ];
 // A name, or `@scope/*` for every package of a scope (#1740: the @oozcitak family under xmlbuilder2).
-const pattern = (p: string) => p.replace(/[/.]/g, '\\$&').replace('*', `[^/'"\`]+`);
+const escape = (s: string) => s.replace(/[\\^$.*+?()[\]{}|/]/g, '\\$&');
+const pattern = (p: string) => p.split('*').map(escape).join(`[^/'"\`]+`);
 const PARSER_NAME = new RegExp(`^(${PARSER_PACKAGES.map(pattern).join('|')})$`);
 // Any string literal naming a parser package (or a path inside one) counts, whatever loads it: `import ... from`,
 // `export ... from`, a side-effect `import 'x'`, a dynamic `import('x')`, `require('x')`, `require.resolve('x')`
