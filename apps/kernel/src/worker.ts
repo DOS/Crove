@@ -1,9 +1,9 @@
 // Worker: relays the outbox into pg-boss queues and runs jobs.
 import { hostname } from 'node:os';
-import { sql } from 'kysely';
+import { CompiledQuery, sql, type Transaction } from 'kysely';
 import pg from 'pg';
-import { PgBoss } from 'pg-boss';
-import type { Db } from '@crove/db';
+import { PgBoss, type Db as BossDb, type SendOptions } from 'pg-boss';
+import type { Database, Db } from '@crove/db';
 import { vietnamToday } from '@crove/kernel-contract';
 import { DomainError, inboundKey, type AgentProgram, type BlobStore, type CredentialBroker, type Runtime } from '@crove/kernel-runtime';
 import { KERNEL_NOTIFYING_EVENTS, PROPOSAL_NUDGE_SWEEP_MS, runAgentWake, sweepProposalNudges, type UsageLimits } from '@crove/kernel';
@@ -79,7 +79,7 @@ const CHAT_ALERT_TEST_SINGLETON_SECONDS = 10;
 export const AGENT_SWEEP_CRON = '*/10 * * * *';
 const AGENT_SWEEP_LIMIT = 200;
 
-function sendAgentWake(boss: PgBoss, orgId: string, agentId: string) {
+function sendAgentWake(boss: JobSender, orgId: string, agentId: string) {
   return boss.send(QUEUES.agentWake, { orgId, agentId } satisfies AgentWakeJob, {
     singletonKey: jobKey(orgId, QUEUES.agentWake, agentId),
     retryLimit: AGENT_RETRY_LIMIT,
@@ -224,9 +224,64 @@ export async function extractPriorities(db: Db, rows: readonly OutboxRow[]): Pro
   return priorities;
 }
 
+// What the relay sends jobs with: pg-boss itself, or pg-boss on a relay batch's transaction (relayBatch).
+export interface JobSender {
+  send(name: string, data?: object | null, options?: SendOptions): Promise<string | null>;
+}
+
+// One relay batch (#1705): the claim and the jobs it sends commit or roll back together. claim runs on the transaction
+// (an outbox, inbound or mail-event claim) and returns one step per claimed row; each step sends its jobs with the
+// sender it is given, pg-boss inserting them on that same transaction through its db option. A failed step rolls the
+// whole batch back, the claim and the jobs already sent, so the next pass relays the batch again and no job is queued
+// twice, whatever the queue's policy. This is chosen over a singleton key per outbox row on every job: a standard
+// queue's singleton key dedupes nothing, and a stately queue's only while the first job is still queued, so only the
+// shared transaction rules out the second job on every queue and for every handler.
+// Every step runs to its end before the transaction closes, and a send that reaches the database after that is
+// refused, never run on the pooled connection outside the transaction. Sends go to the connection one at a time (pg
+// would queue them, but deprecates query() on a client already running one).
+export async function relayBatch(
+  workerDb: Db,
+  sender: JobSender,
+  claim: (trx: Transaction<Database>) => Promise<ReadonlyArray<(boss: JobSender) => Promise<unknown>>>,
+): Promise<number> {
+  return workerDb.transaction().execute(async (trx) => {
+    const steps = await claim(trx);
+    let closed = false;
+    let tail: Promise<unknown> = Promise.resolve();
+    // The first statement of the batch that failed, which aborted the transaction: thrown even when a step caught it
+    // (PostgreSQL would answer the COMMIT with a silent rollback), and before the 25P02 errors every later statement
+    // gets, so the log names the real cause.
+    let aborted: { error: unknown } | null = null;
+    const db: BossDb = {
+      executeSql: (text, values) => {
+        const run = tail.then(async () => {
+          if (closed) throw new Error('relay batch closed: a job sent after its transaction ended');
+          return (await trx.executeQuery(CompiledQuery.raw(text, values ?? []))).rows;
+        });
+        tail = run.catch((error: unknown) => {
+          if (!closed && !aborted && (error as { code?: unknown } | null)?.code !== '25P02') aborted = { error };
+        });
+        return run.then((rows) => ({ rows: [...rows] }));
+      },
+    };
+    const onBatch: JobSender = { send: (name, data, options) => sender.send(name, data, { ...options, db }) };
+    try {
+      const settled = await Promise.allSettled(steps.map((step) => step(onBatch)));
+      await tail;
+      if (aborted) throw (aborted as { error: unknown }).error;
+      const failed = settled.find((s): s is PromiseRejectedResult => s.status === 'rejected');
+      if (failed) throw failed.reason;
+    } finally {
+      closed = true;
+      await tail;
+    }
+    return steps.length;
+  });
+}
+
 // The extraction job of an ingested file, or of a requested re-extraction (version), in its org's group with its fair
 // priority. null for a re-extraction event without a valid version.
-export function sendExtractJob(boss: PgBoss, row: OutboxRow, priority: number): Promise<string | null> | null {
+export function sendExtractJob(boss: JobSender, row: OutboxRow, priority: number): Promise<string | null> | null {
   const fileId = String(row.payload.fileId);
   const options = { priority, group: jobGroup(row.org_id, QUEUES.extract), retryLimit: EXTRACT_RETRY_LIMIT, retryDelay: 20, retryBackoff: true };
   if (row.type === 'kernel.file.reextract_requested') {
@@ -1258,6 +1313,19 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   const lateIdTimer = publishing.has('tiktok') ? setInterval(() => void lateIdSweep(), LATE_ID_SWEEP_MS) : null;
   if (lateIdTimer) void lateIdSweep();
 
+  // A team chat alert (#863) for an outbox event, queued best effort on pg-boss's own connection, outside the relay
+  // batch's transaction, where a failed insert would abort the batch: a failure here is logged and never rolls the claim
+  // back, so it holds up neither the relay nor the notices. A batch relayed again within the same singletonSeconds slot
+  // does not queue it twice, since the slot refuses the second job (#1705); slots follow the clock, as before.
+  const queueChatAlert = (row: OutboxRow, test: boolean) =>
+    boss
+      .send(QUEUES.socialChatAlert, { orgId: row.org_id, eventId: row.event_id, ...(test ? { test: true as const } : {}) } satisfies AgentDispatchJob & { test?: true }, {
+        singletonKey: jobKey(row.org_id, QUEUES.socialChatAlert, test ? 'test' : row.event_id),
+        singletonSeconds: test ? CHAT_ALERT_TEST_SINGLETON_SECONDS : CHAT_ALERT_SINGLETON_SECONDS,
+        retryLimit: 0,
+      })
+      .catch((error: unknown) => console.error(`[social-chat-alert] event ${row.event_id.slice(0, 8)}: not queued (${error instanceof Error ? error.name : typeof error})`));
+
   let running = false;
   let stopped = false;
   const relay = async () => {
@@ -1265,13 +1333,14 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     running = true;
     try {
       for (;;) {
-        const sent = await deps.workerDb.transaction().execute(async (trx) => {
+        const sent = await relayBatch(deps.workerDb, boss, async (trx) => {
           const { rows } = await sql<OutboxRow>`SELECT * FROM crove_kernel.outbox_claim(100)`.execute(trx);
           const priorities = finance ? await extractPriorities(trx, rows) : new Map<OutboxRow, number>();
-          // A failed send rolls back the claim and the batch is relayed again. pg-boss sends outside this transaction, so
-          // the jobs already sent are sent again: only a stately queue or a singletonSeconds slot dedupes them on the key.
-          await Promise.all(
-            rows.map(async (row) => {
+          // A failed send rolls back the claim and the batch is relayed again. Each row's step gets `boss` on the claim's
+          // transaction (relayBatch, #1705), shadowing the worker's own on purpose, so every job it sends rolls back with
+          // the claim and none is queued twice.
+          return rows.map(
+            (row) => async (boss: JobSender) => {
               if (
                 !finance &&
                 (row.type === 'kernel.file.ingested' ||
@@ -1458,17 +1527,10 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                     })
                   : null;
               if (triage) await triage;
-              // A team chat alert (#863), besides the notices. Queued best effort: a failure here is logged and never
-              // rolls the claim back, so it holds up neither the relay nor the notices.
+              // A team chat alert (#863), besides the notices: queued best effort, outside the batch (queueChatAlert).
               if (chatAlerts && (CHAT_ALERTING.has(row.type) || row.type === CHAT_ALERT_TEST_EVENT)) {
                 const test = row.type === CHAT_ALERT_TEST_EVENT;
-                await boss
-                  .send(QUEUES.socialChatAlert, { orgId: row.org_id, eventId: row.event_id, ...(test ? { test: true as const } : {}) } satisfies AgentDispatchJob & { test?: true }, {
-                    singletonKey: jobKey(row.org_id, QUEUES.socialChatAlert, test ? 'test' : row.event_id),
-                    singletonSeconds: test ? CHAT_ALERT_TEST_SINGLETON_SECONDS : CHAT_ALERT_SINGLETON_SECONDS,
-                    retryLimit: 0,
-                  })
-                  .catch((error: unknown) => console.error(`[social-chat-alert] event ${row.event_id.slice(0, 8)}: not queued (${error instanceof Error ? error.name : typeof error})`));
+                await queueChatAlert(row, test);
                 if (test) return null;
               }
               // An in-app notification (#671), besides whatever else the event starts (an agent's review task).
@@ -1522,17 +1584,16 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                 });
               }
               return null;
-            }),
+            },
           );
-          return rows.length;
         });
         if (sent < 100) break;
       }
       for (;;) {
-        const sent = await deps.workerDb.transaction().execute(async (trx) => {
+        const sent = await relayBatch(deps.workerDb, boss, async (trx) => {
           const { rows } = await sql<InboundRow>`SELECT * FROM crove_kernel.inbound_claim(100)`.execute(trx);
-          await Promise.all(
-            rows.map((row) =>
+          return rows.map(
+            (row) => (boss: JobSender) =>
               boss.send(
                 QUEUES.inbound,
                 {
@@ -1543,26 +1604,22 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                 } satisfies InboundJob,
                 { singletonKey: systemJobKey(QUEUES.inbound, row.blob_id), retryLimit: INBOUND_RETRY_LIMIT, retryDelay: 20, retryBackoff: true },
               ),
-            ),
           );
-          return rows.length;
         });
         if (sent < 100) break;
       }
       for (;;) {
-        const sent = await deps.workerDb.transaction().execute(async (trx) => {
+        const sent = await relayBatch(deps.workerDb, boss, async (trx) => {
           const { rows } = await sql<MailEventRow>`SELECT * FROM crove_kernel.mail_event_claim(100)`.execute(trx);
-          await Promise.all(
-            rows.map((row) =>
+          return rows.map(
+            (row) => (boss: JobSender) =>
               boss.send(QUEUES.mailEvent, mailEventJob(row) satisfies MailEventJob, {
                 singletonKey: systemJobKey(QUEUES.mailEvent, `${row.provider}:${row.provider_event_id}`),
                 retryLimit: MAIL_EVENT_RETRY_LIMIT,
                 retryDelay: 20,
                 retryBackoff: true,
               }),
-            ),
           );
-          return rows.length;
         });
         if (sent < 100) break;
       }
