@@ -38,6 +38,7 @@ export function checkModuleGraph(modules) {
       if (!ids.has(dep)) throw new Error(`depcruise: the ${m.id} manifest depends on ${dep}, which is no module`);
       if (dep === m.id) throw new Error(`depcruise: the ${m.id} manifest depends on itself`);
     }
+    if (m.dependsOn.join() !== [...new Set(m.dependsOn)].sort().join()) throw new Error(`depcruise: the ${m.id} manifest's dependsOn is not sorted or repeats a module`);
   }
   const byId = new Map(modules.map((m) => [m.id, m]));
   const done = new Set();
@@ -61,6 +62,13 @@ export const EXCEPTIONS = [
       "normalizePortalInvoices throws the runtime's DomainError (PORTAL_LIST_TOO_LARGE, 422) so the portal sync answers with that status and message, and readSyncedList catches it by class. DomainError lives in the command runtime, a protected path; moving it to an isomorphic package is #1680.",
   },
   {
+    rule: 'domain-pure',
+    from: ['modules/social/src/domain/publish.ts'],
+    to: '^packages/channel/src/',
+    reason:
+      'An `import type` of RetrySafety, the retry contract every channel adapter declares: a top-level `import type` is erased, so nothing of @crove/channel loads.',
+  },
+  {
     rule: 'no-deep-import',
     from: [
       'apps/kernel/test/archive.db.test.ts',
@@ -72,21 +80,21 @@ export const EXCEPTIONS = [
       'apps/kernel/test/tax-portal.test.ts',
       'e2e/tests/bulk-intake.spec.ts',
     ],
-    to: '^(apps/extract/test/(zip|xlsx)-fixture\.ts|e2e/fake-tax-portal/server\.ts)$',
+    to: '^(apps/extract/test/(zip|xlsx)-fixture\\.ts|e2e/fake-tax-portal/server\\.ts)$',
     reason:
       'Test fixtures shared by the tests of several packages: the zip and xlsx builders of apps/extract and the fake tax portal of e2e. Test code that never ships; copies would drift.',
   },
   {
     rule: 'no-deep-import',
     from: ['apps/kernel/test/command-labels.test.ts', 'apps/kernel/test/social-plan-export.db.test.ts'],
-    to: '^apps/app/src/(lib/(audit|social-import|bank-statement)|i18n/messages/(vi|en))\.ts$',
+    to: '^apps/app/src/(lib/(audit|social-import|bank-statement)|i18n/messages/(vi|en))\\.ts$',
     reason:
       "Cross-checks between the server and the app: every command has a label in both languages, and the plan CSV and the bank statement the app parses are the files the server writes. They need the app's own files; tests only.",
   },
   {
     rule: 'no-deep-import',
     from: ['e2e/tests/auth-signup-parity.spec.ts'],
-    to: '^apps/kernel/src/auth-signup-policy\.ts$',
+    to: '^apps/kernel/src/auth-signup-policy\\.ts$',
     reason: "The end-to-end check that the sign-up page and the server apply the same password and email policy reads the server's policy; a test only.",
   },
 ];
@@ -153,16 +161,26 @@ export function buildRules(modules, packages, exceptions = EXCEPTIONS) {
     to: { couldNotResolve: true, path: '^@crove/[^/]+$' },
   });
 
+  // Any other import that does not resolve (a misspelt package or a missing file in a .mjs or .js file, which no
+  // typecheck reads).
+  rules.push({
+    name: 'resolvable',
+    comment: 'An import that does not resolve to a file: a misspelt package or path, or a package the importer does not list.',
+    severity: 'error',
+    from: {},
+    to: { couldNotResolve: true, pathNot: '^@crove/' },
+  });
+
   // domain/ stays pure (plan §5.1): aggregates, invariants, state machines and decimal math, with no database, React
-  // or network. It imports its own module's domain/, the isomorphic packages, zod, decimal.js and node:crypto; a
-  // type-only import is erased and stays allowed.
+  // or network. It imports its own module's domain/, the isomorphic packages, zod, decimal.js and node:crypto. A
+  // type-only import is no exemption: dependency-cruiser marks `import { type X } from 'm'` type-only too, and under
+  // verbatimModuleSyntax Node still loads `m` for it, so one stays only as an exception.
   rules.push({
     name: 'domain-pure',
-    comment: 'A domain/ file imports only its own domain/, @crove/kernel-contract, @crove/extract-contract, @crove/l10n-vn, zod, decimal.js and node:crypto (type-only imports aside): no database, runtime, React or network.',
+    comment: 'A domain/ file imports only its own domain/, @crove/kernel-contract, @crove/extract-contract, @crove/l10n-vn, zod, decimal.js and node:crypto: no database, runtime, React or network.',
     severity: 'error',
     from: { path: '^(modules/[^/]+)/src/domain/' },
     to: {
-      dependencyTypesNot: ['type-only'],
       pathNot: ['^$1/src/domain/', '^packages/(kernel-contract|extract-contract|l10n-vn)/src/', '(^|/)node_modules/(zod|decimal\\.js)/', '^(node:)?crypto$'],
     },
   });
@@ -177,7 +195,7 @@ export function buildRules(modules, packages, exceptions = EXCEPTIONS) {
     severity: 'error',
     from: { path: '^apps/app/' },
     // Their entry files: every other file of theirs is reached through one, so one line names each package reached.
-    to: { path: '^packages/(db|kernel-runtime|kernel)/src/(index|migrate)\.ts$', reachable: true },
+    to: { path: '^packages/(db|kernel-runtime|kernel)/src/(index|migrate)\\.ts$', reachable: true },
   });
   rules.push({
     name: 'app-module-contract-only',
@@ -203,6 +221,9 @@ function applyExceptions(rules, exceptions) {
     const own = exceptions.filter((e) => e.rule === rule.name);
     if (own.length === 0) return [rule];
     const files = [...new Set(own.flatMap((e) => e.from))].sort();
+    // The copy takes the file as its `from.path`, so a file the rule does not cover would widen the rule to it.
+    const outside = files.find((f) => rule.from.path !== undefined && !new RegExp(rule.from.path).test(f));
+    if (outside) throw new Error(`depcruise: an exception to ${rule.name} lists ${outside}, which the rule does not cover`);
     const base = { ...rule, from: { ...rule.from, pathNot: [...list(rule.from.pathNot), ...files.map((f) => `^${escape(f)}$`)] } };
     const exempt = files.map((file) => {
       const dir = file.startsWith('e2e/') ? 'e2e' : file.split('/').slice(0, 2).join('/');

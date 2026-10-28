@@ -18,7 +18,9 @@ describe('depcruise rules from the manifests (#1651)', () => {
     expect(() => checkModuleGraph([kernel, { ...finance, dependsOn: ['kernel', 'ledger'] }])).toThrow('depends on ledger, which is no module');
     expect(() => checkModuleGraph([kernel, { ...finance, dependsOn: ['finance'] }])).toThrow('depends on itself');
     expect(() => checkModuleGraph([{ ...kernel, dependsOn: ['crm'] }, finance, { ...crm, dependsOn: ['finance'] }])).toThrow(/cycle: (kernel -> crm -> finance -> kernel|crm -> finance -> kernel -> crm|finance -> kernel -> crm -> finance)/);
-    expect(() => checkModuleGraph([kernel, finance, { ...crm, dependsOn: ['kernel', 'finance'] }])).not.toThrow();
+    expect(() => checkModuleGraph([kernel, finance, { ...crm, dependsOn: ['kernel', 'finance'] }])).toThrow('is not sorted or repeats a module');
+    expect(() => checkModuleGraph([kernel, finance, { ...crm, dependsOn: ['kernel', 'kernel'] }])).toThrow('is not sorted or repeats a module');
+    expect(() => checkModuleGraph([kernel, finance, { ...crm, dependsOn: ['finance', 'kernel'] }])).not.toThrow();
   });
 
   it('gives each module a rule against every module its manifest does not list', () => {
@@ -26,7 +28,7 @@ describe('depcruise rules from the manifests (#1651)', () => {
     expect(rules.find((r) => r.name === 'module-dag-crm')).toMatchObject({ from: { path: '^modules/crm/' }, to: { path: '^(modules/finance)/' } });
     expect(rules.find((r) => r.name === 'module-dag-kernel')?.to.path).toBe('^(modules/finance|modules/crm)/');
     // A module that lists every other one gets no rule of its own.
-    const all = buildRules([kernel, finance, { ...crm, dependsOn: ['kernel', 'finance'] }], packages, []);
+    const all = buildRules([kernel, finance, { ...crm, dependsOn: ['finance', 'kernel'] }], packages, []);
     expect(all.some((r) => r.name === 'module-dag-crm')).toBe(false);
   });
 
@@ -57,6 +59,8 @@ describe('depcruise rules from the manifests (#1651)', () => {
   it('refuses an exception with no reason or to a rule that does not exist', () => {
     expect(() => buildRules([kernel, finance], packages, [{ rule: 'domain-pure', from: ['a.ts'], to: '^x/', reason: '' }])).toThrow('has no reason');
     expect(() => buildRules([kernel, finance], packages, [{ rule: 'no-such-rule', from: ['a.ts'], to: '^x/', reason: 'r' }])).toThrow('which is no rule');
+    // An exception for a file the rule does not cover would apply the rule to it.
+    expect(() => buildRules([kernel, finance], packages, [{ rule: 'app-no-server', from: ['apps/kernel/src/http.ts'], to: '^x/', reason: 'r' }])).toThrow('which the rule does not cover');
   });
 
   it('gives every listed exception a reason and an exact file list', () => {

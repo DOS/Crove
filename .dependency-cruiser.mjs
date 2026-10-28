@@ -32,8 +32,10 @@ export default {
   forbidden: buildRules(modules, readPackages(root)),
   options: {
     doNotFollow: { path: 'node_modules' },
-    exclude: { path: '(^|/)(node_modules|dist|\\.next|coverage|test-results|playwright-report)/' },
-    // Type-only imports are kept (and marked), so domain-pure can let them through and the others still see them.
+    // Build and test output of the workspace's own packages. Not node_modules: an excluded path drops the imports that
+    // resolve into it from the graph, and domain-pure must see them; doNotFollow already keeps them out of the walk.
+    exclude: { path: '^((apps|packages|modules)/[^/]+|e2e)/(dist|\\.next|coverage|test-results|playwright-report)/' },
+    // Type-only imports are kept, so every rule sees them too.
     tsPreCompilationDeps: true,
     enhancedResolveOptions: {
       exportsFields: ['exports'],

@@ -124,9 +124,9 @@ export interface EntityDeclaration {
 
 export interface ModuleManifest extends ModuleScreens {
   readonly id: string;
-  // The modules this one imports, by id (plan §5.1, §5.2 `dependsOn`): a DAG, sorted. dependency-cruiser's rules are
-  // generated from it (tools/depcruise-rules.mjs), so an import of a module not listed here, or one that closes a
-  // cycle, fails `pnpm depcruise`.
+  // The modules this one imports, by id (plan §5.1, §5.2 `dependsOn`): sorted, and a DAG. dependency-cruiser's rules
+  // are generated from it (tools/depcruise-rules.mjs), which refuses an unsorted list or a cycle, so an import of a
+  // module not listed here fails `pnpm depcruise`.
   readonly dependsOn: readonly string[];
   // Schema name -> table name (sorted) -> every column of the table with its class.
   readonly tables: Readonly<Record<string, Readonly<Record<string, TableColumns>>>>;
