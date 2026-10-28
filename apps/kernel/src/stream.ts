@@ -1,12 +1,16 @@
 // Realtime invalidation over SSE (issue #69, plan §2 Realtime, §4.11 and §9).
 //
 // Writes to the records the SPA shows send `NOTIFY crove_stream, '<org_id> <type> <id>'` from a trigger
-// (20261018140000_crove_kernel_stream_invalidation.sql). Each API process LISTENs on one dedicated connection
-// (StreamHub with a NotificationSource) and hands a hint only to the open streams of that org. A stream sends ids,
-// never row data: the SPA re-fetches through the normal authorized queries, so a hint can never show a record its
-// reader may not see. A stream also re-runs the session check and membership of its org every STREAM_RECHECK_SECONDS
-// and after every RECHECK_EVERY_HINTS hints, holding further hints back while it does, and closes with a reason when
-// either fails. It ends when the access token it was opened with expires.
+// (20261018140000_crove_kernel_stream_invalidation.sql), and rows that belong to one legal entity add it:
+// `<org_id> <type> <id> <legal_entity_id>` (20261103080000 and 20261103090000 *_stream_legal_entity.sql, #1692). Each API
+// process LISTENs on one dedicated connection (StreamHub with a NotificationSource) and hands a hint only to the open
+// streams of that org, and a hint with an entity only to the streams whose legal-entity scope includes it. A stream
+// sends ids, never row data and never the entity: the SPA re-fetches through the normal authorized queries, so a hint
+// can never show a record its reader may not see, and a member limited to some entities does not even learn that a
+// record of another entity changed. A stream also re-runs the session check, membership and legal-entity scope of its
+// org every STREAM_RECHECK_SECONDS and after every RECHECK_EVERY_HINTS hints, holding further hints back while it
+// does, closes with a reason when the check fails, and applies the scope it returns to every hint it sends afterwards.
+// It ends when the access token it was opened with expires.
 //
 // EventSource cannot send the Authorization header, so a stream opens with a one-time ticket from an authenticated
 // POST (stream_ticket_issue, stored as its SHA-256), valid for seconds, bound to the user, org, session and assurance,
@@ -44,17 +48,47 @@ export const PENDING_HINT_LIMIT = 200;
 export const MAX_BUFFERED_BYTES = 256 * 1024;
 
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
-const PAYLOAD = new RegExp(`^(${UUID}) ([a-z_]{1,32}) (${UUID})$`);
+const PAYLOAD = new RegExp(`^(${UUID}) ([a-z_]{1,32}) (${UUID})(?: (${UUID}))?$`);
+const UUID_ONLY = new RegExp(`^${UUID}$`);
 const TYPES: ReadonlySet<string> = new Set(STREAM_HINT_TYPES);
 const TICKET = /^[A-Za-z0-9_-]{43}$/;
 
-// A notification payload, or null for anything that is not exactly `<org_id> <known type> <id>`.
-export function parseHint(payload: string): { orgId: string; hint: StreamHint } | null {
+export interface ParsedHint {
+  orgId: string;
+  hint: StreamHint;
+  // The legal entity of the row the hint is about; absent for an org-wide row.
+  legalEntityId?: string;
+}
+
+// A notification payload, or null for anything that is not exactly `<org_id> <known type> <id>` or
+// `<org_id> <known type> <id> <legal_entity_id>`.
+export function parseHint(payload: string): ParsedHint | null {
   const match = PAYLOAD.exec(payload);
   if (!match) return null;
-  const [, orgId, type, id] = match as unknown as [string, string, string, string];
+  const [, orgId, type, id, legalEntityId] = match as unknown as [string, string, string, string, string | undefined];
   if (!TYPES.has(type)) return null;
-  return { orgId, hint: { type: type as StreamHintType, id } };
+  const hint = { type: type as StreamHintType, id };
+  return legalEntityId === undefined ? { orgId, hint } : { orgId, hint, legalEntityId };
+}
+
+// The legal entities a stream may hear about: every entity of the org, or exactly these (none for an empty set).
+export type StreamScope = { all: true } | { all: false; entities: ReadonlySet<string> };
+export const ALL_ENTITIES: StreamScope = { all: true };
+
+// The scope a kernel.stream.check result grants (packages/kernel/src/queries.ts: `legalEntities` is '*' or a list of
+// entity ids). Anything else throws, so a malformed answer ends the stream as `unavailable` instead of widening it.
+export function streamScopeOf(result: unknown): StreamScope {
+  const legalEntities = (result as { legalEntities?: unknown } | null)?.legalEntities;
+  if (legalEntities === '*') return ALL_ENTITIES;
+  if (Array.isArray(legalEntities) && legalEntities.every((id): id is string => typeof id === 'string' && UUID_ONLY.test(id))) {
+    return { all: false, entities: new Set(legalEntities) };
+  }
+  throw new Error('kernel.stream.check returned no legal-entity scope');
+}
+
+// Whether a stream with this scope may get a hint about a row of this entity (undefined: an org-wide row).
+export function inScope(scope: StreamScope, legalEntityId: string | undefined): boolean {
+  return legalEntityId === undefined || scope.all || scope.entities.has(legalEntityId);
 }
 
 // Maps a failed check to the reason the stream closes with. 401s end the session (the app re-authenticates), 403s
@@ -78,7 +112,9 @@ export function sseEvent(event: string, data: unknown): string {
 
 export interface HubSubscriber {
   readonly orgId: string;
-  hint(hint: StreamHint): void;
+  // legalEntityId: the entity of the row, for the subscriber to drop the hint when it is outside its scope; absent for
+  // an org-wide row.
+  hint(hint: StreamHint, legalEntityId?: string): void;
   // The process can no longer see changes (listener lost, shutdown): the stream must end.
   close(reason: StreamCloseReason): void;
 }
@@ -152,13 +188,14 @@ export class StreamHub {
     };
   }
 
-  // Only the streams of the payload's org get the hint; a payload that does not parse is dropped.
+  // Only the streams of the payload's org get the hint, with its legal entity for each to filter by its own scope; a
+  // payload that does not parse is dropped.
   dispatch(payload: string): void {
     const parsed = parseHint(payload);
     if (!parsed) return;
     const set = this.byOrg.get(parsed.orgId);
     if (!set) return;
-    for (const subscriber of set) subscriber.hint(parsed.hint);
+    for (const subscriber of set) subscriber.hint(parsed.hint, parsed.legalEntityId);
   }
 
   // Deleting from a Set or Map while iterating it is safe: a closed stream unsubscribes itself here.
@@ -349,8 +386,11 @@ export function createPgNotificationSource(options: PgSourceOptions): Notificati
 
 export interface StreamConnectionOptions {
   orgId: string;
-  // The session check and membership of the org; throws a DomainError when the stream must end.
-  check: () => Promise<void>;
+  // The legal-entity scope of the check that admitted the stream; hints about rows of other entities are dropped.
+  scope: StreamScope;
+  // The session check and membership of the org; throws a DomainError when the stream must end, else returns the
+  // legal-entity scope now in force, which replaces the previous one.
+  check: () => Promise<StreamScope>;
   // Bounds the background re-checks of every stream of the process (a Semaphore, issue #281): a re-check waits for
   // a slot, and hints wait with it. Unset: re-checks run at once.
   gate?: { run<T>(fn: () => Promise<T>): Promise<T> };
@@ -370,9 +410,15 @@ export interface StreamConnectionOptions {
   onClosed?: () => void;
 }
 
+interface HeldHint {
+  hint: StreamHint;
+  legalEntityId: string | undefined;
+}
+
 export class StreamConnection implements HubSubscriber {
   readonly orgId: string;
-  private readonly pending = new Map<string, StreamHint>();
+  private readonly pending = new Map<string, HeldHint>();
+  private scope: StreamScope;
   private resyncPending = false;
   private sinceCheck = 0;
   private checking = false;
@@ -385,6 +431,7 @@ export class StreamConnection implements HubSubscriber {
   constructor(options: StreamConnectionOptions) {
     this.options = options;
     this.orgId = options.orgId;
+    this.scope = options.scope;
     this.recheckEvery = options.recheckEveryHints ?? RECHECK_EVERY_HINTS;
     const now = options.now ?? Date.now;
     const heartbeat = options.heartbeatMs ?? HEARTBEAT_MS;
@@ -413,10 +460,16 @@ export class StreamConnection implements HubSubscriber {
     this.send(sseEvent('ready', { recheckSeconds }));
   }
 
-  hint(hint: StreamHint): void {
+  // A hint outside the scope is dropped at once, so it neither waits nor counts toward PENDING_HINT_LIMIT; one that
+  // waits is checked again, when it is sent, against the scope then in force (a re-check may have narrowed it). A hint
+  // that arrives while a re-check that will widen the scope runs is dropped too: fail closed, the app's poll covers it.
+  hint(hint: StreamHint, legalEntityId?: string): void {
     if (this.closed) return;
+    if (!inScope(this.scope, legalEntityId)) return;
     if (!this.resyncPending) {
-      this.pending.set(`${hint.type}:${hint.id}`, hint);
+      // Keyed by the entity too: an extraction hint carries its file's id, and two readings of one file may belong to
+      // different entities, so a narrowing re-check must not drop the in-scope one with the other.
+      this.pending.set(`${hint.type}:${hint.id}:${legalEntityId ?? ''}`, { hint: { type: hint.type, id: hint.id }, legalEntityId });
       if (this.pending.size > PENDING_HINT_LIMIT) {
         this.pending.clear();
         this.resyncPending = true;
@@ -446,15 +499,17 @@ export class StreamConnection implements HubSubscriber {
         this.send(sseEvent('resync', {}));
         continue;
       }
-      const [key, hint] = this.pending.entries().next().value as [string, StreamHint];
+      const [key, held] = this.pending.entries().next().value as [string, HeldHint];
       this.pending.delete(key);
+      if (!inScope(this.scope, held.legalEntityId)) continue;
       this.sinceCheck++;
-      this.send(sseEvent('invalidate', hint));
+      this.send(sseEvent('invalidate', held.hint));
     }
   }
 
-  // Re-runs the session check and membership; hints wait until it answers. At most one per stream runs or waits for
-  // the gate at a time, so the gate's queue never holds more than the open streams.
+  // Re-runs the session check, membership and legal-entity scope; hints wait until it answers and are then sent under
+  // the scope it returned. At most one per stream runs or waits for the gate at a time, so the gate's queue never holds
+  // more than the open streams.
   async recheck(): Promise<void> {
     if (this.closed || this.checking) return;
     this.checking = true;
@@ -462,23 +517,24 @@ export class StreamConnection implements HubSubscriber {
     const timeoutMs = this.options.checkTimeoutMs ?? RECHECK_TIMEOUT_MS;
     // A check that does not answer in time (the pool exhausted, the database hanging) ends the stream as unavailable
     // and frees its slot of the gate, so it cannot hold back the re-checks of every other stream.
-    const bounded = () => {
-      if (this.closed) return Promise.resolve();
+    const bounded = (): Promise<StreamScope | null> => {
+      if (this.closed) return Promise.resolve(null);
       let timer: NodeJS.Timeout | undefined;
       const deadline = new Promise<never>((_, reject) => {
         timer = setTimeout(() => reject(new Error('stream re-check timed out')), timeoutMs);
       });
       return Promise.race([check(), deadline]).finally(() => clearTimeout(timer));
     };
+    let scope: StreamScope | null;
     try {
       // A stream that closed while it waited for a slot skips its check.
-      if (gate) await gate.run(bounded);
-      else await bounded();
+      scope = gate ? await gate.run(bounded) : await bounded();
     } catch (error) {
       this.checking = false;
       this.close(closeReason(error));
       return;
     }
+    if (scope) this.scope = scope;
     this.checking = false;
     this.sinceCheck = 0;
     this.flush();

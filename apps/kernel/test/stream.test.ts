@@ -1,6 +1,7 @@
 // The invalidation stream's fan-out and re-check logic (issue #69), without a database: hints reach only the streams
-// of their org, a failed re-check closes the stream with its reason, hints wait while a check runs, and a stream ends
-// when its token expires, its client stops reading, or the process loses its LISTEN connection.
+// of their org, and a hint about a row of one legal entity only the streams whose scope includes it (#1692), a failed
+// re-check closes the stream with its reason, hints wait while a check runs, and a stream ends when its token expires,
+// its client stops reading, or the process loses its LISTEN connection.
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import type pg from 'pg';
@@ -14,17 +15,21 @@ import {
   createPgNotificationSource,
   isProbePayload,
   sseEvent,
+  ALL_ENTITIES,
   PENDING_HINT_LIMIT,
   RECHECK_EVERY_HINTS,
   StreamConnection,
   StreamHub,
   closeReason,
+  inScope,
   newTicket,
   parseHint,
+  streamScopeOf,
   ticketHash,
   wellFormedTicket,
   type HubSubscriber,
   type NotificationSource,
+  type StreamScope,
 } from '../src/stream.ts';
 
 const ORG_A = randomUUID();
@@ -47,17 +52,48 @@ function fakeSource() {
   return source;
 }
 
-function recorder(orgId: string): HubSubscriber & { hints: unknown[]; closed: string[] } {
+function recorder(orgId: string): HubSubscriber & { hints: unknown[]; entities: unknown[]; closed: string[] } {
   const hints: unknown[] = [];
+  const entities: unknown[] = [];
   const closed: string[] = [];
-  return { orgId, hints, closed, hint: (h) => void hints.push(h), close: (r) => void closed.push(r) };
+  return {
+    orgId,
+    hints,
+    entities,
+    closed,
+    hint: (h, legalEntityId) => {
+      hints.push(h);
+      entities.push(legalEntityId);
+    },
+    close: (r) => void closed.push(r),
+  };
 }
+
+const ENTITY_A = randomUUID();
+const ENTITY_B = randomUUID();
+const only = (...entities: string[]): StreamScope => ({ all: false, entities: new Set(entities) });
 
 describe('parseHint', () => {
   const id = randomUUID();
   it('reads exactly `<org> <type> <id>` of a known type', () => {
     expect(parseHint(`${ORG_A} proposal ${id}`)).toEqual({ orgId: ORG_A, hint: { type: 'proposal', id } });
     expect(parseHint(`${ORG_A} journal_entry ${id}`)).toEqual({ orgId: ORG_A, hint: { type: 'journal_entry', id } });
+    expect(parseHint(`${ORG_A} proposal ${id}`)).not.toHaveProperty('legalEntityId');
+  });
+
+  it('reads the legal entity of an entity-scoped row as a fourth field (#1692)', () => {
+    expect(parseHint(`${ORG_A} journal_entry ${id} ${ENTITY_A}`)).toEqual({ orgId: ORG_A, hint: { type: 'journal_entry', id }, legalEntityId: ENTITY_A });
+    expect(parseHint(`${ORG_A} document ${id} ${ENTITY_B}`)).toEqual({ orgId: ORG_A, hint: { type: 'document', id }, legalEntityId: ENTITY_B });
+    for (const payload of [
+      `${ORG_A} journal_entry ${id} ${ENTITY_A} ${ENTITY_B}`,
+      `${ORG_A} journal_entry ${id}  ${ENTITY_A}`,
+      `${ORG_A} journal_entry ${id} ${ENTITY_A.toUpperCase()}`,
+      `${ORG_A} journal_entry ${id} *`,
+      `${ORG_A} journal_entry ${id} `,
+      `${ORG_A} secret ${id} ${ENTITY_A}`,
+    ]) {
+      expect(parseHint(payload)).toBeNull();
+    }
   });
 
   it('drops anything else', () => {
@@ -107,6 +143,23 @@ describe('StreamHub', () => {
     expect(b.hints).toEqual([{ type: 'document', id }]);
   });
 
+  it("passes a hint's legal entity on, for each stream to filter by its own scope (#1692)", () => {
+    const source = fakeSource();
+    const hub = new StreamHub(source);
+    hub.start();
+    source.ready();
+    const a = recorder(ORG_A);
+    hub.subscribe(a);
+    const id = randomUUID();
+    source.emit(`${ORG_A} journal_entry ${id} ${ENTITY_A}`);
+    source.emit(`${ORG_A} file ${id}`);
+    expect(a.hints).toEqual([
+      { type: 'journal_entry', id },
+      { type: 'file', id },
+    ]);
+    expect(a.entities).toEqual([ENTITY_A, undefined]);
+  });
+
   it('is ready only while the source listens; a lost connection closes every stream', async () => {
     const source = fakeSource();
     const hub = new StreamHub(source);
@@ -133,6 +186,26 @@ describe('StreamHub', () => {
     expect(hub.ready).toBe(false);
     expect(source.stopped).toBe(true);
     expect(a.closed).toEqual(['unavailable', 'shutdown']);
+  });
+});
+
+describe('legal-entity scope (#1692)', () => {
+  it('reads the scope of a kernel.stream.check result, and refuses anything else', () => {
+    expect(streamScopeOf({ role: 'owner', legalEntities: '*' })).toEqual(ALL_ENTITIES);
+    expect(streamScopeOf({ role: 'member', legalEntities: [ENTITY_A] })).toEqual(only(ENTITY_A));
+    expect(streamScopeOf({ role: 'member', legalEntities: [] })).toEqual(only());
+    for (const bad of [undefined, null, {}, { role: 'owner' }, { legalEntities: ['*'] }, { legalEntities: 'all' }, { legalEntities: [ENTITY_A, 1] }, { legalEntities: ['x'] }]) {
+      expect(() => streamScopeOf(bad)).toThrow();
+    }
+  });
+
+  it('lets an org-wide hint through every scope, and an entity hint only through a scope that names it', () => {
+    expect(inScope(ALL_ENTITIES, undefined)).toBe(true);
+    expect(inScope(only(), undefined)).toBe(true);
+    expect(inScope(ALL_ENTITIES, ENTITY_B)).toBe(true);
+    expect(inScope(only(ENTITY_A), ENTITY_A)).toBe(true);
+    expect(inScope(only(ENTITY_A), ENTITY_B)).toBe(false);
+    expect(inScope(only(), ENTITY_A)).toBe(false);
   });
 });
 
@@ -166,12 +239,13 @@ describe('StreamConnection', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  function connection(options: { check?: () => Promise<void>; endsInMs?: number; writable?: () => boolean } = {}) {
+  function connection(options: { check?: () => Promise<StreamScope>; scope?: StreamScope; endsInMs?: number; writable?: () => boolean } = {}) {
     const chunks: string[] = [];
     const state = { ended: 0, closed: 0 };
-    const check = vi.fn(options.check ?? (async () => {}));
+    const check = vi.fn(options.check ?? (async () => ALL_ENTITIES));
     const conn = new StreamConnection({
       orgId: ORG_A,
+      scope: options.scope ?? ALL_ENTITIES,
       check,
       recheckMs: 30_000,
       heartbeatMs: 25_000,
@@ -214,6 +288,7 @@ describe('StreamConnection', () => {
     const { conn, state, check, events } = connection({
       check: async () => {
         if (!member) throw new DomainError('NOT_A_MEMBER', 403, 'gone');
+        return ALL_ENTITIES;
       },
     });
     await vi.advanceTimersByTimeAsync(30_000);
@@ -237,8 +312,8 @@ describe('StreamConnection', () => {
     let fail = false;
     const { conn, check, events } = connection({
       check: () =>
-        new Promise<void>((resolve, reject) => {
-          answer = () => (fail ? reject(new DomainError('UNAUTHENTICATED', 401, 'revoked')) : resolve());
+        new Promise<StreamScope>((resolve, reject) => {
+          answer = () => (fail ? reject(new DomainError('UNAUTHENTICATED', 401, 'revoked')) : resolve(ALL_ENTITIES));
         }),
     });
     for (let i = 0; i < RECHECK_EVERY_HINTS + 5; i++) conn.hint({ type: 'file', id: randomUUID() });
@@ -266,7 +341,7 @@ describe('StreamConnection', () => {
 
   it('collapses an overflowing backlog into one resync', async () => {
     let answer: (() => void) | null = null;
-    const { conn, events } = connection({ check: () => new Promise<void>((resolve) => (answer = resolve)) });
+    const { conn, events } = connection({ check: () => new Promise<StreamScope>((resolve) => (answer = () => resolve(ALL_ENTITIES))) });
     void conn.recheck();
     for (let i = 0; i < PENDING_HINT_LIMIT + 1; i++) conn.hint({ type: 'file', id: randomUUID() });
     (answer as unknown as () => void)();
@@ -301,6 +376,71 @@ describe('StreamConnection', () => {
     expect(conn.isClosed).toBe(true);
     expect(events().at(-1)).toEqual({ event: 'close', data: { reason: 'unavailable' } });
   });
+
+  it('drops hints about rows of entities outside its scope, never counting them, and sends org-wide ones (#1692)', async () => {
+    const { conn, events } = connection({ scope: only(ENTITY_A), check: async () => only(ENTITY_A) });
+    const inA = randomUUID();
+    const inB = randomUUID();
+    const file = randomUUID();
+    conn.hint({ type: 'journal_entry', id: inB }, ENTITY_B);
+    conn.hint({ type: 'journal_entry', id: inA }, ENTITY_A);
+    conn.hint({ type: 'file', id: file });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(events()).toEqual([
+      { event: 'invalidate', data: { type: 'journal_entry', id: inA } },
+      { event: 'invalidate', data: { type: 'file', id: file } },
+    ]);
+    // Out-of-scope hints never fill the backlog: no resync however many arrive.
+    for (let i = 0; i < PENDING_HINT_LIMIT * 2; i++) conn.hint({ type: 'document', id: randomUUID() }, ENTITY_B);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(events()).toHaveLength(2);
+    conn.finish();
+  });
+
+  it('sends nothing of any entity under an empty scope', async () => {
+    const { conn, events } = connection({ scope: only(), check: async () => only() });
+    conn.hint({ type: 'notification', id: randomUUID() }, ENTITY_A);
+    const proposal = randomUUID();
+    conn.hint({ type: 'proposal', id: proposal });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(events()).toEqual([{ event: 'invalidate', data: { type: 'proposal', id: proposal } }]);
+    conn.finish();
+  });
+
+  it('applies the scope each re-check returns, to the hints held while it ran as well', async () => {
+    let scope = ALL_ENTITIES;
+    let answer: (() => void) | null = null;
+    const { conn, events } = connection({
+      check: () => new Promise<StreamScope>((resolve) => (answer = () => resolve(scope))),
+    });
+    const before = randomUUID();
+    conn.hint({ type: 'journal_entry', id: before }, ENTITY_B);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(events()).toEqual([{ event: 'invalidate', data: { type: 'journal_entry', id: before } }]);
+    // The member's assignments narrowed: held hints of entity B are dropped once the check answers.
+    void conn.recheck();
+    const held = randomUUID();
+    const keptA = randomUUID();
+    conn.hint({ type: 'journal_entry', id: held }, ENTITY_B);
+    conn.hint({ type: 'journal_entry', id: keptA }, ENTITY_A);
+    scope = only(ENTITY_A);
+    (answer as unknown as () => void)();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(events().slice(1)).toEqual([{ event: 'invalidate', data: { type: 'journal_entry', id: keptA } }]);
+    conn.hint({ type: 'document', id: randomUUID() }, ENTITY_B);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(events()).toHaveLength(2);
+    // And widened again.
+    scope = ALL_ENTITIES;
+    void conn.recheck();
+    (answer as unknown as () => void)();
+    await vi.advanceTimersByTimeAsync(0);
+    const after = randomUUID();
+    conn.hint({ type: 'document', id: after }, ENTITY_B);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(events().at(-1)).toEqual({ event: 'invalidate', data: { type: 'document', id: after } });
+    conn.finish();
+  });
 });
 
 describe('re-checks share a bounded gate (issue #281)', () => {
@@ -316,10 +456,11 @@ describe('re-checks share a bounded gate (issue #281)', () => {
       (i) =>
         new StreamConnection({
           orgId: ORG_A,
+          scope: ALL_ENTITIES,
           check: () =>
-            new Promise<void>((resolve) => {
+            new Promise<StreamScope>((resolve) => {
               checks.push(i);
-              answers.push(resolve);
+              answers.push(() => resolve(ALL_ENTITIES));
             }),
           gate,
           recheckMs: 3_600_000,
@@ -362,9 +503,10 @@ describe('a re-check that never answers (issue #281)', () => {
   it('closes its stream as unavailable after the deadline and frees the gate for the others', async () => {
     const gate = new Semaphore(1);
     const closes: string[] = [];
-    const make = (check: () => Promise<void>) =>
+    const make = (check: () => Promise<StreamScope>) =>
       new StreamConnection({
         orgId: ORG_A,
+        scope: ALL_ENTITIES,
         check,
         gate,
         checkTimeoutMs: 5_000,
@@ -376,8 +518,8 @@ describe('a re-check that never answers (issue #281)', () => {
         },
         end: () => {},
       });
-    const stuck = make(() => new Promise<void>(() => {}));
-    const healthyCheck = vi.fn(async () => {});
+    const stuck = make(() => new Promise<StreamScope>(() => {}));
+    const healthyCheck = vi.fn(async () => ALL_ENTITIES);
     const healthy = make(healthyCheck);
     void stuck.recheck();
     void healthy.recheck();

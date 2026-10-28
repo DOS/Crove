@@ -132,10 +132,12 @@ import {
   STREAM_TICKET_TTL_SECONDS,
   StreamConnection,
   newTicket,
+  streamScopeOf,
   ticketActor,
   ticketHash,
   wellFormedTicket,
   type StreamHub,
+  type StreamScope,
   type TicketBinding,
   type TicketStore,
 } from './stream.ts';
@@ -953,9 +955,11 @@ export function createHttpApp(deps: HttpDeps) {
       }
       const actor = ticketActor(binding);
       const orgId = binding.orgId;
-      const check = () => runtime.query(STREAM_CHECK_QUERY, {}, { actor, orgId }).then(() => undefined);
+      // The check also answers the legal-entity scope the stream's hints are filtered by (#1692).
+      const check = () => runtime.query(STREAM_CHECK_QUERY, {}, { actor, orgId }).then(streamScopeOf);
+      let scope: StreamScope;
       try {
-        await check();
+        scope = await check();
       } catch (error) {
         release();
         return problem(c, error);
@@ -970,6 +974,7 @@ export function createHttpApp(deps: HttpDeps) {
       let unsubscribe = () => {};
       const connection = new StreamConnection({
         orgId,
+        scope,
         check,
         ...(stream.rechecks ? { gate: stream.rechecks } : {}),
         recheckMs: stream.recheckSeconds * 1000,
