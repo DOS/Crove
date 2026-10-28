@@ -142,7 +142,7 @@ CREATE TRIGGER stream_hint AFTER INSERT OR UPDATE ON crove_notes.todo
   FOR EACH ROW EXECUTE FUNCTION crove_kernel.stream_notify('todo', 'id');
 
 -- ---------------------------------------------------------------------------
--- Definers (ADR-0037 §2), redefined from 20261103120000_crove_notes_core.sql to reach to-dos too. Same signatures,
+-- Definers (ADR-0037 §2), redefined from 20261103130000_crove_notes_core.sql to reach to-dos too. Same signatures,
 -- same callers and checks; none returns a title, detail or step.
 -- ---------------------------------------------------------------------------
 
