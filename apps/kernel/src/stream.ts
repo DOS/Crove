@@ -67,7 +67,7 @@ const SHARED_HINT_TYPES: ReadonlySet<StreamHintType> = new Set<StreamHintType>([
 // (#1692): a hint of one of these types without an entity reaches no stream, rather than every stream of the org
 // (#1703). stream-legal-entity.db.test.ts checks this list against the catalog, so a table that becomes entity-scoped
 // fails it until its type is added here.
-export const ENTITY_HINT_TYPES: ReadonlySet<StreamHintType> = new Set<StreamHintType>(['journal_entry', 'document', 'extraction', 'notification']);
+export const ENTITY_HINT_TYPES: ReadonlySet<StreamHintType> = new Set<StreamHintType>(['journal_entry', 'document', 'extraction', 'notification', 'proposal']);
 
 // Whether a hint of this type may go on with this entity (undefined: none named): a type of ENTITY_HINT_TYPES needs one.
 export function entityNamed(type: StreamHintType, legalEntityId: string | undefined): boolean {
