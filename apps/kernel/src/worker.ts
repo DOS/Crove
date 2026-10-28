@@ -207,7 +207,7 @@ export async function extractPriorities(db: Db, rows: readonly OutboxRow[]): Pro
   const extracts = rows.filter((row) => EXTRACT_EVENTS.includes(row.type));
   const priorities = new Map<OutboxRow, number>();
   if (extracts.length === 0) return priorities;
-  const groupIds = [...new Set(extracts.map((row) => jobGroup(row.org_id, QUEUES.extract).id))];
+  const groupIds = [...new Set(extracts.map((row) => row.org_id))].map((orgId) => jobGroup(orgId, QUEUES.extract).id);
   const { rows: counted } = await sql<{ group_id: string; n: number }>`
     SELECT group_id, count(*)::int AS n FROM ${sql.table(`${JOB_SCHEMA}.job`)}
     WHERE name = ${QUEUES.extract} AND state IN ('created', 'retry', 'active') AND group_id = ANY(${groupIds}::text[])
