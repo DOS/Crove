@@ -11,7 +11,7 @@ const root = fileURLToPath(new URL('.', import.meta.url));
 const manifestFiles = [
   { dir: 'packages/kernel', file: './packages/kernel/src/manifest.ts' },
   ...readdirSync(new URL('./modules/', import.meta.url), { withFileTypes: true })
-    .filter((d) => d.isDirectory())
+    .filter((d) => d.isDirectory() && !d.name.startsWith('.'))
     .map((d) => ({ dir: `modules/${d.name}`, file: `./modules/${d.name}/src/manifest.ts` })),
 ];
 const modules = await Promise.all(

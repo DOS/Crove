@@ -21,10 +21,11 @@ export function readPackages(root) {
     });
 }
 
-// The files an `exports` field points to, condition objects included; `*` in a target stays a wildcard.
+// The files an `exports` field points to, condition objects included; `*` in a target stays a wildcard, and a null
+// target (a path the package forbids) points nowhere.
 function exportTargets(exports) {
-  if (exports === undefined) return [];
   if (typeof exports === 'string') return [exports];
+  if (exports === null || typeof exports !== 'object') return [];
   return Object.values(exports).flatMap(exportTargets);
 }
 
@@ -222,7 +223,8 @@ function applyExceptions(rules, exceptions) {
     if (own.length === 0) return [rule];
     const files = [...new Set(own.flatMap((e) => e.from))].sort();
     // The copy takes the file as its `from.path`, so a file the rule does not cover would widen the rule to it.
-    const outside = files.find((f) => rule.from.path !== undefined && !new RegExp(rule.from.path).test(f));
+    const covered = rule.from.path === undefined ? null : new RegExp(rule.from.path);
+    const outside = covered && files.find((f) => !covered.test(f));
     if (outside) throw new Error(`depcruise: an exception to ${rule.name} lists ${outside}, which the rule does not cover`);
     const base = { ...rule, from: { ...rule.from, pathNot: [...list(rule.from.pathNot), ...files.map((f) => `^${escape(f)}$`)] } };
     const exempt = files.map((file) => {

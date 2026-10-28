@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { EXCEPTIONS, buildRules, checkModuleGraph } from '../depcruise-rules.mjs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { EXCEPTIONS, buildRules, checkModuleGraph, readPackages } from '../depcruise-rules.mjs';
 
 const kernel = { id: 'kernel', dir: 'packages/kernel', dependsOn: [] };
 const finance = { id: 'finance', dir: 'modules/finance', dependsOn: ['kernel'] };
@@ -41,6 +44,27 @@ describe('depcruise rules from the manifests (#1651)', () => {
     expect(allowed('modules/crm/src/bookings.ts')).toBe(false);
     expect(allowed('packages/db/src/context/index.ts')).toBe(false);
     expect(allowed('apps/app/src/main.tsx')).toBe(false);
+  });
+
+  it('reads the exported files of each package, a null target (a forbidden path) pointing nowhere', () => {
+    const root = mkdtempSync(join(tmpdir(), 'depcruise-'));
+    try {
+      const pkg = (dir: string, json: object) => {
+        mkdirSync(join(root, dir), { recursive: true });
+        writeFileSync(join(root, dir, 'package.json'), JSON.stringify(json));
+      };
+      for (const parent of ['apps', 'packages', 'modules']) mkdirSync(join(root, parent));
+      pkg('packages/a', { name: '@crove/a', exports: { '.': { import: './src/index.ts', default: null }, './private/*': null } });
+      pkg('modules/b', { name: '@crove/mod-b', exports: null });
+      pkg('e2e', { name: '@crove/e2e' });
+      expect(readPackages(root).sort((x, y) => x.dir.localeCompare(y.dir))).toEqual([
+        { dir: 'e2e', name: '@crove/e2e', exports: [] },
+        { dir: 'modules/b', name: '@crove/mod-b', exports: [] },
+        { dir: 'packages/a', name: '@crove/a', exports: ['./src/index.ts'] },
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('exempts only the listed files, each with the union of its exceptions, and keeps the rule for every other file', () => {
