@@ -138,13 +138,15 @@ function runtimeImports(raw: string): { names: string[]; problems: string[] } {
   const problems: string[] = [];
   for (const m of text.matchAll(/\b(import|export)\b([^;]*?)\bfrom\s*(['"`])([^'"`]*)\3/g)) {
     const [, verb, clause = '', , specifier = ''] = m;
-    if (!specifier.includes('kernel-runtime')) continue;
+    const fromRuntime = specifier.includes('kernel-runtime');
     const cleaned = clause.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' ').trim();
     if (/^type\b/.test(cleaned)) continue;
-    if (cleaned.includes('*')) problems.push(`${verb} * from ${specifier}`);
     const braces = cleaned.match(/\{([\s\S]*)\}/);
-    const outside = braces ? cleaned.replace(braces[0], '').replace(/,/g, ' ').trim() : cleaned;
-    if (verb === 'import' && outside.length > 0) problems.push(`a default import from ${specifier}`);
+    if (fromRuntime) {
+      if (cleaned.includes('*')) problems.push(`${verb} * from ${specifier}`);
+      const outside = braces ? cleaned.replace(braces[0], '').replace(/,/g, ' ').trim() : cleaned;
+      if (verb === 'import' && outside.length > 0) problems.push(`a default import from ${specifier}`);
+    }
     for (const spec of (braces?.[1] ?? '').split(',')) {
       const part = spec.trim();
       if (part.length === 0 || /^type\b/.test(part)) continue;
@@ -152,9 +154,13 @@ function runtimeImports(raw: string): { names: string[]; problems: string[] } {
       // An import name may be written as a string: import { 'Runtime' as R }.
       if (name?.trim().replace(/^(['"])(.*)\1$/, '$2') !== 'Runtime') continue;
       if (verb === 'export') problems.push(`re-exports Runtime from ${specifier}`);
+      // From any other module, Runtime can only be the class passed on (kernel.ts exporting it, say).
+      else if (!fromRuntime) problems.push(`imports Runtime from ${specifier}`);
       else names.push((alias ?? name).trim());
     }
   }
+  // A local export of the class: export { Runtime } or export default Runtime.
+  if (/\bexport\s*\{[^}]*\bRuntime\b[^}]*\}(?!\s*from)|\bexport\s+default\s+Runtime\b/.test(text)) problems.push('exports Runtime');
   if (/\bimport\s*\(/.test(text) || /\bimport\(/.test(raw)) problems.push('a dynamic import()');
   if (/\brequire\s*\(/.test(text) || /\brequire\(/.test(raw)) problems.push('require()');
   if (/createRequire\((?!import\.meta\.url\)\.resolve\()/.test(raw)) problems.push('createRequire() used for more than resolve()');
@@ -277,16 +283,23 @@ describe('declared command writes against the manifests (#1697, #1710)', () => {
       if (found.names.length > 0) importers.push({ file, names: found.names, text });
     }
     expect(problems).toEqual([]);
-    // Only kernel.ts holds the class as a value, under its own name, and uses it only in serverRuntime().
+    // As before #1766: no source but kernel.ts writes `new Runtime`.
+    expect(sources.filter((s) => /\bnew\s+Runtime\b/.test(s.text)).map((s) => s.file)).toEqual(['apps/kernel/src/kernel.ts']);
+    // Only kernel.ts holds the class as a value, under its own name, and uses it only in serverRuntime(): with its
+    // import from the runtime package and that function taken out (comments blanked), the name appears nowhere else,
+    // so it is not re-exported, passed on or stored.
     expect(importers.map((i) => [i.file, i.names])).toEqual([['apps/kernel/src/kernel.ts', ['Runtime']]]);
-    const kernel = importers[0]?.text ?? '';
+    const kernel = stripComments(importers[0]?.text ?? '');
     const start = kernel.indexOf('export function serverRuntime(');
     const end = kernel.indexOf('\n}\n', start);
     expect(start).toBeGreaterThan(0);
     expect(kernel.slice(start, end)).toMatch(/new Runtime\(/);
-    const outside = `${kernel.slice(0, start)}${kernel.slice(end)}`
+    const runtimeImport = [...kernel.matchAll(/\bimport\b[^;]*?\bfrom\s*'@crove\/kernel-runtime';/g)];
+    expect(runtimeImport).toHaveLength(1);
+    const outside = [kernel.slice(0, runtimeImport[0]?.index), kernel.slice((runtimeImport[0]?.index ?? 0) + (runtimeImport[0]?.[0].length ?? 0), start), kernel.slice(end)]
+      .join('\n')
       .split('\n')
-      .filter((line) => /\bRuntime\b/.test(line) && !/^\s*\/\//.test(line) && line.trim() !== 'Runtime,');
+      .filter((line) => /\bRuntime\b/.test(line));
     expect(outside).toEqual([]);
   });
 
@@ -322,6 +335,11 @@ describe('declared command writes against the manifests (#1697, #1710)', () => {
       'const shadow = Object.create(runtime);',
       `const f = new Function('return 1');`,
       'eval(code);',
+      // The class passed on through another module (#1771 review): kernel.ts exporting it, another file importing it.
+      'export {\n  Runtime,\n};',
+      'export default Runtime;',
+      `import { Runtime } from './kernel.ts';`,
+      `import { Runtime as R } from './kernel.ts';`,
     ]) {
       expect(scan(source).problems, source).not.toEqual([]);
     }
@@ -355,10 +373,33 @@ describe('declared command writes against the manifests (#1697, #1710)', () => {
     const inherited = Object.assign(Object.create({ risk: 'R3' }) as object, { ...def({ name: 't1766.inherited' }), risk: undefined });
     expect(() => new Runtime(cells).register({ commands: [inherited as CommandDef<unknown, unknown>] })).toThrow(/not a plain object/);
     expect(() => new Runtime(cells).register({ commands: [def({ name: 't1766.risk', risk: 'R9' as never })] })).toThrow(/unknown risk/);
+    // An object that names R2 when made a string is not the string R2 the agent checks compare with.
+    expect(() => new Runtime(cells).register({ commands: [def({ name: 't1766.risk_object', risk: { toString: () => 'R2' } as never })] })).toThrow(/unknown risk/);
     expect(() => new Runtime(cells).register({ commands: [def({ name: 't1766.access', access: 'agents' as never })] })).toThrow(/access is a role list/);
     expect(() => new Runtime(cells).register({ commands: [def({ name: 't1766.agent', access: [], writes: [], agent: { roles: 'all' as never } })] })).toThrow(
       /agent access names a role list/,
     );
+  });
+
+  it('reads a field a definition leaves out as absent, whatever Object.prototype holds', () => {
+    const contactWriter = def({ name: 't1766.proto', access: ['owner'], writes: [CONTACT] });
+    const proto = Object.prototype as Record<string, unknown>;
+    proto.agent = { roles: 'any' };
+    try {
+      // Read through the prototype, the inherited agent access would make it a contact writer agents run.
+      expect(() => new Runtime(cells).register({ commands: [contactWriter] })).not.toThrow();
+    } finally {
+      delete proto.agent;
+    }
+  });
+
+  it('keeps its own copy of the session source', () => {
+    const source = { mode: 'db' as 'db' | 'off', liveCheckForR3: false, check: async () => {} };
+    const runtime = new Runtime(cells, { sessions: source });
+    source.mode = 'off';
+    source.check = async () => {};
+    expect(runtime.sessionMode).toBe('db');
+    expect(() => new Runtime(cells, { sessions: { ...source, mode: 'none' as never } })).toThrow(/known mode/);
   });
 
   it('keeps its registry out of reach: no cast, Object.create or assignment changes a runtime', () => {

@@ -782,7 +782,9 @@ function plainCopy(value: unknown, what: string): Record<string, unknown> {
       throw new Error(`${what} has a hidden or symbol property ${String(key)}`);
     }
   }
-  return { ...(value as Record<string, unknown>) };
+  // On a null prototype: a field the definition leaves out (agent) reads undefined, whatever is later set on
+  // Object.prototype.
+  return Object.assign(Object.create(null) as Record<string, unknown>, value);
 }
 
 const frozenList = (value: unknown): unknown => (Array.isArray(value) ? Object.freeze([...value]) : value);
@@ -865,7 +867,14 @@ export class Runtime {
   // A plain Db is one cell that also holds the control plane (singleCell).
   constructor(cells: CellResolver | Db, options: RuntimeOptions = {}) {
     this.#cells = isCellResolver(cells) ? cells : singleCell(cells);
-    this.#sessions = options.sessions ?? null;
+    // The runtime's own frozen copy of the session source, read once: changing the object passed in (its check
+    // replaced by a no-op) does not turn off the ADR-0028 check here (#1766).
+    const sessions = options.sessions ?? null;
+    if (sessions !== null && (!['db', 'jwt', 'off'].includes(sessions.mode) || typeof sessions.check !== 'function')) {
+      throw new Error('sessions: a session status source has a known mode and a check function');
+    }
+    this.#sessions =
+      sessions === null ? null : Object.freeze({ mode: sessions.mode, liveCheckForR3: sessions.liveCheckForR3 === true, check: sessions.check.bind(sessions) });
     this.stepUp = options.stepUp ?? 'required';
     const refusalAudit = options.refusalAudit ?? DEFAULT_REFUSAL_AUDIT_LIMITS;
     this.refusalAudit = refusalAudit === 'unbounded' ? 'unbounded' : Object.freeze(validateRefusalAuditLimits(refusalAudit));
@@ -893,7 +902,9 @@ export class Runtime {
       if (typeof c.name !== 'string' || c.name.length === 0) throw new Error('a command is named');
       if (this.#commands.has(c.name)) throw new Error(`duplicate command ${c.name}`);
       // Every check below reads risk and access, and so do the agent and role checks when it runs.
-      if (!Object.hasOwn(RISK_ORDER, c.risk)) throw new Error(`command ${c.name}: unknown risk ${String(c.risk)}`);
+      // A string: hasOwn alone would take an object whose toString() names a risk, which the agent checks compare
+      // with === and would not see as R2 or R3.
+      if (typeof c.risk !== 'string' || !Object.hasOwn(RISK_ORDER, c.risk)) throw new Error(`command ${c.name}: unknown risk ${String(c.risk)}`);
       if (!validAccess(c.access, ACCESS_KINDS)) throw new Error(`command ${c.name}: access is a role list or one of ${ACCESS_KINDS.join(', ')}`);
       if (c.agent !== undefined && (!validAccess(c.agent.roles, ['any']) || (c.agent.taint !== undefined && c.agent.taint !== 'propagate'))) {
         throw new Error(`command ${c.name}: agent access names a role list or 'any', and taint is 'propagate' or absent`);
