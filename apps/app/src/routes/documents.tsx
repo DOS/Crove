@@ -56,16 +56,18 @@ function DocumentRow({ d, slug, notes }: { d: PurchaseDocument; slug: string; no
             <Badge variant="success">{t('status.recorded')}</Badge>
           )}
           <InvoiceCorrections corrects={d.corrects} correctedBy={d.correctedBy} />
-          {notes && (
+        </TableCell>
+        {notes && (
+          <TableCell className="px-4 py-3 text-right">
             <Button variant="ghost" size="sm" onClick={() => setNotesOpen((o) => !o)} aria-expanded={notesOpen} aria-label={tn('panel.toggleOf', { name })}>
               {tn('panel.title')}
             </Button>
-          )}
-        </TableCell>
+          </TableCell>
+        )}
       </TableRow>
       {notesOpen && (
         <TableRow>
-          <TableCell colSpan={8} className="px-4 py-3">
+          <TableCell colSpan={9} className="px-4 py-3">
             <RecordNotesPanel
               slug={slug}
               target={{ targetType: 'finance.purchase_document', targetId: d.id }}
@@ -123,6 +125,8 @@ export function DocumentsPage() {
             t('columns.vat'),
             t('columns.total'),
             t('columns.status'),
+            // The notes of each document (#1672), when the deployment runs the notes module.
+            ...(notes ? [''] : []),
           ]}
         >
           {shown?.map((d) => (
