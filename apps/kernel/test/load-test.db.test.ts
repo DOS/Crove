@@ -3,7 +3,7 @@
 // Set CROVE_TEST_ADMIN_URL to a superuser URL.
 import pg from 'pg';
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_LOAD_ARGS, formatReport, judge, runLoad } from '../load/load-test.ts';
+import { judge, runLoad } from '../load/load-test.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const suite = ADMIN ? describe : describe.skip;
@@ -50,7 +50,6 @@ suite('load test on PostgreSQL (#998)', () => {
       ['back-pressure resume', true],
     ]);
 
-    console.log(`TEMP-1717 small report\n${formatReport(result, verdicts)}`);
     const name = lines.find((l) => l.startsWith('database '))?.split(' ')[1];
     const root = new pg.Client({ connectionString: ADMIN });
     await root.connect();
@@ -60,10 +59,4 @@ suite('load test on PostgreSQL (#998)', () => {
       await root.end();
     }
   }, 300_000);
-
-  // TEMPORARY (#1717): the full default run on the CI runner, for the runbook's numbers. Removed before review.
-  it('TEMP-1717 full run', async () => {
-    const result = await runLoad({ adminUrl: ADMIN as string, ...DEFAULT_LOAD_ARGS }, (line) => console.log(`[load-test] ${line}`));
-    console.log(`TEMP-1717 full report\n${formatReport(result, judge(result))}`);
-  }, 1_200_000);
 });
