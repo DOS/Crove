@@ -56,7 +56,9 @@ const serverSources = (): Array<{ file: string; text: string }> =>
 
 // The source with comments blanked out (newlines kept) and strings left as they are, so prose in a comment ("an
 // import (#465)") is not read as code. A small scanner: it follows string and template literals (and the code inside
-// `${...}`); it does not parse regular expression literals, so the raw text is checked for the plain forms as well.
+// `${...}`) and regular expression literals (a `/` where an expression starts), so a quote or backtick inside a
+// regular expression does not throw it off; the raw text is checked for the plain forms as well.
+const REGEX_BEFORE = /(?:^|[(,=:[!&|?{};+\-*%<>~^]|\b(?:return|typeof|case|do|else|in|of|new|delete|void|throw|yield|await))\s*$/;
 function stripComments(source: string): string {
   let out = '';
   // Open template literals and, inside each `${`, the depth of braces since it opened.
@@ -102,6 +104,20 @@ function stripComments(source: string): string {
       i = j + 1;
       continue;
     }
+    if (ch === '/' && REGEX_BEFORE.test(out.slice(-24))) {
+      // A regular expression literal: up to the `/` that closes it outside a character class, on the same line.
+      let j = i + 1;
+      let inClass = false;
+      while (j < source.length && source[j] !== '\n' && (inClass || source[j] !== '/')) {
+        if (source[j] === '\\') j += 1;
+        else if (source[j] === '[') inClass = true;
+        else if (source[j] === ']') inClass = false;
+        j += 1;
+      }
+      out += source.slice(i, j + 1);
+      i = j + 1;
+      continue;
+    }
     if (ch === '`') stack.push('template');
     else if (typeof top === 'number' && ch === '{') stack[stack.length - 1] = top + 1;
     else if (typeof top === 'number' && ch === '}') {
@@ -133,7 +149,8 @@ function runtimeImports(raw: string): { names: string[]; problems: string[] } {
       const part = spec.trim();
       if (part.length === 0 || /^type\b/.test(part)) continue;
       const [name, alias] = part.split(/\s+as\s+/);
-      if (name?.trim() !== 'Runtime') continue;
+      // An import name may be written as a string: import { 'Runtime' as R }.
+      if (name?.trim().replace(/^(['"])(.*)\1$/, '$2') !== 'Runtime') continue;
       if (verb === 'export') problems.push(`re-exports Runtime from ${specifier}`);
       else names.push((alias ?? name).trim());
     }
@@ -141,11 +158,14 @@ function runtimeImports(raw: string): { names: string[]; problems: string[] } {
   if (/\bimport\s*\(/.test(text) || /\bimport\(/.test(raw)) problems.push('a dynamic import()');
   if (/\brequire\s*\(/.test(text) || /\brequire\(/.test(raw)) problems.push('require()');
   if (/createRequire\((?!import\.meta\.url\)\.resolve\()/.test(raw)) problems.push('createRequire() used for more than resolve()');
-  // Ways to construct a class held in a value rather than by its name: from an instance, by reflection, by a
-  // subclass. None is needed in server code; a class's own `constructor(` stays allowed.
-  if (/\.[ \t]*constructor\b|\[\s*['"`]constructor['"`]\s*\]|Reflect[ \t]*\.[ \t]*construct\b|\bextends\s+Runtime\b/.test(text)) {
+  // Ways to construct a class held in a value rather than by its name: from an instance (`.constructor`, the
+  // `'constructor'` key, destructuring it), by reflection, by a subclass. None is needed in server code; a class's own
+  // `constructor(` stays allowed.
+  if (/\.[ \t]*constructor\b|['"`]constructor['"`]|\bconstructor\s*:|\{[^{}]*\bconstructor\b[^{}]*\}\s*=[^=>]|Reflect[ \t]*\.[ \t]*construct\b|\bextends\s+Runtime\b/.test(text)) {
     problems.push('reaches a class through its constructor, Reflect.construct or a Runtime subclass');
   }
+  // Code built from strings, and an object made over another (a shadow of a runtime); Object.create(null) stays allowed.
+  if (/\beval\s*\(|\bFunction\s*\(|\bObject\s*\.\s*create\s*\((?!\s*null\s*\))/.test(text)) problems.push('eval, Function or Object.create over an object');
   return { names, problems };
 }
 
@@ -275,7 +295,11 @@ describe('declared command writes against the manifests (#1697, #1710)', () => {
     expect(scan(`import { DomainError, type Runtime } from '@crove/kernel-runtime';`)).toEqual({ names: [], problems: [] });
     expect(scan(`import type { Runtime } from '@crove/kernel-runtime';`)).toEqual({ names: [], problems: [] });
     expect(scan(`// an import (#465) of a .constructor, Reflect.construct\nconst a = 1;`)).toEqual({ names: [], problems: [] });
-    expect(scan(`class A {\n  constructor() {}\n}`)).toEqual({ names: [], problems: [] });
+    expect(scan(`class A {\n  constructor(a: string) {}\n}`)).toEqual({ names: [], problems: [] });
+    expect(scan('const out = Object.create(null) as Record<string, unknown>;')).toEqual({ names: [], problems: [] });
+    // A quote or backtick in a regular expression does not hide the code after it.
+    expect(scan("const re = /[`'*]/g;\nconst k = require('x');").problems).toEqual(['require()']);
+    expect(scan(`import { 'Runtime' as R } from '@crove/kernel-runtime';`).names).toEqual(['R']);
     expect(scan(`import { Runtime } from '@crove/kernel-runtime';`).names).toEqual(['Runtime']);
     expect(scan(`import {\n  DomainError,\n  Runtime as R, // the class\n} from '@crove/kernel-runtime';`).names).toEqual(['R']);
     expect(scan(`import { Runtime as R } from '../../packages/kernel-runtime/src/runtime.ts';`).names).toEqual(['R']);
@@ -292,6 +316,12 @@ describe('declared command writes against the manifests (#1697, #1710)', () => {
       `const R = Object.getPrototypeOf(runtime)['constructor'];`,
       'const r = Reflect.construct(Cls, [cells]);',
       'class Mine extends Runtime {}',
+      'const { constructor: C } = runtime;',
+      'const { constructor } = runtime;',
+      `const C = Reflect.get(Object.getPrototypeOf(runtime), 'constructor');`,
+      'const shadow = Object.create(runtime);',
+      `const f = new Function('return 1');`,
+      'eval(code);',
     ]) {
       expect(scan(source).problems, source).not.toEqual([]);
     }
@@ -305,26 +335,54 @@ describe('declared command writes against the manifests (#1697, #1710)', () => {
     );
   });
 
-  it('keeps its own frozen copy of a registered definition, so changing the caller object changes nothing', () => {
-    const contactWriter = def({ name: 't1766.contact', access: ['owner'], writes: [CONTACT] }) as CommandDef<unknown, unknown> & Record<string, unknown>;
+  it('keeps its own copy of a registered definition, so changing the caller object changes nothing', () => {
     const approvers = def({ name: 't1766.clean', writes: [INTERNAL], agentApprovers: { roles: ['finance.chief_accountant'] } });
-    const runtime = new Runtime(cells, { manifests: manifests() }).register({ commands: [contactWriter, approvers] });
-    // Agent access set on a contact writer after it registered, and more approvers added to a clean one.
-    contactWriter.agent = { roles: 'any' };
+    const contactWriter = def({ name: 't1766.contact', writes: [CONTACT] });
+    const runtime = new Runtime(cells, { manifests: manifests() }).register({ commands: [approvers, contactWriter] });
+    // More approvers added to a clean command, the contact write taken off a writer: P04 reads what registered.
     (approvers.agentApprovers as { roles: string[] }).roles.push('kernel.owner');
     (contactWriter.writes as CommandWrite[]).length = 0;
-    const stored = (runtime as unknown as { commands: Map<string, CommandDef<unknown, unknown>> }).commands;
-    expect(stored.get('t1766.contact')?.agent).toBeUndefined();
-    expect(stored.get('t1766.contact')?.writes).toHaveLength(1);
-    expect(Object.isFrozen(stored.get('t1766.contact'))).toBe(true);
-    expect(runtime.commandInfo('t1766.contact')?.contactOrPayment).toBe(true);
     expect(runtime.commandInfo('t1766.clean')?.agentApprovers).toEqual(['finance.chief_accountant']);
-    // A getter on the definition is read once, when it registers.
-    let reads = 0;
-    const flipping = def({ name: 't1766.flip', access: ['owner'], writes: [CONTACT] });
-    Object.defineProperty(flipping, 'agent', { enumerable: true, get: () => (reads++ === 0 ? undefined : { roles: 'any' }) });
-    const flipRuntime = new Runtime(cells).register({ commands: [flipping] });
-    expect((flipRuntime as unknown as { commands: Map<string, CommandDef<unknown, unknown>> }).commands.get('t1766.flip')?.agent).toBeUndefined();
+    expect(runtime.commandInfo('t1766.contact')?.contactOrPayment).toBe(true);
+    // (Agent access set on a definition after it registers grants nothing: agents.db.test.ts runs it as an agent.)
+  });
+
+  it('refuses a definition it could copy only in part, and an unknown risk or access', () => {
+    const hidden: Record<string, unknown> = { ...def({ name: 't1766.hidden' }) };
+    delete hidden.risk;
+    Object.defineProperty(hidden, 'risk', { enumerable: false, value: 'R3' });
+    expect(() => new Runtime(cells).register({ commands: [hidden as unknown as CommandDef<unknown, unknown>] })).toThrow(/hidden or symbol property risk/);
+    const inherited = Object.assign(Object.create({ risk: 'R3' }) as object, { ...def({ name: 't1766.inherited' }), risk: undefined });
+    expect(() => new Runtime(cells).register({ commands: [inherited as CommandDef<unknown, unknown>] })).toThrow(/not a plain object/);
+    expect(() => new Runtime(cells).register({ commands: [def({ name: 't1766.risk', risk: 'R9' as never })] })).toThrow(/unknown risk/);
+    expect(() => new Runtime(cells).register({ commands: [def({ name: 't1766.access', access: 'agents' as never })] })).toThrow(/access is a role list/);
+    expect(() => new Runtime(cells).register({ commands: [def({ name: 't1766.agent', access: [], writes: [], agent: { roles: 'all' as never } })] })).toThrow(
+      /agent access names a role list/,
+    );
+  });
+
+  it('keeps its registry out of reach: no cast, Object.create or assignment changes a runtime', () => {
+    const forgedCommand = def({ name: 't1766.forged', access: [], agent: { roles: 'any' }, writes: [forged({ ...PARTY, email: 'internal' })] });
+    const runtime = serverRuntime(cells, config, {});
+    // A shadow object over the runtime is not one: its methods cannot reach the registry.
+    const shadow = Object.create(runtime) as Runtime & Record<string, unknown>;
+    shadow.manifestTables = null;
+    expect(() => shadow.register({ commands: [forgedCommand] })).toThrow(TypeError);
+    expect(runtime.commandInfo('t1766.forged')).toBeNull();
+    // No field or method of the runtime, or of the class, can be replaced or added.
+    const open = runtime as unknown as Record<string, unknown>;
+    expect(open.commands).toBeUndefined();
+    expect(open.contactOrPayment).toBeUndefined();
+    expect(() => {
+      open.register = () => runtime;
+    }).toThrow(TypeError);
+    expect(() => {
+      open.stepUp = 'off';
+    }).toThrow(TypeError);
+    expect(() => {
+      (Runtime.prototype as unknown as Record<string, unknown>).authorizeAgent = () => {};
+    }).toThrow(TypeError);
+    expect(() => runtime.register({ commands: [forgedCommand] })).toThrow(/not its manifest's/);
   });
 
   it('freezes every manifest, and the runtime keeps its own copy of the classes', () => {

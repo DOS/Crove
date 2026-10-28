@@ -1467,6 +1467,21 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
     expect(register({ writes: [CONTACT_1697, PAYMENT_1697, INTERNAL_1697] })).not.toThrow();
   });
 
+  it('runs a command as it registered: agent access set on its definition afterwards grants an agent nothing (#1766)', async () => {
+    const contactWriter = defineCommand({
+      name: 't1766.contact_writer',
+      input: z.object({}),
+      risk: 'R1',
+      access: ['owner'],
+      writes: [CONTACT_1697],
+      handler: async () => ({ ok: true }),
+    }) as CommandDef<unknown, unknown> & { agent?: unknown };
+    worker.register({ commands: [contactWriter] });
+    contactWriter.agent = { roles: 'any' };
+    const { actor } = await liveAgent(orgA, owner);
+    await expect(worker.execute('t1766.contact_writer', {}, { actor, orgId: orgA })).rejects.toMatchObject({ code: 'FORBIDDEN', details: { rule: 'agent_access' } });
+  });
+
   it('lets an agent approve a clean R1 proposal within its max_risk, executed by the worker through the proposal gate', async () => {
     const requester = await liveAgent(orgA, owner);
     const asked = await agentProposes(requester, 't260.prop_r1');
