@@ -138,7 +138,7 @@ function VendorRow({
       {notesOpen && (
         <TableRow>
           <TableCell colSpan={6} className="px-4 py-3">
-            <RecordNotesPanel slug={slug} target={{ targetType: 'kernel.party', targetId: vendor.id }} headingId={`notes-${vendor.id}`} />
+            <RecordNotesPanel slug={slug} target={{ targetType: 'kernel.party', targetId: vendor.id }} headingId={`notes-${vendor.id}`} label={tn('panel.toggleOf', { name: vendor.name })} />
           </TableCell>
         </TableRow>
       )}

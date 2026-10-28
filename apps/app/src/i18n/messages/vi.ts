@@ -574,6 +574,7 @@ export const vi = {
     updated: 'Sửa lúc {when}',
     emptyTitle: 'Chưa có ghi chú nào',
     emptyHint: 'Ghi lại điều cần nhớ về khách hàng này',
+    emptyScreenHint: 'Ghi chú riêng chỉ bạn đọc được; ghi chú dùng chung cả tổ chức cùng xem',
     pick: 'Chọn một ghi chú để xem',
     back: 'Về danh sách',
     loading: 'Đang tải ghi chú',

@@ -5,8 +5,10 @@
 import type { ReactNode } from 'react';
 
 const SAFE_URL = /^(https?:\/\/|mailto:)/i;
-// Bold, inline code, a link, italics: the first match wins at each position.
-const INLINE = /\*\*([^*]+)\*\*|`([^`]+)`|\[([^\]]+)\]\(([^)\s]+)\)|_([^_]+)_|\*([^*]+)\*/g;
+// Bold, inline code, a link, italics: the first match wins at each position. Italics need word edges for _x_ (so
+// snake_case stays as typed) and no space just inside the stars for *x* (so "2 * 3 * 4" stays); a link's address may
+// hold one level of parentheses.
+const INLINE = /\*\*([^*]+)\*\*|`([^`]+)`|\[([^\]]+)\]\(((?:[^()\s]|\([^()\s]*\))+)\)|(?<![\p{L}\p{N}])_([^_]+)_(?![\p{L}\p{N}])|\*(\S(?:[^*]*\S)?)\*/gu;
 
 export function renderInline(text: string, keyPrefix = 'i'): ReactNode[] {
   const out: ReactNode[] = [];
@@ -88,9 +90,16 @@ export function Markdown({ text }: { text: string }) {
         }
         if (block.kind === 'list') {
           const items = block.items.map((item, j) => (
-            <li key={j} className={item.checked === null ? undefined : 'flex list-none items-start gap-2'}>
-              {item.checked !== null && <input type="checkbox" checked={item.checked} readOnly disabled className="mt-1" aria-hidden="true" tabIndex={-1} />}
-              <span className={item.checked ? 'text-muted-foreground line-through' : undefined}>{renderInline(item.text, `l${i}-${j}`)}</span>
+            <li key={j} className={item.checked === null ? undefined : 'list-none'}>
+              {item.checked === null ? (
+                renderInline(item.text, `l${i}-${j}`)
+              ) : (
+                // A labelled, read-only checkbox: a screen reader hears the step and whether it is done.
+                <label className="flex items-start gap-2">
+                  <input type="checkbox" checked={item.checked} readOnly disabled className="mt-1" />
+                  <span className={item.checked ? 'text-muted-foreground line-through' : undefined}>{renderInline(item.text, `l${i}-${j}`)}</span>
+                </label>
+              )}
             </li>
           ));
           return block.ordered ? (

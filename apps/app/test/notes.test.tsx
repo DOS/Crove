@@ -17,6 +17,15 @@ describe('note Markdown (#1671)', () => {
     expect(out).toMatch(/<input type="checkbox"[^>]*checked=""/);
   });
 
+  it('leaves snake_case and arithmetic alone, keeps parentheses in a link, and labels each checklist step', () => {
+    const out = html('file_name_v2 và 2 * 3 * 4 [Wiki](https://vi.wikipedia.org/wiki/Thuế_(kinh_tế))\n\n- [x] Gọi khách');
+    expect(out).toContain('file_name_v2');
+    expect(out).toContain('2 * 3 * 4');
+    expect(out).not.toContain('<em>');
+    expect(out).toContain('href="https://vi.wikipedia.org/wiki/Thuế_(kinh_tế)"');
+    expect(out).toMatch(/<label[^>]*><input type="checkbox"[^>]*\/><span[^>]*>Gọi khách<\/span><\/label>/);
+  });
+
   it('opens only safe links, with rel set, and keeps raw HTML as text', () => {
     const out = html('[Cổng thuế](https://thuedientu.gdt.gov.vn) [x](javascript:alert(1)) <script>alert(1)</script> <img src="https://t.example/p.gif">');
     expect(out).toContain('href="https://thuedientu.gdt.gov.vn"');

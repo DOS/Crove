@@ -576,6 +576,7 @@ export const en = {
     updated: 'Edited {when}',
     emptyTitle: 'No notes yet',
     emptyHint: 'Write down what to remember about this client',
+    emptyScreenHint: 'A private note is yours alone; a shared note is for the whole organization',
     pick: 'Choose a note to read',
     back: 'Back to the list',
     loading: 'Loading notes',

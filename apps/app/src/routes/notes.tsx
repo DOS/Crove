@@ -1,9 +1,10 @@
 // The notes screen (issue #1671, plan docs/plan/notes.md §3.10): the lists on the left (Của tôi, Dùng chung, Đã ghim,
 // Lưu trữ, Thùng rác) with a search, the open note on the right; on a narrow screen the list and the note take turns.
-// The author edits the title, Markdown body and tags, which save by themselves after a pause against the revision they
-// read (a note changed elsewhere asks to reload), and makes it private or shared. The lock and the word "Riêng tư" or
-// "Dùng chung" are always beside the title. Owners and admins may pin, archive or delete a shared note; the server and
-// the row policies decide, the screen only hides what can never succeed.
+// The author edits the title, Markdown body and tags, which save by themselves a pause after the last keystroke against
+// the revision they read (lib/note-autosave.ts; a note changed elsewhere asks to reload), and makes it private or
+// shared. The lock and the word "Riêng tư" or "Dùng chung" are always beside the title. Owners and admins may pin,
+// archive or delete a shared note; viewers write nothing. The server and the row policies decide; the screen only
+// hides what can never succeed.
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
@@ -17,71 +18,75 @@ import { Textarea } from '@crove/ui/components/textarea';
 import { VisibilityBadge, refreshNotes } from '../components/notes-panel.tsx';
 import { Empty, ErrorText, ListSkeleton, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
-import { client, errorMessage, orpc } from '../lib/api.ts';
+import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { Markdown } from '../lib/markdown.tsx';
+import { createAutosaver, type NoteValues, type SaveState } from '../lib/note-autosave.ts';
 import { looksLikePassword, parseTags, type NotesSearch } from '../lib/notes.ts';
 
 const SAVE_AFTER_MS = 800;
-type SaveState = 'idle' | 'saving' | 'saved' | 'conflict' | 'error';
-
 const isConflict = (error: unknown) => (error as { code?: string } | null)?.code === 'NOTE_REVISION_CONFLICT';
+const valuesOf = (note: Note): NoteValues => ({ title: note.title, body: note.body, tags: note.tags.join(', ') });
 
-function Editor({ note, slug, role }: { note: Note; slug: string; role: string | undefined }) {
+function Editor({ note, slug, role, back, focusTitle }: { note: Note; slug: string; role: string | undefined; back: NotesSearch; focusTitle: boolean }) {
   const t = useTranslations('notes');
   const f = useFormat();
   const navigate = useNavigate();
-  const [title, setTitle] = useState(note.title);
-  const [body, setBody] = useState(note.body);
-  const [tags, setTags] = useState(note.tags.join(', '));
+  const [values, setValues] = useState<NoteValues>(() => valuesOf(note));
   const [preview, setPreview] = useState(!note.mine);
   const [state, setState] = useState<SaveState>('idle');
   const [saveError, setSaveError] = useState<unknown>(null);
   const [confirmShare, setConfirmShare] = useState(false);
-  const revision = useRef(note.revision);
-  const dirty = useRef(false);
+  const saver = useRef(
+    createAutosaver({
+      revision: note.revision,
+      delayMs: SAVE_AFTER_MS,
+      save: async (revision, v) => (await client.notes.update({ noteId: note.id, revision, title: v.title, body: v.body, tags: parseTags(v.tags) })).revision,
+      isConflict,
+      onState: (next, error) => {
+        setState(next);
+        if (error !== undefined) setSaveError(error);
+        if (next === 'saved') void refreshNotes();
+      },
+    }),
+  ).current;
   const manager = role === 'owner' || role === 'admin';
-  const mayManage = note.mine || (note.visibility === 'org' && manager);
+  const writer = role !== undefined && role !== 'viewer';
+  const mayManage = writer && (note.mine || (note.visibility === 'org' && manager));
   const inTrash = note.deletedAt !== null;
+  const editable = note.mine && writer && !inTrash;
 
-  // A change made elsewhere (another tab, the stream's refetch) replaces the text while nothing is waiting to save.
+  // A change made elsewhere (another tab, the stream's refetch) replaces the text while nothing waits to save.
   useEffect(() => {
-    if (dirty.current || note.revision === revision.current) return;
-    revision.current = note.revision;
-    setTitle(note.title);
-    setBody(note.body);
-    setTags(note.tags.join(', '));
-  }, [note]);
+    if (saver.dirty() || saver.busy() || note.revision === saver.revision()) return;
+    saver.reset(note.revision);
+    setValues(valuesOf(note));
+  }, [note, saver]);
+  // Leaving the note (another note, the list, another screen) or the page saves what waits.
+  useEffect(() => {
+    const away = () => {
+      if (document.visibilityState === 'hidden') void saver.flush();
+    };
+    const leave = () => void saver.flush();
+    document.addEventListener('visibilitychange', away);
+    window.addEventListener('pagehide', leave);
+    return () => {
+      document.removeEventListener('visibilitychange', away);
+      window.removeEventListener('pagehide', leave);
+      void saver.flush();
+      saver.dispose();
+    };
+  }, [saver]);
 
-  const save = async () => {
-    if (title.trim() === '') return;
-    setState('saving');
-    try {
-      const done = await client.notes.update({ noteId: note.id, revision: revision.current, title, body, tags: parseTags(tags) });
-      revision.current = done.revision;
-      dirty.current = false;
-      setState('saved');
-      void refreshNotes();
-    } catch (error) {
-      setSaveError(error);
-      setState(isConflict(error) ? 'conflict' : 'error');
-    }
+  const edit = (patch: Partial<NoteValues>) => {
+    const next = { ...values, ...patch };
+    setValues(next);
+    saver.edit(next);
   };
-  // Saves a pause after the last keystroke.
-  useEffect(() => {
-    if (!dirty.current) return;
-    const timer = setTimeout(() => void save(), SAVE_AFTER_MS);
-    return () => clearTimeout(timer);
-  }, [title, body, tags]);
-  const edit = (set: (v: string) => void) => (value: string) => {
-    dirty.current = true;
-    setState('idle');
-    set(value);
-  };
-  const reload = () => {
-    dirty.current = false;
-    revision.current = -1;
-    setState('idle');
-    void refreshNotes();
+  // The server's copy, read again whatever the cache holds, replaces the text (after a conflict).
+  const reload = async () => {
+    const fresh = await queryClient.fetchQuery({ ...orpc.notes.get.queryOptions({ input: { noteId: note.id } }), staleTime: 0 });
+    saver.reset(fresh.revision);
+    setValues(valuesOf(fresh));
   };
 
   const act = useMutation({
@@ -93,11 +98,12 @@ function Editor({ note, slug, role }: { note: Note; slug: string; role: string |
     },
     onSuccess: (done, action) => {
       setConfirmShare(false);
-      if (action === 'share' || action === 'unshare') revision.current = done.revision;
+      if (action === 'share' || action === 'unshare') saver.setRevision(done.revision);
       void refreshNotes();
-      if (action === 'delete' || action === 'archive') void navigate({ to: '/o/$slug/notes', params: { slug }, search: {} });
+      if (action === 'delete' || action === 'archive') void navigate({ to: '/o/$slug/notes', params: { slug }, search: back });
     },
   });
+  const blocked = act.isPending || state === 'saving';
 
   return (
     <article className="space-y-4" aria-labelledby="note-title">
@@ -113,12 +119,12 @@ function Editor({ note, slug, role }: { note: Note; slug: string; role: string |
         </span>
       </div>
 
-      {note.mine && !inTrash ? (
+      {editable ? (
         <>
           <label htmlFor="note-title" className="sr-only">
             {t('titleLabel')}
           </label>
-          <Input id="note-title" value={title} maxLength={200} onChange={(e) => edit(setTitle)(e.target.value)} className="text-base font-semibold" />
+          <Input id="note-title" value={values.title} maxLength={200} autoFocus={focusTitle} onChange={(e) => edit({ title: e.target.value })} className="text-base font-semibold" />
           <div className="flex items-center gap-2">
             <Button variant={preview ? 'ghost' : 'outline'} size="sm" onClick={() => setPreview(false)} aria-pressed={!preview}>
               {t('write')}
@@ -128,16 +134,18 @@ function Editor({ note, slug, role }: { note: Note; slug: string; role: string |
             </Button>
           </div>
           {preview ? (
-            <div className="min-h-40 rounded-md border px-3 py-2">{body.trim() === '' ? <p className="text-sm text-subtle-foreground">{t('emptyBody')}</p> : <Markdown text={body} />}</div>
+            <div className="min-h-40 rounded-md border px-3 py-2">
+              {values.body.trim() === '' ? <p className="text-sm text-subtle-foreground">{t('emptyBody')}</p> : <Markdown text={values.body} />}
+            </div>
           ) : (
             <>
               <label htmlFor="note-body" className="sr-only">
                 {t('bodyLabel')}
               </label>
-              <Textarea id="note-body" value={body} rows={14} maxLength={100_000} onChange={(e) => edit(setBody)(e.target.value)} placeholder={t('bodyPlaceholder')} className="font-mono text-sm" />
+              <Textarea id="note-body" value={values.body} rows={14} maxLength={100_000} onChange={(e) => edit({ body: e.target.value })} placeholder={t('bodyPlaceholder')} className="font-mono text-sm" />
             </>
           )}
-          {looksLikePassword(`${title}\n${body}`) && (
+          {looksLikePassword(`${values.title}\n${values.body}`) && (
             <p role="note" className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-foreground">
               {t('passwordWarning')}
             </p>
@@ -146,7 +154,7 @@ function Editor({ note, slug, role }: { note: Note; slug: string; role: string |
             <label htmlFor="note-tags" className="text-xs font-medium text-muted-foreground">
               {t('tagsLabel')}
             </label>
-            <Input id="note-tags" value={tags} onChange={(e) => edit(setTags)(e.target.value)} placeholder={t('tagsHint')} />
+            <Input id="note-tags" value={values.tags} onChange={(e) => edit({ tags: e.target.value })} placeholder={t('tagsHint')} />
           </div>
         </>
       ) : (
@@ -171,7 +179,7 @@ function Editor({ note, slug, role }: { note: Note; slug: string; role: string |
       {state === 'conflict' && (
         <div className="flex flex-wrap items-center gap-2" role="alert">
           <ErrorText>{t('conflict')}</ErrorText>
-          <Button size="sm" variant="outline" onClick={reload}>
+          <Button size="sm" variant="outline" onClick={() => void reload()}>
             {t('reload')}
           </Button>
         </div>
@@ -182,7 +190,7 @@ function Editor({ note, slug, role }: { note: Note; slug: string; role: string |
         <div className="space-y-2 rounded-lg border p-3 text-sm" role="alertdialog" aria-label={t('shareTitle')}>
           <p className="text-foreground">{t('shareConfirm')}</p>
           <div className="flex gap-2">
-            <Button size="sm" disabled={act.isPending} onClick={() => act.mutate('share')}>
+            <Button size="sm" disabled={blocked} onClick={() => act.mutate('share')}>
               {t('makeShared')}
             </Button>
             <Button size="sm" variant="ghost" onClick={() => setConfirmShare(false)}>
@@ -195,23 +203,23 @@ function Editor({ note, slug, role }: { note: Note; slug: string; role: string |
       {mayManage && (
         <div className="flex flex-wrap gap-2 border-t pt-3">
           {inTrash ? (
-            <Button size="sm" variant="outline" disabled={act.isPending} onClick={() => act.mutate('restore')}>
+            <Button size="sm" variant="outline" disabled={blocked} onClick={() => act.mutate('restore')}>
               {t('restore')}
             </Button>
           ) : (
             <>
               {note.mine && !confirmShare && (
-                <Button size="sm" variant="outline" disabled={act.isPending} onClick={() => (note.visibility === 'org' ? act.mutate('unshare') : setConfirmShare(true))}>
+                <Button size="sm" variant="outline" disabled={blocked} onClick={() => (note.visibility === 'org' ? act.mutate('unshare') : setConfirmShare(true))}>
                   {note.visibility === 'org' ? t('makePrivate') : t('makeShared')}
                 </Button>
               )}
-              <Button size="sm" variant="outline" disabled={act.isPending} onClick={() => act.mutate(note.pinned ? 'unpin' : 'pin')}>
+              <Button size="sm" variant="outline" disabled={blocked} onClick={() => act.mutate(note.pinned ? 'unpin' : 'pin')}>
                 {note.pinned ? t('unpin') : t('pin')}
               </Button>
-              <Button size="sm" variant="outline" disabled={act.isPending} onClick={() => act.mutate(note.archivedAt ? 'restore' : 'archive')}>
+              <Button size="sm" variant="outline" disabled={blocked} onClick={() => act.mutate(note.archivedAt ? 'restore' : 'archive')}>
                 {note.archivedAt ? t('restore') : t('archive')}
               </Button>
-              <Button size="sm" variant="ghost" disabled={act.isPending} onClick={() => act.mutate('delete')}>
+              <Button size="sm" variant="ghost" disabled={blocked} onClick={() => act.mutate('delete')}>
                 {t('delete')}
               </Button>
             </>
@@ -233,10 +241,15 @@ export function NotesPage() {
   const search: NotesSearch = useSearch({ strict: false });
   const view: NoteListView = search.list ?? 'mine';
   const [q, setQ] = useState(search.q ?? '');
+  // Back and forward change the address, and the search box follows it.
+  useEffect(() => setQ(search.q ?? ''), [search.q]);
+  const [created, setCreated] = useState<string | null>(null);
   const go = (next: NotesSearch) => void navigate({ to: '/o/$slug/notes', params: { slug }, search: next });
+  const back: NotesSearch = search.q ? { q: search.q } : { list: view };
 
   const me = useQuery(orpc.me.get.queryOptions());
   const role = me.data?.orgs.find((o) => o.slug === slug)?.role;
+  const writer = role !== undefined && role !== 'viewer';
   const list = useQuery({ ...orpc.notes.list.queryOptions({ input: { view } }), enabled: !search.q });
   const found = useQuery({ ...orpc.notes.search.queryOptions({ input: { q: search.q ?? '' } }), enabled: Boolean(search.q) });
   const notes = search.q ? found : list;
@@ -245,15 +258,16 @@ export function NotesPage() {
     mutationFn: () => client.notes.create({ title: t('newTitle') }),
     onSuccess: (done) => {
       void refreshNotes();
+      setCreated(done.noteId);
       go({ list: 'mine', note: done.noteId });
     },
   });
-  const newButton = (
+  const newButton = writer ? (
     <Button onClick={() => create.mutate()} disabled={create.isPending}>
       {create.isPending && <Spinner className="text-current" />}
       {t('new')}
     </Button>
-  );
+  ) : undefined;
 
   return (
     <div>
@@ -287,14 +301,7 @@ export function NotesPage() {
           {search.q && (
             <p className="mt-3 text-xs text-subtle-foreground">
               {t('searchingFor', { q: search.q })}{' '}
-              <button
-                type="button"
-                className="text-link underline"
-                onClick={() => {
-                  setQ('');
-                  go({ list: view });
-                }}
-              >
+              <button type="button" className="text-link underline" onClick={() => go({ list: view })}>
                 {t('clearSearch')}
               </button>
             </p>
@@ -304,7 +311,7 @@ export function NotesPage() {
             {notes.isPending && !notes.error ? (
               <ListSkeleton />
             ) : notes.data && notes.data.length === 0 ? (
-              <Empty title={search.q ? t('searchEmpty') : t('emptyTitle')} hint={t('emptyHint')} />
+              <Empty title={search.q ? t('searchEmpty') : t('emptyTitle')} hint={t('emptyScreenHint')} action={search.q ? undefined : newButton} />
             ) : (
               <ul className="divide-y rounded-lg border">
                 {notes.data?.map((n) => (
@@ -312,7 +319,7 @@ export function NotesPage() {
                     <Link
                       to="/o/$slug/notes"
                       params={{ slug }}
-                      search={{ ...(search.q ? { q: search.q } : { list: view }), note: n.id }}
+                      search={{ ...back, note: n.id }}
                       className="block px-3 py-2 text-sm hover:bg-muted/50 focus-visible:bg-muted/50 aria-[current=page]:bg-muted"
                       aria-current={n.id === search.note ? 'page' : undefined}
                       data-testid="note-row"
@@ -332,7 +339,7 @@ export function NotesPage() {
         </section>
         <section aria-label={t('noteLabel')} className={search.note ? undefined : 'hidden lg:block'}>
           {search.note && (
-            <Link to="/o/$slug/notes" params={{ slug }} search={search.q ? { q: search.q } : { list: view }} className="mb-3 inline-block text-sm text-link underline lg:hidden">
+            <Link to="/o/$slug/notes" params={{ slug }} search={back} className="mb-3 inline-block text-sm text-link underline lg:hidden">
               {t('back')}
             </Link>
           )}
@@ -341,7 +348,7 @@ export function NotesPage() {
           ) : open.error ? (
             <ErrorText>{errorMessage(open.error)}</ErrorText>
           ) : open.data ? (
-            <Editor key={open.data.id} note={open.data} slug={slug} role={role} />
+            <Editor key={open.data.id} note={open.data} slug={slug} role={role} back={back} focusTitle={created === open.data.id} />
           ) : (
             <ListSkeleton />
           )}

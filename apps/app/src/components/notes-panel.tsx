@@ -36,7 +36,14 @@ export function VisibilityBadge({ note }: { note: Pick<NoteSummary, 'visibility'
   );
 }
 
-function PanelNote({ note, slug }: { note: NoteSummary; slug: string }) {
+// The caller's role in the org: viewers write no note, and owners and admins also pin a shared one.
+function useNotesRole(slug: string) {
+  const me = useQuery(orpc.me.get.queryOptions());
+  const role = me.data?.orgs.find((o) => o.slug === slug)?.role;
+  return { writer: role !== undefined && role !== 'viewer', manager: role === 'owner' || role === 'admin' };
+}
+
+function PanelNote({ note, slug, mayPin }: { note: NoteSummary; slug: string; mayPin: boolean }) {
   const t = useTranslations('notes');
   const f = useFormat();
   const pin = useMutation({
@@ -51,9 +58,11 @@ function PanelNote({ note, slug }: { note: NoteSummary; slug: string }) {
       {note.pinned && <Badge variant="secondary">{t('pinnedBadge')}</Badge>}
       <VisibilityBadge note={note} />
       <span className="text-xs text-subtle-foreground">{f.date(note.updatedAt)}</span>
-      <Button variant="ghost" size="sm" disabled={pin.isPending} onClick={() => pin.mutate()} aria-label={t(note.pinned ? 'unpinOf' : 'pinOf', { title: note.title })}>
-        {note.pinned ? t('unpin') : t('pin')}
-      </Button>
+      {mayPin && (
+        <Button variant="ghost" size="sm" disabled={pin.isPending} onClick={() => pin.mutate()} aria-label={t(note.pinned ? 'unpinOf' : 'pinOf', { title: note.title })}>
+          {note.pinned ? t('unpin') : t('pin')}
+        </Button>
+      )}
       {pin.error && <ErrorText>{errorMessage(pin.error)}</ErrorText>}
     </li>
   );
@@ -106,11 +115,29 @@ function AddNote({ target, onDone }: { target: NoteLinkTargetInput | undefined; 
   );
 }
 
-function PanelBody({ slug, target, headingId, notes, error }: { slug: string; target: NoteLinkTargetInput | undefined; headingId: string; notes: NoteSummary[] | null; error: unknown }) {
+// label: the region's name when several panels may be open at once (one per party row), so each is told apart.
+function PanelBody({
+  slug,
+  target,
+  headingId,
+  label,
+  className,
+  notes,
+  error,
+}: {
+  slug: string;
+  target: NoteLinkTargetInput | undefined;
+  headingId: string;
+  label?: string;
+  className?: string;
+  notes: NoteSummary[] | null;
+  error: unknown;
+}) {
   const t = useTranslations('notes');
+  const { writer, manager } = useNotesRole(slug);
   const [adding, setAdding] = useState(false);
   return (
-    <section className="mt-8" aria-labelledby={headingId}>
+    <section className={className} {...(label ? { 'aria-label': label } : { 'aria-labelledby': headingId })}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 id={headingId} className="text-sm font-semibold">
           {t('panel.title')}
@@ -128,23 +155,25 @@ function PanelBody({ slug, target, headingId, notes, error }: { slug: string; ta
         ) : notes && notes.length > 0 ? (
           <ul className="divide-y">
             {notes.map((n) => (
-              <PanelNote key={n.id} note={n} slug={slug} />
+              <PanelNote key={n.id} note={n} slug={slug} mayPin={writer && (n.mine || (n.visibility === 'org' && manager))} />
             ))}
           </ul>
         ) : (
           !error && <p className="px-4 py-3 text-sm text-subtle-foreground">{t('panel.empty')}</p>
         )}
-        <div className="border-t">
-          {adding ? (
-            <AddNote target={target} onDone={() => setAdding(false)} />
-          ) : (
-            <div className="px-4 py-3">
-              <Button variant="outline" size="sm" onClick={() => setAdding(true)}>
-                {t('panel.add')}
-              </Button>
-            </div>
-          )}
-        </div>
+        {writer && (
+          <div className="border-t">
+            {adding ? (
+              <AddNote target={target} onDone={() => setAdding(false)} />
+            ) : (
+              <div className="px-4 py-3">
+                <Button variant="outline" size="sm" onClick={() => setAdding(true)}>
+                  {t('panel.add')}
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
       </Card>
     </section>
   );
@@ -155,14 +184,14 @@ export function OrgNotesPanel({ slug }: { slug: string }) {
   const pinned = useQuery(orpc.notes.list.queryOptions({ input: { view: 'pinned', limit: 20 } }));
   const shared = useQuery(orpc.notes.list.queryOptions({ input: { view: 'shared', limit: LATEST + 20 } }));
   const notes = pinned.data && shared.data ? [...pinned.data, ...shared.data.filter((n) => !n.pinned).slice(0, LATEST)] : null;
-  return <PanelBody slug={slug} target={undefined} headingId="overview-notes" notes={notes} error={pinned.error ?? shared.error} />;
+  return <PanelBody slug={slug} target={undefined} headingId="overview-notes" className="mt-8" notes={notes} error={pinned.error ?? shared.error} />;
 }
 
 // A record's panel (a party): the notes linked to it.
-export function RecordNotesPanel({ slug, target, headingId }: { slug: string; target: NoteLinkTargetInput; headingId: string }) {
+export function RecordNotesPanel({ slug, target, headingId, label }: { slug: string; target: NoteLinkTargetInput; headingId: string; label: string }) {
   const panel = useQuery(orpc.notes.panel.queryOptions({ input: target }));
   const notes = panel.data ? [...panel.data.pinned, ...panel.data.latest] : null;
-  return <PanelBody slug={slug} target={target} headingId={headingId} notes={notes} error={panel.error} />;
+  return <PanelBody slug={slug} target={target} headingId={headingId} label={label} notes={notes} error={panel.error} />;
 }
 
 // Before an owner removes a member (ADR-0037 §4): how many private notes they have, which nobody reads once they leave

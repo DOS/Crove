@@ -82,7 +82,7 @@ function CustomerRow({
       {notesOpen && (
         <TableRow>
           <TableCell colSpan={columns} className="px-4 py-3">
-            <RecordNotesPanel slug={slug} target={{ targetType: 'kernel.party', targetId: customer.id }} headingId={`notes-${customer.id}`} />
+            <RecordNotesPanel slug={slug} target={{ targetType: 'kernel.party', targetId: customer.id }} headingId={`notes-${customer.id}`} label={tn('panel.toggleOf', { name: customer.name })} />
           </TableCell>
         </TableRow>
       )}
