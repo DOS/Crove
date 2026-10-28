@@ -194,7 +194,7 @@ export const zTodoSummary = z.object({
   dueAt: z.string().nullable(),
   dueTime: z.string().nullable(),
   timeZone: z.string(),
-  // When the reminder is due, or null for none.
+  // The reminder's time, or null for none; it may have passed (sent, or already past when it was set).
   remindAt: z.string().nullable(),
   group: z.enum(TODO_DUE_GROUPS).nullable(),
   overdue: z.boolean(),

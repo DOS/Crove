@@ -1,6 +1,6 @@
 // To-do reminders on PostgreSQL 17 (issue #1675, ADR-0037 §2, notes plan §3.8): the reminder claim is the worker
 // login's alone, outside every context, and returns ids, owners and times, never a title, detail or step; it claims a
-// reminder once and never one of a done, cancelled or deleted to-do; the notification notes.todo.remind writes goes to
+// reminder once and never one of a done, cancelled, handed-over or deleted to-do; the notification notes.todo.remind writes goes to
 // the to-do's owner alone, only while the to-do still waits for that reminder, and holds none of its text. Part of the invariant suite; it imports package code under test,
 // never helpers from outside test/invariant/. Set CROVE_TEST_ADMIN_URL to a superuser URL; each run makes its own
 // database.
@@ -32,8 +32,8 @@ suite('to-do reminders on PostgreSQL (#1675, ADR-0037)', () => {
   let worker: Runtime;
   let orgId = '';
   const users = { owner: '', mine: '', other: '' };
-  // Due to-dos of the member: open, done, cancelled and in the trash; and one not due yet.
-  const todos = { open: randomUUID(), done: randomUUID(), cancelled: randomUUID(), trashed: randomUUID(), ahead: randomUUID() };
+  // Due to-dos of the member: open, done, cancelled, handed over and in the trash; and one not due yet.
+  const todos = { open: randomUUID(), done: randomUUID(), cancelled: randomUUID(), handed: randomUUID(), trashed: randomUUID(), ahead: randomUUID() };
   let agent = { agentId: '', runId: '' };
   const asUser = (userId: string) => ({ type: 'user' as const, userId, aal: 'aal1' as const });
   const asMfa = (userId: string) => ({ type: 'user' as const, userId, aal: 'aal2' as const, sessionId: randomUUID(), mfaAt: Math.floor(Date.now() / 1000) });
@@ -117,7 +117,13 @@ suite('to-do reminders on PostgreSQL (#1675, ADR-0037)', () => {
       { templateKey: 'finance.chief_accountant', reportsTo: null },
       { actor: asMfa(users.owner), orgId },
     );
-    await api.runtime.execute('kernel.task.create', { title: 'Việc thử', assigneePositionId: installed.positionId }, { actor: asUser(users.owner), orgId });
+    const { taskId } = await api.runtime.execute<{ taskId: string }>('kernel.task.create', { title: 'Việc thử', assigneePositionId: installed.positionId }, { actor: asUser(users.owner), orgId });
+    await admin((c) =>
+      c.query(
+        `INSERT INTO crove_notes.todo (org_id, id, owner_user_id, title, status, task_id, sort_key, remind_at) VALUES ($1, $2, $3, $4, 'handed_over', $5, 'f', now() - interval '1 minute')`,
+        [orgId, todos.handed, users.mine, SECRET, taskId],
+      ),
+    );
     const started = await worker.execute<{ runId: string | null }>('kernel.agent.run.start', { agentId: installed.agentId }, { actor: SYSTEM, orgId });
     agent = { agentId: installed.agentId, runId: started.runId as string };
   }, 300_000);
@@ -142,17 +148,15 @@ suite('to-do reminders on PostgreSQL (#1675, ADR-0037)', () => {
     for (const [name, url, enter] of callers) {
       expect(await outcome(inContext(url, enter, (c) => c.query(CLAIM))), name).toMatchObject({ ok: false, code: '42501' });
     }
-    const sent = await admin((c) => c.query<{ n: number }>(`SELECT count(*)::int AS n FROM crove_notes.todo WHERE org_id = $1 AND reminded_at IS NOT NULL`, [orgId]));
-    expect(sent.rows[0]?.n).toBe(0);
     // The check notes.todo.remind makes is the worker's, in the org's system context only, and answers an owner or null.
     const check = 'SELECT crove_notes.todo_reminder_owner($1::uuid, now()) AS owner';
     const noContext: [string, string, (c: pg.Client) => Promise<unknown>] = ['the worker login, no context', workerUrl, async () => {}];
     for (const [name, url, enter] of [...callers.filter(([n]) => n !== 'the system context'), noContext]) {
       expect(await outcome(inContext(url, enter, (c) => c.query(check, [todos.open]))), name).toMatchObject({ ok: false, code: '42501' });
     }
-    const answer = await inContext(workerUrl, (c) => c.query('SELECT crove_kernel.enter_system_context($1::uuid)', [orgId]), (c) => c.query(check, [todos.open]));
+    const answer = await inContext(workerUrl, (c) => c.query('SELECT crove_kernel.enter_system_context($1::uuid)', [orgId]), (c) => c.query(check, [todos.ahead]));
     expect(answer.fields.map((f) => f.name)).toEqual(['owner']);
-    // Not claimed yet, so not a reminder to send.
+    // Never claimed, so not a reminder to send.
     expect(answer.rows).toEqual([{ owner: null }]);
   });
 
@@ -182,7 +186,7 @@ suite('to-do reminders on PostgreSQL (#1675, ADR-0037)', () => {
     const remind = (i: { todoId: string; remindAt: string }, org = orgId) => worker.execute('notes.todo.remind', i, { actor: { type: 'system', component: 'notes' }, orgId: org });
     expect(await remind(input)).toEqual({ sent: 0 });
     expect(await remind({ todoId: todos.open, remindAt: new Date(Date.parse(remindAt) + 60_000).toISOString() })).toEqual({ sent: 0 });
-    for (const todoId of [todos.done, todos.cancelled, todos.trashed, todos.ahead, randomUUID()]) expect(await remind({ todoId, remindAt }), todoId).toEqual({ sent: 0 });
+    for (const todoId of [todos.done, todos.cancelled, todos.handed, todos.trashed, todos.ahead, randomUUID()]) expect(await remind({ todoId, remindAt }), todoId).toEqual({ sent: 0 });
     const rows = await admin(async (c) => (await c.query(`SELECT * FROM crove_kernel.notification WHERE org_id = $1 AND kind = 'notes.todo_due'`, [orgId])).rows);
     expect(rows.map((r: { user_id: string; subject_type: string; subject_id: string; detail: unknown }) => [r.user_id, r.subject_type, r.subject_id, r.detail])).toEqual([
       [users.mine, 'notes.todo', todos.open, {}],

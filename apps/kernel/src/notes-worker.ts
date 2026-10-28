@@ -63,21 +63,19 @@ export async function sweepNotesTrash(deps: { runtime: Runtime; workerDb: Db }, 
 }
 
 // One pass of the reminders: the due ones, claimed (marked sent) by crove_notes.todo_reminders_claim, each becoming one
-// notification for its owner through notes.todo.remind in the org's system context. A failure after the claim skips
-// that reminder rather than sending it twice. The claim returns ids, owners and times, never text; logs carry ids and
-// codes only.
+// notification for its owner through notes.todo.remind in the org's system context, tried twice (a lock timeout, a
+// serialization failure). A failure after that skips the reminder rather than retry it on every pass (notes.md §3.8:
+// at most once). The claim returns ids, owners and times, never text; logs carry ids and codes only.
 export async function sweepNotesReminders(deps: { runtime: Runtime; workerDb: Db }): Promise<number> {
   const { rows } = await sql<{ org_id: string; id: string; remind_at: Date }>`
     SELECT org_id, id, remind_at FROM crove_notes.todo_reminders_claim(${REMIND_SWEEP_LIMIT}::int)`.execute(deps.workerDb);
   let sent = 0;
   for (const row of rows) {
+    const remind = () =>
+      deps.runtime.execute<{ sent: number }>('notes.todo.remind', { todoId: row.id, remindAt: new Date(row.remind_at).toISOString() }, { actor: ACTOR, orgId: row.org_id });
     try {
-      const done = await deps.runtime.execute<{ sent: number }>(
-        'notes.todo.remind',
-        { todoId: row.id, remindAt: new Date(row.remind_at).toISOString() },
-        { actor: ACTOR, orgId: row.org_id },
-      );
-      sent += done.sent;
+      // A second try is harmless: the notification's key and the check of the to-do write it once.
+      sent += (await remind().catch(remind)).sent;
     } catch (error) {
       console.warn(`[notes-remind] org ${row.org_id.slice(0, 8)}`, error instanceof DomainError ? error.code : error instanceof Error ? error.name : 'error');
     }

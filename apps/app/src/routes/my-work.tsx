@@ -171,7 +171,7 @@ function TodoEditor({ todo, onClose }: { todo: Todo; onClose: () => void }) {
           <span>
             <span className="block text-foreground">{t('fieldRemind')}</span>
             <span className="block text-subtle-foreground">
-              {todo.remindAt && remind && !remindTouched && dueOn === (todo.dueOn ?? '') && dueTime === (todo.dueTime ?? '')
+              {todo.remindAt && Date.parse(todo.remindAt) > Date.now() && remind && !remindTouched && dueOn === (todo.dueOn ?? '') && dueTime === (todo.dueTime ?? '')
                 ? t('remindAt', { time: f.dateTime(todo.remindAt) })
                 : t('remindHint')}
             </span>

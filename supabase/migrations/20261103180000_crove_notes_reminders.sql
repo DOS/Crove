@@ -16,11 +16,12 @@ SET LOCAL lock_timeout = '2s';
 CREATE INDEX IF NOT EXISTS todo_remind_idx ON crove_notes.todo (remind_at)
   WHERE remind_at IS NOT NULL AND reminded_at IS NULL AND status = 'open' AND deleted_at IS NULL;
 
--- A new reminder time is a reminder not sent yet, whoever writes it: a moved due day reminds again at its new time.
+-- A new reminder time is a reminder not sent yet, unless the writer says otherwise in the same statement (an automatic
+-- time already past when it was set is stored as passed): a moved due day reminds again at its new time.
 CREATE OR REPLACE FUNCTION crove_notes.todo_remind_reset() RETURNS trigger
 LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
 BEGIN
-  IF NEW.remind_at IS DISTINCT FROM OLD.remind_at THEN
+  IF NEW.remind_at IS DISTINCT FROM OLD.remind_at AND NEW.reminded_at IS NOT DISTINCT FROM OLD.reminded_at THEN
     NEW.reminded_at := NULL;
   END IF;
   RETURN NEW;

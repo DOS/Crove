@@ -125,9 +125,15 @@ suite('to-do reminders and search on PostgreSQL (#1675)', () => {
     expect((await o.get(o.mine, off.todoId)).remindAt).toBeNull();
     const none = await o.exec<TodoWritten>(o.mine, 'notes.todo.create', { title: 'Không hạn' });
     expect((await o.get(o.mine, none.todoId)).remindAt).toBeNull();
-    // Due yesterday: 8:00 of that day has passed, so no reminder fires the moment it is written.
+    // Due yesterday: 8:00 of that day has passed, so it is kept as passed and not sent the moment it is written; moved
+    // to a later day, the automatic reminder follows it.
     const late = await o.exec<TodoWritten>(o.mine, 'notes.todo.create', { title: 'Quá hạn', dueOn: dayAhead(-1), timeZone: TZ });
-    expect((await o.get(o.mine, late.todoId)).remindAt).toBeNull();
+    expect((await o.get(o.mine, late.todoId)).remindAt).toBe(todoDueInstant(dayAhead(-1), '08:00', TZ).toISOString());
+    const sentAt = (id: string) => admin(async (c) => (await c.query<{ reminded_at: Date | null }>(`SELECT reminded_at FROM crove_notes.todo WHERE id = $1`, [id])).rows[0]?.reminded_at);
+    expect(await sentAt(late.todoId)).not.toBeNull();
+    await o.exec(o.mine, 'notes.todo.update', { todoId: late.todoId, revision: 1, title: 'Quá hạn', details: '', checklist: [], dueOn: dayAhead(2), dueTime: null, timeZone: TZ });
+    expect((await o.get(o.mine, late.todoId)).remindAt).toBe(todoDueInstant(dayAhead(2), '08:00', TZ).toISOString());
+    expect(await sentAt(late.todoId)).toBeNull();
     // A picked time, with or without a due day; one already past is refused.
     const at = new Date(Date.now() + 3_600_000).toISOString();
     const picked = await o.exec<TodoWritten>(o.mine, 'notes.todo.create', { title: 'Giờ tự chọn', reminder: { at } });
@@ -224,6 +230,11 @@ suite('to-do reminders and search on PostgreSQL (#1675)', () => {
     expect((await o.reminders()).some((r) => r.subject_id === again)).toBe(false);
     const claimed = await admin((c) => c.query<{ reminded_at: Date | null }>(`SELECT reminded_at FROM crove_notes.todo WHERE id = $1`, [again]));
     expect(claimed.rows[0]?.reminded_at).not.toBeNull();
+    // Done before its time and reopened after it, or restored from the trash: not reminded late.
+    await o.exec(o.mine, 'notes.todo.reopen', { todoId: done });
+    await o.exec(o.mine, 'notes.todo.restore', { todoId: deleted });
+    await sweepNotesReminders({ runtime: worker, workerDb });
+    expect((await o.reminders()).some((r) => r.subject_id === done || r.subject_id === deleted)).toBe(false);
   });
 
   it("puts a branch-limited member's reminder under their branch, so they see it", async () => {

@@ -132,18 +132,22 @@ function due(input: { dueOn: string | null; dueTime: string | null; timeZone: st
   };
 }
 
-// When the reminder is due (notes.md §3.8): the automatic one only while it is ahead, so a to-do written for today
-// after 8:00 is not reminded at once; a picked time must be ahead.
-function remindAt(reminder: TodoReminder, at: { due_on: string | null; due_at: Date | null; time_zone: string }, now: Date): Date | null {
-  if (reminder === 'off') return null;
+// When the reminder is due (notes.md §3.8), and whether it counts as passed: an automatic time already past (a to-do
+// written for today after 8:00) is kept, so it still reads as automatic and follows a moved due day, but marked passed,
+// so it is not sent at once; a picked time must be ahead.
+function remindAt(reminder: TodoReminder, at: { due_on: string | null; due_at: Date | null; time_zone: string }, now: Date): { at: Date | null; passed: boolean } {
+  if (reminder === 'off') return { at: null, passed: false };
   if (reminder === 'auto') {
     const auto = todoAutoReminder({ dueOn: at.due_on, dueAt: at.due_at, timeZone: at.time_zone });
-    return auto !== null && auto.getTime() > now.getTime() ? auto : null;
+    return { at: auto, passed: auto !== null && auto.getTime() <= now.getTime() };
   }
   const picked = new Date(reminder.at);
   if (picked.getTime() <= now.getTime()) throw new DomainError('TODO_REMINDER_PAST', 400, 'Giờ nhắc đã qua; hãy chọn một giờ sắp tới');
-  return picked;
+  return { at: picked, passed: false };
 }
+
+// A to-do back in the list (reopened, restored) whose reminder time passed meanwhile is not reminded late.
+const reminderPassed = (now: Date) => sql<Date | null>`CASE WHEN remind_at <= ${now}::timestamptz AND reminded_at IS NULL THEN ${now}::timestamptz ELSE reminded_at END`;
 
 // How a reminder is told in the audit: its kind and time, never the to-do's text.
 const reminderKind = (reminder: TodoReminder) => (typeof reminder === 'string' ? reminder : 'custom');
@@ -213,7 +217,8 @@ export const todoCreate = defineCommand({
         details: detailsOf(input.details),
         checklist: checklistOf(input.checklist),
         ...when,
-        remind_at: remind,
+        remind_at: remind.at,
+        reminded_at: remind.passed ? ctx.now : null,
         sort_key: sortKey,
         created_at: ctx.now,
         updated_at: ctx.now,
@@ -229,7 +234,7 @@ export const todoCreate = defineCommand({
       dueTime: input.dueTime !== null,
       timeZone: input.timeZone,
       reminder: reminderKind(input.reminder),
-      remindAt: remind?.toISOString() ?? null,
+      remindAt: remind.at?.toISOString() ?? null,
     });
     return written(row);
   },
@@ -261,24 +266,33 @@ export const todoUpdate = defineCommand({
       beforeRemind === null
         ? before.due_on === null
         : beforeRemind.getTime() === todoAutoReminder({ dueOn: before.due_on, dueAt: beforeDueAt === null ? null : new Date(beforeDueAt), timeZone: before.time_zone })?.getTime();
-    const remind = input.reminder !== undefined ? remindAt(input.reminder, next, ctx.now) : dueMoved && wasAuto ? remindAt('auto', next, ctx.now) : beforeRemind;
+    const remind = input.reminder !== undefined ? remindAt(input.reminder, next, ctx.now) : dueMoved && wasAuto ? remindAt('auto', next, ctx.now) : null;
+    const remindChanged = remind !== null && (beforeRemind?.getTime() ?? null) !== (remind.at?.getTime() ?? null);
     const changed = [
       ...(before.title !== input.title ? ['title'] : []),
       ...(before.details !== details ? ['details'] : []),
       ...(JSON.stringify(steps(before.checklist)) !== checklist ? ['checklist'] : []),
       ...(before.due_on !== next.due_on || beforeDueAt !== (next.due_at?.getTime() ?? null) ? ['due'] : []),
       ...(before.time_zone !== next.time_zone ? ['timeZone'] : []),
-      ...((beforeRemind?.getTime() ?? null) !== (remind?.getTime() ?? null) ? ['reminder'] : []),
+      ...(remindChanged ? ['reminder'] : []),
     ];
     const row = await ctx.trx
       .updateTable('crove_notes.todo')
-      // A new reminder time clears reminded_at (the b_remind_reset trigger), so it is sent again.
-      .set({ title: input.title, details, checklist, ...next, remind_at: remind, revision: before.revision + 1, updated_at: ctx.now })
+      // A new reminder time is sent at that time, unless it has already passed.
+      .set({
+        title: input.title,
+        details,
+        checklist,
+        ...next,
+        ...(remind !== null && remindChanged ? { remind_at: remind.at, reminded_at: remind.passed ? ctx.now : null } : {}),
+        revision: before.revision + 1,
+        updated_at: ctx.now,
+      })
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', input.todoId)
       .returning(['id', 'revision'])
       .executeTakeFirstOrThrow();
-    ctx.audit({ todoId: row.id, revision: row.revision, changed, dueOn: next.due_on, remindAt: remind?.toISOString() ?? null });
+    ctx.audit({ todoId: row.id, revision: row.revision, changed, dueOn: next.due_on, ...(remind !== null && remindChanged ? { remindAt: remind.at?.toISOString() ?? null } : {}) });
     return written(row);
   },
 });
@@ -300,7 +314,7 @@ function statusCommand(name: string, from: TodoStatus, to: TodoStatus) {
       if (before.status !== from) throw new DomainError('TODO_NOT_CHANGEABLE', 409, 'Việc này đã được giao hoặc đã hủy');
       const row = await ctx.trx
         .updateTable('crove_notes.todo')
-        .set({ status: to, done_at: to === 'done' ? ctx.now : null, revision: before.revision + 1, updated_at: ctx.now })
+        .set({ status: to, done_at: to === 'done' ? ctx.now : null, ...(to === 'open' ? { reminded_at: reminderPassed(ctx.now) } : {}), revision: before.revision + 1, updated_at: ctx.now })
         .where('org_id', '=', ctx.orgId)
         .where('id', '=', input.todoId)
         .returning(['id', 'revision'])
@@ -352,7 +366,7 @@ function trashCommand(name: string, toTrash: boolean) {
       if ((before.deleted_at !== null) === toTrash) return written(before);
       await ctx.trx
         .updateTable('crove_notes.todo')
-        .set({ deleted_at: toTrash ? ctx.now : null, updated_at: ctx.now })
+        .set({ deleted_at: toTrash ? ctx.now : null, ...(toTrash ? {} : { reminded_at: reminderPassed(ctx.now) }), updated_at: ctx.now })
         .where('org_id', '=', ctx.orgId)
         .where('id', '=', input.todoId)
         .execute();
