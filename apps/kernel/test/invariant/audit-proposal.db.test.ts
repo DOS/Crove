@@ -168,7 +168,7 @@ suite('audit rows naming a proposal on PostgreSQL (#1695)', () => {
     admin(async (c) =>
       (
         await c.query<{ command: string; outcome: string }>(
-          'SELECT command, outcome FROM crove_kernel.audit_event WHERE proposal_id = $1 ORDER BY command, occurred_at',
+          'SELECT command, outcome FROM crove_kernel.audit_event WHERE proposal_id = $1 ORDER BY command, occurred_at, id',
           [proposalId],
         )
       ).rows,
