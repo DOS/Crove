@@ -2724,7 +2724,7 @@ export const en = {
       provider: 'For',
       anyProvider: 'Every platform',
       body: 'Text',
-      bodyPlaceholder: '#crove #khaitruong',
+      bodyPlaceholder: '#myshop #grandopening',
       isTemplate: 'A template to start a whole post',
       save: 'Save',
       cancel: 'Cancel',

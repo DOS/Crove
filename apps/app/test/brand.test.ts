@@ -104,20 +104,21 @@ describe('brand name (#1040)', () => {
     expect(withBrand('Tệp {brandSlug}-but-toan.xlsx của {brand}')).toBe('Tệp ten-moi-but-toan.xlsx của Tên Mới');
   });
 
-  // #1683: with no BRAND_NAME, every screen says Ludy; the old name shows nowhere.
+  // #1683: with no BRAND_NAME, every screen says Ludy; the old name shows nowhere, in any case (a #crove
+  // hashtag example too).
   it('shows no "Crove" with no brand configured', () => {
     for (const locale of LOCALES) {
-      const offenders = messages(catalog(locale)).filter(([key, text]) => /\bCrove\b/.test(text) && !ALLOWED_MESSAGES.has(key));
+      const offenders = messages(catalog(locale)).filter(([key, text]) => /\bcrove\b/i.test(text) && !ALLOWED_MESSAGES.has(key));
       expect(offenders, locale).toEqual([]);
     }
     const guides = [...quickGuide(), ...firmGuide()].flatMap((step) => [step.title, ...step.items]).join('\n');
-    expect(guides).not.toMatch(/\bCrove\b/);
+    expect(guides).not.toMatch(/\bcrove\b/i);
     for (const file of STATIC_FILES) {
       const shown = readFileSync(join(app, file), 'utf8')
         .split('\n')
         .map(code)
         .join('\n');
-      expect(shown, file).not.toMatch(/\bCrove\b/);
+      expect(shown, file).not.toMatch(/\bcrove\b/i);
       expect(shown, file).toContain(DEFAULT_BRAND);
     }
   });

@@ -2723,7 +2723,7 @@ export const vi = {
       provider: 'Dùng cho',
       anyProvider: 'Mọi nền tảng',
       body: 'Nội dung',
-      bodyPlaceholder: '#crove #khaitruong',
+      bodyPlaceholder: '#cuahang #khaitruong',
       isTemplate: 'Là mẫu để bắt đầu cả bài',
       save: 'Lưu',
       cancel: 'Hủy',
