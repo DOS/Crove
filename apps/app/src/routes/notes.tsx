@@ -22,7 +22,7 @@ import { client, clientForOrg, errorMessage, orpc, queryClient } from '../lib/ap
 import { Markdown } from '../lib/markdown.tsx';
 import { applyFormat, shortcutFormat, type MarkdownFormat } from '../lib/markdown-edit.ts';
 import { createAutosaver, type NoteValues, type SaveState } from '../lib/note-autosave.ts';
-import { looksLikePassword, parseTags, tagCounts, type NotesSearch } from '../lib/notes.ts';
+import { listOfNote, looksLikePassword, parseTags, tagCounts, type NotesSearch } from '../lib/notes.ts';
 
 const SAVE_AFTER_MS = 800;
 const isConflict = (error: unknown) => (error as { code?: string } | null)?.code === 'NOTE_REVISION_CONFLICT';
@@ -456,7 +456,7 @@ export function NotesPage() {
           ) : open.error ? (
             <ErrorText>{errorMessage(open.error)}</ErrorText>
           ) : open.data ? (
-            <Editor key={open.data.id} note={open.data} slug={slug} role={role} back={back} focusTitle={created === open.data.id} onTag={(t) => go({ list: view, tag: t })} />
+            <Editor key={open.data.id} note={open.data} slug={slug} role={role} back={back} focusTitle={created === open.data.id} onTag={(t) => go({ list: listOfNote(open.data, search.q ? undefined : search.list), tag: t })} />
           ) : (
             <ListSkeleton />
           )}

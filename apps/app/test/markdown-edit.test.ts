@@ -2,7 +2,7 @@
 // member expects it, the shortcuts, the tag chips' order, and ?tag= in the address.
 import { describe, expect, it } from 'vitest';
 import { applyFormat, shortcutFormat, type TextEdit } from '../src/lib/markdown-edit.ts';
-import { parseNotesSearch, tagCounts } from '../src/lib/notes.ts';
+import { listOfNote, parseNotesSearch, tagCounts } from '../src/lib/notes.ts';
 
 // The text with ‹ and › marking the selection, and back (Markdown uses [ and ] itself).
 function marked(text: string): TextEdit {
@@ -74,6 +74,17 @@ describe('note tag filter (#1739)', () => {
       { tag: 'ngân hàng', count: 1 },
     ]);
     expect(tagCounts(notes, 1)).toEqual([{ tag: 'thuế', count: 2 }]);
+  });
+
+  it("opens a tag chip's list on one that holds the note", () => {
+    const note = { mine: false, visibility: 'org' as const, pinned: false, archivedAt: null, deletedAt: null };
+    // Another member's shared note found by a search: not "mine".
+    expect(listOfNote(note, undefined)).toBe('shared');
+    expect(listOfNote(note, 'mine')).toBe('shared');
+    expect(listOfNote({ ...note, pinned: true }, 'pinned')).toBe('pinned');
+    expect(listOfNote({ ...note, mine: true, visibility: 'private' }, undefined)).toBe('mine');
+    expect(listOfNote({ ...note, archivedAt: '2026-10-01T00:00:00Z' }, 'shared')).toBe('archived');
+    expect(listOfNote({ ...note, deletedAt: '2026-10-01T00:00:00Z' }, 'archived')).toBe('trash');
   });
 
   it('keeps ?tag= as one tag the way the server keeps it, and drops an empty one', () => {
