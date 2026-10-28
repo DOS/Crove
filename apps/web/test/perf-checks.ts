@@ -128,7 +128,7 @@ export async function measureVitals(browser: Browser, path: string, profile: Pro
   return { vitals, problems, summary };
 }
 
-type Loaded = { url: string; type: string; contentType: string; bytes: number | null; encoded: number };
+type Loaded = { url: string; type: string; contentType: string; bytes: number | null; encoded: number | null };
 
 // What one visit downloads and what the page declares, against the budget's rules for fonts, images and scripts.
 export async function auditResources(browser: Browser, path: string, profile: Profile, setup?: Setup) {
@@ -146,7 +146,9 @@ export async function auditResources(browser: Browser, path: string, profile: Pr
           type: request.resourceType(),
           contentType: (response.headers()['content-type'] ?? '').split(';')[0].trim(),
           bytes: (await response.body().catch(() => null))?.length ?? null,
-          encoded: (await request.sizes()).responseBodySize,
+          // sizes() rejects when the request was torn down before Playwright read them; the size is then unknown,
+          // which the checks below report rather than count as 0.
+          encoded: (await request.sizes().catch(() => null))?.responseBodySize ?? null,
         };
       })(),
     );
@@ -178,7 +180,11 @@ export async function auditResources(browser: Browser, path: string, profile: Pr
   for (const image of resources.filter((r) => r.type === 'image' && r.contentType !== 'image/svg+xml')) {
     if (!['image/avif', 'image/webp'].includes(image.contentType)) problems.push(`image ${pathOf(image.url)} is ${image.contentType || 'of no type'}, not AVIF or WebP`);
     // Chromium keeps no body for an image, so its size is the one sent (images are sent uncompressed).
-    const size = Math.max(image.bytes ?? 0, image.encoded);
+    if (image.bytes === null && image.encoded === null) {
+      problems.push(`image ${pathOf(image.url)} could not be read, so its size is unknown`);
+      continue;
+    }
+    const size = Math.max(image.bytes ?? 0, image.encoded ?? 0);
     if (size > BUDGET.imageBytes) problems.push(`image ${pathOf(image.url)} is ${kb(size)}, over ${kb(BUDGET.imageBytes)}`);
   }
   // An <img> is judged by the type it was served as (next/image negotiates the format behind one URL), or by its
@@ -195,9 +201,9 @@ export async function auditResources(browser: Browser, path: string, profile: Pr
   // Client JavaScript: Next's runtime, React and the interactive islands, from this site, under a cap in files and in
   // bytes (sent and decoded).
   const scripts = resources.filter((r) => r.type === 'script');
-  const encoded = scripts.reduce((sum, s) => sum + s.encoded, 0);
+  const encoded = scripts.reduce((sum, s) => sum + (s.encoded ?? 0), 0);
   const decoded = scripts.reduce((sum, s) => sum + (s.bytes ?? 0), 0);
-  for (const script of scripts.filter((s) => s.bytes === null)) problems.push(`script ${pathOf(script.url)} could not be read, so its size is unknown`);
+  for (const script of scripts.filter((s) => s.bytes === null || s.encoded === null)) problems.push(`script ${pathOf(script.url)} could not be read, so its size is unknown`);
   for (const script of scripts.filter((s) => new URL(s.url).origin !== origin)) problems.push(`script ${script.url} from another origin`);
   if (scripts.length > BUDGET.scriptFiles) problems.push(`${scripts.length} script files, at most ${BUDGET.scriptFiles}`);
   if (encoded > BUDGET.scriptBytesSent) problems.push(`${kb(encoded)} of script sent, at most ${kb(BUDGET.scriptBytesSent)}`);
