@@ -159,8 +159,10 @@ export const commentAccept = defineCommand({
   // revision: of the text the member saw, the post's for a suggestion on the post's text, the channel's for one on its
   // own text (the timeline gives it).
   input: z.strictObject({ commentId: zId, revision: z.number().int().positive() }),
-  risk: 'R1',
-  sideEffect: 'internal',
+  // It may run social.post.submit nested, whose event alerts the org's team chat on Telegram or Discord, a third-party
+  // provider (plan §4.7: a job with egress derives R2, through a nested run too; #1698).
+  risk: 'R2',
+  sideEffect: 'external',
   access: MEMBERS,
   target: (input) => ({ type: 'social.post_comment', id: input.commentId }),
   handler: async (ctx, input) => {

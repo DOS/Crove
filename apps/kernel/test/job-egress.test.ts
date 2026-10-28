@@ -11,7 +11,7 @@ import { FINANCE_NOTIFYING_EVENTS, financeCommands } from '@crove/mod-finance';
 import { CHAT_ALERTING_EVENTS, CHAT_ALERT_TEST_EVENT, NOTIFYING_EVENTS, socialCommands } from '@crove/mod-social';
 import { MAIL_QUEUES, QUEUES, SOCIAL_PUBLISH_QUEUES, TENANT_HOSTED_PROVIDERS, queueEgress, socialPublishQueue, type JobEgress } from '../src/jobs-schema.ts';
 import { orgPurgeCommand } from '../src/org-purge.ts';
-import { DEPS_REACH, Sources, emittersOf, reachOf, sendSites, workSites, type Known, type WorkSite } from './job-egress.ts';
+import { DEPS_REACH, Sources, emittersOf, reachOf, sendSites, workSites, type DynamicRuns, type Known, type WorkSite } from './job-egress.ts';
 
 const known: Known = {
   imports: { CHAT_ALERTING_EVENTS, CHAT_ALERT_TEST_EVENT, NOTIFYING_EVENTS, KERNEL_NOTIFYING_EVENTS, FINANCE_NOTIFYING_EVENTS },
@@ -60,11 +60,36 @@ const RANK = { R0: 0, R1: 1, R2: 2, R3: 3 } as const;
 const all = (): Array<CommandDef<unknown, unknown>> =>
   [...kernelCommands, orgPurgeCommand({ store: {} as never }), ...financeCommands, ...socialCommands, ...crmCommands] as Array<CommandDef<unknown, unknown>>;
 
-// Commands below R2 whose handlers emit an event that feeds a queue with egress. None since #1662 (coordinator
-// decision): each is R2 `external`, a line to the org's own team chat on Telegram or Discord included, since it sends
-// tenant content to a third-party provider. An exemption needs a product flow the plans require and a reason in plan
-// §4.7. A command that runs one of them through ctx.run or tryRun is not followed yet (#1698).
+// Commands below R2 whose handlers emit an event that feeds a queue with egress, themselves or through a nested
+// command they run (ctx.run or ctx.tryRun, followed transitively). None since #1662 and #1698 (coordinator decision):
+// each is R2 `external`, a line to the org's own team chat on Telegram or Discord included, since it sends tenant
+// content to a third-party provider, and so is a command that runs one of them nested (kernel.inbound.receive and
+// social.media.save_stock run kernel.file.ingest, social.post_comment.accept runs social.post.submit). An exemption
+// needs a product flow the plans require and a reason in plan §4.7.
 const BELOW_R2: Readonly<Record<string, readonly string[]>> = {};
+
+// The commands a nested run may run when its source does not name them, worked out from the registered definitions.
+const dynamicRuns = (defs: ReadonlyArray<CommandDef<unknown, unknown>>): DynamicRuns => {
+  const names = (keep: (c: CommandDef<unknown, unknown>) => boolean) => defs.filter(keep).map((c) => c.name);
+  const proposals = names((c) => c.access === 'proposal');
+  return {
+    // kernel.task.propose refuses a preparer that is not R0 before it runs it.
+    'packages/kernel/src/agents.ts: input.preparer': names((c) => c.risk === 'R0'),
+    // kernel.agent.proposal.approve and kernel.proposal.approve run the approved proposal's command.
+    'packages/kernel/src/agents.ts: proposal.command': proposals,
+    'packages/kernel/src/commands.ts: proposal.command': proposals,
+    // kernel.proposal.edit runs the reviser registered for the proposal's command (its `revises`).
+    'packages/kernel/src/commands.ts: reviser': names((c) => typeof c.revises === 'string'),
+  };
+};
+
+// The commands of `emitters` that are not external, with the fed queues each event of theirs leads to.
+function belowR2(emitters: ReadonlyMap<string, ReadonlySet<string>>, external: (name: string) => boolean, fed: (event: string) => string[]): Record<string, string[]> {
+  const below: Record<string, string[]> = {};
+  for (const [event, by] of emitters) for (const name of by) if (!external(name)) (below[name] ??= []).push(...fed(event));
+  for (const routes of Object.values(below)) routes.sort();
+  return below;
+}
 
 // Sends to a queue with egress from outside the outbox relay, and why each needs no command of its own: the command
 // that decides it, which must declare an external effect, or the reason.
@@ -234,17 +259,54 @@ describe('job egress (#1653)', () => {
     expect([...new Set(sends.filter((s) => s.within !== 'the outbox relay').map((s) => s.within))].sort()).toEqual(Object.keys(OTHER_SENDS).sort());
     for (const [site, why] of Object.entries(OTHER_SENDS)) if ('command' in why) expect(external(why.command), `${site}: ${why.command}`).toBe(true);
 
-    const { commands, problems } = emittersOf(feeds, sources, known, ['packages/kernel/src', 'modules', 'apps/kernel/src']);
+    const { commands, runs, problems } = emittersOf(feeds, sources, known, ['packages/kernel/src', 'modules', 'apps/kernel/src'], dynamicRuns(all()));
     expect(problems).toEqual([]);
     expect([...commands].filter(([, by]) => by.size === 0).map(([event]) => event)).toEqual(Object.keys(NO_COMMAND).sort());
+    // The nested runs are seen: the ones that once reached an R2 emitter from an R1 command (#1698) among them.
+    expect(runs.get('kernel.inbound.receive')).toEqual(new Set(['kernel.file.ingest']));
+    expect(runs.get('social.media.save_stock')).toEqual(new Set(['kernel.file.ingest']));
+    expect(runs.get('social.post_comment.accept')).toContain('social.post.submit');
+    for (const name of ['kernel.file.ingest', 'kernel.inbound.receive', 'social.media.save_stock']) expect(commands.get('kernel.file.ingested')?.has(name), name).toBe(true);
+    expect(commands.get('social.post.submitted')?.has('social.post_comment.accept')).toBe(true);
     // Each event with the queues it feeds and their egress: 'social.post.submitted -> social-chat-alert (provider:...)'.
     const fed = (event: string) =>
       [...new Set(sends.filter((s) => s.events?.includes(event)).flatMap((s) => s.queues.filter(hasEgress)))]
         .sort()
         .map((q) => `${event} -> ${q} (${targets(queueEgress(q)).join(', ')})`);
-    const below: Record<string, string[]> = {};
-    for (const [event, by] of commands) for (const name of by) if (!external(name)) (below[name] ??= []).push(...fed(event));
-    for (const routes of Object.values(below)) routes.sort();
-    expect(below).toEqual(BELOW_R2);
+    expect(belowR2(commands, external, fed)).toEqual(BELOW_R2);
+  });
+
+  it('follows nested runs to the command that runs them, and fails a planted R1 command that runs an emitter (#1698)', () => {
+    const planted = new Sources({
+      'modules/planted/src/a.ts': `
+        const NAMES = { a: 'planted.emit' } as const;
+        export const emitter = defineCommand({ name: 'planted.emit', risk: 'R2', sideEffect: 'external', handler: async (ctx) => ctx.emit('planted.fed', {}) });
+        export const outer = defineCommand({ name: 'planted.outer', risk: 'R1', handler: async (ctx) => ctx.run('planted.emit', {}) });
+        export const twice = defineCommand({ name: 'planted.twice', risk: 'R1', handler: async (ctx) => ctx.tryRun('planted.outer', {}, { recover: () => true }) });
+        export const table = defineCommand({ name: 'planted.table', risk: 'R1', handler: async (ctx, input) => ctx.run(NAMES[input.k], {}) });
+        function nest(ctx, name) {
+          return ctx.run(name, {});
+        }
+        export const helper = defineCommand({ name: 'planted.helper', risk: 'R1', handler: async (ctx) => nest(ctx, 'planted.emit') });
+        function make(name, inner) {
+          return defineCommand({ name, risk: 'R1', handler: async (ctx) => ctx.run(inner, {}) });
+        }
+        export const made = make('planted.made', 'planted.emit');
+        export const quiet = defineCommand({ name: 'planted.quiet', risk: 'R1', handler: async (ctx) => ctx.run('planted.other', {}) });
+        export const dynamic = defineCommand({ name: 'planted.dynamic', risk: 'R1', handler: async (ctx, input) => ctx.run(input.name, {}) });`,
+    });
+    const external = (name: string) => name === 'planted.emit';
+    const fed = (event: string) => [`${event} -> planted-queue (provider:planted)`];
+    const route = ['planted.fed -> planted-queue (provider:planted)'];
+    // Without the commands the dynamic run may run, the test says so and does not guess.
+    const blind = emittersOf(['planted.fed'], planted, known, ['modules/planted']);
+    expect(blind.problems).toEqual([
+      "modules/planted/src/a.ts:16: a nested run whose command the test cannot read (input.name); name the commands it may run in the test's dynamic runs",
+    ]);
+    expect(belowR2(blind.commands, external, fed)).toEqual({ 'planted.outer': route, 'planted.twice': route, 'planted.table': route, 'planted.helper': route, 'planted.made': route });
+    // With them, it follows that one too; a stale entry is a problem.
+    const told = emittersOf(['planted.fed'], planted, known, ['modules/planted'], { 'modules/planted/src/a.ts: input.name': ['planted.twice'], 'modules/planted/src/a.ts: gone': ['planted.emit'] });
+    expect(told.problems).toEqual(['the dynamic run modules/planted/src/a.ts: gone is no longer in the sources']);
+    expect(Object.keys(belowR2(told.commands, external, fed)).sort()).toEqual(['planted.dynamic', 'planted.helper', 'planted.made', 'planted.outer', 'planted.table', 'planted.twice']);
   });
 });

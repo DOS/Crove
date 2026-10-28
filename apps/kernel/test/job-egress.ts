@@ -9,11 +9,12 @@
 //   publishers and the mailer reach their provider; fetch() itself and Node's network modules are never allowed.
 // - sendSites(): every boss.send() and boss.schedule() of apps/kernel/src, with the queues it may name and, inside the
 //   outbox relay, the outbox events that lead to it.
-// - emittersOf(): the commands whose handler emits an event, followed through the helpers they call.
+// - emittersOf(): the commands whose handler emits an event, followed through the helpers they call and through the
+//   nested commands they run (ctx.run and ctx.tryRun), transitively.
 //
 // Modules and packages/kernel never reach the network themselves (commands do no network I/O, plan §4.6): the test
 // runs reachOf() over each of their files and finds nothing, so following the worker into them finds nothing either.
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { parseAst } from 'vitest/node';
 
@@ -151,19 +152,23 @@ export class Sources {
     return file;
   }
 
-  // Every .ts source under the directories, tests aside.
+  // Every .ts source under the directories, tests aside, planted ones included.
   list(dirs: readonly string[]): string[] {
-    const out: string[] = [];
+    const out = new Set<string>();
+    const source = (name: string) => name.endsWith('.ts') && !name.endsWith('.test.ts') && !name.endsWith('.d.ts');
     const walk = (dir: string) => {
       for (const entry of readdirSync(join(ROOT, dir), { withFileTypes: true })) {
         const path = `${dir}/${entry.name}`;
         if (entry.isDirectory()) {
           if (entry.name !== 'node_modules' && entry.name !== 'test' && entry.name !== 'dist') walk(path);
-        } else if (entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts') && !entry.name.endsWith('.d.ts')) out.push(path);
+        } else if (source(entry.name)) out.add(path);
       }
     };
-    for (const dir of dirs) walk(dir);
-    return out.sort();
+    for (const dir of dirs) {
+      if (existsSync(join(ROOT, dir))) walk(dir);
+      for (const path of Object.keys(this.overrides)) if (path.startsWith(`${dir}/`) && source(path)) out.add(path);
+    }
+    return [...out].sort();
   }
 }
 
@@ -610,13 +615,67 @@ export function sendSites(sources: Sources, known: Known, files = sources.list([
   return out;
 }
 
-// The command definition (an object with a name, a risk and a handler) a node is in, or the named function it is in.
-function enclosing(node: N, sources: Sources, known: Known): { command: string } | { fn: Declaration; name: string } | null {
+const strip = (e: N): N => (VALUE_TS.has(e.type) || e.type === 'ParenthesizedExpression' ? strip(e.expression) : e);
+
+// The strings an expression may be: a constant (evaluate()), any value of a constant table indexed by something else
+// (PROPOSAL_PREPARERS[input.command]), a const alias of one, or a parameter, through every call of its function in its
+// file (a factory's `name`, a helper's command name). Throws on anything else.
+function valuesOf(expr: N, sources: Sources, known: Known, seen: Set<N> = new Set()): string[] {
+  const strings = (v: unknown): string[] => {
+    const list = [v].flat();
+    if (list.length === 0 || list.some((s) => typeof s !== 'string')) throw new Error(`not a command name: ${textOf(expr)} (${at(expr)})`);
+    return list as string[];
+  };
+  const direct = readable(() => evaluate(expr, sources, known));
+  if (direct !== null) return strings(direct);
+  const fail = () => new Error(`cannot read ${textOf(expr)} (${at(expr)})`);
+  const e = strip(expr);
+  if (e.type === 'MemberExpression' && e.computed) {
+    const table = readable(() => evaluate(e.object, sources, known));
+    if (table === null || typeof table !== 'object') throw fail();
+    return strings(Object.values(table as Record<string, unknown>).flat());
+  }
+  if (e.type !== 'Identifier') throw fail();
+  const decl = declarationOf(e);
+  if (decl && isConst(decl) && decl.id.type === 'Identifier') return valuesOf(decl.init, sources, known, seen);
+  // A parameter already on the way here is a recursion the test does not follow.
+  if (decl?.type !== 'Identifier' || seen.has(decl)) throw fail();
+  const path = new Set(seen).add(decl);
+  // A parameter: the argument at its place in every call of the named function that declares it.
+  let fn = parentOf(decl);
+  while (fn && !isFunction(fn)) fn = parentOf(fn);
+  const index = fn ? (fn.params as N[]).findIndex((p) => p === decl || (p.type === 'AssignmentPattern' && p.left === decl)) : -1;
+  if (!fn || index < 0) throw fail();
+  const holder = fn.type === 'FunctionDeclaration' && fn.id ? fn : parentOf(fn)?.type === 'VariableDeclarator' && parentOf(fn)?.id.type === 'Identifier' ? parentOf(fn) : null;
+  if (!holder) throw fail();
+  // Called only in its own file: an exported function may be called from anywhere.
+  if (parentOf(holder)?.type === 'ExportNamedDeclaration' || parentOf(parentOf(holder) as N)?.type === 'ExportNamedDeclaration') throw fail();
+  const out: string[] = [];
+  let calls = 0;
+  eachReference(sources.get(fileOf(holder)).program, (id) => {
+    if (id.name !== holder.id.name || declarationOf(id) !== holder) return;
+    const call = parentOf(id);
+    // Handed on as a value, its calls are out of sight.
+    if (call?.type !== 'CallExpression' || call.callee !== id) throw fail();
+    const arg = (call.arguments as N[])[index];
+    const param = (fn as N).params[index] as N;
+    const given = arg ?? (param.type === 'AssignmentPattern' ? param.right : undefined);
+    if (!given || given.type === 'SpreadElement') throw fail();
+    out.push(...valuesOf(given, sources, known, path));
+    calls++;
+  });
+  if (calls === 0) throw fail();
+  return out;
+}
+
+// The command definition (an object with a name, a risk and a handler) a node is in, with the names it may have, or
+// the named function it is in.
+function enclosing(node: N, sources: Sources, known: Known): { commands: string[] } | { fn: Declaration; name: string } | null {
   for (let n = parentOf(node); n; n = parentOf(n)) {
     if (n.type === 'ObjectExpression') {
       const props = new Map((n.properties as N[]).filter((p) => p.type === 'Property' && !p.computed && p.key.type === 'Identifier').map((p) => [p.key.name as string, p.value as N]));
       const name = props.get('name');
-      if (name && props.has('handler') && props.has('risk')) return { command: String(evaluate(name, sources, known)) };
+      if (name && props.has('handler') && props.has('risk')) return { commands: valuesOf(name, sources, known) };
     }
     if (n.type === 'FunctionDeclaration' && n.id) return { fn: n, name: n.id.name };
     const p = parentOf(n);
@@ -627,17 +686,34 @@ function enclosing(node: N, sources: Sources, known: Known): { command: string }
 }
 
 interface Emitters {
-  // Event type -> the commands that may emit it.
+  // Event type -> the commands that may emit it, themselves or through the nested commands they run.
   commands: Map<string, Set<string>>;
-  // Emit sites the test cannot tie to a command or read the type of.
+  // Command -> the nested commands it may run (ctx.run, ctx.tryRun).
+  runs: Map<string, Set<string>>;
+  // Emit and nested run sites the test cannot tie to a command or read the type or the command of.
   problems: string[];
 }
 
-// The commands that emit each of the events, with the emit sites under the directories.
-export function emittersOf(events: readonly string[], sources: Sources, known: Known, dirs: readonly string[]): Emitters {
+// The commands a nested run whose command is not in its source may run, by '<file>: <its command expression>': the
+// caller works them out from the registered definitions (the R0 preparers, the revisers, the proposal commands).
+export type DynamicRuns = Readonly<Record<string, readonly string[]>>;
+
+const isNestedRun = (node: N): boolean =>
+  node.type === 'CallExpression' &&
+  node.callee.type === 'MemberExpression' &&
+  !node.callee.computed &&
+  (node.callee.property.name === 'run' || node.callee.property.name === 'tryRun') &&
+  node.callee.object.type === 'Identifier' &&
+  node.callee.object.name === 'ctx';
+
+// The commands that emit each of the events, with the emit sites under the directories, and every command that runs
+// one of those as a nested command, transitively.
+export function emittersOf(events: readonly string[], sources: Sources, known: Known, dirs: readonly string[], dynamic: DynamicRuns = {}): Emitters {
   const files = sources.list(dirs);
   const wanted = new Set(events);
   const commands = new Map<string, Set<string>>(events.map((e) => [e, new Set<string>()]));
+  const runs = new Map<string, Set<string>>();
+  const usedDynamic = new Set<string>();
   const problems: string[] = [];
   // The strings an emit's type may be: a constant, or a variable assigned only constants (null aside).
   const typesOf = (expr: N): string[] | null => {
@@ -666,7 +742,7 @@ export function emittersOf(events: readonly string[], sources: Sources, known: K
   const commandsOf = (node: N, depth: number, seen: Set<Declaration>): string[] | string => {
     const found = enclosing(node, sources, known);
     if (!found) return `${at(node)} is in no command and no named function`;
-    if ('command' in found) return [found.command];
+    if ('commands' in found) return found.commands;
     if (seen.has(found.fn)) return [];
     seen.add(found.fn);
     if (depth > 8) return `${at(node)}: too many calls deep`;
@@ -694,8 +770,40 @@ export function emittersOf(events: readonly string[], sources: Sources, known: K
     }
     return out;
   };
+  // A nested run: the commands that run it, and the commands it may run.
+  const nested = (node: N) => {
+    const arg = node.arguments[0] as N | undefined;
+    if (!arg) {
+      problems.push(`${at(node)}: a nested run without a command`);
+      return;
+    }
+    const key = `${fileOf(node)}: ${textOf(arg)}`;
+    let callees = readable(() => valuesOf(arg, sources, known));
+    if (callees === null && Object.hasOwn(dynamic, key)) {
+      usedDynamic.add(key);
+      callees = [...(dynamic[key] as readonly string[])];
+    }
+    if (callees === null) {
+      problems.push(`${at(node)}: a nested run whose command the test cannot read (${textOf(arg)}); name the commands it may run in the test's dynamic runs`);
+      return;
+    }
+    const callers = commandsOf(node, 0, new Set());
+    if (typeof callers === 'string') {
+      problems.push(`nested run of ${callees.join(', ')}: ${callers}`);
+      return;
+    }
+    for (const caller of callers) {
+      const to = runs.get(caller) ?? new Set<string>();
+      for (const callee of callees) to.add(callee);
+      runs.set(caller, to);
+    }
+  };
   for (const file of files) {
     each(sources.get(file).program, (node) => {
+      if (isNestedRun(node)) {
+        nested(node);
+        return;
+      }
       if (node.type !== 'CallExpression' || node.callee.type !== 'MemberExpression' || node.callee.computed || node.callee.property.name !== 'emit' || node.arguments.length < 2) return;
       const type = node.arguments[0] as N;
       const types = typesOf(type);
@@ -713,5 +821,19 @@ export function emittersOf(events: readonly string[], sources: Sources, known: K
       for (const t of hit) for (const c of names) commands.get(t)?.add(c);
     });
   }
-  return { commands, problems };
+  for (const key of Object.keys(dynamic)) if (!usedDynamic.has(key)) problems.push(`the dynamic run ${key} is no longer in the sources`);
+  // A command that runs an emitter, or a command that runs one, emits what it emits.
+  for (const by of commands.values()) {
+    for (let grown = true; grown; ) {
+      grown = false;
+      for (const [caller, callees] of runs) {
+        if (by.has(caller)) continue;
+        if ([...callees].some((c) => by.has(c))) {
+          by.add(caller);
+          grown = true;
+        }
+      }
+    }
+  }
+  return { commands, runs, problems };
 }
