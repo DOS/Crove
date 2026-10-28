@@ -94,10 +94,10 @@ const CRM_SCREENS = {
   nav: [{ app: 'crm', group: 'crm', path: 'bookings', label: 'bookings' }],
 } as const satisfies ModuleScreens;
 
-// Notes and personal to-dos (#1671): the notes screen and its menu item come with the module's screens (step N2's UI).
+// Members' notes (#1671, notes plan §3.10): the notes screen (?note= opens one), in the Home app beside the team's tasks.
 const NOTES_SCREENS = {
-  routes: [],
-  nav: [],
+  routes: [{ path: 'notes' }],
+  nav: [{ app: 'home', group: 'work', path: 'notes', label: 'notes' }],
 } as const satisfies ModuleScreens;
 
 export const MODULE_SCREENS = {
