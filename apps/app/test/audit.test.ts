@@ -1,6 +1,8 @@
-// The audit log screen's filter (#672).
+// The audit log screen's filter (#672) and its command labels (#1654).
 import { describe, expect, it } from 'vitest';
-import { auditFilter, nextAuditCursor } from '../src/lib/audit.ts';
+import { en } from '../src/i18n/messages/en.ts';
+import { vi } from '../src/i18n/messages/vi.ts';
+import { auditFilter, commandLabel, nextAuditCursor, withCommandLabels } from '../src/lib/audit.ts';
 
 const empty = { actor: '', command: '', outcome: '', target: '', from: '', to: '' };
 
@@ -23,5 +25,30 @@ describe('audit filter', () => {
     expect(nextAuditCursor({ items: [item], more: true })).toEqual({ at: '2026-10-01T00:00:00.000Z', id: 'b' });
     expect(nextAuditCursor({ items: [item], more: false })).toBeUndefined();
     expect(nextAuditCursor({ items: [], more: true })).toBeUndefined();
+  });
+
+  it('labels a command in each language, and gives null for a name without a label', () => {
+    expect(commandLabel(vi.commands, 'kernel.proposal.approve')).toBe('Duyệt đề xuất');
+    expect(commandLabel(en.commands, 'kernel.proposal.approve')).toBe('Approve a proposal');
+    expect(commandLabel(vi.commands, 'kernel.proposal.gone')).toBeNull();
+    expect(commandLabel(vi.commands, 'kernel.proposal')).toBeNull();
+    expect(commandLabel(vi.commands, 'kernel.proposal.approve.more')).toBeNull();
+    expect(commandLabel(vi.commands, 'kernel.toString')).toBeNull();
+  });
+
+  it('adds a label column after the command column and keeps every other cell as written', () => {
+    const csv =
+      '﻿occurred_at,actor_name,command,outcome,detail\r\n' +
+      '2026-10-01T00:00:00.000Z,"Lê, Văn A",kernel.proposal.approve,ok,"a ""quoted"", line\r\nand more"\r\n' +
+      "2026-10-02T00:00:00.000Z,'=1+1,kernel.retired,failed,\r\n";
+    const labels = (name: string) => (name === 'kernel.proposal.approve' ? 'Duyệt, "nhanh"' : null);
+    expect(withCommandLabels(csv, labels)).toBe(
+      '﻿occurred_at,actor_name,command,command_label,outcome,detail\r\n' +
+        '2026-10-01T00:00:00.000Z,"Lê, Văn A",kernel.proposal.approve,"Duyệt, ""nhanh""",ok,"a ""quoted"", line\r\nand more"\r\n' +
+        "2026-10-02T00:00:00.000Z,'=1+1,kernel.retired,,failed,\r\n",
+    );
+    expect(withCommandLabels('a,b\r\n1,2\r\n', labels)).toBe('a,b\r\n1,2\r\n');
+    // A last line without its line break, ending in an empty cell, is kept.
+    expect(withCommandLabels('command,detail\r\nkernel.x,', labels)).toBe('command,command_label,detail\r\nkernel.x,,\r\n');
   });
 });

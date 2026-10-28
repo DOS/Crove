@@ -1,8 +1,9 @@
 // The org's audit log for owners and admins (#672): every command's audit row, newest first, filtered by who, what,
 // outcome, object and days, a page at a time, and the filtered list as a CSV file (the server builds and audits it).
+// Commands show by their label in the screen's language, with the name under it (#1654); the file gets a label column.
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
-import { useTranslations } from 'use-intl';
+import { useLocale, useMessages, useTranslations } from 'use-intl';
 import { AUDIT_OUTCOMES, type AuditCursor, type AuditFilter, type AuditOutcome, type AuditPage } from '@crove/kernel-contract';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
@@ -13,7 +14,7 @@ import { DateInput } from '../components/date-input.tsx';
 import { DataTable, Empty, ErrorText, PageHeader, Spinner, TableSkeleton } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc } from '../lib/api.ts';
-import { auditFilter, nextAuditCursor, type AuditFilterForm } from '../lib/audit.ts';
+import { auditFilter, commandLabel, nextAuditCursor, withCommandLabels, type AuditFilterForm } from '../lib/audit.ts';
 
 const OUTCOME_BADGE: Record<AuditOutcome, 'success' | 'warning' | 'destructive' | 'secondary'> = {
   ok: 'success',
@@ -24,14 +25,31 @@ const OUTCOME_BADGE: Record<AuditOutcome, 'success' | 'warning' | 'destructive' 
 
 const EMPTY: AuditFilterForm = { actor: '', command: '', outcome: '', target: '', from: '', to: '' };
 
+// A command by its label, with its name under it for whoever searches the code or the file; a name with no label (a
+// command no longer registered) as it is.
+function CommandName({ label, name }: { label: string | null; name: string }) {
+  if (label === null) return <span className="font-mono text-xs">{name}</span>;
+  return (
+    <>
+      {label}
+      <p className="font-mono text-xs text-subtle-foreground">{name}</p>
+    </>
+  );
+}
+
 export function AuditPage() {
   const t = useTranslations('audit');
   const f = useFormat();
+  const locale = useLocale();
+  const labels = useMessages().commands;
   const org = useQuery(orpc.org.get.queryOptions());
   const canRead = org.data?.role === 'owner' || org.data?.role === 'admin';
   const [form, setForm] = useState<AuditFilterForm>(EMPTY);
   const filter: AuditFilter = auditFilter(form);
   const commands = useQuery({ ...orpc.org.auditCommands.queryOptions(), enabled: canRead });
+  const commandOptions = (commands.data ?? [])
+    .map((name) => ({ name, label: commandLabel(labels, name) ?? name }))
+    .sort((a, b) => a.label.localeCompare(b.label, locale));
   // A page at a time (the server sends at most AUDIT_PAGE_SIZE); Load more asks for the rows after the last one.
   const log = useInfiniteQuery({
     ...orpc.org.audit.infiniteOptions({
@@ -46,7 +64,8 @@ export function AuditPage() {
   const exportCsv = useMutation({
     mutationFn: () => client.org.auditExport(filter),
     onSuccess: (file) => {
-      const url = URL.createObjectURL(new Blob([file.csv], { type: 'text/csv;charset=utf-8' }));
+      const csv = withCommandLabels(file.csv, (name) => commandLabel(labels, name));
+      const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
       const a = document.createElement('a');
       a.href = url;
       a.download = file.filename;
@@ -95,9 +114,9 @@ export function AuditPage() {
           <span className="text-subtle-foreground">{t('filterCommand')}</span>
           <NativeSelect className="mt-1 w-64" value={form.command} onChange={set('command')}>
             <NativeSelectOption value="">{t('anyCommand')}</NativeSelectOption>
-            {(commands.data ?? []).map((c) => (
-              <NativeSelectOption key={c} value={c}>
-                {c}
+            {commandOptions.map((c) => (
+              <NativeSelectOption key={c.name} value={c.name}>
+                {c.label}
               </NativeSelectOption>
             ))}
           </NativeSelect>
@@ -148,7 +167,9 @@ export function AuditPage() {
                   {r.actorType === 'system' ? t('system') : (r.actorName ?? t('former'))}
                   {r.actorType === 'agent' && <p className="text-xs text-subtle-foreground">{t('agent')}</p>}
                 </TableCell>
-                <TableCell className="px-4 py-3 font-mono text-xs text-foreground">{r.command}</TableCell>
+                <TableCell className="px-4 py-3 text-foreground">
+                  <CommandName label={commandLabel(labels, r.command)} name={r.command} />
+                </TableCell>
                 <TableCell className="px-4 py-3">
                   <Badge variant={OUTCOME_BADGE[r.outcome]}>{t(`outcomes.${r.outcome}`)}</Badge>
                 </TableCell>

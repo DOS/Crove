@@ -5487,6 +5487,768 @@ export const en = {
       before_opening_later_date: 'This date is on or before the opening balances, so it cannot be posted. Choose a date after the opening balance date.',
     },
   },
+  // The label of every registered command and query, by its name (#1654), for the audit log and its export.
+  // apps/kernel/test/command-labels.test.ts fails on a registered name without one.
+  commands: {
+    crm: {
+      booking: {
+        cancel: 'Cancel a booking',
+        confirm: 'Confirm a booking',
+        list: 'List bookings',
+        mail_data: 'Read the details of a booking mail',
+        manage: "Carry out a visitor's change or cancellation of a booking",
+        move: 'Move a booking',
+        next_slots: 'Read the next free slots',
+        remind: 'Send a booking reminder',
+        suggest_slots: 'Suggest booking times to a client',
+      },
+      booking_feed: {
+        create: 'Create the booking feed address',
+        get: 'Read the booking feed address',
+        revoke: 'Revoke the booking feed address',
+        revoke_for_member: 'Revoke the booking feed of a member who lost access',
+      },
+      event_type: {
+        create: 'Create a booking type',
+        list: 'List booking types',
+        set_active: 'Turn a booking type on or off',
+        update: 'Edit a booking type',
+      },
+    },
+    finance: {
+      account: {
+        create: 'Add a ledger account',
+        update: 'Edit a ledger account',
+      },
+      accounts: {
+        list: 'List the chart of accounts',
+      },
+      archive: {
+        build: 'Build a document archive',
+        get: 'Read a document archive',
+        list: 'List document archives',
+        record: 'Record a built document archive',
+        source: 'Read the data for a document archive',
+      },
+      bank: {
+        import: 'Import a bank statement',
+        line_voucher: 'Read the voucher of a statement line',
+        lines: 'List bank statement lines',
+        open_lines: 'List unmatched bank statement lines',
+        preview: 'Preview a bank statement',
+        suggestions: 'Read bank matching suggestions',
+      },
+      categorization_rule: {
+        create: 'Add an account rule',
+        remove: 'Remove an account rule',
+      },
+      categorization_rules: {
+        list: 'List account rules',
+      },
+      closing: {
+        prepare: 'Prepare a year-end closing proposal',
+        record: 'Post the year-end closing',
+      },
+      customers: {
+        list: 'List customers',
+      },
+      depreciation: {
+        prepare: 'Prepare a depreciation and allocation proposal',
+        record: 'Post depreciation and allocation',
+      },
+      document: {
+        exports: "List a document's exports",
+      },
+      documents: {
+        list: 'List documents',
+        voided_proposals: 'Find proposals whose document was voided',
+      },
+      extraction: {
+        file: 'Read a file to extract',
+        lookup: 'Find the invoice a replacement or adjustment corrects',
+      },
+      fixed_asset: {
+        create: 'Add a fixed asset or prepaid cost',
+        end: 'End a fixed asset or prepaid cost',
+        export: 'Export the fixed asset register',
+      },
+      fixed_assets: {
+        list: 'List fixed assets and prepaid costs',
+      },
+      journal: {
+        export: 'Export the general journal',
+        get: 'Read a journal entry',
+        list: 'List journal entries',
+        prepare_reversal: 'Prepare a reversal proposal',
+        reverse: 'Reverse a journal entry',
+      },
+      journal_voucher: {
+        prepare: 'Prepare a general journal voucher proposal',
+        record: 'Post a general journal voucher',
+      },
+      ledger: {
+        account: 'Read an account ledger',
+        book: 'Read an accounting book',
+        export: 'Export the ledger',
+        period: 'Read the ledger for a period',
+      },
+      legal_entities: {
+        list: 'List legal entities for the finance screens',
+      },
+      misa_goods_code: {
+        remove: 'Remove a MISA item code',
+        set: 'Set a MISA item code',
+      },
+      misa_goods_codes: {
+        list: 'List MISA item codes',
+      },
+      missing_invoices: {
+        remind: 'Send the missing invoice reminder',
+        reminder: {
+          set: 'Set the missing invoice reminder',
+        },
+        request: 'Ask for the missing invoices by mail',
+        status: 'Read the missing invoice status',
+      },
+      notification: {
+        dispatch: 'Send finance notifications',
+      },
+      opening_balance: {
+        post: 'Post opening balances',
+        preview: 'Preview opening balances',
+      },
+      period: {
+        closing_remind: 'Remind to lock a period',
+        lock: 'Lock a period',
+        lock_state: 'Read the period lock state',
+        unlock: 'Unlock a period',
+      },
+      portal_list: {
+        import: 'Import an invoice list from the tax portal',
+        reconcile: "Reconcile the tax portal's invoice list",
+        record: 'Record a tax portal invoice list',
+        remove: 'Remove a tax portal invoice list',
+        source: 'Read a pending invoice list',
+      },
+      portal_sync: {
+        call: 'Record a tax portal call',
+        call_end: 'Record the end of a tax portal call',
+        check: 'Check whether the tax portal sync may run',
+        list: 'Sync the invoice list from the tax portal',
+        xml_plan: 'Plan the invoice XML downloads',
+      },
+      purchase: {
+        record: 'Post a purchase invoice',
+        revise: 'Revise a posted purchase',
+      },
+      search: 'Search finance',
+      statements: {
+        export: 'Export the financial statements',
+        htkk: 'Build the financial statements file for HTKK',
+        htkk_check: 'Check the financial statements for HTKK',
+        period: 'Read the financial statements for a period',
+      },
+      vat: {
+        declaration: 'Read the VAT return',
+        export: 'Export the VAT listing',
+        payment_mark: 'Mark the VAT as paid',
+        period: 'Read the VAT for a period',
+        return_mark: 'Mark the VAT return as filed',
+      },
+      vendor: {
+        set_default_account: "Set a vendor's default account",
+      },
+      vendors: {
+        list: 'List vendors',
+      },
+      voucher: {
+        prepare: 'Prepare a cash or bank voucher proposal',
+        record: 'Post a cash or bank voucher',
+      },
+      vouchers: {
+        cash: 'Read the cash book',
+        list: 'List posted vouchers',
+        purchases: 'List purchase vouchers',
+        sales: 'List sales vouchers',
+      },
+    },
+    kernel: {
+      agent: {
+        budget: {
+          set: 'Set an AI budget',
+        },
+        budgets: {
+          list: 'List AI budgets',
+        },
+        dispatch_event: 'Hand an event to AI agents',
+        kill_switch: {
+          engage: 'Stop AI',
+          release: 'Let AI run again',
+        },
+        proposal: {
+          approve: "Carry out an AI agent's approval",
+          create: "Create an AI agent's proposal",
+        },
+        run: {
+          finish: 'Finish an AI agent run',
+          start: 'Start an AI agent run',
+        },
+        template: {
+          install: 'Install an AI agent from a template',
+        },
+        templates: {
+          list: 'List AI agent templates',
+        },
+        update: 'Edit an AI agent',
+      },
+      audit: {
+        commands: 'List the commands in the audit log',
+        export: 'Export the audit log',
+        list: 'Read the audit log',
+      },
+      calendar: {
+        event: {
+          add: 'Add a calendar event',
+          cancel: 'Cancel a calendar event',
+        },
+        get: 'Read the calendar',
+        hours: {
+          save: 'Save working hours',
+        },
+        slots: 'Read free slots',
+      },
+      channel: {
+        connect: 'Connect a channel',
+        credential: "Read a channel's credential",
+        disconnect: 'Disconnect a channel',
+        list: 'List connected channels',
+        mark_expired: 'Mark a channel connection expired',
+        oauth_begin: 'Start connecting a channel by sign-in',
+        oauth_consume: 'Finish connecting a channel by sign-in',
+        refresh: "Refresh a channel's credential",
+        reseal: "Re-encrypt a channel's credential",
+      },
+      chart: {
+        get: 'Read the org chart',
+      },
+      extraction: {
+        record: "Record a file's extraction",
+      },
+      file: {
+        archive: {
+          record: 'Record an opened archive',
+          source: 'Read an archive to open',
+        },
+        get: 'Read a file',
+        hold: {
+          record: "Record a file's evidence hold",
+        },
+        image_size: {
+          record: "Record an image's size",
+        },
+        ingest: 'Take in a file',
+        reextract: 'Read a file again',
+        upload: {
+          begin: 'Start a file upload',
+          claim: 'Complete a file upload',
+        },
+      },
+      files: {
+        batch: 'Read the files of an upload',
+        recent: 'List recent files',
+      },
+      inbound: {
+        receive: 'Receive an email',
+        recent: 'List recent incoming emails',
+        rotate: 'Change the inbound email address',
+        text: "Read an incoming email's text",
+      },
+      inbox: {
+        get: 'Read a Document inbox item',
+        list: 'List the Document inbox',
+      },
+      legal_entity: {
+        create: 'Add a legal entity',
+        list: 'List legal entities',
+        update: 'Edit a legal entity',
+      },
+      mail: {
+        contact: {
+          queue: 'Queue a mail to a contact',
+        },
+        direct: {
+          get: 'Read a mail to send at once',
+        },
+        event: {
+          record: 'Record a mail delivery event',
+        },
+        queue: {
+          begin: 'Start sending a queued mail',
+          record: "Record a queued mail's send",
+        },
+        record_direct: 'Record a mail sent at once',
+        suppression: {
+          add: 'Stop mail to an address',
+          lift: 'Allow mail to an address again',
+        },
+      },
+      member: {
+        change_role: "Change a member's role",
+        invite: {
+          accept: 'Accept an invite',
+          create: 'Invite a member',
+          revoke: 'Revoke an invite',
+        },
+        invites: {
+          list: 'List invites',
+        },
+        remove: 'Remove a member',
+        role: {
+          assign: 'Give a member a role',
+          revoke: 'Take a role from a member',
+        },
+        roles: {
+          list: 'List member roles',
+        },
+      },
+      notification: {
+        dispatch: 'Send notifications',
+        list: 'List notifications',
+        mute: 'Turn a kind of notification on or off',
+        read: 'Mark notifications read',
+      },
+      number: {
+        allocations: 'List allocated voucher numbers',
+        policy: {
+          set: 'Set the voucher numbering policy',
+        },
+        void: 'Void a voucher number',
+      },
+      org: {
+        create: 'Create an organization',
+        export: {
+          current: 'Read the newest data export',
+          get: "Read the organization's data export",
+          live_keys: 'List the data exports still kept',
+          record: 'Record a data export',
+          snapshot: 'Read the data to export',
+        },
+        get: 'Read the organization',
+        offboard: 'Offboard the organization and export its data',
+        overview: 'Read the organization overview',
+        purge: "Purge the organization's data",
+        set_address: "Set the organization's address",
+        set_approval_preset: 'Set the approval preset',
+        set_contact_email: 'Set the contact email',
+        set_tax_code: 'Set the tax code',
+        set_vat_filing_period: 'Set the VAT filing period',
+      },
+      party: {
+        duplicate_hints: 'List possible duplicate parties',
+        link_entity: 'Link a party to a legal entity',
+        link_for_tax_code: 'Find or link a party by tax code',
+        mark_duplicate: 'Merge a duplicate party',
+        unlink_entity: 'Unlink a party from a legal entity',
+        unmark_duplicate: 'Undo a party merge',
+        update: 'Edit a party',
+      },
+      personal_data: {
+        erase: 'Erase personal data',
+        find: 'Find personal data',
+      },
+      position: {
+        assign: 'Assign a position',
+        create: 'Add a position to the org chart',
+        update: 'Edit a position',
+      },
+      proposal: {
+        approve: 'Approve a proposal',
+        approve_many: 'Approve several proposals',
+        edit: 'Edit a proposal',
+        expire: 'Expire a proposal',
+        reject: 'Reject a proposal',
+        remind: 'Remind about a proposal',
+        request: 'Request a proposal',
+        resubmit: 'Resubmit a proposal',
+        timeline: "Read a proposal's timeline",
+      },
+      proposal_policy: {
+        get: 'Read the approval policy',
+        save: 'Save the approval policy',
+      },
+      session: {
+        revoke: 'Revoke a session',
+      },
+      sessions: {
+        list: 'List sessions',
+      },
+      stream: {
+        check: 'Recheck the live update stream',
+      },
+      task: {
+        approve_proposal: 'Approve a proposal as an AI agent',
+        checkout: 'Check out a task',
+        comment: 'Comment on a task',
+        create: 'Create a task',
+        delegate: 'Delegate part of a task',
+        escalate: 'Escalate a task',
+        get: 'Read a task',
+        list: 'List tasks',
+        propose: 'Propose instead of acting',
+        set_status: "Change a task's status",
+      },
+      tax_obligation: {
+        done: 'Mark a tax obligation done',
+        undo: 'Undo a done tax obligation',
+      },
+      tax_profile: {
+        get: 'Read the tax profile',
+        save: 'Save the tax profile',
+      },
+      usage: {
+        defer: 'Defer an item over a usage limit',
+        over: 'Check the usage limits',
+        record: 'Record usage',
+      },
+      user: {
+        status_note: 'Note an account blocked or unblocked',
+      },
+    },
+    social: {
+      account: {
+        audience_due: 'Check whether the audience is due',
+        connection_version: "Read a channel connection's version",
+        record: "Record a channel's growth",
+        trends: 'Read channel growth',
+      },
+      attention: {
+        inbox: 'List the posts that need attention',
+      },
+      auto_reply: {
+        begin: 'Start an auto reply',
+        record: 'Record an auto reply',
+      },
+      banned_word: {
+        add: 'Add a banned word',
+        list: 'List banned words',
+        remove: 'Remove a banned word',
+      },
+      bio: {
+        get: 'Read the link in bio page',
+        save: 'Save the link in bio page',
+      },
+      brand_voice: {
+        list: 'List brand voices',
+        remove: 'Remove a brand voice',
+        save: 'Save a brand voice',
+      },
+      calendar_feed: {
+        create: 'Create the calendar feed address',
+        get: 'Read the calendar feed address',
+        revoke: 'Revoke the calendar feed address',
+      },
+      calendar_note: {
+        list: 'List calendar notes',
+        remove: 'Remove a calendar note',
+        save: 'Save a calendar note',
+      },
+      channel: {
+        policies: "Read the channels' settings",
+        set_client_approval: 'Turn client approval on or off for a channel',
+        set_four_eyes: 'Turn four-eyes review on or off for a channel',
+        set_policy: "Set a channel's posting rules",
+        set_reminders: "Set a channel's reminders",
+        set_short_links: "Turn a channel's short links on or off",
+        set_signature: "Set a channel's signature",
+        waiting: "List a channel's waiting posts",
+      },
+      channel_access: {
+        list: "List members' channel access",
+        mine: 'Read my channel access',
+        set: "Set a member's channels",
+      },
+      channel_option: {
+        get: "Read a channel's posting options",
+        load: 'Read a channel options request',
+        record: "Record a channel's posting options",
+        request: "Fetch a channel's posting options",
+      },
+      channel_set: {
+        list: 'List channel sets',
+        remove: 'Remove a channel set',
+        save: 'Save a channel set',
+      },
+      chat_alert: {
+        get: 'Read the chat alert',
+        prepare: 'Prepare a chat alert line',
+        remove: 'Remove the chat alert',
+        reseal: 'Re-encrypt the chat alert',
+        save: 'Save the chat alert',
+        target: 'Read the chat alert target',
+        test: 'Send a test chat alert',
+        tested: 'Record a test chat alert',
+      },
+      comment: {
+        begin: 'Start posting the first comment',
+        record: 'Record the first comment',
+        retry: 'Retry the first comment',
+      },
+      digest: {
+        send: 'Send the digest mail',
+      },
+      edit: {
+        begin: 'Start editing a published post',
+        record: 'Record an edit of a published post',
+      },
+      external_post: {
+        channel: "Read a channel's grants for its posts",
+        import: 'Bring in posts published directly on a channel',
+        record: 'Record a post published directly on a channel',
+        target: 'Read a post published directly on a channel to check',
+      },
+      feed: {
+        add: 'Add a feed',
+        list: 'List feeds',
+        load: 'Read a feed to fetch',
+        record: "Record a feed's new items",
+        remove: 'Remove a feed',
+        update: 'Edit a feed',
+      },
+      gate: {
+        begin: 'Start setting Bluesky reply limits',
+        record: 'Record Bluesky reply limits',
+      },
+      goal: {
+        progress: "Read the monthly goals' progress",
+        remove: 'Remove a monthly goal',
+        set: 'Set a monthly goal',
+      },
+      idea: {
+        create: 'Add an idea',
+        get: 'Read an idea',
+        list: 'List ideas',
+        move: 'Move an idea',
+        update: 'Edit an idea',
+      },
+      label: {
+        create: 'Create a post label',
+        delete: 'Delete a post label',
+        list: 'List post labels',
+        update: 'Edit a post label',
+      },
+      late_id: {
+        record: 'Record a late TikTok post id',
+        target: 'Read a TikTok post waiting for its id',
+      },
+      link_preview: {
+        get: 'Read a link preview',
+        load: 'Read a link preview request',
+        record: 'Record a link preview',
+        request: 'Request a link preview',
+      },
+      links: {
+        revoke_for_member: 'Revoke the links of a member who lost access',
+      },
+      media: {
+        archive: 'Archive a library file',
+        draft_images: 'Read images for an AI draft',
+        file: "Read where a post's image is stored",
+        list: 'List the library',
+        resolve: 'Find library files by name or id',
+        restore: 'Restore a library file',
+        save_stock: 'Save a stock photo',
+        stored: 'Read a library file for alt text',
+        tag: 'Tag a file',
+        tags: 'List library tags',
+        untag: 'Untag a file',
+        usage: 'Read where a file is used',
+      },
+      metrics: {
+        check_outperforming: 'Check for a post doing better than usual',
+        export: 'Export post metrics',
+        external: 'Read metrics of posts published directly on channels',
+        insights: 'Read metric insights',
+        record: 'Record post metrics',
+        summary: 'Read the metrics summary',
+        summary_figures: 'Read the figures for a summary',
+        target: 'Read a post to check',
+        totals: 'Read metric totals',
+      },
+      notification: {
+        dispatch: 'Send social notifications',
+        list: 'List social notifications',
+        mail: 'Mail a notification',
+        mute: 'Turn social notifications on or off',
+        read: 'Mark social notifications read',
+      },
+      overview: {
+        figures: 'Read the social figures for the overview',
+      },
+      pin: {
+        begin: 'Start pinning a post',
+        record: 'Record a pinned post',
+      },
+      plan: {
+        export: 'Export the posting plan',
+      },
+      playlist: {
+        begin: 'Start adding a video to a playlist',
+        record: 'Record a video added to a playlist',
+      },
+      post: {
+        activity: "Read a post's activity",
+        add_channels: 'Add channels to a post',
+        archive: 'Archive a post',
+        assign: 'Assign a post',
+        bulk_add_channel: 'Add a channel to several posts',
+        bulk_archive: 'Archive several posts',
+        bulk_assign: 'Assign several posts',
+        bulk_labels: 'Label several posts',
+        bulk_replace: 'Find and replace in several posts',
+        bulk_replace_preview: 'Preview a find and replace',
+        bulk_restore: 'Restore several posts',
+        create: 'Create a post',
+        create_from_media: 'Create posts from media',
+        duplicate: 'Duplicate a post',
+        get: 'Read a post',
+        import: 'Import posts from a CSV file',
+        list: 'List posts',
+        pre_review: 'Check a post before review',
+        recurrence_clear: "Clear a post's repeat",
+        recurrence_set: "Set a post's repeat",
+        remind_due: "Remind about a post's due date",
+        repost: 'Repost a post',
+        repost_evergreen: 'Repost an evergreen post',
+        restore: 'Restore a post',
+        restore_version: 'Restore an earlier version of a post',
+        review_diff: 'Read changes since the last review',
+        set_evergreen: "Set a post's evergreen reposts",
+        set_labels: 'Label a post',
+        set_text_variations: "Save a post's text variations",
+        submit: 'Submit a post for review',
+        update: 'Edit a post',
+        versions: "List a post's versions",
+      },
+      post_comment: {
+        accept: 'Accept a suggested edit',
+        add: 'Comment on a post',
+        edit: 'Edit a comment',
+        reopen: 'Reopen a comment',
+        resolve: 'Resolve a comment',
+        skip: 'Skip a suggested edit',
+        suggest: 'Suggest an edit',
+      },
+      publish: {
+        begin: 'Start publishing to a channel',
+        record: 'Record a publish to a channel',
+      },
+      publishing: {
+        hold: 'Pause all publishing',
+        hold_get: 'Read the publishing pause',
+        release: 'Resume publishing',
+      },
+      push: {
+        devices: 'List push devices',
+        record: 'Record a push notification',
+        subscribe: 'Turn on push notifications on a device',
+        targets: 'Read push notification targets',
+        unsubscribe: 'Turn off push notifications on a device',
+      },
+      queue: {
+        check_low: 'Check for a queue running low',
+        get: 'Read the queue',
+        move_to_front: 'Move a post to the front of the queue',
+        open_slots: "Read the queue's open slots",
+        set: "Set the queue's slots",
+        shuffle: 'Shuffle the queue',
+      },
+      recurring: {
+        next: 'Create the next copy of a repeating post',
+      },
+      remove: {
+        begin: 'Start removing a post from a channel',
+        record: 'Record a post removed from a channel',
+        schedule: 'Remove a post on schedule',
+        watch: 'Check a scheduled removal',
+      },
+      report_branding: {
+        get: 'Read the report branding',
+        remove: 'Remove the report branding',
+        save: 'Save the report branding',
+      },
+      report_link: {
+        create: 'Create a report link',
+        list: 'List report links',
+        revoke: 'Revoke a report link',
+      },
+      report_schedule: {
+        defer: 'Defer a failed scheduled report',
+        list: 'List report schedules',
+        mint_link: 'Create a link for a scheduled report',
+        remove: 'Remove a report schedule',
+        run: 'Send a scheduled report',
+        save: 'Save a report schedule',
+        test: 'Send a test report',
+      },
+      repost: {
+        begin: 'Start an automatic repost',
+        record: 'Record an automatic repost',
+      },
+      review: {
+        client_settle: "Apply a client's review answer",
+        inbox: 'List posts waiting for review',
+        remind: 'Remind about a review',
+        reply: "Reply to a client's review",
+      },
+      review_check: {
+        list: 'Read the review checklist',
+        set: 'Save the review checklist',
+      },
+      review_link: {
+        create: 'Create a review link',
+        create_plan: 'Create a plan review link',
+        list: 'List review links',
+        list_plans: 'List plan review links',
+        revoke: 'Revoke a review link',
+      },
+      saved_view: {
+        delete: 'Delete a saved view',
+        list: 'List saved views',
+        save: 'Save a view',
+      },
+      snippet: {
+        create: 'Add a snippet',
+        delete: 'Delete a snippet',
+        list: 'List snippets',
+        update: 'Edit a snippet',
+      },
+      team: {
+        report: 'Read the team report',
+      },
+      thread: {
+        begin: 'Start posting the next part of a thread',
+        record: 'Record the next part of a thread',
+        retry: 'Retry the rest of a thread',
+      },
+      variant: {
+        cancel: 'Cancel a post on a channel',
+        decide: 'Approve or reject a post on a channel',
+        edit_published: 'Edit a published post on a channel',
+        remove: 'Remove a post from a channel',
+        reschedule: 'Reschedule a post on a channel',
+        resolve: 'Settle whether a post went out on a channel',
+        retry: 'Retry a post on a channel',
+        schedule: 'Schedule a post on a channel',
+        unschedule: 'Unschedule a post on a channel',
+        update: 'Edit a post on a channel',
+      },
+      watermark: {
+        get: 'Read the watermark',
+        remove: 'Remove the watermark',
+        save: 'Save the watermark',
+      },
+    },
+  },
 } as const satisfies CatalogShape<Messages>;
 
 // Names every English message whose arguments differ from the Vietnamese one.
