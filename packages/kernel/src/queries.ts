@@ -482,17 +482,26 @@ export type StreamLegalEntities = '*' | string[];
 
 // The re-check of an open invalidation stream (issue #69): the same session check (for the org), context entry and
 // membership as every other read, returning the caller's role and the legal-entity scope of its sealed context, by
-// which the API drops the hints of entity-scoped rows outside it (#1692). Runs every STREAM_RECHECK_SECONDS per stream.
+// which the API drops the hints of entity-scoped rows outside it (#1692), and whether the caller reads the org's shared
+// notes, by which it drops the hints of other members' shared notes (#1753). Runs every STREAM_RECHECK_SECONDS per
+// stream.
 export const streamCheck = defineQuery({
   name: 'kernel.stream.check',
   input: z.object({}),
   access: ALL,
   handler: async (ctx) => {
-    const { rows } = await sql<{ scope: string[] | null }>`SELECT crove_kernel.ctx_le_scope() AS scope`.execute(ctx.trx);
+    // shared_notes is note_read's rule for a shared note of another author (20261103130000_crove_notes_core.sql):
+    // owners, admins and members whose scope is the whole org, as the policy reads tenant_member in this context.
+    const { rows } = await sql<{ scope: string[] | null; shared_notes: boolean | null }>`
+      SELECT crove_kernel.ctx_le_scope() AS scope,
+             '*' = ANY (crove_kernel.ctx_le_scope()::text[]) AND EXISTS (
+               SELECT 1 FROM crove_kernel.tenant_member m
+               WHERE m.org_id = crove_kernel.ctx_org_id() AND m.user_id = crove_kernel.ctx_user_id()
+                 AND m.role IN ('owner', 'admin', 'member')) AS shared_notes`.execute(ctx.trx);
     // As stored by enter_context (uuid::text); the API refuses anything that is not an id (streamScopeOf).
     const scope = rows[0]?.scope ?? [];
     const legalEntities: StreamLegalEntities = scope.includes('*') ? '*' : scope;
-    return { role: ctx.role, legalEntities };
+    return { role: ctx.role, legalEntities, sharedNotes: rows[0]?.shared_notes === true };
   },
 });
 

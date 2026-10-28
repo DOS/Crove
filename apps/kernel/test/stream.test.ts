@@ -54,21 +54,24 @@ function fakeSource() {
   return source;
 }
 
-function recorder(orgId: string): HubSubscriber & { hints: unknown[]; entities: unknown[]; recipients: unknown[]; closed: string[] } {
+function recorder(orgId: string): HubSubscriber & { hints: unknown[]; entities: unknown[]; recipients: unknown[]; shared: unknown[]; closed: string[] } {
   const hints: unknown[] = [];
   const entities: unknown[] = [];
   const recipients: unknown[] = [];
+  const shared: unknown[] = [];
   const closed: string[] = [];
   return {
     orgId,
     hints,
     entities,
     recipients,
+    shared,
     closed,
-    hint: (h, legalEntityId, userId) => {
+    hint: (h, legalEntityId, userId, isShared) => {
       hints.push(h);
       entities.push(legalEntityId);
       recipients.push(userId);
+      shared.push(isShared);
     },
     close: (r) => void closed.push(r),
   };
@@ -80,6 +83,8 @@ const only = (...entities: string[]): StreamScope => ({ all: false, entities: ne
 // The user every StreamConnection below is opened for, and another member of the org.
 const USER_A = randomUUID();
 const USER_B = randomUUID();
+// The scope of an owner, admin or member with the whole org: it reads the org's shared notes (#1753).
+const READS_SHARED: StreamScope = { all: true, sharedNotes: true };
 
 describe('parseHint', () => {
   const id = randomUUID();
@@ -124,6 +129,30 @@ describe('parseHint', () => {
       `${ORG_A} notification ${id} ${ENTITY_A} @*`,
       `${ORG_A} notification ${id} ${ENTITY_A} @`,
       `${ORG_A} notification ${id} ${ENTITY_A}  @${USER_A}`,
+    ]) {
+      expect(parseHint(payload)).toBeNull();
+    }
+  });
+
+  it('reads the owner of a to-do and the author of a note, and `+shared` on a shared note only (#1753)', () => {
+    expect(parseHint(`${ORG_A} todo ${id} @${USER_A}`)).toEqual({ orgId: ORG_A, hint: { type: 'todo', id }, userId: USER_A });
+    expect(parseHint(`${ORG_A} note ${id} @${USER_A}`)).toEqual({ orgId: ORG_A, hint: { type: 'note', id }, userId: USER_A });
+    expect(parseHint(`${ORG_A} note ${id} @${USER_A}+shared`)).toEqual({ orgId: ORG_A, hint: { type: 'note', id }, userId: USER_A, shared: true });
+    expect(parseHint(`${ORG_A} note ${id} @${USER_A}`)).not.toHaveProperty('shared');
+    for (const payload of [
+      // A to-do or a note for nobody in particular reaches nobody.
+      `${ORG_A} todo ${id}`,
+      `${ORG_A} note ${id}`,
+      // `+shared` belongs to a note's recipient, and to a note only.
+      `${ORG_A} note ${id} +shared`,
+      `${ORG_A} note ${id}+shared`,
+      `${ORG_A} note ${id} @${USER_A} +shared`,
+      `${ORG_A} note ${id} @${USER_A}+shared+shared`,
+      `${ORG_A} note ${id} @${USER_A}+org`,
+      `${ORG_A} note ${id} @${USER_A}+SHARED`,
+      `${ORG_A} todo ${id} @${USER_A}+shared`,
+      `${ORG_A} notification ${id} ${ENTITY_A} @${USER_A}+shared`,
+      `${ORG_A} file ${id} @${USER_A}+shared`,
     ]) {
       expect(parseHint(payload)).toBeNull();
     }
@@ -211,6 +240,27 @@ describe('StreamHub', () => {
     expect(a.recipients).toEqual([USER_B, undefined]);
   });
 
+  it('passes on whether a note is shared, for each stream to apply its own access (#1753)', () => {
+    const source = fakeSource();
+    const hub = new StreamHub(source);
+    hub.start();
+    source.ready();
+    const a = recorder(ORG_A);
+    hub.subscribe(a);
+    const id = randomUUID();
+    source.emit(`${ORG_A} note ${id} @${USER_B}+shared`);
+    source.emit(`${ORG_A} note ${id} @${USER_B}`);
+    source.emit(`${ORG_A} todo ${id} @${USER_B}`);
+    source.emit(`${ORG_A} todo ${id}`);
+    expect(a.hints).toEqual([
+      { type: 'note', id },
+      { type: 'note', id },
+      { type: 'todo', id },
+    ]);
+    expect(a.recipients).toEqual([USER_B, USER_B, USER_B]);
+    expect(a.shared).toEqual([true, false, false]);
+  });
+
   it('is ready only while the source listens; a lost connection closes every stream', async () => {
     const source = fakeSource();
     const hub = new StreamHub(source);
@@ -242,10 +292,24 @@ describe('StreamHub', () => {
 
 describe('legal-entity scope (#1692)', () => {
   it('reads the scope of a kernel.stream.check result, and refuses anything else', () => {
-    expect(streamScopeOf({ role: 'owner', legalEntities: '*' })).toEqual(ALL_ENTITIES);
-    expect(streamScopeOf({ role: 'member', legalEntities: [ENTITY_A] })).toEqual(only(ENTITY_A));
-    expect(streamScopeOf({ role: 'member', legalEntities: [] })).toEqual(only());
-    for (const bad of [undefined, null, {}, { role: 'owner' }, { legalEntities: ['*'] }, { legalEntities: 'all' }, { legalEntities: [ENTITY_A, 1] }, { legalEntities: ['x'] }]) {
+    expect(streamScopeOf({ role: 'owner', legalEntities: '*', sharedNotes: true })).toEqual({ all: true, sharedNotes: true });
+    expect(streamScopeOf({ role: 'viewer', legalEntities: '*', sharedNotes: false })).toEqual({ all: true, sharedNotes: false });
+    expect(streamScopeOf({ role: 'member', legalEntities: [ENTITY_A], sharedNotes: false })).toEqual({ ...only(ENTITY_A), sharedNotes: false });
+    expect(streamScopeOf({ role: 'member', legalEntities: [], sharedNotes: false })).toEqual({ ...only(), sharedNotes: false });
+    for (const bad of [
+      undefined,
+      null,
+      {},
+      { role: 'owner' },
+      { legalEntities: ['*'], sharedNotes: false },
+      { legalEntities: 'all', sharedNotes: false },
+      { legalEntities: [ENTITY_A, 1], sharedNotes: false },
+      { legalEntities: ['x'], sharedNotes: false },
+      // Shared-note access must be stated (#1753): a missing or malformed one never widens the stream.
+      { legalEntities: '*' },
+      { legalEntities: '*', sharedNotes: 'true' },
+      { legalEntities: [ENTITY_A], sharedNotes: 1 },
+    ]) {
       expect(() => streamScopeOf(bad)).toThrow();
     }
   });
@@ -262,12 +326,26 @@ describe('legal-entity scope (#1692)', () => {
 
 describe('recipient (#1702)', () => {
   it("lets a member's own hint through only that member's stream, and one that names nobody through none", () => {
-    expect(forRecipient(USER_A, 'notification', USER_A)).toBe(true);
-    expect(forRecipient(USER_A, 'notification', USER_B)).toBe(false);
-    expect(forRecipient(USER_A, 'notification', undefined)).toBe(false);
-    expect(forRecipient(USER_A, 'file', undefined)).toBe(true);
+    for (const type of ['notification', 'todo', 'note'] as const) {
+      expect(forRecipient(ALL_ENTITIES, USER_A, type, USER_A)).toBe(true);
+      expect(forRecipient(ALL_ENTITIES, USER_A, type, USER_B)).toBe(false);
+      expect(forRecipient(ALL_ENTITIES, USER_A, type, undefined)).toBe(false);
+      // Reading shared notes opens no other member's own row that is not shared.
+      expect(forRecipient(READS_SHARED, USER_A, type, USER_B)).toBe(false);
+    }
+    expect(forRecipient(ALL_ENTITIES, USER_A, 'file', undefined)).toBe(true);
     // A recipient narrows any hint to that member.
-    expect(forRecipient(USER_A, 'file', USER_B)).toBe(false);
+    expect(forRecipient(ALL_ENTITIES, USER_A, 'file', USER_B)).toBe(false);
+  });
+
+  it("lets another member's shared note through only a stream that reads shared notes (#1753)", () => {
+    expect(forRecipient(READS_SHARED, USER_A, 'note', USER_B, true)).toBe(true);
+    expect(forRecipient({ ...only(), sharedNotes: true }, USER_A, 'note', USER_B, true)).toBe(true);
+    expect(forRecipient({ all: true, sharedNotes: false }, USER_A, 'note', USER_B, true)).toBe(false);
+    // Absent access is no access.
+    expect(forRecipient(ALL_ENTITIES, USER_A, 'note', USER_B, true)).toBe(false);
+    // Its author always hears of it.
+    expect(forRecipient({ all: true, sharedNotes: false }, USER_A, 'note', USER_A, true)).toBe(true);
   });
 });
 
@@ -473,6 +551,43 @@ describe('StreamConnection', () => {
     for (let i = 0; i < PENDING_HINT_LIMIT * 2; i++) conn.hint({ type: 'notification', id: randomUUID() }, ENTITY_A, USER_B);
     await vi.advanceTimersByTimeAsync(0);
     expect(events()).toHaveLength(1);
+    conn.finish();
+  });
+
+  it("sends another member's shared note only while the stream reads shared notes, never their to-do or private note (#1753)", async () => {
+    let scope: StreamScope = READS_SHARED;
+    let answer: (() => void) | null = null;
+    const { conn, events } = connection({
+      scope: READS_SHARED,
+      check: () => new Promise<StreamScope>((resolve) => (answer = () => resolve(scope))),
+    });
+    const shared = randomUUID();
+    const privateNote = randomUUID();
+    const todo = randomUUID();
+    const own = randomUUID();
+    conn.hint({ type: 'note', id: privateNote }, undefined, USER_B, false);
+    conn.hint({ type: 'todo', id: todo }, undefined, USER_B, false);
+    conn.hint({ type: 'note', id: shared }, undefined, USER_B, true);
+    conn.hint({ type: 'todo', id: own }, undefined, USER_A, false);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(events()).toEqual([
+      { event: 'invalidate', data: { type: 'note', id: shared } },
+      { event: 'invalidate', data: { type: 'todo', id: own } },
+    ]);
+    // The member became a viewer: a shared note held while the check ran is dropped once it answers.
+    void conn.recheck();
+    const held = randomUUID();
+    conn.hint({ type: 'note', id: held }, undefined, USER_B, true);
+    scope = { all: true, sharedNotes: false };
+    (answer as unknown as () => void)();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(events()).toHaveLength(2);
+    // And later ones are dropped at once; their own shared note still reaches them.
+    const mine = randomUUID();
+    conn.hint({ type: 'note', id: randomUUID() }, undefined, USER_B, true);
+    conn.hint({ type: 'note', id: mine }, undefined, USER_A, true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(events().slice(2)).toEqual([{ event: 'invalidate', data: { type: 'note', id: mine } }]);
     conn.finish();
   });
 
