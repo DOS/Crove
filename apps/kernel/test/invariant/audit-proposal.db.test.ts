@@ -1,14 +1,15 @@
 // An audit row that names a proposal names one of its own org, in a state the runtime writes such a row in (issue
 // #1695, plan §4.10; coordinator decision option A) on a real PostgreSQL 17:
-// - a tenant-role insert naming another org's proposal, or an id that does not exist, is refused;
+// - a tenant-role insert naming another org's proposal, or an id that does not exist, is refused, and a row aimed at
+//   another org gets that same refusal whatever the org holds;
 // - a row for the proposal's own command needs the proposal 'approved' (a state only the approving transaction sees),
 //   so a pending, executed, rejected, failed or expired proposal is refused for it;
 // - a row for another command needs 'approved' (a command the execution runs) or 'pending' (an edit's reviser), so an
 //   executed, rejected, failed or expired proposal is refused for it too; a pending one passes for it (the gap left
-//   for option B, written down here so a change to it is seen);
+//   for option B, #1706, written down here so a change to it is seen);
 // - the runtime's own flows still pass: uploading, editing (the reviser's row names the pending proposal) and
-//   approving a purchase invoice (the record's row names it approved), and a command the execution runs, as
-//   kernel.party.link_for_tax_code under finance.purchase.record, whose row names the approved proposal;
+//   approving a purchase invoice (the record's row names it approved, and so does the row of
+//   kernel.party.link_for_tax_code, which the record runs for a supplier the org does not know yet);
 // - staff writes are not checked, as audit_event_stamp.
 // Set CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
 // Part of the invariant suite: CI runs this file from the base branch on protected-path PRs (AGENTS.md).
@@ -220,7 +221,17 @@ suite('audit rows naming a proposal on PostgreSQL (#1695)', () => {
       await expect(outcome(write(appUrl, userContext(o.owner, o.orgId), o.orgId, command, foreign))).resolves.toBe('refused');
       await expect(outcome(write(appUrl, userContext(o.owner, o.orgId), o.orgId, command, randomUUID()))).resolves.toBe('refused');
     }
+    // A row aimed at the other org gets the same refusal whatever that org holds, before its policy refuses the row, so
+    // the answer tells nothing of its proposals; without a context too.
+    const foreignPending = await proposal(other.orgId, other.owner, 'pending');
+    for (const id of [foreign, foreignPending, randomUUID()]) {
+      for (const command of [OWN, OTHER]) {
+        await expect(outcome(write(appUrl, userContext(o.owner, o.orgId), other.orgId, command, id))).resolves.toBe('refused');
+        await expect(outcome(write(appUrl, null, other.orgId, command, id))).resolves.toBe('refused');
+      }
+    }
     expect(await rowsNaming(foreign)).toEqual([]);
+    expect(await rowsNaming(foreignPending)).toEqual([]);
   });
 
   it("needs the proposal approved for its own command's row, and approved or pending for another command's", async () => {
@@ -243,6 +254,8 @@ suite('audit rows naming a proposal on PostgreSQL (#1695)', () => {
     });
   });
 
+  // The member below moves the proposal's status itself, as kernel.proposal.approve does in its transaction: the check
+  // binds a row to the state the session's transaction sees (a status transition guard is #1707).
   it('holds in a system context too, and passes the approving transaction its own row', async () => {
     const o = await org();
     const executed = await proposal(o.orgId, o.owner, 'executed');
@@ -304,9 +317,12 @@ suite('audit rows naming a proposal on PostgreSQL (#1695)', () => {
     );
     // The approval runs the record with the approved proposal's id.
     await runtime.execute('kernel.proposal.approve', { id: proposalId, revision, acceptUnverifiedSignature: true }, { actor: asMfa(o.owner), orgId: o.orgId });
+    // The record finds no party with the seller's tax code in the new org, so it runs kernel.party.link_for_tax_code,
+    // whose row names the approved proposal too.
     expect(await rowsNaming(proposalId)).toEqual([
       { command: OWN, outcome: 'ok' },
       { command: 'finance.purchase.revise', outcome: 'ok' },
+      { command: OTHER, outcome: 'ok' },
     ]);
     const status = await admin(async (c) => (await c.query<{ status: string }>('SELECT status FROM crove_kernel.proposal WHERE id = $1', [proposalId])).rows[0]?.status);
     expect(status).toBe('executed');
