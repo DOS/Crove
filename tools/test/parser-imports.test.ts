@@ -1,6 +1,7 @@
 // Dependency rule (External-tenant gate T12): PDF, XML and MIME parsers run only in crove-extract (apps/extract),
 // which also holds the e-invoice parser. The API, the worker and the modules and packages they load must not
-// import a parser, must not depend on one, and the kernel image's production dependency tree must not contain one.
+// import a parser, must not depend on one, and the kernel image's production dependency tree must not contain one
+// but exceljs's saxes, which the image build removes (#1719; the kernel-image CI job checks the built image).
 import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
