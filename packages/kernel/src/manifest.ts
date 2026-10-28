@@ -55,7 +55,7 @@ export const kernelManifest = defineModule({
       org_usage: columns(['org_id', 'id', 'metric', 'amount', 'created_at']),
       outbox_archive: columns(['org_id', 'day', 'object_key', 'sha256', 'row_count', 'archived_at', 'purged_at', 'purged_rows']),
       outbox_event: columns(['org_id', 'id', 'type', 'actor_id', 'command_id', 'created_at', 'actor_type', 'agent_id', 'agent_run'], { payload: 'pii' }),
-      outbox_pending: columns(['seq', 'org_id', 'event_id', 'attempts', 'last_error']),
+      outbox_pending: columns(['seq', 'org_id', 'event_id', 'attempts', 'last_error', 'held_type']),
       party: columns(['org_id', 'id', 'kind', 'source_trust', 'verified_at', 'verified_by', 'version', 'created_at', 'updated_at', 'duplicate_of'], { name: 'pii', tax_code: 'national_id_if_individual', address: 'contact', email: 'contact', phone: 'contact', search: 'pii' }),
       position: columns(['org_id', 'id', 'title', 'module', 'role_key', 'reports_to', 'holder_user_id', 'holder_agent_id', 'le_scope', 'flags', 'job_description', 'status', 'created_at', 'updated_at']),
       prober_alert_state: columns(['id', 'problem', 'started_at', 'notified_at', 'updated_at']),

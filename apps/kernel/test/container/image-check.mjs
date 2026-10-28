@@ -1,10 +1,11 @@
 // Check of the built kernel image, run by the `kernel-image` CI job inside the image (External-tenant gate T12):
 // every kernel module loads without starting anything, the web app is there, no PDF, XML or MIME parser package
 // exists anywhere in the image's node_modules nor parser code inside another package (but the reasoned exceptions
-// in BUNDLED_PARSERS, #1740), and the finance exports write workbooks without one (exceljs's XML
-// reader, saxes, is removed at build time and reading a workbook fails, #1719).
+// pinned in PINNED, #1740, #1770), no test or tooling file is in it (#1770), and the finance exports write workbooks
+// without one (exceljs's XML reader, saxes, is removed at build time and reading a workbook fails, #1719).
 // Usage: node image-check.mjs [app root, default /app]
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { basename, join, relative, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -70,46 +71,57 @@ const PARSER_CODE = [
   /\bnew\s+DOMParser\b|\.parseFromString\s*\(/,
   /\bstartxref\b/,
 ];
-// The files whose parser code is accepted, by package and path inside it, each with its reason. Parser code in any
-// other file fails, in these packages too, and so does an accepted file the image no longer holds (an upgrade moved
-// it, or the scan stopped reading files): update the list, with its reason, after reading what changed.
-const BUNDLED_PARSERS = [
+// The files whose parser code or inlined module is accepted, each with its reason and pinned by its package's version
+// and the sha256 of its content, as read when it was pinned (#1770). A pinned file passes without being searched;
+// one whose version or content changed (an upgrade, a patch) fails until someone reads the new file and pins it
+// again, so an upgrade cannot slip a new parser into an accepted file. Parser code in any other file fails, in these
+// packages too, and so does a pinned file the image no longer holds.
+const PINNED = [
   {
     pkg: '@aws-sdk/xml-builder',
-    files: ['dist-cjs/index.js', 'dist-es/xml-parser.js', 'dist-es/xml-parser.browser.js'],
+    version: '3.972.41',
     reason: "its hand-written parseXML reads only the S3 answers of the operator's own endpoint",
+    files: {
+      'dist-cjs/index.js': 'ebaa02fe69fb4bf244f2ed10cdbb3ef9c725ab5b39be4b36532a68308804ff81',
+      'dist-es/xml-parser.js': '5cf78ee442ca71df8037c69a182be175727362c3591b4007d31768f20b25c25b',
+      'dist-es/xml-parser.browser.js': 'f0283367a322119ec2c0ad6df8b66d38074215b7d19cae4a031728c0e70fdc5e',
+    },
   },
   {
     pkg: '@aws-sdk/core',
-    files: ['dist-cjs/submodules/protocols/index.js', 'dist-es/submodules/protocols/xml/parseXmlBody.js', 'dist-es/submodules/protocols/xml/XmlShapeDeserializer.js'],
+    version: '3.978.3',
     reason: "the S3 client's protocol layer, which hands those answers to @aws-sdk/xml-builder",
+    files: {
+      'dist-cjs/submodules/protocols/index.js': 'ee36508322ba0dc6829eba7c26b3414bfed0bcd98543564618f8c50a5cb92ece',
+      'dist-es/submodules/protocols/xml/parseXmlBody.js': 'f8eb5bdad0a0eefb4a0b6ebdc6b4e1628f48921fcbd0a8e8129c34eeac2511cd',
+      'dist-es/submodules/protocols/xml/XmlShapeDeserializer.js': 'ada9587eacc163869f93297839480d6bf0ca8713d1623587ae529e02c8c8c872',
+    },
   },
   {
     pkg: 'undici',
-    files: ['lib/web/fetch/formdata-parser.js'],
+    version: '7.30.0',
     reason: "fetch's multipart/form-data reader (Request.formData()), the same one Node ships built in",
+    files: { 'lib/web/fetch/formdata-parser.js': 'd5d048201a040865a4376e423fd78b102ad164cb51ad7b0ade56897c7318bd6b' },
+  },
+  {
+    pkg: 'undici',
+    version: '7.30.0',
+    reason: "llhttp inlined as WebAssembly, the HTTP/1.1 parser undici's fetch runs and Node's own HTTP is built on",
+    files: {
+      'lib/llhttp/llhttp-wasm.js': '344f7ae80c983694372d9234584a1261ef5492ab219d6e573e933f5d1c715b00',
+      'lib/llhttp/llhttp_simd-wasm.js': '52c16227482700834512f2c2257eb44652f39b11f868600562274f476025e4bd',
+    },
   },
 ];
-const ACCEPTED = new Map(BUNDLED_PARSERS.flatMap(({ pkg, files, reason }) => files.map((file) => [`${pkg}/${file}`, reason])));
-// Workspace files (by path from the app root) whose matches are not parser code.
-const WORKSPACE_ACCEPTED = new Map([
-  ['apps/kernel/test/container/image-check.mjs', 'this check, whose patterns and comments name the parsers it looks for'],
-]);
+const PINS = new Map(PINNED.flatMap(({ pkg, version, reason, files }) => Object.entries(files).map(([file, sha256]) => [`${pkg}/${file}`, { version, reason, sha256 }])));
 const seen = new Set();
 // Native and WebAssembly modules, whose code no text check reads (a PDF engine such as mupdf or pdfium ships as
 // one), are refused outright, wherever they are and whatever their name: a file that starts with the WebAssembly or
 // ELF magic bytes, a .node or .wasm file, or JavaScript holding one in base64 ("\0asm" and "\x7fELF" encode to
-// AGFzbQ and f0VMRg). The image holds none.
+// AGFzbQ and f0VMRg). The image holds none but the pinned llhttp builds.
 const BINARY_NAME = /\.(?:node|wasm)$/;
 const BINARY_MAGIC = [Buffer.from('\0asm', 'latin1'), Buffer.from('\x7fELF', 'latin1')];
 const BINARY_INLINE = /AGFzbQ|f0VMRg/;
-// Inlined modules accepted, by package and path inside it (pinned and checked like BUNDLED_PARSERS).
-const INLINE_ACCEPTED = new Map(
-  ['lib/llhttp/llhttp-wasm.js', 'lib/llhttp/llhttp_simd-wasm.js'].map((file) => [
-    `undici/${file}`,
-    "llhttp, the HTTP/1.1 parser undici's fetch runs, the one Node's own HTTP is built on",
-  ]),
-);
 const head = Buffer.alloc(4);
 function isBinary(path) {
   const fd = openSync(path, 'r');
@@ -140,12 +152,16 @@ for (const entry of entries) {
 // 3. On the way, every JavaScript file of a package (`pkg`: the package the walk is in, { name, dir }) and every
 // source file of the workspace's own code is read for PARSER_CODE, and no native or WebAssembly module may be
 // anywhere. The web app's build is browser code, which never runs in the kernel, so its text is not read; the
-// binary check covers it too.
+// binary check covers it too. Outside node_modules no test directory or test file may be (#1770).
 const WEB_DIST = join(root, 'apps/app/dist');
 function walk(dir, scope, pkg, textScan = true) {
   const inNodeModules = basename(dir) === 'node_modules';
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name);
+    if (!relative(root, path).split(sep).includes('node_modules')) {
+      if (entry.isDirectory() && (entry.name === 'test' || entry.name === 'tests')) failures.push(`a test directory is in the image: ${path}`);
+      if (entry.isFile() && /\.test\.[cm]?[jt]sx?$/.test(entry.name)) failures.push(`a test file is in the image: ${path}`);
+    }
     if (entry.isFile()) {
       if (BINARY_NAME.test(entry.name) || isBinary(path)) failures.push(`native or WebAssembly module in the image: ${path}`);
       else if (textScan && (pkg !== undefined ? /\.[cm]?js$/.test(entry.name) : /\.(?:[cm]?[jt]s|tsx)$/.test(entry.name))) scanFile(path, pkg);
@@ -162,25 +178,34 @@ function walk(dir, scope, pkg, textScan = true) {
 }
 function scanFile(path, pkg) {
   scannedFiles++;
-  const code = readFileSync(path, 'utf8');
+  const bytes = readFileSync(path);
   const key = pkg === undefined ? undefined : `${pkg.name}/${relative(pkg.dir, path).split(sep).join('/')}`;
-  if (BINARY_INLINE.test(code)) {
-    if (key !== undefined && INLINE_ACCEPTED.has(key)) seen.add(key);
-    else if (!(pkg === undefined && WORKSPACE_ACCEPTED.has(relative(root, path).split(sep).join('/')))) failures.push(`native or WebAssembly module inlined in the image: ${path}`);
+  const pin = key === undefined ? undefined : PINS.get(key);
+  if (pin !== undefined) {
+    seen.add(key);
+    const sha256 = createHash('sha256').update(bytes).digest('hex');
+    const version = JSON.parse(readFileSync(join(pkg.dir, 'package.json'), 'utf8')).version;
+    if (sha256 !== pin.sha256 || version !== pin.version) {
+      failures.push(`the pinned file ${key} changed (now ${pkg.name}@${version}, sha256 ${sha256}; pinned ${pin.version}, ${pin.sha256}): read the new file, then pin it again in PINNED`);
+    }
+    return;
   }
+  const code = bytes.toString('utf8');
+  if (BINARY_INLINE.test(code)) failures.push(`native or WebAssembly module inlined in the image: ${path}`);
   const match = PARSER_CODE.map((re) => re.exec(code)?.[0]).find((m) => m !== undefined);
-  if (match === undefined) return;
-  if (key !== undefined && ACCEPTED.has(key)) seen.add(key);
-  else if (pkg === undefined && WORKSPACE_ACCEPTED.has(relative(root, path).split(sep).join('/'))) return;
-  else failures.push(`parser code in the image, ${pkg === undefined ? 'outside node_modules' : `in ${pkg.name}`}: ${path} (${match.trim().slice(0, 60)})`);
+  if (match !== undefined) failures.push(`parser code in the image, ${pkg === undefined ? 'outside node_modules' : `in ${pkg.name}`}: ${path} (${match.trim().slice(0, 60)})`);
 }
 walk(root);
 if (scannedFiles === 0) failures.push(`no JavaScript file was read under ${root}`);
-for (const key of ACCEPTED.keys()) {
-  if (!seen.has(key)) failures.push(`the reasoned exception ${key} has no parser code in the image any more: update BUNDLED_PARSERS`);
+for (const key of PINS.keys()) {
+  if (!seen.has(key)) failures.push(`the pinned file ${key} is not in the image any more: update PINNED`);
 }
-for (const key of INLINE_ACCEPTED.keys()) {
-  if (!seen.has(key)) failures.push(`the reasoned exception ${key} has no inlined module in the image any more: update INLINE_ACCEPTED`);
+// Tests, their fixtures and the repo's tooling stay out of the image (.dockerignore, #1770); only the git hook
+// installer the root package's prepare script runs is left of tools/.
+if (existsSync(join(root, 'e2e'))) failures.push(`the end-to-end suite is in the image: ${join(root, 'e2e')}`);
+const tools = join(root, 'tools');
+for (const name of existsSync(tools) ? readdirSync(tools) : []) {
+  if (name !== 'install-git-hooks.mjs') failures.push(`tooling is in the image: ${join(tools, name)}`);
 }
 if (existsSync(join(root, 'apps/extract'))) failures.push('apps/extract is in the kernel image');
 if (!existsSync(join(root, 'apps/app/dist/index.html'))) failures.push('the web app build (apps/app/dist) is missing');
@@ -267,7 +292,7 @@ try {
 }
 
 console.log(`checked ${entries.length} store entries, ${scannedFiles} package files and ${modules.length} kernel modules, wrote 2 workbooks`);
-for (const key of seen) console.log(`accepted ${ACCEPTED.has(key) ? 'parser code' : 'inlined module'} in ${key}: ${ACCEPTED.get(key) ?? INLINE_ACCEPTED.get(key)}`);
+for (const key of seen) console.log(`pinned ${key} (${PINS.get(key).version}): ${PINS.get(key).reason}`);
 if (failures.length > 0) {
   console.error(failures.join('\n'));
   process.exit(1);
