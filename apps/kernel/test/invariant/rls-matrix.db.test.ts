@@ -7,8 +7,10 @@
 // column under another name are not covered; AGENTS.md requires org_id on every tenant table.
 // Legal entities (#1281, plan §4.6, T8): every table with a NOT NULL legal_entity_id column, and
 // crove_kernel.legal_entity itself (by id), must carry the RESTRICTIVE le_scope policy, and a member of org A whose
-// assignments limit it to one entity reads, inserts, updates and deletes none of another entity's rows. A nullable
-// legal_entity_id (role_assignment: the entity an assignment is limited to) is a scope, not an owner, and is left out.
+// assignments limit it to one entity reads, inserts, updates and deletes none of another entity's rows.
+// A nullable legal_entity_id is either an entity scope with org-level rows (NULLABLE_ENTITY_SCOPED: the RESTRICTIVE
+// le_scope policy that lets NULL through, and the scoped member reaches no row of another entity but reads the
+// org-level ones; #1716) or a reasoned exception (NULLABLE_ENTITY_UNSCOPED).
 // Author-only tables (ADR-0037, AUTHOR_ONLY below) keep every cross-org case; only the system context's own-org
 // controls change there, since the system reads part of them and writes none.
 // Part of the invariant suite: CI runs this file from the base branch on protected-path PRs (AGENTS.md).
@@ -73,10 +75,27 @@ const AUTHOR_ONLY = new Map<string, string>([
   // A to-do is its owner's alone, the system context's included.
   ['crove_notes.todo', 'false'],
 ]);
+// Tables whose nullable legal_entity_id scopes a row to an entity, NULL being an org-level row every member reads
+// (#1716). The value makes a row of org A's default entity: the table's trigger gives it the entity of the record it
+// names (the fixture's journal entry), so it is seeded as the database owner, and the scoped member's insert names
+// the entity itself. Sorted, one table per line.
+const NULLABLE_ENTITY_SCOPED = new Map<string, (o: OrgFixture) => Values>([
+  ['crove_kernel.activity', (o) => ({ org_id: o.id, record_type: 'finance.journal_entry', record_id: o.entry, kind: 'rls.matrix', summary: 'RLS matrix entity row' })],
+]);
+// Tables with a nullable legal_entity_id that is not such a scope, and why. Sorted, one table per line.
+const NULLABLE_ENTITY_UNSCOPED = new Map<string, string>([
+  // A stamp, not yet a scope, until the owner decides #1538: agents' positions have an empty le_scope.
+  ['crove_kernel.proposal', 'stamp until #1538'],
+  // The entity an assignment is limited to; role_assignment_scope lets every member read the org-wide ones.
+  ['crove_kernel.role_assignment', 'the scope of an assignment'],
+]);
 const RLS_DENIED = /new row violates row-level security policy/;
 // The RESTRICTIVE legal-entity policy (20261030001000, 20261102140000), as pg_get_expr prints it for column c.
 const leScopePredicate = (c: string) =>
   `(('*'::text = ANY (( SELECT crove_kernel.ctx_le_scope() AS ctx_le_scope)::text[])) OR ((${c})::text = ANY (( SELECT crove_kernel.ctx_le_scope() AS ctx_le_scope)::text[])))`;
+// The same policy for a nullable column whose NULL rows are org-level (20261101060000 role_assignment_scope, #1716).
+const leScopeOrOrgPredicate = (c: string) =>
+  `((${c} IS NULL) OR ('*'::text = ANY (( SELECT crove_kernel.ctx_le_scope() AS ctx_le_scope)::text[])) OR ((${c})::text = ANY (( SELECT crove_kernel.ctx_le_scope() AS ctx_le_scope)::text[])))`;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
 
 type Values = Record<string, string | number>;
@@ -1256,6 +1275,8 @@ interface Relation {
   owner: string;
   // The column le_scope checks: legal_entity_id, id for crove_kernel.legal_entity, or null for an org-wide table.
   entityColumn: string | null;
+  // Whether the table has a nullable legal_entity_id (NULLABLE_ENTITY_SCOPED or NULLABLE_ENTITY_UNSCOPED).
+  nullableEntity: boolean;
 }
 
 // Creates the database, applies the migrations and reads the catalog before the cases are collected, so every
@@ -1283,7 +1304,11 @@ async function prepare() {
                   SELECT 1 FROM pg_catalog.pg_attribute a
                   WHERE a.attrelid = c.oid AND a.attname = 'legal_entity_id' AND a.attnotnull AND a.attnum > 0 AND NOT a.attisdropped)
                 THEN 'legal_entity_id'
-              END AS "entityColumn"
+              END AS "entityColumn",
+              EXISTS (
+                SELECT 1 FROM pg_catalog.pg_attribute a
+                WHERE a.attrelid = c.oid AND a.attname = 'legal_entity_id' AND NOT a.attnotnull AND a.attnum > 0 AND NOT a.attisdropped)
+                AS "nullableEntity"
        FROM pg_catalog.pg_class c
        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
        WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
@@ -1612,6 +1637,14 @@ suite('generated cross-org RLS matrix on PostgreSQL (T8)', () => {
     expect(entityTables, 'tables scoped by legal entity').toContain('crove_finance.journal_entry');
     expect(entityTables).toContain('crove_kernel.legal_entity');
     expect(entityTables).not.toContain('crove_kernel.role_assignment');
+    // Every nullable legal_entity_id is a listed scope or a listed exception, and every listed table has one.
+    const nullable = relations.filter((r) => r.nullableEntity).map((r) => r.name).sort();
+    expect(nullable, 'tables with a nullable legal_entity_id: list each in NULLABLE_ENTITY_SCOPED or NULLABLE_ENTITY_UNSCOPED').toEqual(
+      [...NULLABLE_ENTITY_SCOPED.keys(), ...NULLABLE_ENTITY_UNSCOPED.keys()].sort(),
+    );
+    for (const list of [[...NULLABLE_ENTITY_SCOPED.keys()], [...NULLABLE_ENTITY_UNSCOPED.keys()]]) {
+      expect(list, 'NULLABLE_ENTITY_SCOPED and NULLABLE_ENTITY_UNSCOPED are kept sorted').toEqual([...list].sort());
+    }
   });
 
   it('runs no runtime role as a superuser or with BYPASSRLS', async () => {
@@ -1927,6 +1960,63 @@ suite('generated cross-org RLS matrix on PostgreSQL (T8)', () => {
           if (cols.length > 0 && can(table, 'crove_app', 'SELECT')) {
             const set = factory.update?.set ?? `"${cols[0]}" = "${cols[0]}"`;
             const updated = await probe(scoped, (c) => c.query(`UPDATE ${table} SET ${set} WHERE org_id = $1 AND ${others}`, [orgs.A.id]));
+            expect(expectRows(updated, `${where} (update)`).rowCount, `${where}: rows of another entity updated`).toBe(0);
+          }
+          if (can(table, 'crove_app', 'DELETE') && can(table, 'crove_app', 'SELECT')) {
+            const deleted = await probe(scoped, (c) => c.query(`DELETE FROM ${table} WHERE org_id = $1 AND ${others}`, [orgs.A.id]));
+            expect(expectRows(deleted, `${where} (delete)`).rowCount, `${where}: rows of another entity deleted`).toBe(0);
+          }
+        });
+      }
+
+      const entityRow = NULLABLE_ENTITY_SCOPED.get(table);
+      if (entityRow) {
+        it('has the RESTRICTIVE le_scope policy that keeps org-level rows, and a member limited to another entity reaches only those', async () => {
+          const { rows: policies } = await admin.query<{ cmd: string; roles: string[]; qual: string | null; check: string | null }>(
+            `SELECT p.polcmd::text AS cmd,
+                    ARRAY(SELECT CASE WHEN o = 0 THEN 'public' ELSE pg_catalog.pg_get_userbyid(o) END FROM pg_catalog.unnest(p.polroles) o ORDER BY 1)::text[] AS roles,
+                    pg_catalog.pg_get_expr(p.polqual, p.polrelid) AS qual, pg_catalog.pg_get_expr(p.polwithcheck, p.polrelid) AS check
+             FROM pg_catalog.pg_policy p WHERE p.polrelid = $1::regclass AND NOT p.polpermissive`,
+            [table],
+          );
+          const predicate = leScopeOrOrgPredicate('legal_entity_id');
+          expect(policies.filter((p) => p.qual === predicate || p.check === predicate), `${table} needs the RESTRICTIVE le_scope policy that lets NULL through`).toEqual([
+            { cmd: '*', roles: ['crove_tenant'], qual: predicate, check: predicate },
+          ]);
+
+          // A row of org A's default entity, written as the database owner: the table's trigger names its entity.
+          const { rows: defaults } = await admin.query<{ id: string }>('SELECT id::text AS id FROM crove_kernel.legal_entity WHERE org_id = $1 AND is_default', [orgs.A.id]);
+          const defaultEntity = defaults[0]?.id;
+          const seeded = insertSql({ table, values: entityRow(orgs.A) });
+          const { rows: written } = await admin.query<{ entity: string | null }>(`${seeded.text} RETURNING legal_entity_id::text AS entity`, seeded.values);
+          expect(written, `${table}: the entity row gets its record's entity`).toEqual([{ entity: defaultEntity }]);
+          const { rows: orgLevel } = await admin.query<{ n: number }>(`SELECT count(*)::int AS n FROM ${table} WHERE org_id = $1 AND legal_entity_id IS NULL`, [orgs.A.id]);
+          expect(orgLevel[0]?.n, `${table}: the factories seed org-level rows of org A`).toBeGreaterThan(0);
+
+          const where = `${scoped.name} on ${table}`;
+          const others = `legal_entity_id IS NOT NULL AND legal_entity_id <> '${branch}'::uuid`;
+          // Reads: no row of another entity, and every org-level row of its org.
+          const read = expectRows(await probe(scoped, (c) => c.query(`SELECT org_id::text AS org FROM ${table} WHERE ${others}`)), `${where} (read)`);
+          expect(read.rows, `${where}: rows of another entity`).toEqual([]);
+          const shared = expectRows(
+            await probe(scoped, (c) => c.query(`SELECT count(*)::int AS n FROM ${table} WHERE org_id = $1 AND legal_entity_id IS NULL`, [orgs.A.id])),
+            `${where} (org-level read)`,
+          );
+          expect(shared.rows, `${where}: org-level rows`).toEqual([{ n: orgLevel[0]?.n }]);
+          if (can(table, 'crove_app', 'INSERT')) {
+            // Inserts: a row that names another entity is refused by RLS; an org-level row (the table's factory) is not.
+            const named = insertSql({ table, values: { ...entityRow(orgs.A), legal_entity_id: defaultEntity ?? '' } });
+            expect(await probe(scoped, (c) => c.query(named.text, named.values)), `${where} (insert): a row of another entity must be refused with 42501`).toMatchObject({
+              ok: false,
+              code: '42501',
+            });
+            const plain = insertSql({ table, values: factoryFor(table).make(orgs.A).row });
+            expectRows(await probe(scoped, (c) => c.query(plain.text, plain.values)), `${where} (insert of an org-level row)`);
+          }
+          // Updates and deletes: nothing of another entity changes.
+          const cols = columnsToUpdate(table, 'crove_app');
+          if (cols.length > 0 && can(table, 'crove_app', 'SELECT')) {
+            const updated = await probe(scoped, (c) => c.query(`UPDATE ${table} SET "${cols[0]}" = "${cols[0]}" WHERE org_id = $1 AND ${others}`, [orgs.A.id]));
             expect(expectRows(updated, `${where} (update)`).rowCount, `${where}: rows of another entity updated`).toBe(0);
           }
           if (can(table, 'crove_app', 'DELETE') && can(table, 'crove_app', 'SELECT')) {
