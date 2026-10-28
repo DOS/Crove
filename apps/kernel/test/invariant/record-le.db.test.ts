@@ -1,8 +1,8 @@
 // Links of parties to legal entities (#1280 part 3b, plan §4.6, coordinator decision (b)) on PostgreSQL 17: a member
 // limited to one entity gets its own new parties linked to it, writes no link itself, and finds a company the org
 // already knows by its tax code (linked into its own scope only), but never a person's party; agent and system contexts
-// may not use that lookup; a proposal carries its extraction's entity. The policies that limit what such a member sees
-// of parties and proposals wait for #1538. Part of the invariant suite; it imports package
+// may not use that lookup; a proposal carries its extraction's entity. The policy that limits what such a member sees
+// of parties waits; proposals are scoped by le_scope since #1538. Part of the invariant suite; it imports package
 // code under test, never helpers from outside test/invariant/. Set CROVE_TEST_ADMIN_URL to a superuser URL; each run
 // makes its own database.
 import { randomUUID } from 'node:crypto';

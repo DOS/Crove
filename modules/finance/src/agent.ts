@@ -29,14 +29,15 @@ interface TaskDetail {
   proposal: { id: string; title: string; status: string; checks: Check[] | null } | null;
 }
 
-// The review comment: counts and the messages of failed and warning checks. Deterministic, from the checks only.
+// The review comment: counts and the messages of failed and warning checks. Deterministic, from the checks only. It
+// leaves out the proposal's title: task comments are read org-wide, and a proposal of one legal entity is not (#1538).
 export function reviewText(proposal: TaskDetail['proposal']): string {
   if (!proposal) return 'Không tìm thấy đề xuất cần rà soát.';
-  if (!proposal.checks) return `Không đọc được kết quả kiểm tra của đề xuất "${proposal.title}"; cần người rà soát trực tiếp.`;
+  if (!proposal.checks) return 'Không đọc được kết quả kiểm tra của đề xuất; cần người rà soát trực tiếp.';
   const failed = proposal.checks.filter((c) => c.status === 'fail');
   const warned = proposal.checks.filter((c) => c.status === 'warn');
   const passed = proposal.checks.filter((c) => c.status === 'pass');
-  const lines = [`Kết quả kiểm tra đề xuất "${proposal.title}": ${passed.length} đạt, ${warned.length} cảnh báo, ${failed.length} không đạt.`];
+  const lines = [`Kết quả kiểm tra đề xuất: ${passed.length} đạt, ${warned.length} cảnh báo, ${failed.length} không đạt.`];
   for (const c of failed) lines.push(`- Không đạt: ${c.message.slice(0, MESSAGE_CHARS)}`);
   for (const c of warned) lines.push(`- Cảnh báo: ${c.message.slice(0, MESSAGE_CHARS)}`);
   lines.push(failed.length > 0 ? 'Đề nghị kiểm tra lại trước khi duyệt.' : 'Không thấy lỗi chặn; cần người có thẩm quyền duyệt ghi sổ.');
@@ -61,7 +62,8 @@ export const chiefAccountantReview: AgentProgram = async (agent) => {
       await agent.execute('kernel.task.set_status', { id: task.id, fence, status: 'done' });
       continue;
     }
-    await agent.execute('kernel.task.escalate', { id: task.id, fence, title: `Duyệt đề xuất: ${detail.proposal.title}`.slice(0, 300), reason: review });
+    // Not the proposal's title: tasks are read org-wide, and a proposal of one legal entity is not (#1538).
+    await agent.execute('kernel.task.escalate', { id: task.id, fence, title: 'Duyệt đề xuất đã rà soát', reason: review });
   }
 };
 
