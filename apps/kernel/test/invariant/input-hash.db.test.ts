@@ -3,11 +3,13 @@
 // deployment's hash key, which no runtime role can read, bound to the org of the sealed context, the actor and the
 // command. Whoever holds the row and a guess of a private note (ADR-0037) cannot confirm it, as they could with the
 // plain SHA-256; the same input hashes differently in two orgs, for two actors and in two deployments; a retry still
-// replays, also against a row claimed before the switch; and the WORM verifier passes over plain and keyed rows alike.
+// replays, also against a row claimed before the switch; the WORM verifier passes over plain and keyed rows alike; the
+// runtime the server builds (createKernel) writes keyed rows; and an agent run and the system hash under their own keys.
 // Part of the invariant suite; it imports package code under test, never helpers from outside test/invariant/. Set
 // CROVE_TEST_ADMIN_URL to a superuser URL; each run makes its own database.
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
+import { createServer, type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -17,14 +19,20 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
-import { DomainError, Runtime, defineCommand } from '@crove/kernel-runtime';
+import { ORG_HEADER } from '@crove/kernel-contract';
+import { DomainError, Runtime, defineCommand, type AgentActor, type BlobStore } from '@crove/kernel-runtime';
+import { financeCommands, financeQueries } from '@crove/mod-finance';
 import { notesCommands, notesQueries } from '@crove/mod-notes';
+import { loadConfig } from '../../src/config.ts';
+import { createKernel, defaultAdapters, type IdentityPort } from '../../src/kernel.ts';
 import { LocalArchiveStore, verifyArchive, writeArchive } from '../../src/worm.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
 const CREATE = 'notes.note.create';
 const ORG_CREATE = 'kernel.org.create';
+const SYSTEM = { type: 'system' as const, component: 'kernel.agent' };
+const COMMENT = 'kernel.task.comment';
 const suite = ADMIN ? describe : describe.skip;
 
 // The canonical input the runtime hashes: JSON with object keys sorted and undefined members left out.
@@ -40,6 +48,31 @@ const sha256 = (text: string) => createHash('sha256').update(text, 'utf8').diges
 // A private note's create input as the command parses it (defaults filled in).
 const parsedNote = (title: string) => ({ body: '', tags: [], title, visibility: 'private' });
 
+// Files for the server's runtime; the test uploads none.
+class MemoryStore implements BlobStore {
+  private readonly blobs = new Map<string, Uint8Array>();
+  async put(key: string, bytes: Uint8Array) {
+    this.blobs.set(key, bytes);
+    return `content:${createHash('sha256').update(bytes).digest('hex')}`;
+  }
+  async get(key: string) {
+    const b = this.blobs.get(key);
+    if (!b) throw new Error('missing blob');
+    return b;
+  }
+  async delete(key: string) {
+    this.blobs.delete(key);
+  }
+}
+
+async function freePort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as AddressInfo;
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  return port;
+}
+
 suite('keyed input hash on PostgreSQL (#1732)', () => {
   const dbName = `crove_test_input_hash_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
   let adminUrl = '';
@@ -49,9 +82,11 @@ suite('keyed input hash on PostgreSQL (#1732)', () => {
   let db: Db;
   let worker: Db;
   let keyed: Runtime;
+  let keyedWorker: Runtime;
   let plain: Runtime;
   let dir = '';
   const orgs = { a: '', b: '', c: '' };
+  let slugA = '';
   const users = { ownerA: '', member: '', ownerB: '' };
   const asUser = (userId: string) => ({ type: 'user' as const, userId, aal: 'aal1' as const });
   const asMfa = (userId: string) => ({ type: 'user' as const, userId, aal: 'aal2' as const, sessionId: randomUUID(), mfaAt: Math.floor(Date.now() / 1000) });
@@ -132,18 +167,21 @@ suite('keyed input hash on PostgreSQL (#1732)', () => {
       handler: async (ctx, input) => (await ctx.tryRun('test.refused', input, { recover: () => true })).status,
     });
     const defs = {
-      commands: [...kernelCommands, ...notesCommands, refused, tries],
-      queries: [...kernelQueries({ inboundDomain: null }), ...notesQueries],
+      commands: [...kernelCommands, ...financeCommands, ...notesCommands, refused, tries],
+      queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries, ...notesQueries],
     };
     keyed = new Runtime(db, { inputHash: 'keyed' }).register(defs);
-    plain = new Runtime(db).register(defs);
+    // System and agent actors run as the worker role, which alone enters their contexts.
+    keyedWorker = new Runtime(worker, { inputHash: 'keyed' }).register(defs);
+    // Said explicitly: the plain SHA-256 a runtime wrote before #1732, whatever the default (#1741).
+    plain = new Runtime(db, { inputHash: 'sha256' }).register(defs);
 
     const tag = randomUUID().slice(0, 8);
     const person = (name: string) => upsertIdentity(db, { issuer: 'test', subject: `${name}-${tag}`, email: `${name}-${tag}@example.com`, name: null });
     users.ownerA = await person('owner-a');
     users.ownerB = await person('owner-b');
     users.member = await person('member');
-    orgs.a = (await createOrg(keyed, asUser(users.ownerA), `Input hash A ${tag}`)).orgId;
+    ({ orgId: orgs.a, slug: slugA } = await createOrg(keyed, asUser(users.ownerA), `Input hash A ${tag}`));
     orgs.b = (await createOrg(keyed, asUser(users.ownerB), `Input hash B ${tag}`)).orgId;
     orgs.c = (await createOrg(keyed, asUser(users.ownerA), `Input hash C ${tag}`)).orgId;
     const { acceptPath } = await keyed.execute<{ acceptPath: string }>(
@@ -331,6 +369,82 @@ suite('keyed input hash on PostgreSQL (#1732)', () => {
     );
     // No org argument: the org is the sealed context's.
     expect(fn).toEqual({ args: 'p_actor_key text, p_command text, p_input text', definer: true, config: ['search_path=pg_catalog, pg_temp'], public_grant: false, tenant: true });
+  });
+
+  it('writes keyed hashes from the runtime the server builds (createKernel)', { timeout: 60_000 }, async () => {
+    // The API role as main.ts starts it, with a fixed user for the one header this test sends. A server whose runtime
+    // drops inputHash 'keyed' (apps/kernel/src/kernel.ts) writes the plain SHA-256, and this fails.
+    const port = await freePort();
+    const config = loadConfig({
+      DATABASE_URL: appUrl,
+      AUTH_JWT_SECRET: 'test-only-jwt-secret-for-input-hash-0123',
+      AUTH_ISSUER: 'test-auth',
+      WEB_DIST: '/nonexistent',
+      HOST: '127.0.0.1',
+      PORT: String(port),
+      STREAM_MAX_CONNECTIONS: '0',
+    });
+    const identity: IdentityPort = {
+      sessions: { mode: 'off', liveCheckForR3: false, check: async () => {} },
+      revoker: null,
+      authenticator: () => async () => ({ userId: users.ownerA, email: 'owner-a@example.com', name: null, aal: 'aal1', sessionId: randomUUID(), mfaAt: null }),
+    };
+    const kernel = createKernel(config, { ...defaultAdapters(config), identity, ai: null, storage: new MemoryStore() });
+    const stop = await kernel.start('api');
+    try {
+      const title = `Mã cửa ${randomUUID().slice(0, 8)}`;
+      const response = await fetch(`http://127.0.0.1:${port}/api/rpc/notes/create`, {
+        method: 'POST',
+        headers: { authorization: 'Bearer test', 'content-type': 'application/json', [ORG_HEADER]: slugA },
+        body: JSON.stringify({ json: { title } }),
+      });
+      expect(response.status).toBe(200);
+      expect(await lastHash(orgs.a, users.ownerA, CREATE)).toBe(`k1:${await hmacOf(orgs.a, `user:${users.ownerA}`, CREATE, canonical(parsedNote(title)))}`);
+    } finally {
+      await stop();
+    }
+  });
+
+  it('keys the rows of a live agent run and of the system under their own actor keys, in the contexts of the worker role', async () => {
+    const { agentId, positionId } = await keyed.execute<{ agentId: string; positionId: string }>(
+      'kernel.agent.template.install',
+      { templateKey: 'finance.chief_accountant', reportsTo: null },
+      { actor: asMfa(users.ownerA), orgId: orgs.a },
+    );
+    const { taskId } = await keyed.execute<{ taskId: string }>('kernel.task.create', { title: 'Đối chiếu sao kê', assigneePositionId: positionId }, { actor: asUser(users.ownerA), orgId: orgs.a });
+    // The system starts the run (system context): its row is keyed under the system component's key.
+    const { runId } = await keyedWorker.execute<{ runId: string | null }>('kernel.agent.run.start', { agentId }, { actor: SYSTEM, orgId: orgs.a });
+    if (!runId) throw new Error('no run');
+    const system = await admin(
+      async (c) =>
+        (
+          await c.query<{ h: string }>(
+            `SELECT input_sha256 AS h FROM crove_kernel.audit_event WHERE org_id = $1 AND actor_type = 'system' AND command = 'kernel.agent.run.start' AND outcome = 'ok' ORDER BY id DESC LIMIT 1`,
+            [orgs.a],
+          )
+        ).rows[0]?.h,
+    );
+    expect(system).toBe(`k1:${await hmacOf(orgs.a, 'system:kernel.agent', 'kernel.agent.run.start', canonical({ agentId }))}`);
+
+    // The agent (agent context): an ok row and its idempotency row under agent:<agent>:<run>, a retry that replays,
+    // and a refused command keyed alike.
+    const actor: AgentActor = { type: 'agent', agentId, runId };
+    const agentKey = `agent:${agentId}:${runId}`;
+    const { fence } = await keyedWorker.execute<{ fence: string }>('kernel.task.checkout', { id: taskId }, { actor, orgId: orgs.a });
+    const key = randomUUID();
+    const comment = { id: taskId, fence, body: 'Số tài khoản 0123 4567' };
+    const first = await keyedWorker.execute(COMMENT, comment, { actor, orgId: orgs.a, idempotencyKey: key });
+    expect(await keyedWorker.execute(COMMENT, comment, { actor, orgId: orgs.a, idempotencyKey: key })).toEqual(first);
+    const expected = `k1:${await hmacOf(orgs.a, agentKey, COMMENT, canonical(comment))}`;
+    expect(await lastHash(orgs.a, agentId, COMMENT)).toBe(expected);
+    const request = await admin(
+      async (c) =>
+        (await c.query<{ h: string }>('SELECT request_sha256 AS h FROM crove_kernel.idempotency_key WHERE org_id = $1 AND actor_key = $2 AND key = $3', [orgs.a, agentKey, key])).rows[0]?.h,
+    );
+    expect(request).toBe(expected);
+    const selfAssigned = { title: 'Tự giao việc', assigneePositionId: null };
+    expect(await refusalCode(keyedWorker.execute('kernel.task.create', selfAssigned, { actor, orgId: orgs.a }))).toBe('FORBIDDEN');
+    expect(await lastHash(orgs.a, agentId, 'kernel.task.create', 'denied')).toBe(`k1:${await hmacOf(orgs.a, agentKey, 'kernel.task.create', canonical(selfAssigned))}`);
   });
 
   it('anchors plain and keyed rows in the WORM stream, and the verifier passes over both', async () => {
