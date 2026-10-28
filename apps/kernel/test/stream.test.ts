@@ -1,7 +1,8 @@
 // The invalidation stream's fan-out and re-check logic (issue #69), without a database: hints reach only the streams
-// of their org, and a hint about a row of one legal entity only the streams whose scope includes it (#1692), a failed
-// re-check closes the stream with its reason, hints wait while a check runs, and a stream ends when its token expires,
-// its client stops reading, or the process loses its LISTEN connection.
+// of their org, a hint about a row of one legal entity only the streams whose scope includes it (#1692), and a hint
+// about a member's own notification only that member's streams (#1702); a failed re-check closes the stream with its
+// reason, hints wait while a check runs, and a stream ends when its token expires, its client stops reading, or the
+// process loses its LISTEN connection.
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import type pg from 'pg';
@@ -21,6 +22,7 @@ import {
   StreamConnection,
   StreamHub,
   closeReason,
+  forRecipient,
   inScope,
   newTicket,
   parseHint,
@@ -52,18 +54,21 @@ function fakeSource() {
   return source;
 }
 
-function recorder(orgId: string): HubSubscriber & { hints: unknown[]; entities: unknown[]; closed: string[] } {
+function recorder(orgId: string): HubSubscriber & { hints: unknown[]; entities: unknown[]; recipients: unknown[]; closed: string[] } {
   const hints: unknown[] = [];
   const entities: unknown[] = [];
+  const recipients: unknown[] = [];
   const closed: string[] = [];
   return {
     orgId,
     hints,
     entities,
+    recipients,
     closed,
-    hint: (h, legalEntityId) => {
+    hint: (h, legalEntityId, userId) => {
       hints.push(h);
       entities.push(legalEntityId);
+      recipients.push(userId);
     },
     close: (r) => void closed.push(r),
   };
@@ -72,6 +77,9 @@ function recorder(orgId: string): HubSubscriber & { hints: unknown[]; entities: 
 const ENTITY_A = randomUUID();
 const ENTITY_B = randomUUID();
 const only = (...entities: string[]): StreamScope => ({ all: false, entities: new Set(entities) });
+// The user every StreamConnection below is opened for, and another member of the org.
+const USER_A = randomUUID();
+const USER_B = randomUUID();
 
 describe('parseHint', () => {
   const id = randomUUID();
@@ -91,6 +99,31 @@ describe('parseHint', () => {
       `${ORG_A} journal_entry ${id} *`,
       `${ORG_A} journal_entry ${id} `,
       `${ORG_A} secret ${id} ${ENTITY_A}`,
+    ]) {
+      expect(parseHint(payload)).toBeNull();
+    }
+  });
+
+  it("reads the recipient of a member's own row last, and drops a notification hint that names none (#1702)", () => {
+    expect(parseHint(`${ORG_A} notification ${id} ${ENTITY_A} @${USER_A}`)).toEqual({
+      orgId: ORG_A,
+      hint: { type: 'notification', id },
+      legalEntityId: ENTITY_A,
+      userId: USER_A,
+    });
+    expect(parseHint(`${ORG_A} notification ${id} @${USER_A}`)).toEqual({ orgId: ORG_A, hint: { type: 'notification', id }, userId: USER_A });
+    expect(parseHint(`${ORG_A} journal_entry ${id} ${ENTITY_A}`)).not.toHaveProperty('userId');
+    for (const payload of [
+      // Fail closed: a notification for nobody in particular reaches nobody.
+      `${ORG_A} notification ${id}`,
+      `${ORG_A} notification ${id} ${ENTITY_A}`,
+      `${ORG_A} notification ${id} ${ENTITY_A} ${USER_A}`,
+      `${ORG_A} notification ${id} @${USER_A} ${ENTITY_A}`,
+      `${ORG_A} notification ${id} ${ENTITY_A} @${USER_A} @${USER_B}`,
+      `${ORG_A} notification ${id} ${ENTITY_A} @${USER_A.toUpperCase()}`,
+      `${ORG_A} notification ${id} ${ENTITY_A} @*`,
+      `${ORG_A} notification ${id} ${ENTITY_A} @`,
+      `${ORG_A} notification ${id} ${ENTITY_A}  @${USER_A}`,
     ]) {
       expect(parseHint(payload)).toBeNull();
     }
@@ -160,6 +193,24 @@ describe('StreamHub', () => {
     expect(a.entities).toEqual([ENTITY_A, undefined]);
   });
 
+  it("passes a hint's recipient on, for each stream to drop another member's notification (#1702)", () => {
+    const source = fakeSource();
+    const hub = new StreamHub(source);
+    hub.start();
+    source.ready();
+    const a = recorder(ORG_A);
+    hub.subscribe(a);
+    const id = randomUUID();
+    source.emit(`${ORG_A} notification ${id} ${ENTITY_A} @${USER_B}`);
+    source.emit(`${ORG_A} notification ${id} ${ENTITY_A}`);
+    source.emit(`${ORG_A} file ${id}`);
+    expect(a.hints).toEqual([
+      { type: 'notification', id },
+      { type: 'file', id },
+    ]);
+    expect(a.recipients).toEqual([USER_B, undefined]);
+  });
+
   it('is ready only while the source listens; a lost connection closes every stream', async () => {
     const source = fakeSource();
     const hub = new StreamHub(source);
@@ -209,6 +260,17 @@ describe('legal-entity scope (#1692)', () => {
   });
 });
 
+describe('recipient (#1702)', () => {
+  it("lets a member's own hint through only that member's stream, and one that names nobody through none", () => {
+    expect(forRecipient(USER_A, 'notification', USER_A)).toBe(true);
+    expect(forRecipient(USER_A, 'notification', USER_B)).toBe(false);
+    expect(forRecipient(USER_A, 'notification', undefined)).toBe(false);
+    expect(forRecipient(USER_A, 'file', undefined)).toBe(true);
+    // A recipient narrows any hint to that member.
+    expect(forRecipient(USER_A, 'file', USER_B)).toBe(false);
+  });
+});
+
 describe('closeReason', () => {
   it('maps a failed check to the reason the app acts on', () => {
     expect(closeReason(new DomainError('UNAUTHENTICATED', 401, 'x'))).toBe('session');
@@ -245,6 +307,7 @@ describe('StreamConnection', () => {
     const check = vi.fn(options.check ?? (async () => ALL_ENTITIES));
     const conn = new StreamConnection({
       orgId: ORG_A,
+      userId: USER_A,
       scope: options.scope ?? ALL_ENTITIES,
       check,
       recheckMs: 30_000,
@@ -397,9 +460,25 @@ describe('StreamConnection', () => {
     conn.finish();
   });
 
+  it("drops another member's notification at once, never counting it, and sends its own user's (#1702)", async () => {
+    const { conn, events } = connection();
+    const mine = randomUUID();
+    const theirs = randomUUID();
+    conn.hint({ type: 'notification', id: theirs }, ENTITY_A, USER_B);
+    conn.hint({ type: 'notification', id: randomUUID() }, ENTITY_A);
+    conn.hint({ type: 'notification', id: mine }, ENTITY_A, USER_A);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(events()).toEqual([{ event: 'invalidate', data: { type: 'notification', id: mine } }]);
+    // Another member's hints never fill the backlog: no resync however many arrive.
+    for (let i = 0; i < PENDING_HINT_LIMIT * 2; i++) conn.hint({ type: 'notification', id: randomUUID() }, ENTITY_A, USER_B);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(events()).toHaveLength(1);
+    conn.finish();
+  });
+
   it('sends nothing of any entity under an empty scope', async () => {
     const { conn, events } = connection({ scope: only(), check: async () => only() });
-    conn.hint({ type: 'notification', id: randomUUID() }, ENTITY_A);
+    conn.hint({ type: 'notification', id: randomUUID() }, ENTITY_A, USER_A);
     const proposal = randomUUID();
     conn.hint({ type: 'proposal', id: proposal });
     await vi.advanceTimersByTimeAsync(0);
@@ -456,6 +535,7 @@ describe('re-checks share a bounded gate (issue #281)', () => {
       (i) =>
         new StreamConnection({
           orgId: ORG_A,
+          userId: USER_A,
           scope: ALL_ENTITIES,
           check: () =>
             new Promise<StreamScope>((resolve) => {
@@ -506,6 +586,7 @@ describe('a re-check that never answers (issue #281)', () => {
     const make = (check: () => Promise<StreamScope>) =>
       new StreamConnection({
         orgId: ORG_A,
+        userId: USER_A,
         scope: ALL_ENTITIES,
         check,
         gate,
