@@ -199,13 +199,14 @@ suite('bulk intake of a ZIP archive on PostgreSQL (issue #314)', () => {
   it('records a failed opening on the last attempt even when the archive lookup failed (#432)', async () => {
     // The worker's runtime, but the lookup of the archive behind a job fails, as while the database is unreachable.
     const lookupFails = new Proxy(workerRuntime, {
-      get(target, property, receiver) {
+      get(target, property) {
         if (property === 'query') {
           return (name: string, ...rest: unknown[]) =>
             name === 'kernel.file.archive.source' ? Promise.reject(new Error('connection refused')) : Reflect.apply(target.query, target, [name, ...rest]);
         }
-        const value = Reflect.get(target, property, receiver);
-        return typeof value === 'function' ? value.bind(receiver) : value;
+        // Bound to the runtime itself: its state is in private fields a proxy does not carry (#1766).
+        const value = Reflect.get(target, property, target);
+        return typeof value === 'function' ? value.bind(target) : value;
       },
     }) as Runtime;
     const zip = await uploadZip([{ name: 'hd.xml', data: invoiceXml(-50) }], 'that-bai.zip');

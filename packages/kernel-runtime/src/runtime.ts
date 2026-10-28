@@ -14,7 +14,7 @@ export type Risk = 'R0' | 'R1' | 'R2' | 'R3';
 // legal or irreversible. It covers everything the command's transaction does, the commands it runs included (an
 // approval runs the approved command), but not what a later command does with what it leaves behind. The declared
 // risk is at least the risk it derives.
-export const SIDE_EFFECTS = ['none', 'internal', 'external', 'financial', 'legal', 'irreversible'] as const;
+export const SIDE_EFFECTS = Object.freeze(['none', 'internal', 'external', 'financial', 'legal', 'irreversible'] as const);
 export type SideEffect = (typeof SIDE_EFFECTS)[number];
 
 const RISK_ORDER: Record<Risk, number> = { R0: 0, R1: 1, R2: 2, R3: 3 };
@@ -195,7 +195,7 @@ export interface CommandWrite {
 
 // The data classes of the manifests (DATA_CLASSES in @crove/kernel-contract, which this package does not import;
 // apps/kernel/test/invariant/command-writes.test.ts checks the two lists are the same).
-export const WRITE_DATA_CLASSES = ['internal', 'pii', 'contact', 'payment', 'national_id', 'national_id_if_individual', 'sensitive'] as const;
+export const WRITE_DATA_CLASSES = Object.freeze(['internal', 'pii', 'contact', 'payment', 'national_id', 'national_id_if_individual', 'sensitive'] as const);
 // The classes whose write is policy P04 (plan §4.7: changing a payee, bank account or contact point).
 const P04_DATA_CLASSES: readonly string[] = ['contact', 'payment'];
 
@@ -851,8 +851,8 @@ export class Runtime {
   // The classes of every manifest table (RuntimeOptions.manifests), or null when the runtime was given none.
   readonly #manifestTables: ReadonlyMap<string, Readonly<Record<string, string>>> | null;
   // Where each transaction opens (Decision 14): tenant work on the org's cell, org-less work on the control plane.
-  private readonly cells: CellResolver;
-  private readonly sessions: SessionStatusSource | null;
+  readonly #cells: CellResolver;
+  readonly #sessions: SessionStatusSource | null;
   private readonly stepUp: 'required' | 'off';
   private readonly refusalAudit: Required<RefusalAuditLimits> | 'unbounded';
   // null: absentModules not given, so every unregistered module counts as absent.
@@ -864,8 +864,8 @@ export class Runtime {
 
   // A plain Db is one cell that also holds the control plane (singleCell).
   constructor(cells: CellResolver | Db, options: RuntimeOptions = {}) {
-    this.cells = isCellResolver(cells) ? cells : singleCell(cells);
-    this.sessions = options.sessions ?? null;
+    this.#cells = isCellResolver(cells) ? cells : singleCell(cells);
+    this.#sessions = options.sessions ?? null;
     this.stepUp = options.stepUp ?? 'required';
     const refusalAudit = options.refusalAudit ?? DEFAULT_REFUSAL_AUDIT_LIMITS;
     this.refusalAudit = refusalAudit === 'unbounded' ? 'unbounded' : Object.freeze(validateRefusalAuditLimits(refusalAudit));
@@ -880,7 +880,7 @@ export class Runtime {
 
   // How sessions are checked (see BootstrapEnv), for org-less reads that apply the same upstream checks as a command.
   get sessionMode(): SessionStatusSource['mode'] | null {
-    return this.sessions?.mode ?? null;
+    return this.#sessions?.mode ?? null;
   }
 
   // Checks each definition on its own; validate() checks how they fit together once every module is registered.
@@ -1087,10 +1087,10 @@ export class Runtime {
   // The session status check, in the caller's transaction. Fails closed: a user actor without a session id is
   // refused whenever the runtime checks sessions.
   private async checkSession(trx: Transaction<Database>, actor: Actor, orgId: string | null): Promise<void> {
-    if (actor.type !== 'user' || !this.sessions) return;
+    if (actor.type !== 'user' || !this.#sessions) return;
     const sessionId = actor.sessionId;
     if (!sessionId) throw new DomainError('UNAUTHENTICATED', 401, 'Phiên đăng nhập không hợp lệ');
-    await this.sessions.check(trx, { ...actor, sessionId }, orgId);
+    await this.#sessions.check(trx, { ...actor, sessionId }, orgId);
   }
 
   private async enter(trx: Transaction<Database>, actor: Actor, orgId: string): Promise<Entered> {
@@ -1204,7 +1204,7 @@ export class Runtime {
   // check gets 503. It runs inside the request transaction, so an R3 holds one pooled connection for at most the
   // live check's timeout (5 s); R3 is rare and human-initiated.
   private async requireLiveSession(def: CommandDef<unknown, unknown>, actor: Actor): Promise<void> {
-    if (def.risk !== 'R3' || actor.type !== 'user' || !this.sessions?.liveCheckForR3) return;
+    if (def.risk !== 'R3' || actor.type !== 'user' || !this.#sessions?.liveCheckForR3) return;
     if (!actor.confirmLive) {
       throw new DomainError('AUTH_UNAVAILABLE', 503, 'Chưa kiểm tra được phiên đăng nhập với máy chủ xác thực, hãy thử lại sau');
     }
@@ -1557,7 +1557,7 @@ export class Runtime {
     if (!def || def.bootstrap) throw new DomainError('COMMAND_NOT_FOUND', 404, `Không có lệnh ${name}`);
     const input = parseInput(def.input, rawInput);
     const orgId = options.orgId;
-    return this.executeIn<O>(name, def, input, options.actor, options.idempotencyKey, () => this.cells.resolveTenant(orgId), async () => orgId);
+    return this.executeIn<O>(name, def, input, options.actor, options.idempotencyKey, () => this.#cells.resolveTenant(orgId), async () => orgId);
   }
 
   // Runs an org-less command (see CommandDef.bootstrap). Only users run them; the org comes from the definer.
@@ -1570,7 +1570,7 @@ export class Runtime {
     // The session is checked before the definer runs (no org yet), and again for the org when it is entered. There
     // is no org to resolve a cell from, so the transaction opens on the control plane and the new org lives in
     // the control plane's cell (plan §3.6).
-    const controlPlane = async () => this.cells.controlPlane();
+    const controlPlane = async () => this.#cells.controlPlane();
     return this.executeIn<O>(name, def, input, options.actor, options.idempotencyKey, controlPlane, async (trx) => {
       await this.checkSession(trx, options.actor, null);
       return bootstrap(trx, options.actor, input, options.idempotencyKey ?? null, { sessionMode: this.sessionMode });
@@ -1687,7 +1687,7 @@ export class Runtime {
     const commandId = uuidv7();
     const outcome = refusal.status === 403 ? 'denied' : 'failed';
     try {
-      const db = await this.cells.resolveTenant(orgId);
+      const db = await this.#cells.resolveTenant(orgId);
       await db.transaction().execute(async (trx) => {
         await this.enter(trx, actor, orgId);
         if (!(await this.countRefusal(trx, name, { code: refusal.code, security: isSecurityRefusal(refusal) }, actor, orgId))) return;
@@ -1733,7 +1733,7 @@ export class Runtime {
     const caller = actor.type === 'user' ? `user:${actor.userId.toLowerCase()}` : `agent:${actor.agentId.toLowerCase()}`;
     const target = orgId && UUID_RE.test(orgId) ? orgId.toLowerCase() : null;
     try {
-      await sql`SELECT crove_kernel.security_event_note(${caller}, ${name}, ${code}, ${target}::uuid)`.execute(this.cells.controlPlane());
+      await sql`SELECT crove_kernel.security_event_note(${caller}, ${name}, ${code}, ${target}::uuid)`.execute(this.#cells.controlPlane());
     } catch (error) {
       const sqlState = (error as { code?: unknown } | null)?.code;
       console.error(`[execute ${name}] SECURITY_EVENT_FAILED`, {
@@ -1808,7 +1808,7 @@ export class Runtime {
     const input = parseInput(def.input, rawInput);
     let reached = false;
     try {
-      const db = await this.cells.resolveTenant(options.orgId);
+      const db = await this.#cells.resolveTenant(options.orgId);
       return await db.transaction().execute(async (trx) => {
         // The session check may record a first-seen session, so it runs before the transaction turns read-only.
         await this.checkSession(trx, options.actor, options.orgId);
@@ -1840,7 +1840,7 @@ export class Runtime {
     const input = parseInput(def.input, rawInput);
     let reached = false;
     try {
-      const db = await this.cells.resolveTenant(options.orgId);
+      const db = await this.#cells.resolveTenant(options.orgId);
       return await db
         .transaction()
         .setIsolationLevel('repeatable read')
@@ -1867,7 +1867,7 @@ export class Runtime {
   // session status check. Only definer functions are callable. Creating an org is a command: executeOrgless().
   async forUser<O>(actor: UserActor, fn: (db: Db) => Promise<O>): Promise<O> {
     try {
-      return await this.cells.controlPlane().transaction().execute(async (trx) => {
+      return await this.#cells.controlPlane().transaction().execute(async (trx) => {
         await this.checkSession(trx, actor, null);
         return fn(trx);
       });
@@ -1881,7 +1881,7 @@ export class Runtime {
   // Org-less machinery work without a user (inbound email), on the control plane. User work goes through forUser().
   async orgless<O>(fn: (db: Db) => Promise<O>): Promise<O> {
     try {
-      return await fn(this.cells.controlPlane());
+      return await fn(this.#cells.controlPlane());
     } catch (error) {
       const domain = toDomainError(error);
       if (domain.code === 'INTERNAL') logInternal('orgless', error);
