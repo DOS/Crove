@@ -1,6 +1,6 @@
 // Links shared by both languages. NEXT_PUBLIC_APP_URL points at a running Crove app (the kernel serves it with the
 // sign-in page at /login); without it the sign-in link goes to Crove Cloud (ADR-0027: app.crove.com).
-export const GITHUB_URL = 'https://github.com/DOS/Crove';
+export const GITHUB_URL = 'https://github.com/DOS/Ludy';
 export const DOCS_URL = `${GITHUB_URL}#readme`;
 export const SECURITY_URL = `${GITHUB_URL}/blob/main/SECURITY.md`;
 export const LICENSE_URL = `${GITHUB_URL}/blob/main/LICENSE`;

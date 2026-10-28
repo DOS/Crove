@@ -4,15 +4,15 @@
 
 Forward or upload your purchase invoices. Ludy reads them (Vietnamese e-invoice XML deterministically, PDFs and photos with any OpenAI-compatible model), checks every number, and puts a proposed TT133 journal entry in your AI Inbox. You review, adjust accounts if needed, and approve. Approved invoices become vendors, purchase documents and balanced journal entries you can export to Excel for your accountant.
 
-Ludy was called Crove until October 2026. The code keeps that name as its code name `crove`: the `@crove/*` packages, the `crove_*` database schemas and roles, the `CROVE_*` settings, the compose services and images (`crove`, `crove-extract`) and the `[Crove]` prefix of logs and alerts. Renaming them would break every existing deployment's database, settings and scripts for no change users can see. The repository is still `DOS/Crove` for now.
+Ludy was called Crove until October 2026. The code keeps that name as its code name `crove`: the `@crove/*` packages, the `crove_*` database schemas and roles, the `CROVE_*` settings, the compose services and images (`crove`, `crove-extract`) and the `[Crove]` prefix of logs and alerts. Renaming them would break every existing deployment's database, settings and scripts for no change users can see. The repository is still `DOS/Ludy` for now.
 
 ## Quick start
 
 Requirements: Docker with Compose.
 
 ```bash
-git clone https://github.com/DOS/Crove.git
-cd Crove
+git clone https://github.com/DOS/Ludy.git
+cd Ludy
 docker compose up
 ```
 

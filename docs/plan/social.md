@@ -1,6 +1,6 @@
 # Crove Social: module plan
 
-> Plan for the Social module (`social`, product name "Crove Social"), 2026-10-16. Owner decision of 2026-10-16: Social starts now, in parallel with the Accounting work, as an exception to plan Decision 2 (kernel plan, Decision 17). References: Postiz (and the owner's archived fork DOS/Crove-Post), OpenPost, BrightBean Studio, TryPost, Mixpost, and the platforms' official docs; findings and sources in [social-research.md](social-research.md). We study designs, never copy code (research §1). The kernel plan's Phase 5 section stays the summary; this file is the detailed plan. Vietnamese page for the owner: [social.vi.html](social.vi.html).
+> Plan for the Social module (`social`, product name "Crove Social"), 2026-10-16. Owner decision of 2026-10-16: Social starts now, in parallel with the Accounting work, as an exception to plan Decision 2 (kernel plan, Decision 17). References: Postiz (and the owner's archived fork DOS/Ludy-Post), OpenPost, BrightBean Studio, TryPost, Mixpost, and the platforms' official docs; findings and sources in [social-research.md](social-research.md). We study designs, never copy code (research §1). The kernel plan's Phase 5 section stays the summary; this file is the detailed plan. Vietnamese page for the owner: [social.vi.html](social.vi.html).
 
 ## 1. Goal and scope
 
@@ -405,6 +405,6 @@ Open questions, settled by testing when the adapter is built: Instagram's daily 
 | Platform rules change or block access | Adapters behind one interface; `sandbox` keeps the product testable; constraints rechecked per adapter |
 | Duplicate posts | `external_call` + reconciliation, never a blind retry (§3.4) |
 | Token leaks | Envelope encryption, decrypt only in jobs and the callback, redaction tests |
-| Code provenance | Crove's CLA lets the owner relicense, and third-party code cannot be relicensed: Postiz (including the DOS/Crove-Post fork), OpenPost and the others are studied for design only, and adapters are written from the platforms' docs (research §1). ADR-0020 still governs any reuse of the forks' code |
+| Code provenance | Crove's CLA lets the owner relicense, and third-party code cannot be relicensed: Postiz (including the DOS/Ludy-Post fork), OpenPost and the others are studied for design only, and adapters are written from the platforms' docs (research §1). ADR-0020 still governs any reuse of the forks' code |
 | Heavy self-host (Postiz needs Temporal, Redis, Elasticsearch) | Postgres and pg-boss only, already in the stack; workers only for configured providers; the prober's worker heartbeat catches a stalled worker |
 | Platform metrics renamed or removed (Meta Page Insights, 2026) | Snapshot common fields plus `extra`; metrics map per adapter with tests |

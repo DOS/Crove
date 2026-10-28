@@ -557,7 +557,7 @@ a:hover { color: var(--primary-hover); }
         <li><a href="#san-pham">Sản phẩm</a></li>
         <li><a href="#ma-nguon-mo">Mã nguồn mở</a></li>
         <li><a href="#bang-gia">Bảng giá</a></li>
-        <li><a href="https://github.com/DOS/Crove/tree/main/docs">Tài liệu</a></li>
+        <li><a href="https://github.com/DOS/Ludy/tree/main/docs">Tài liệu</a></li>
       </ul>
     </nav>
     <div class="nav-actions">
@@ -904,13 +904,13 @@ a:hover { color: var(--primary-hover); }
         <h3 id="tech-h">Cho người làm kỹ thuật</h3>
         <p>Nếu công ty có người lo IT, Crove chạy trên máy chủ riêng bằng một lệnh. Đọc PDF và ảnh dùng bất kỳ mô hình AI tương thích OpenAI nào bạn chọn.</p>
         <div class="code" tabindex="0" aria-label="Lệnh cài đặt"><pre><span class="c"># Tải mã nguồn và chạy</span>
-git clone https://github.com/DOS/Crove.git
-cd Crove
+git clone https://github.com/DOS/Ludy.git
+cd Ludy
 docker compose up
 <span class="c"># Mở http://localhost:8080</span></pre></div>
         <div class="copy-row">
           <button class="btn btn-secondary" id="copyBtn" type="button">Chép lệnh</button>
-          <a href="https://github.com/DOS/Crove">Xem trên GitHub</a>
+          <a href="https://github.com/DOS/Ludy">Xem trên GitHub</a>
           <span class="copy-status" id="copyStatus" role="status"></span>
         </div>
       </div>
@@ -927,7 +927,7 @@ docker compose up
         <h3>Tự host</h3>
         <p class="price">Miễn phí</p>
         <p>Mã nguồn mở AGPL. Cài trên máy chủ của bạn, dữ liệu nằm ở chỗ bạn.</p>
-        <a class="btn btn-secondary" href="https://github.com/DOS/Crove">Xem hướng dẫn cài</a>
+        <a class="btn btn-secondary" href="https://github.com/DOS/Ludy">Xem hướng dẫn cài</a>
       </div>
       <div class="plan">
         <h3>Crove Cloud</h3>
@@ -982,9 +982,9 @@ docker compose up
       <p>Hệ điều hành doanh nghiệp mã nguồn mở cho chủ shop và công ty nhỏ. Phát hành theo giấy phép AGPL-3.0.</p>
     </div>
     <ul>
-      <li><a href="https://github.com/DOS/Crove">GitHub</a></li>
-      <li><a href="https://github.com/DOS/Crove/tree/main/docs">Tài liệu</a></li>
-      <li><a href="https://github.com/DOS/Crove/blob/main/LICENSE">Giấy phép AGPL</a></li>
+      <li><a href="https://github.com/DOS/Ludy">GitHub</a></li>
+      <li><a href="https://github.com/DOS/Ludy/tree/main/docs">Tài liệu</a></li>
+      <li><a href="https://github.com/DOS/Ludy/blob/main/LICENSE">Giấy phép AGPL</a></li>
     </ul>
   </div>
 </footer>
@@ -1029,7 +1029,7 @@ docker compose up
   var copyBtn = document.getElementById('copyBtn');
   var copyStatus = document.getElementById('copyStatus');
   copyBtn.addEventListener('click', function () {
-    var cmd = 'git clone https://github.com/DOS/Crove.git\ncd Crove\ndocker compose up';
+    var cmd = 'git clone https://github.com/DOS/Ludy.git\ncd Ludy\ndocker compose up';
     function done(ok) { copyStatus.textContent = ok ? 'Đã chép lệnh.' : 'Chưa chép được, hãy chọn và chép thủ công.'; }
     try {
       navigator.clipboard.writeText(cmd).then(function () { done(true); }, function () { done(false); });

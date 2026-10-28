@@ -179,7 +179,7 @@ The kernel refuses to start on a public `PUBLIC_URL` with unsafe settings: a sam
 `tools/deploy/caddy/` holds a reverse proxy for this layout: Caddy on ports 80 and 443 in front of the app on loopback. Copy both files into the stack directory from a checkout. The server needs one anyway, since the nightly backup runs from it ([backup-and-restore.md](backup-and-restore.md)):
 
 ```bash
-git clone --depth 1 --branch main https://github.com/DOS/Crove.git /opt/crove-src   # or the release tag you deploy
+git clone --depth 1 --branch main https://github.com/DOS/Ludy.git /opt/crove-src   # or the release tag you deploy
 cp /opt/crove-src/tools/deploy/caddy/compose.host.yml /opt/crove-src/tools/deploy/caddy/Caddyfile /opt/crove/
 ```
 
