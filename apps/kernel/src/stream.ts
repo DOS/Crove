@@ -9,10 +9,10 @@
 // includes it, and a hint with a recipient only to the streams of that user. A stream sends ids, never row data, the
 // entity or the recipient: the SPA re-fetches through the normal authorized queries, so a hint can never show a record
 // its reader may not see, a member limited to some entities does not even learn that a record of another entity
-// changed, and no member learns when another got a notification. A stream also re-runs the session check, membership and legal-entity scope of its
-// org every STREAM_RECHECK_SECONDS and after every RECHECK_EVERY_HINTS hints, holding further hints back while it
-// does, closes with a reason when the check fails, and applies the scope it returns to every hint it sends afterwards.
-// It ends when the access token it was opened with expires.
+// changed, and no member learns when another got a notification. A stream also re-runs the session check, membership
+// and legal-entity scope of its org every STREAM_RECHECK_SECONDS and after every RECHECK_EVERY_HINTS hints, holding
+// further hints back while it does, closes with a reason when the check fails, and applies the scope it returns to
+// every hint it sends afterwards. It ends when the access token it was opened with expires.
 //
 // EventSource cannot send the Authorization header, so a stream opens with a one-time ticket from an authenticated
 // POST (stream_ticket_issue, stored as its SHA-256), valid for seconds, bound to the user, org, session and assurance,

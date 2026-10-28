@@ -1,8 +1,8 @@
 // The invalidation stream's fan-out and re-check logic (issue #69), without a database: hints reach only the streams
 // of their org, a hint about a row of one legal entity only the streams whose scope includes it (#1692), and a hint
-// about a member's own notification only that member's streams (#1702), a failed
-// re-check closes the stream with its reason, hints wait while a check runs, and a stream ends when its token expires,
-// its client stops reading, or the process loses its LISTEN connection.
+// about a member's own notification only that member's streams (#1702); a failed re-check closes the stream with its
+// reason, hints wait while a check runs, and a stream ends when its token expires, its client stops reading, or the
+// process loses its LISTEN connection.
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import type pg from 'pg';
