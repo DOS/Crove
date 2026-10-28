@@ -18,7 +18,7 @@ import { ACCOUNT_SWEEP_MS, CHAT_ALERT_TEST_EVENT, CHAT_ALERTING_EVENTS, DIGEST_S
 import { sweepFeeds } from './feeds.ts';
 import { SECURITY_SWEEP_MS, sweepSecuritySignals, type SecurityThresholds } from './security-signals.ts';
 import { BACK_PRESSURE_CHECK_MS, DEFAULT_OUTBOX_LAG_PAUSE_SECONDS, PausableWork, checkBackPressure, outboxLagSeconds } from './back-pressure.ts';
-import { DEAD_LETTER_WORK, takeDeadLetter } from './dead-letter.ts';
+import { DEAD_LETTER_WORK, pruneInboxItems, takeDeadLetter } from './dead-letter.ts';
 import { ChatAlertSender } from './chat-alerts.ts';
 import { archiveSource, expandArchive, recordArchiveFailure, type ArchiveSource } from './archive.ts';
 import { backfillImageSizes, IMAGE_SIZE_SWEEP_MS } from './image-size-backfill.ts';
@@ -676,7 +676,9 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       console.log(`[retention] ${Object.entries(mailCleared).map(([store, n]) => `${store}=${n}`).join(' ')}`);
       const pruned = await pruneRefusalTally(deps.workerDb, keepDays);
       const securityEvents = await pruneSecurityEvents(deps.workerDb);
-      console.log(`[retention] refusal_tally=${pruned} security_event=${securityEvents}`);
+      // Dismissed and old dead-letter Inbox items (#1747), each org in its own system context.
+      const inboxItems = await pruneInboxItems({ runtime: deps.runtime, workerDb: deps.workerDb });
+      console.log(`[retention] refusal_tally=${pruned} security_event=${securityEvents} inbox_item=${inboxItems}`);
     } finally {
       // Each catches its own errors; they run even when a database purge failed.
       await sweepStaging(deps.store);
