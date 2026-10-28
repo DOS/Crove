@@ -1,6 +1,6 @@
 // The operator's deployment-wide kill switch (tools/ops/kill-switch.mjs, #886, #1696) on the e2e stack: the script's
-// own argument checks and SQL (parseArgs, runSwitch), run as the database owner through psql in the compose `db`
-// service, since the stack publishes no database port. Used by the rehearsal, e2e/tests/kill-switches.spec.ts.
+// own argument checks and SQL (parseArgs, runSwitch), run as the `postgres` superuser through psql in the compose
+// `db` service, since the stack publishes no database port. Used by the rehearsal, e2e/tests/kill-switches.spec.ts.
 import { parseArgs, runSwitch, type SwitchStatus } from '../../tools/ops/kill-switch.mjs';
 import { sql } from './db.ts';
 

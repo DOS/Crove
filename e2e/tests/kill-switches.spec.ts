@@ -5,7 +5,7 @@
 import { randomUUID } from 'node:crypto';
 import { expect, test, type Page } from '@playwright/test';
 import { exec, sql } from '../lib/db.ts';
-import { engage, release, releaseAll, status } from '../lib/kill-switch.ts';
+import { engage, REHEARSAL_BY, release, releaseAll, status } from '../lib/kill-switch.ts';
 import { MAILPIT_URL } from '../lib/mail.ts';
 import { createOrg, newEmail, signInNewUser, storedSession } from '../lib/session.ts';
 import { nextTotp } from '../lib/totp.ts';
@@ -147,8 +147,8 @@ test('the org switch on the Agents page and the deployment ai switch refuse agen
       `SELECT engaged, changed_by, reason FROM crove_kernel.global_kill_switch WHERE key = 'ai' ORDER BY changed_at DESC, id DESC LIMIT 2`,
     ),
   ).toEqual([
-    { engaged: false, changed_by: 'e2e kill-switch rehearsal', reason: null },
-    { engaged: true, changed_by: 'e2e kill-switch rehearsal', reason: REASON },
+    { engaged: false, changed_by: REHEARSAL_BY, reason: null },
+    { engaged: true, changed_by: REHEARSAL_BY, reason: REASON },
   ]);
 });
 
@@ -220,8 +220,9 @@ test('the deployment relay and mail switches hold a booking and its mail, and re
 
     await test.step('released, the relay sends the request: the booking is confirmed and its mail queued, still held', async () => {
       await release(relayKey);
-      await expect(visitor.getByText('Đã đặt lịch')).toBeVisible({ timeout: 30_000 });
-      expect(booking()).toEqual([{ status: 'confirmed', pending: false }]);
+      await expect.poll(() => booking(), { message: 'the booking confirmed by the worker', timeout: 30_000 }).toEqual([{ status: 'confirmed', pending: false }]);
+      // The visitor's page, still polling, shows it too.
+      await expect(visitor.getByText('Đã đặt lịch')).toBeVisible();
       await expect.poll(() => mails(), { message: "the visitor's confirmation queued" }).toEqual([{ status: 'queued' }]);
       // The mail sweep runs every 10 s; past one, the held mail is still queued and Mailpit has nothing.
       await page.waitForTimeout(12_000);
