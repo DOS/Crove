@@ -4,7 +4,8 @@
 // command. Whoever holds the row and a guess of a private note (ADR-0037) cannot confirm it, as they could with the
 // plain SHA-256; the same input hashes differently in two orgs, for two actors and in two deployments; a retry still
 // replays, also against a row claimed before the switch; the WORM verifier passes over plain and keyed rows alike; the
-// runtime the server builds (createKernel) writes keyed rows; and an agent run and the system hash under their own keys.
+// runtime the server builds (createKernel) and a runtime built without the option (the default, #1741) write keyed
+// rows; and an agent run and the system hash under their own keys.
 // Part of the invariant suite; it imports package code under test, never helpers from outside test/invariant/. Set
 // CROVE_TEST_ADMIN_URL to a superuser URL; each run makes its own database.
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
@@ -83,6 +84,7 @@ suite('keyed input hash on PostgreSQL (#1732)', () => {
   let worker: Db;
   let keyed: Runtime;
   let keyedWorker: Runtime;
+  let byDefault: Runtime;
   let plain: Runtime;
   let dir = '';
   const orgs = { a: '', b: '', c: '' };
@@ -175,6 +177,7 @@ suite('keyed input hash on PostgreSQL (#1732)', () => {
     keyedWorker = new Runtime(worker, { inputHash: 'keyed' }).register(defs);
     // Said explicitly: the plain SHA-256 a runtime wrote before #1732, whatever the default (#1741).
     plain = new Runtime(db, { inputHash: 'sha256' }).register(defs);
+    byDefault = new Runtime(db).register(defs);
 
     const tag = randomUUID().slice(0, 8);
     const person = (name: string) => upsertIdentity(db, { issuer: 'test', subject: `${name}-${tag}`, email: `${name}-${tag}@example.com`, name: null });
@@ -371,9 +374,22 @@ suite('keyed input hash on PostgreSQL (#1732)', () => {
     expect(fn).toEqual({ args: 'p_actor_key text, p_command text, p_input text', definer: true, config: ['search_path=pg_catalog, pg_temp'], public_grant: false, tenant: true });
   });
 
+  it('writes keyed hashes from a runtime built without the option: keyed is the default (#1741)', async () => {
+    const actor = asUser(users.ownerA);
+    const title = `Mặc định ${randomUUID().slice(0, 8)}`;
+    const key = randomUUID();
+    await byDefault.execute(CREATE, { title }, { actor, orgId: orgs.a, idempotencyKey: key });
+    const expected = `k1:${await hmacOf(orgs.a, `user:${users.ownerA}`, CREATE, canonical(parsedNote(title)))}`;
+    expect(await lastHash(orgs.a, users.ownerA, CREATE)).toBe(expected);
+    const request = await admin(
+      async (c) => (await c.query<{ h: string }>('SELECT request_sha256 AS h FROM crove_kernel.idempotency_key WHERE org_id = $1 AND key = $2', [orgs.a, key])).rows[0]?.h,
+    );
+    expect(request).toBe(expected);
+  });
+
   it('writes keyed hashes from the runtime the server builds (createKernel)', { timeout: 60_000 }, async () => {
     // The API role as main.ts starts it, with a fixed user for the one header this test sends. A server whose runtime
-    // drops inputHash 'keyed' (apps/kernel/src/kernel.ts) writes the plain SHA-256, and this fails.
+    // asks for 'sha256' (apps/kernel/src/kernel.ts) writes the plain SHA-256, and this fails.
     const port = await freePort();
     const config = loadConfig({
       DATABASE_URL: appUrl,

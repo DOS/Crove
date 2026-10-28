@@ -592,7 +592,8 @@ export async function runLoad(args: LoadArgs, log: (line: string) => void = cons
     workerPool = createPool({ connectionString: login(adminUrl, 'crove_worker', workerPassword), max: 4 });
     const db: Db = createDb(appPool);
     const worker: Db = createDb(workerPool);
-    const runtime = new Runtime(db, { sessions: createSessionStatusSource('off') }).register({
+    // Input hashes keyed as the server writes them (#1732), so the run measures their cost too.
+    const runtime = new Runtime(db, { sessions: createSessionStatusSource('off'), inputHash: 'keyed' }).register({
       commands: [...kernelCommands, ...financeCommands],
       queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries],
     });
