@@ -200,6 +200,23 @@ suite("a former member's purge and their re-add (#1722, #1757)", () => {
     expect(await items(users.gone)).toBe(0);
   });
 
+  it('lets no login role take the membership lock itself', async () => {
+    // A role that could hold it could stall purges or hold back invite accepts; only the definers' owner calls it.
+    const rows = await admin(
+      async (c) =>
+        (
+          await c.query<{ role: string; can: boolean; definer: boolean }>(
+            `SELECT r.role, pg_catalog.has_function_privilege(r.role, 'crove_kernel.membership_lock(uuid, uuid)', 'EXECUTE') AS can,
+                    (SELECT p.prosecdef FROM pg_catalog.pg_proc p WHERE p.oid = 'crove_kernel.membership_lock(uuid, uuid)'::regprocedure) AS definer
+             FROM pg_catalog.unnest(ARRAY['crove_app', 'crove_worker', 'crove_tenant', 'crove_definer_tenant', 'crove_prober']) AS r(role)
+             WHERE EXISTS (SELECT 1 FROM pg_catalog.pg_roles x WHERE x.rolname = r.role)`,
+          )
+        ).rows,
+    );
+    expect(rows.length).toBeGreaterThanOrEqual(4);
+    for (const r of rows) expect(r, r.role).toMatchObject({ can: false, definer: false });
+  });
+
   it('reads the purge delay through audit_event_member_remove_idx (#1757)', async () => {
     // The two audit reads of the delay, as member_items_purge and former_members_due run them. The planner is kept off
     // a sequential scan, which this small table would otherwise get, so the plan shows which index it picks.
