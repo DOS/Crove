@@ -15,7 +15,7 @@
 import pg from 'pg';
 
 const KEYS = ['ai', 'mail'];
-// The shape the table's CHECK constraint accepts (20261103100000_crove_kernel_relay_kill_switch.sql).
+// The shape the table's CHECK constraint accepts (20261103110000_crove_kernel_relay_kill_switch.sql).
 const RELAY_KEY = /^relay:[a-z0-9_]+(\.[a-z0-9_]+)+$/;
 
 export function isKey(key) {
