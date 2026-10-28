@@ -60,9 +60,10 @@ const RANK = { R0: 0, R1: 1, R2: 2, R3: 3 } as const;
 const all = (): Array<CommandDef<unknown, unknown>> =>
   [...kernelCommands, orgPurgeCommand({ store: {} as never }), ...financeCommands, ...socialCommands, ...crmCommands] as Array<CommandDef<unknown, unknown>>;
 
-// Commands below R2 whose events feed a queue with egress. None since #1662 (coordinator decision): every command that
-// feeds one is R2 `external`, a line to the org's own team chat on Telegram or Discord included, since it sends tenant
-// content to a third-party provider. An exemption needs a product flow the plans require and a reason in plan §4.7.
+// Commands below R2 whose handlers emit an event that feeds a queue with egress. None since #1662 (coordinator
+// decision): each is R2 `external`, a line to the org's own team chat on Telegram or Discord included, since it sends
+// tenant content to a third-party provider. An exemption needs a product flow the plans require and a reason in plan
+// §4.7. A command that runs one of them through ctx.run or tryRun is not followed yet (#1698).
 const BELOW_R2: Readonly<Record<string, readonly string[]>> = {};
 
 // Sends to a queue with egress from outside the outbox relay, and why each needs no command of its own: the command

@@ -192,8 +192,8 @@ async function copyPost(
 export const postRepost = defineCommand({
   name: 'social.post.repost',
   input: z.strictObject({ postId: zId }),
-  // The copy goes to review, which alerts the org's team chat on Telegram or Discord (plan §4.7: a job with egress
-  // derives R2; #1662).
+  // The copy stays a draft, but copyPost, which makes it, alerts the org's team chat on Telegram or Discord when a copy
+  // is submitted; the check of plan §4.7 counts every caller of an emit, so it is R2 like the copies that do (#1662).
   risk: 'R2',
   sideEffect: 'external',
   access: MEMBERS,
@@ -290,8 +290,8 @@ export const postSetEvergreen = defineCommand({
 export const postDuplicate = defineCommand({
   name: 'social.post.duplicate',
   input: zSocialPostDuplicate,
-  // The copy goes to review, which alerts the org's team chat on Telegram or Discord (plan §4.7: a job with egress
-  // derives R2; #1662).
+  // The copy stays a draft, but copyPost, which makes it, alerts the org's team chat on Telegram or Discord when a copy
+  // is submitted; the check of plan §4.7 counts every caller of an emit, so it is R2 like the copies that do (#1662).
   risk: 'R2',
   sideEffect: 'external',
   access: MEMBERS,
