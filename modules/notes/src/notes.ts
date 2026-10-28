@@ -149,6 +149,12 @@ async function addLink(ctx: CommandContext, row: Pick<SummaryRow, 'id' | 'visibi
 }
 
 const written = (row: Pick<SummaryRow, 'id' | 'revision'>): NoteWritten => ({ noteId: row.id, revision: row.revision });
+
+// A link added or removed changes the note as others see it; touching the note sends its stream hint (#69), so open
+// apps read the note and the record's panel again.
+async function touch(ctx: CommandContext, noteId: string): Promise<void> {
+  await ctx.trx.updateTable('crove_notes.note').set({ updated_at: ctx.now }).where('org_id', '=', ctx.orgId).where('id', '=', noteId).execute();
+}
 const target = (input: { noteId: string }) => ({ type: 'notes.note', id: input.noteId });
 
 export const noteCreate = defineCommand({
@@ -282,6 +288,7 @@ export const linkAdd = defineCommand({
     const note = await loadForChange(ctx, input.noteId, (row) => assertAuthor(row, userId));
     assertNotInTrash(note);
     const linkId = await addLink(ctx, note, userId, input.targetType, input.targetId);
+    await touch(ctx, input.noteId);
     ctx.audit({ noteId: input.noteId, linkId, targetType: input.targetType, targetId: input.targetId });
     return { noteId: input.noteId, linkId };
   },
@@ -304,6 +311,7 @@ export const linkRemove = defineCommand({
     if (!link) throw new DomainError('NOTE_LINK_NOT_FOUND', 404, 'Không tìm thấy liên kết này');
     await loadForChange(ctx, link.note_id, (row) => assertAuthor(row, userId));
     await ctx.trx.deleteFrom('crove_notes.link').where('org_id', '=', ctx.orgId).where('id', '=', input.linkId).execute();
+    await touch(ctx, link.note_id);
     ctx.audit({ noteId: link.note_id, linkId: input.linkId, targetType: link.target_type, targetId: link.target_id });
     return { noteId: link.note_id, linkId: input.linkId };
   },
