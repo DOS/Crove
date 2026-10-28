@@ -52,7 +52,7 @@ const serverSources = (): Array<{ file: string; text: string }> =>
         .filter((name) => name !== 'kernel-runtime' && statSync(join(ROOT, dir, name, 'src'), { throwIfNoEntry: false })?.isDirectory())
         .map((name) => `${dir}/${name}/src`),
     ),
-  ].flatMap((dir) => sourceFiles(join(ROOT, dir)).map((path) => ({ file: relative(ROOT, path).split(sep).join('/'), text: readFileSync(path, 'utf8') })));
+  ].flatMap((dir) => sourceFiles(join(ROOT, dir)).map((path) => ({ file: relative(ROOT, path).split(sep).join('/'), text: readFileSync(path, 'utf8').replace(/\r\n/g, '\n') })));
 
 // The source with comments blanked out (newlines kept) and strings left as they are, so prose in a comment ("an
 // import (#465)") is not read as code. A small scanner: it follows string and template literals (and the code inside
@@ -293,6 +293,7 @@ describe('declared command writes against the manifests (#1697, #1710)', () => {
     const start = kernel.indexOf('export function serverRuntime(');
     const end = kernel.indexOf('\n}\n', start);
     expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
     expect(kernel.slice(start, end)).toMatch(/new Runtime\(/);
     const runtimeImport = [...kernel.matchAll(/\bimport\b[^;]*?\bfrom\s*'@crove\/kernel-runtime';/g)];
     expect(runtimeImport).toHaveLength(1);
