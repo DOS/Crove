@@ -6,7 +6,7 @@ How to replace the database login passwords, `INBOUND_SECRET`, the secrets in th
 
 - A value may have leaked: a copy of `.env` left the server, a value was pasted into a ticket or a chat, a laptop that held it was lost.
 - Someone who knew a value loses that access (an operator leaves, a contractor's job ends).
-- On a schedule, if your policy asks for one. Nothing in Crove expires these values.
+- On a schedule, if your policy asks for one. Nothing in Ludy expires these values.
 
 A leak is also a security incident: contain it with this runbook, then follow [incidents.md](incidents.md), section 9.
 
@@ -38,7 +38,7 @@ How it works: `migrate` sets the password of the first five roles from `.env` on
 
 Connections from inside the `db` container over its socket or `127.0.0.1` need no password (the image's `pg_hba.conf` trusts them). The `psql` commands in [incidents.md](incidents.md) and the backup script use them, so they keep working whatever you change here.
 
-### 1.1 The Crove roles and Supabase Auth
+### 1.1 The `crove_*` roles and Supabase Auth
 
 1. Replace the values you rotate (one, several or all five) in `.env`, for example:
 

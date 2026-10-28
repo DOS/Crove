@@ -1,6 +1,6 @@
 # Runbook: block or unblock a user account
 
-How the deployment operator blocks a user account in Crove, and unblocks it (issue #985, ADR-0028 section 2). Use it for an account that abuses the service: mass spam to the inbound address, hammering the API, or a compromised account the owner cannot reach. It does not delete anything, and it does not touch Supabase Auth.
+How the deployment operator blocks a user account in Ludy, and unblocks it (issue #985, ADR-0028 section 2). Use it for an account that abuses the service: mass spam to the inbound address, hammering the API, or a compromised account the owner cannot reach. It does not delete anything, and it does not touch Supabase Auth.
 
 ## What it does
 
@@ -22,6 +22,6 @@ On success it prints one line, for example `[user-disable] account <id> is now d
 
 ## Afterwards
 
-- Tell the org owners why, outside Crove. Their audit log shows the note with the reason.
-- On self-host with the bundled Supabase Auth, the user can still sign in there, but every Crove request is refused. To stop sign-ins at the source too, ban the user in Supabase Auth as well.
+- Tell the org owners why, outside Ludy. Their audit log shows the note with the reason.
+- On self-host with the bundled Supabase Auth, the user can still sign in there, but every Ludy request is refused. To stop sign-ins at the source too, ban the user in Supabase Auth as well.
 - Unblocking does not restore sessions the user signed out of. They sign in again.

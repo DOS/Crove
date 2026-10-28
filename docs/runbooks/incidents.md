@@ -1,6 +1,6 @@
 # Runbook: incidents
 
-What to do when something breaks on a Crove deployment that runs the `docker compose` stack (the pilot setup, issue #678, plan section 7.10). Each incident below has the same parts: the symptom, the alert that fires, the checks (commands to copy), the fix, how to confirm it, and who to tell.
+What to do when something breaks on a Ludy deployment that runs the `docker compose` stack (the pilot setup, issue #678, plan section 7.10). Each incident below has the same parts: the symptom, the alert that fires, the checks (commands to copy), the fix, how to confirm it, and who to tell.
 
 How alerts reach the owner's phone (the prober, the outside uptime check on `/healthz`, the heartbeat monitor) is in [alerts.md](alerts.md). Backups and restores are in [backup-and-restore.md](backup-and-restore.md), credential keys in [context-key-rotation.md](context-key-rotation.md) and [credential-key.md](credential-key.md), database passwords, `INBOUND_SECRET` and webhook secrets in [secret-rotation.md](secret-rotation.md), releases and rollbacks in [deploy.md](deploy.md).
 
@@ -111,7 +111,7 @@ For `notify_queue`, look for a session that stopped reading, usually one left id
 docker compose exec db psql -U postgres -c "SELECT pid, application_name, state, now() - state_change AS for FROM pg_stat_activity WHERE state LIKE 'idle in transaction%' ORDER BY state_change;"
 ```
 
-**Fix.** Restart the worker (`docker compose restart crove`). A batch that fails every time keeps its error in `last_error` and is retried for ever without losing the event: fix the cause the error names (the job queue schema, the database), and the relay catches up by itself. For the NOTIFY queue, end the session that holds it: `SELECT pg_terminate_backend(<pid>);` with the pid from the query above (a Crove process reconnects by itself).
+**Fix.** Restart the worker (`docker compose restart crove`). A batch that fails every time keeps its error in `last_error` and is retried for ever without losing the event: fix the cause the error names (the job queue schema, the database), and the relay catches up by itself. For the NOTIFY queue, end the session that holds it: `SELECT pg_terminate_backend(<pid>);` with the pid from the query above (a Ludy process reconnects by itself).
 
 **Confirm.** The pending counts fall to 0 (or near it), the prober sends `RESOLVED`, screens update without reloading.
 
@@ -147,11 +147,11 @@ The job's `name` says what failed and `output` holds the error.
   docker compose exec db psql -U postgres -c "UPDATE crove_jobs.job SET state = 'retry', retry_limit = retry_limit + 1, completed_on = NULL, start_after = GREATEST(start_after, now()) WHERE name = '<job name>' AND id = ANY('{<id>,<id>}'::uuid[]) AND state = 'failed';"
   ```
 
-  Only jobs whose handlers are safe to run twice should be retried this way; every Crove job is meant to be (idempotency keys and singleton keys), but read the error first.
+  Only jobs whose handlers are safe to run twice should be retried this way; every Ludy job is meant to be (idempotency keys and singleton keys), but read the error first.
 
 **Confirm.** The job's state moves to `completed` (`SELECT state FROM crove_jobs.job WHERE id = '<id>';`), and the next probes send `RESOLVED` once the window has passed.
 
-**Who to tell.** SEV2. The owner the same day, with the job name and the error. When it was a sign-out (`[signout] ALERT`), the user it was for: their session is closed in Crove but may still be open in Supabase Auth.
+**Who to tell.** SEV2. The owner the same day, with the job name and the error. When it was a sign-out (`[signout] ALERT`), the user it was for: their session is closed in Ludy but may still be open in Supabase Auth.
 
 ## 4. Supabase Auth outage
 
@@ -240,7 +240,7 @@ A rate limit (HTTP 429) or a server error is retried (3 attempts with backoff); 
 - **Deployment-wide (#886):** `pnpm ops:kill-switch`, for the operator, with the admin URL the migrations use.
   - `ai` stops AI document reading and every agent of every org, in the database too: an agent context is refused with `KILL_SWITCH_ON`.
   - `mail` holds the mail queue. Mail stays queued and goes out once released. Invite mail, which a person sends directly, is not held.
-  - Every change keeps its time, who and why, and no Crove login can flip it.
+  - Every change keeps its time, who and why, and no `crove_*` login role can flip it.
 
 **When to use it.** An agent posts, sends or proposes things it should not, or spends more than expected.
 
@@ -275,11 +275,11 @@ It takes effect at once, with no restart. To rehearse it (Phase 1 exit criterion
 
 A member's phone or laptop is lost or stolen while signed in.
 
-**What the member does** (Settings, sessions): sign out the session on that device, or all their sessions (`kernel.session.revoke`). This closes them in Crove at the next request and in Supabase Auth through the background job. Then change the password, and remove the second factor that lived on that device and add a new one (Settings, two-factor).
+**What the member does** (Settings, sessions): sign out the session on that device, or all their sessions (`kernel.session.revoke`). This closes them in Ludy at the next request and in Supabase Auth through the background job. Then change the password, and remove the second factor that lived on that device and add a new one (Settings, two-factor).
 
 **What the org's owner does** when the member cannot: in Settings, the member's sessions, revoke them; this closes them in that org at once. If the device may be in someone else's hands for long, remove the member from the org (`kernel.member.remove`, R3) and invite them again once they have a new device.
 
-**What the operator does** when the member lost their only second factor and cannot sign in: there is no admin tool in Crove for resetting a factor yet, and Supabase Auth's admin API is not exposed through the kernel. The member signs up the factor again after the owner removes and re-invites them; tell the owner if that is not enough.
+**What the operator does** when the member lost their only second factor and cannot sign in: there is no admin tool in Ludy for resetting a factor yet, and Supabase Auth's admin API is not exposed through the kernel. The member signs up the factor again after the owner removes and re-invites them; tell the owner if that is not enough.
 
 **Confirm.** The member's session list no longer shows the device; a request from it gets signed out.
 

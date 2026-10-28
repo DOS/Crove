@@ -1,6 +1,6 @@
 # Runbook: alerts that reach the owner's phone
 
-How the owner of a Crove deployment (the pilot setup, backlog item M1-9, issue #309) learns about an outage before the design partner calls. Three pieces, each set up once and tested once:
+How the owner of a Ludy deployment (the pilot setup, backlog item M1-9, issue #309) learns about an outage before the design partner calls. Three pieces, each set up once and tested once:
 
 1. **The prober** posts to a Telegram chat (or a Slack channel) the owner reads on the phone when background work stops moving: the relay, the job queue, the worker, the NOTIFY queue, the database, a failed backup.
 2. **An outside uptime check** requests `PUBLIC_URL/healthz` every 5 minutes from somewhere other than the server, and pages the owner when it fails: the API, the reverse proxy, the certificate or the whole host is down.
@@ -149,4 +149,4 @@ When the alert comes (`N schema change(s) outside the migration pipeline, first 
 
 Check that the watch is on: `docker compose exec db psql -U postgres -c "SELECT evtname, evtenabled FROM pg_event_trigger"` lists both triggers with `A` (fires in every session).
 
-**Hosted Supabase.** Its `postgres` role is not a superuser, but the supautils extension lets it create event triggers, so `migrate` installs the watch there too ([Supabase docs](https://supabase.com/docs/guides/database/postgres/event-triggers)). Such triggers are skipped for superuser sessions and Supabase's reserved roles ([Supabase blog](https://supabase.com/blog/event-triggers-wo-superuser)), so DDL by Supabase's own staff and maintenance roles is not recorded; DDL by `postgres` and every Crove role is. Where a hosted PostgreSQL refuses event triggers to the admin role (permission denied), `migrate` logs the skip and completes; use the provider's audit log (pgaudit) instead.
+**Hosted Supabase.** Its `postgres` role is not a superuser, but the supautils extension lets it create event triggers, so `migrate` installs the watch there too ([Supabase docs](https://supabase.com/docs/guides/database/postgres/event-triggers)). Such triggers are skipped for superuser sessions and Supabase's reserved roles ([Supabase blog](https://supabase.com/blog/event-triggers-wo-superuser)), so DDL by Supabase's own staff and maintenance roles is not recorded; DDL by `postgres` and every `crove_*` role is. Where a hosted PostgreSQL refuses event triggers to the admin role (permission denied), `migrate` logs the skip and completes; use the provider's audit log (pgaudit) instead.
