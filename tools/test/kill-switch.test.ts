@@ -9,6 +9,23 @@ describe('ops kill-switch arguments', () => {
     expect(parseArgs(['mail', 'off', '--by', 'Trực ca'])).toEqual({ action: 'set', key: 'mail', engaged: false, by: 'Trực ca', reason: null });
   });
 
+  it('reads a relay switch for one event type (#1696)', () => {
+    expect(parseArgs(['relay:kernel.org.export_requested', 'on', '--reason', 'export crashes', '--by', 'Trực ca'])).toEqual({
+      action: 'set',
+      key: 'relay:kernel.org.export_requested',
+      engaged: true,
+      by: 'Trực ca',
+      reason: 'export crashes',
+    });
+    expect(parseArgs(['relay:social.post.submitted', 'off', '--by', 'Trực ca'])).toMatchObject({ key: 'relay:social.post.submitted', engaged: false });
+  });
+
+  it('refuses a relay key that is not an event type', () => {
+    for (const key of ['relay:', 'relay:kernel', 'relay:Kernel.File', 'relay:kernel.file.*', 'relay:kernel..file', 'relay: kernel.file', 'relay:kernel.file.', `relay:a.${'b'.repeat(200)}`, 'relays:kernel.file']) {
+      expect(() => parseArgs([key, 'off', '--by', 'x']), key).toThrow(/usage/);
+    }
+  });
+
   it('refuses an unknown key or state, a missing name, and engaging without a reason', () => {
     for (const argv of [
       [],

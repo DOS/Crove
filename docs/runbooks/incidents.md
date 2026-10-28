@@ -240,7 +240,8 @@ A rate limit (HTTP 429) or a server error is retried (3 attempts with backoff); 
 - **Deployment-wide (#886):** `pnpm ops:kill-switch`, for the operator, with the admin URL the migrations use.
   - `ai` stops AI document reading and every agent of every org, in the database too: an agent context is refused with `KILL_SWITCH_ON`.
   - `mail` holds the mail queue. Mail stays queued and goes out once released. Invite mail, which a person sends directly, is not held.
-  - Every change keeps its time, who and why, and no `crove_*` login role can flip it.
+  - `relay:<event type>` (#1696), for example `relay:kernel.org.export_requested`, holds the outbox events of that one type in every org: the worker's relay leaves them in the outbox and keeps relaying every other type, so the jobs that type starts (an export, a publish, a booking mail) stop while the rest of the app runs. Releasing it sends the held events, oldest first, within a second; nothing is lost or sent twice. The key is the event type exactly as the outbox stores it (lowercase words joined by dots), one type per switch.
+  - Every change keeps its time, who and why (the switch's own append-only history, its audit trail), and no `crove_*` login role can flip it.
 
 **When to use it.** An agent posts, sends or proposes things it should not, or spends more than expected.
 
@@ -253,9 +254,13 @@ ADMIN_DATABASE_URL=postgres://... pnpm ops:kill-switch status
 ADMIN_DATABASE_URL=postgres://... pnpm ops:kill-switch ai on --reason "AI endpoint compromised" --by "<your name>"
 ADMIN_DATABASE_URL=postgres://... pnpm ops:kill-switch ai off --by "<your name>"
 ADMIN_DATABASE_URL=postgres://... pnpm ops:kill-switch mail on --reason "mail provider compromised" --by "<your name>"
+ADMIN_DATABASE_URL=postgres://... pnpm ops:kill-switch relay:kernel.org.export_requested on --reason "export job crashes the worker" --by "<your name>"
+ADMIN_DATABASE_URL=postgres://... pnpm ops:kill-switch relay:kernel.org.export_requested off --by "<your name>"
 ```
 
-It takes effect at once, with no restart. To rehearse it (Phase 1 exit criterion 8), engage `ai` on a staging deployment and check two things: an agent wake-up is refused, and a new PDF in the Inbox shows "AI đang tạm dừng". Then release it.
+`status` lists `ai`, `mail` and every relay key ever used, each with its state and last change.
+
+It takes effect at once, with no restart. A relay switch holds only events not yet relayed: jobs already queued for that type still run (stop those with the module or the worker, below). While one is engaged the held events still count in the prober's outbox age (§2, "Outbox lag"), so that alert keeps firing as a reminder to release it; the worker's back-pressure ignores them, so agents and bulk mail keep running. The flood query in §2 (back-pressure) lists the waiting events by org and type, held ones included. To rehearse it (Phase 1 exit criterion 8), engage `ai` on a staging deployment and check two things: an agent wake-up is refused, and a new PDF in the Inbox shows "AI đang tạm dừng". Then release it.
 
 **Other deployment-wide levers**, applied with `docker compose up -d` after editing `.env`:
 
