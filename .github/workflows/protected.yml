@@ -87,7 +87,7 @@ jobs:
           git ls-files -z | { grep -zE "$suite_re" || true; } | xargs -0 -r rm -f --
           xargs -0 -r git --literal-pathspecs checkout "$BASE_SHA" -- < "$base_list"
           # The files on disk must now be exactly the base list.
-          find . -name node_modules -prune -o -name .git -prune -o -type f -regextype posix-extended \
+          find . -name node_modules -prune -o -path ./.git -prune -o ! -type d -regextype posix-extended \
             -regex '\./(.*/)?test/invariant/.*|\./vitest\.invariant\.config\.ts|\./supabase/tests/database/_[^/]*\.test\.sql' \
             -printf '%P\0' | sort -z > "$RUNNER_TEMP/invariant-disk.list"
           if ! cmp -s "$base_list" "$RUNNER_TEMP/invariant-disk.list"; then
@@ -147,7 +147,7 @@ jobs:
           # The files on disk, found and hashed without git (whose index, attributes, config and replace refs PR code
           # can change): exactly the base files, each with its base content.
           actual="$RUNNER_TEMP/invariant-actual.sha256"
-          find . -name node_modules -prune -o -name .git -prune -o -type f -regextype posix-extended \
+          find . -name node_modules -prune -o -path ./.git -prune -o ! -type d -regextype posix-extended \
             -regex '\./(.*/)?test/invariant/.*|\./vitest\.invariant\.config\.ts|\./supabase/tests/database/_[^/]*\.test\.sql' \
             -printf '%P\0' | sort -z | xargs -0 -r sha256sum -z -- > "$actual"
           if ! cmp -s "$expected" "$actual"; then
@@ -211,7 +211,7 @@ jobs:
           # The files on disk, found and hashed without git (whose index, attributes, config and replace refs PR code
           # can change): exactly the base files, each with its base content.
           actual="$RUNNER_TEMP/invariant-actual.sha256"
-          find . -name node_modules -prune -o -name .git -prune -o -type f -regextype posix-extended \
+          find . -name node_modules -prune -o -path ./.git -prune -o ! -type d -regextype posix-extended \
             -regex '\./(.*/)?test/invariant/.*|\./vitest\.invariant\.config\.ts|\./supabase/tests/database/_[^/]*\.test\.sql' \
             -printf '%P\0' | sort -z | xargs -0 -r sha256sum -z -- > "$actual"
           if ! cmp -s "$expected" "$actual"; then
