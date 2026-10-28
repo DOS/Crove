@@ -59,6 +59,8 @@ describe('migration lint: contract-header', () => {
       'DROP TYPE crove_social.t;',
       'DROP DOMAIN crove_social.d;',
       'DROP PROCEDURE crove_social.p();',
+      'DROP EXTENSION IF EXISTS crove_x;',
+      'DROP ROLE IF EXISTS crove_old;',
       'ALTER TABLE crove_social.sample RENAME TO sample2;',
       'ALTER TABLE ONLY crove_social.sample DROP note;',
       'ALTER TABLE crove_social.sample ADD COLUMN y int, DROP COLUMN x;',
@@ -90,6 +92,8 @@ describe('migration lint: contract-header', () => {
       'ALTER TRIGGER a ON crove_social.sample RENAME TO b;',
       'ALTER POLICY a ON crove_social.sample RENAME TO b;',
       'ALTER TABLE crove_social.sample ADD COLUMN IF NOT EXISTS type text;',
+      // Columns named like actions (review probe).
+      'ALTER TABLE crove_social.sample ADD COLUMN IF NOT EXISTS rename text, ADD COLUMN drop int;',
       'ALTER DOMAIN crove_social.d DROP CONSTRAINT c;',
       "COMMENT ON TABLE crove_social.sample IS 'DROP TABLE x; ALTER TABLE y RENAME TO z';",
       "CREATE OR REPLACE FUNCTION crove_social.f() RETURNS void LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $f$ BEGIN DROP TABLE crove_social.x; END $f$;",
@@ -108,6 +112,11 @@ describe('migration lint: contract-header', () => {
     // IF NOT EXISTS may have found an existing table, so dropping it is a contract change.
     expect(rules('CREATE TABLE IF NOT EXISTS crove_social.stage (id int);\nDROP TABLE crove_social.stage;')).toEqual([2]);
     expect(rules('CREATE TABLE crove_social.stage (id int);\nDROP TABLE crove_social.stage, crove_social.sample;')).toEqual([2]);
+    // Only a top-level CREATE surely ran: in a DO it may be skipped or its error swallowed (review probes).
+    expect(rules("DO $$ BEGIN CREATE TYPE crove_social.s AS ENUM ('a'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;\nDROP TYPE crove_social.s;")).toEqual([2]);
+    expect(rules('DO $$ BEGIN IF false THEN CREATE TABLE crove_social.t (id int); END IF; END $$;\nDROP TABLE crove_social.t CASCADE;')).toEqual([2]);
+    // The helper must be of the kind dropped.
+    expect(rules('CREATE TYPE crove_social.t AS (a int);\nDROP TABLE crove_social.t;')).toEqual([2]);
   });
 
   it('needs the header on the comment lines right before the statement, one statement per header', () => {
@@ -120,6 +129,8 @@ describe('migration lint: contract-header', () => {
     expect(rules('SELECT 1; -- crove:contract adr=0028\nDROP TABLE crove_social.sample;')).toEqual([2]);
     expect(rules("SELECT '\n-- crove:contract adr=0028';\nDROP TABLE crove_social.sample;")).toEqual([3]);
     expect(rules('/* crove:contract adr=0028 */\nDROP TABLE crove_social.sample;')).toEqual([2]);
+    expect(rules('DO $$ -- crove:contract adr=0028\nBEGIN DROP TABLE crove_social.sample; END $$;')).toEqual([2]);
+    expect(rules('-- crove:contractor adr=0028\nDROP TABLE crove_social.sample;')).toEqual([2]);
     // A header before a DO does not reach into its body.
     expect(rules('-- crove:contract adr=0028\nDO $$ BEGIN\n  DROP TABLE crove_social.sample;\nEND $$;')).toEqual([3]);
   });

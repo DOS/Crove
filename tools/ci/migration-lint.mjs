@@ -15,15 +15,16 @@
 //                         (one no earlier migration created, or one this file dropped first);
 //   contract-header       put `-- crove:contract adr=<id>` (the ADR that records the change, a file in docs/adr) on the
 //                         comment lines right before every contract change (plan §3.5 and §5.5, #1693): a DROP of a
-//                         table, view, sequence, type, domain or function, any RENAME or SET SCHEMA, a DROP COLUMN or
-//                         ATTRIBUTE, and a column or attribute type change. One header covers one statement. Indexes,
-//                         constraints, triggers, policies and rules are internals, not contract; nor is dropping a
-//                         helper this file created;
+//                         table, view, sequence, type, domain, function, extension, operator or role, any RENAME or
+//                         SET SCHEMA, a DROP COLUMN or ATTRIBUTE, and a column or attribute type change (a DROP and
+//                         CREATE of the same name too). One header covers one statement. Indexes, constraints,
+//                         triggers, policies and rules are internals, not contract; nor is dropping a helper a
+//                         top-level statement of this file created;
 //   hot-table-retry       run DDL that locks a hot table (crove_jobs.*, crove_kernel.outbox_*, audit_event, record,
 //                         idempotency_key, processed_message; plan §5.5, #1693) inside the lock-retry block: a
-//                         BEGIN ... EXCEPTION WHEN lock_not_available block directly in a LOOP, which sets lock_timeout
-//                         before the statement, EXITs after it, and RAISEs in the handler. A table this file created
-//                         with a plain CREATE TABLE is not hot yet;
+//                         BEGIN ... EXCEPTION WHEN lock_not_available block directly in a LOOP, which sets a local
+//                         lock_timeout other than 0 before the statement, EXITs after it, and RAISEs (not a NOTICE)
+//                         in the handler. A table a top-level plain CREATE TABLE of this file made is not hot yet;
 //   no-edit-applied       with --since, not change or delete a migration that is already on the base branch.
 // contract-header and hot-table-retry skip the files up to BREAKING_RULES_AFTER, the newest on main when they landed.
 // DO bodies are linted too: their PL/pgSQL is split into statements and each SQL statement is checked like a top-level
@@ -38,7 +39,11 @@
 //   - a function body the same file then calls (SELECT f()), whose statements run at migration time;
 //   - SET standard_conforming_strings = off, which changes how '...' strings end and so where statements split;
 //   - a hot table named by a bare placeholder or crove_kernel.%I in an EXECUTE, an index of a hot table whose name
-//     does not say so, and a hot table locked by a function the file calls (apply_tenant_rls and the like).
+//     does not say so, and a hot table locked by a function the file calls (apply_tenant_rls and the like);
+//   - a contract change whose command words come from a placeholder (EXECUTE format('DROP %s ...', 'TABLE'));
+//   - the control flow of a retry block: any EXIT or RETURN after the statement counts (one in an IF or an inner
+//     loop too), and so does a statement in an inner block whose own handler swallows the lock error;
+//   - an unquoted PL/pgSQL keyword used as a name (SELECT 1 AS loop), which can confuse the block structure.
 //
 // The plan names libpg-query for this. This lint uses its own small lexer instead (comments, strings, quoted
 // identifiers and dollar quoting), so it needs no dependency and runs in the Docs check job without an install. The
@@ -77,8 +82,8 @@ const TRANSACTION_WORDS = new Set(['begin', 'start', 'commit', 'end', 'rollback'
 // Tokens: { t: 'word' | 'qident' | 'string' | 'punct' | 'other', v, line, body? }. A word's v is lowercased; a
 // quoted identifier keeps its case. A string's body is its content, with bodyLine the line it starts on. Line
 // comments are pushed to `comments` as { line, text, alone } when it is given; `alone` is true when no code comes
-// before the comment on its line.
-export function lex(sql, firstLine = 1, comments = undefined) {
+// before the comment on its line (`afterCode`: the first line starts after code, as a DO body does after its $).
+export function lex(sql, firstLine = 1, comments = undefined, afterCode = false) {
   const tokens = [];
   let i = 0;
   let line = firstLine;
@@ -87,7 +92,7 @@ export function lex(sql, firstLine = 1, comments = undefined) {
     for (let k = i; k < to; k++) if (sql[k] === '\n') line++;
     i = to;
   };
-  let codeLine = -1; // the line the last token ended on, so a comment knows whether code comes before it on its line
+  let codeLine = afterCode ? firstLine : -1; // the line the last token ended on, so a comment knows whether code comes before it on its line
   while (i < n) {
     const c = sql[i];
     const next = sql[i + 1];
@@ -435,7 +440,7 @@ function policyKey(tokens, nameAt) {
 
 // Kinds whose DROP is a contract change: what application code names. Indexes, constraints, triggers, policies and
 // rules are the schema's internals (the idempotent re-create pattern drops them), so dropping or renaming them is not.
-const CONTRACT_DROP_KINDS = new Set(['table', 'view', 'materialized', 'foreign', 'sequence', 'type', 'domain', 'function', 'procedure', 'routine', 'aggregate']);
+const CONTRACT_DROP_KINDS = new Set(['table', 'view', 'materialized', 'foreign', 'sequence', 'type', 'domain', 'function', 'procedure', 'routine', 'aggregate', 'extension', 'operator', 'role']);
 const FUNCTION_KINDS = new Set(['function', 'procedure', 'routine', 'aggregate']);
 const INTERNAL_KINDS = new Set(['index', 'trigger', 'policy', 'rule', 'statistics', 'event']);
 // ALTER TABLE ... DROP <word>: these drop a property of a column or table, not a column.
@@ -453,18 +458,29 @@ export function breakingChange(tokens) {
   }
   if (!isWord(head, 'alter') || !isWord(tokens[1]) || INTERNAL_KINDS.has(tokens[1].v) || isWord(tokens[1], 'default')) return undefined;
   const dropsColumns = isWord(tokens[1], 'table', 'foreign', 'type');
+  // The actions start after the object's name (and a function's argument list) and after each comma at depth 0, so
+  // a column named rename or drop is not read as an action.
+  let k = isWord(tokens[1], 'materialized', 'foreign') ? 3 : isWord(tokens[1], 'text') ? 4 : 2;
+  k = skipWords(tokens, skipIfExists(tokens, k), 'only');
+  const name = qualifiedName(tokens, k);
+  if (name === undefined) return undefined;
+  k = skipParens(tokens, name.end);
+  if (isPunct(tokens[k], '*')) k++;
+  const actions = [k];
   let depth = 0;
-  for (let k = 2; k < tokens.length; k++) {
-    const token = tokens[k];
-    if (isPunct(token, '(')) depth++;
-    else if (isPunct(token, ')')) depth--;
-    if (depth !== 0 || token.t !== 'word') continue;
-    if (token.v === 'rename' && !isWord(tokens[k + 1], 'constraint')) return { what: 'RENAME', names: [] };
-    if (token.v === 'set' && isWord(tokens[k + 1], 'schema')) return { what: 'SET SCHEMA', names: [] };
-    if (token.v === 'drop' && dropsColumns && !isWord(tokens[k + 1], ...NOT_A_COLUMN)) return { what: isWord(tokens[1], 'type') ? 'DROP ATTRIBUTE' : 'DROP COLUMN', names: [] };
-    if (token.v === 'alter') {
+  for (let j = k; j < tokens.length; j++) {
+    if (isPunct(tokens[j], '(')) depth++;
+    else if (isPunct(tokens[j], ')')) depth--;
+    else if (depth === 0 && isPunct(tokens[j], ',')) actions.push(j + 1);
+  }
+  for (const a of actions) {
+    const action = tokens[a];
+    if (isWord(action, 'rename') && !isWord(tokens[a + 1], 'constraint')) return { what: 'RENAME', names: [] };
+    if (isWord(action, 'set') && isWord(tokens[a + 1], 'schema')) return { what: 'SET SCHEMA', names: [] };
+    if (isWord(action, 'drop') && dropsColumns && !isWord(tokens[a + 1], ...NOT_A_COLUMN)) return { what: isWord(tokens[1], 'type') ? 'DROP ATTRIBUTE' : 'DROP COLUMN', names: [] };
+    if (isWord(action, 'alter')) {
       // ALTER [COLUMN | ATTRIBUTE] <name> [SET DATA] TYPE
-      let j = k + 1;
+      let j = a + 1;
       if (isWord(tokens[j], 'column', 'attribute')) j++;
       const after = tokens[j + 1];
       if (isWord(after, 'type') || (isWord(after, 'set') && isWord(tokens[j + 2], 'data') && isWord(tokens[j + 3], 'type'))) return { what: 'a type change', names: [] };
@@ -481,7 +497,8 @@ export const isHotTable = ({ schema, name }) => schema === 'crove_jobs' || (sche
 
 // The existing tables a DDL statement locks: ALTER TABLE or INDEX, CREATE INDEX, TRIGGER, POLICY or RULE ON, the
 // parent of CREATE TABLE ... PARTITION OF or INHERITS, the table a REFERENCES names, DROP TABLE or INDEX, DROP or
-// ALTER TRIGGER, POLICY or RULE ON, and LOCK TABLE. [{ schema, name, line }]; reads, writes and grants are not DDL.
+// ALTER TRIGGER, POLICY or RULE ON, REINDEX, CLUSTER and LOCK TABLE. [{ schema, name, line }]; reads, writes and
+// grants are not DDL.
 export function lockedTables(tokens) {
   const head = tokens[0];
   const tables = [];
@@ -513,15 +530,22 @@ export function lockedTables(tokens) {
   } else if (isWord(head, 'drop')) {
     if (isWord(tokens[1], 'table', 'index')) for (const name of nameList(tokens, skipIfExists(tokens, skipWords(tokens, 2, 'concurrently')), 'cascade', 'restrict')) push(name);
     else if (isWord(tokens[1], 'trigger', 'policy', 'rule')) onTable(2);
+  } else if (isWord(head, 'reindex') && isWord(tokens[1], 'table', 'index')) {
+    push(qualifiedName(tokens, skipWords(tokens, 2, 'concurrently')));
+  } else if (isWord(head, 'cluster')) {
+    push(qualifiedName(tokens, skipWords(tokens, 1, 'verbose')));
   } else if (isWord(head, 'lock')) {
     for (const name of nameList(tokens, skipWords(tokens, 1, 'table', 'only'), 'in', 'nowait')) push(name);
   }
   return tables;
 }
 
+// A lock_timeout value that makes the wait end: a number or string other than 0 (DEFAULT is 0, no timeout).
+const waits = (token) => (token?.t === 'string' || token?.t === 'other') && !/^\s*0*(\.0*)?\s*(ms|s|min|h|d)?\s*$/i.test(token.t === 'string' ? token.body : token.v);
+
 // The lock-retry blocks of a PL/pgSQL body (plan §5.5): a BEGIN ... EXCEPTION WHEN lock_not_available ... END block
 // directly inside a LOOP, whose handler RAISEs (so the retries are bounded). Returns, for each, the token indexes of
-// its BEGIN and EXCEPTION, where it sets lock_timeout (set_config('lock_timeout', ...) or SET [LOCAL] lock_timeout)
+// its BEGIN and EXCEPTION, where it sets lock_timeout (set_config('lock_timeout', ..., true) or SET LOCAL lock_timeout)
 // and where it EXITs or RETURNs, so the caller can check a statement sits between them in that order.
 export function retryBlocks(tokens) {
   const blocks = [];
@@ -540,12 +564,18 @@ export function retryBlocks(tokens) {
         const top = stack.pop();
         if (top?.kind !== 'block' || top.exception === -1 || top.parent !== 'loop') continue;
         const handler = tokens.slice(top.exception, k);
-        if (!handler.some((t) => isWord(t, 'lock_not_available')) || !handler.some((t) => isWord(t, 'raise'))) continue;
+        // RAISE; or RAISE [EXCEPTION] ... ends the retries; RAISE NOTICE and the other levels only log.
+        const raises = handler.some((t, j) => isWord(t, 'raise') && !isWord(handler[j + 1], 'debug', 'log', 'info', 'notice', 'warning'));
+        if (!handler.some((t) => isWord(t, 'lock_not_available')) || !raises) continue;
         const timeouts = [];
         const exits = [];
         for (let j = top.at + 1; j < top.exception; j++) {
-          const isSetConfig = isWord(tokens[j], 'set_config') && isPunct(tokens[j + 1], '(') && tokens[j + 2]?.t === 'string' && tokens[j + 2].body === 'lock_timeout';
-          const isSet = isWord(tokens[j], 'set') && isWord(tokens[isWord(tokens[j + 1], 'local', 'session') ? j + 2 : j + 1], 'lock_timeout');
+          // set_config('lock_timeout', <not 0>, true) or SET LOCAL lock_timeout = <not 0>: a timeout of 0 waits for ever,
+          // and one that is not local outlives the transaction into the runner's session.
+          const isSetConfig = isWord(tokens[j], 'set_config') && isPunct(tokens[j + 1], '(') && tokens[j + 2]?.t === 'string' && tokens[j + 2].body === 'lock_timeout'
+            && isPunct(tokens[j + 3], ',') && waits(tokens[j + 4]) && isPunct(tokens[j + 5], ',') && isWord(tokens[j + 6], 'true');
+          const isSet = isWord(tokens[j], 'set') && isWord(tokens[j + 1], 'local') && isWord(tokens[j + 2], 'lock_timeout')
+            && (isPunct(tokens[j + 3], '=') || isWord(tokens[j + 3], 'to')) && waits(tokens[j + 4]);
           if (isSetConfig || isSet) timeouts.push(j);
           if (isWord(tokens[j], 'exit', 'return')) exits.push(j);
         }
@@ -615,7 +645,7 @@ export function lintMigration(file, sql, {
   const functions = []; // { key, line }: functions created, waiting for their REVOKE
   const revoked = []; // { key | schema, index }: REVOKE ALL ... FROM PUBLIC, in order
   const dropped = []; // { key, index }: DROP FUNCTION, PROCEDURE or ROUTINE, in order
-  const createdPlain = new Set(); // "<schema>.<name>" of tables, views, types ... a plain CREATE made new in this file
+  const createdPlain = new Set(); // "<kind>:<schema>.<name>" of tables, views, types ... a plain CREATE made new in this file
   const createdFunctions = new Set(); // keys of functions this file created so far
   const usedHeaders = new Set(); // lines of the contract headers a breaking statement used
   let order = 0;
@@ -643,7 +673,7 @@ export function lintMigration(file, sql, {
     // Dropping a helper this file created (a one-shot backfill function, say) changes no contract.
     const helper = (name) => !name.dynamic && (FUNCTION_KINDS.has(change.kind)
       ? createdFunctions.has(`${name.schema ?? ''}.${name.name}`) && !existingFunctions.has(`${name.schema ?? ''}.${name.name}`)
-      : createdPlain.has(`${name.schema ?? ''}.${name.name}`));
+      : createdPlain.has(`${change.kind}:${name.schema ?? ''}.${name.name}`));
     if (change.names.length > 0 && change.names.every(helper)) return;
     const line = tokens[0].line;
     const header = contractHeader(anchorLine);
@@ -660,7 +690,7 @@ export function lintMigration(file, sql, {
   };
   const checkHot = (tokens, retry) => {
     if (retry) return;
-    const hot = lockedTables(tokens).filter((t) => isHotTable(t) && !createdPlain.has(`${t.schema}.${t.name}`));
+    const hot = lockedTables(tokens).filter((t) => isHotTable(t) && !createdPlain.has(`table:${t.schema}.${t.name}`));
     if (hot.length === 0) return;
     const names = [...new Set(hot.map((t) => `${t.schema}.${t.name}`))].join(', ');
     report(tokens[0].line, 'hot-table-retry', `DDL on the hot table ${names} runs in the lock-retry block (plan §5.5): DO $$ DECLARE n int := 0; BEGIN LOOP BEGIN PERFORM set_config('lock_timeout', '2s', true); <statement>; EXIT; EXCEPTION WHEN lock_not_available THEN n := n + 1; IF n >= 15 THEN RAISE; END IF; PERFORM pg_sleep(1 + random()); END; END LOOP; END $$;`);
@@ -675,10 +705,11 @@ export function lintMigration(file, sql, {
       return;
     }
     if (replace || !isWord(tokens[k]) || !PLAIN_CREATE_KINDS.has(tokens[k].v)) return;
+    const kind = tokens[k].v;
     k += isWord(tokens[k], 'materialized') ? 2 : 1;
     if (isWord(tokens[k], 'if')) return;
     const name = qualifiedName(tokens, k);
-    if (name && !name.dynamic) createdPlain.add(`${name.schema ?? ''}.${name.name}`);
+    if (name && !name.dynamic) createdPlain.add(`${kind}:${name.schema ?? ''}.${name.name}`);
   };
 
   if (schema === undefined) report(1, 'module-schema', `the file name does not match <14-digit version>_crove_<module>_<description>.sql, so its module is unknown`);
@@ -777,14 +808,15 @@ export function lintMigration(file, sql, {
       checkContract(tokens, ctx.anchorLine ?? head.line);
       checkHot(tokens, ctx.retry(head));
     }
-    noteCreated(tokens);
+    // Only a top-level CREATE surely ran: one in a DO may sit in a branch not taken or a block that swallows its error.
+    if (ctx === TOP && !nested) noteCreated(tokens);
 
     // DO bodies, and SQL an EXECUTE runs from a string literal.
     if (isWord(head, 'do')) {
       // DO [LANGUAGE lang] code, or DO code LANGUAGE lang: the code is the string that does not name the language.
       const body = tokens.find((token, k) => token.t === 'string' && !isWord(tokens[k - 1], 'language'));
       if (body) {
-        const bodyTokens = lex(body.body, body.bodyLine, comments);
+        const bodyTokens = lex(body.body, body.bodyLine, comments, true);
         const blocks = retryBlocks(bodyTokens);
         const index = new Map(bodyTokens.map((token, k) => [token, k]));
         const inherited = ctx.retry(head);

@@ -31,6 +31,8 @@ const HOT_DDL = [
   'DROP INDEX IF EXISTS crove_kernel.outbox_event_org_idx',
   'ALTER INDEX crove_jobs.job_i5 SET (fillfactor = 90)',
   'LOCK TABLE crove_jobs.queue IN SHARE MODE',
+  'REINDEX TABLE crove_kernel.audit_event',
+  'CLUSTER VERBOSE crove_kernel.outbox_event USING outbox_event_pkey',
   'CREATE TABLE IF NOT EXISTS crove_kernel.party_ref (org_id uuid, a uuid, FOREIGN KEY (org_id, a) REFERENCES crove_kernel.audit_event (org_id, id))',
   'CREATE TABLE IF NOT EXISTS crove_jobs.job_x PARTITION OF crove_jobs.job FOR VALUES IN (1)',
 ];
@@ -69,7 +71,13 @@ describe('migration lint: hot-table-retry', () => {
       'no loop': "DO $$ BEGIN BEGIN PERFORM set_config('lock_timeout', '2s', true); ALTER TABLE crove_kernel.audit_event ADD COLUMN x int; EXIT; EXCEPTION WHEN lock_not_available THEN RAISE; END; END $$;",
       'another error': retry('ALTER TABLE crove_kernel.audit_event ADD COLUMN x int').replace('lock_not_available', 'duplicate_column'),
       'no bound': retry('ALTER TABLE crove_kernel.audit_event ADD COLUMN x int').replace('IF n >= 15 THEN RAISE; END IF;', ''),
-      'no timeout': retry('ALTER TABLE crove_kernel.audit_event ADD COLUMN x int').replace("PERFORM set_config('lock_timeout', '2s', true);", ''),
+      'a notice for a bound': retry('ALTER TABLE crove_kernel.audit_event ADD COLUMN x int').replace('THEN RAISE;', "THEN RAISE NOTICE 'again';"),
+      'a timeout of 0': retry('ALTER TABLE crove_kernel.audit_event ADD COLUMN x int').replace("'2s'", "'0'"),
+      'a timeout of 0 ms': retry('ALTER TABLE crove_kernel.audit_event ADD COLUMN x int').replace("PERFORM set_config('lock_timeout', '2s', true);", 'SET LOCAL lock_timeout = 0;'),
+      'the default timeout': retry('ALTER TABLE crove_kernel.audit_event ADD COLUMN x int').replace("PERFORM set_config('lock_timeout', '2s', true);", 'SET LOCAL lock_timeout TO DEFAULT;'),
+      'a session timeout': retry('ALTER TABLE crove_kernel.audit_event ADD COLUMN x int').replace('true);', 'false);'),
+      'SET without LOCAL': retry('ALTER TABLE crove_kernel.audit_event ADD COLUMN x int').replace("PERFORM set_config('lock_timeout', '2s', true);", "SET lock_timeout = '2s';"),
+      'no timeout':retry('ALTER TABLE crove_kernel.audit_event ADD COLUMN x int').replace("PERFORM set_config('lock_timeout', '2s', true);", ''),
       'another setting': retry('ALTER TABLE crove_kernel.audit_event ADD COLUMN x int').replace("'lock_timeout'", "'statement_timeout'"),
       'timeout after': retry("ALTER TABLE crove_kernel.audit_event ADD COLUMN x int; PERFORM set_config('lock_timeout', '2s', true)").replace("PERFORM set_config('lock_timeout', '2s', true);\n", ''),
       'no exit': retry('ALTER TABLE crove_kernel.audit_event ADD COLUMN x int').replace('EXIT;', ''),
@@ -99,6 +107,9 @@ describe('migration lint: hot-table-retry', () => {
     expect(rules('CREATE TABLE crove_jobs.job_y (id int);\nCREATE INDEX job_y_idx ON crove_jobs.job_y (id);\nALTER TABLE crove_jobs.job_y ADD COLUMN x int;')).toEqual([]);
     // IF NOT EXISTS may have found the live table.
     expect(rules('CREATE TABLE IF NOT EXISTS crove_kernel.outbox_x (id int);\nCREATE INDEX IF NOT EXISTS outbox_x_idx ON crove_kernel.outbox_x (id);')).toEqual([2]);
+    // A CREATE in a DO may not have run (review probes).
+    expect(rules('DO $$ BEGIN CREATE TABLE crove_kernel.outbox_event (id int); EXCEPTION WHEN duplicate_table THEN NULL; END $$;\nALTER TABLE crove_kernel.outbox_event ADD COLUMN x int;')).toEqual([2]);
+    expect(rules("DO $$ BEGIN IF to_regclass('crove_kernel.audit_event') IS NULL THEN CREATE TABLE crove_kernel.audit_event (id int); END IF; END $$;\nALTER TABLE crove_kernel.audit_event ADD COLUMN x int;")).toEqual([2]);
   });
 
   it('knows the hot tables and the shape of the block', () => {
