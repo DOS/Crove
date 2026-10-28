@@ -12,7 +12,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
-import { Runtime } from '@crove/kernel-runtime';
+import { Runtime, type InputHashMode } from '@crove/kernel-runtime';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -45,10 +45,12 @@ suite('kernel projections per legal entity on PostgreSQL (#1280 part 3)', () => 
     }
   }
 
-  function connect() {
+  // The database starts before the keyed input hash's migration (20261103180000_crove_kernel_input_hash.sql), where
+  // crove_kernel.command_input_hash does not exist yet: the runtime that seeds it writes the plain hash (#1741).
+  function connect(inputHash: InputHashMode = 'keyed') {
     pool = createPool({ connectionString: appUrl, max: 4 });
     db = createDb(pool);
-    rt = new Runtime(db).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
+    rt = new Runtime(db, { inputHash }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
   }
 
   // A file and its reading, written as the database owner, the reading in the given entity or none.
@@ -91,7 +93,7 @@ suite('kernel projections per legal entity on PostgreSQL (#1280 part 3)', () => 
     app.username = 'crove_app';
     app.password = 'test-app-pw';
     appUrl = app.toString();
-    connect();
+    connect('sha256');
     owner = await upsertIdentity(db, { issuer: 'test', subject: randomUUID(), email: 'owner@kernel-le.test', name: null });
     accountant = await upsertIdentity(db, { issuer: 'test', subject: randomUUID(), email: 'accountant@kernel-le.test', name: null });
     ({ orgId } = await createOrg(rt, asUser(owner), 'Hai pháp nhân'));

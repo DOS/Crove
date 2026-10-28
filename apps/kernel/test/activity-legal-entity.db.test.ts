@@ -14,7 +14,7 @@ import { createDb, createPool } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import type { JournalVoucherRequest, Timeline } from '@crove/kernel-contract';
-import { Runtime } from '@crove/kernel-runtime';
+import { Runtime, type InputHashMode } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
@@ -71,9 +71,11 @@ suite('activity per legal entity on PostgreSQL (#1716)', () => {
     }
   }
 
-  function connect() {
+  // The database starts before the keyed input hash's migration (20261103180000_crove_kernel_input_hash.sql), where
+  // crove_kernel.command_input_hash does not exist yet: the runtime that seeds it writes the plain hash (#1741).
+  function connect(inputHash: InputHashMode = 'keyed') {
     pool = createPool({ connectionString: appUrl, max: 4 });
-    rt = new Runtime(createDb(pool)).register({
+    rt = new Runtime(createDb(pool), { inputHash }).register({
       commands: [...kernelCommands, ...financeCommands],
       queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries],
     });
@@ -136,7 +138,7 @@ suite('activity per legal entity on PostgreSQL (#1716)', () => {
     app.username = 'crove_app';
     app.password = 'test-app-pw';
     appUrl = app.toString();
-    connect();
+    connect('sha256');
 
     const db = createDb(pool);
     const person = (name: string) => upsertIdentity(db, { issuer: 'test', subject: randomUUID(), email: `${name}@activity-le.test`, name: null });

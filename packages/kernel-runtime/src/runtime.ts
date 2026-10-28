@@ -428,9 +428,10 @@ export interface RuntimeOptions {
   // How a command's input is hashed into audit_event.input_sha256 and idempotency_key.request_sha256 (#1732).
   // 'keyed': crove_kernel.command_input_hash, an HMAC-SHA256 under the deployment's hash key that no runtime role can
   // read, over the org of the sealed context, the actor key, the command and the canonical input ('k1:<hex>'): whoever
-  // holds an exported or archived row cannot confirm a guessed input (a private note's title, ADR-0037). The server
-  // always passes it (apps/kernel createKernel). 'sha256' (default; tests and tools): the plain SHA-256 of the
-  // canonical input, as before #1732.
+  // holds an exported or archived row cannot confirm a guessed input (a private note's title, ADR-0037). The default
+  // (#1741), and what the server runs (apps/kernel createKernel). 'sha256': the plain SHA-256 of the canonical input,
+  // as before #1732, only for tests: one that shows what the plain hash gives away, and those that seed a database
+  // migrated to a version before crove_kernel.command_input_hash exists.
   inputHash?: InputHashMode;
 }
 
@@ -750,7 +751,7 @@ export class Runtime {
     this.refusalAudit = refusalAudit === 'unbounded' ? 'unbounded' : validateRefusalAuditLimits(refusalAudit);
     this.absentModules = options.absentModules ? new Set(options.absentModules) : null;
     this.build = options.build ?? 'dev';
-    const inputHash = options.inputHash ?? 'sha256';
+    const inputHash = options.inputHash ?? 'keyed';
     if (!(INPUT_HASH_MODES as readonly string[]).includes(inputHash)) throw new Error(`unknown input hash mode ${String(inputHash)}`);
     this.inputHash = inputHash;
   }
