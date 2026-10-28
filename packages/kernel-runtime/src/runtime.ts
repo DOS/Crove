@@ -159,11 +159,11 @@ export interface CommandDef<I = unknown, O = unknown> {
   // (RuntimeOptions.manifests), a table no manifest has or classes that are not its manifest's (#1710). An empty list
   // says the command writes no table (only the runtime's rows for it). An agent's proposal of the command is
   // flagged P04 when a declared column is `contact` or `payment`, and also when the command declares no writes at all
-  // (nothing says it writes none). A
-  // proposal command whose declared writes have no such column may run, as a nested command at any depth, only commands
-  // that declare none either: the runtime refuses any other at execution, so a nested write cannot escape P04. Events it
-  // emits are not writes: a command that handles them runs on its own, under its own declaration (a proposal command
-  // declared free of contact and payment writes must not emit one whose handler writes such a column, #1710).
+  // (nothing says it writes none). A proposal command whose declared writes have no such column may run, as a nested
+  // command at any depth, only commands that declare none either: the runtime refuses any other at execution, so a
+  // nested write cannot escape P04. Events it emits are not writes: a command that handles them runs on its own, under
+  // its own declaration (a proposal command declared free of contact and payment writes must not emit one whose handler
+  // writes such a column, #1710).
   writes?: readonly CommandWrite[];
   // access 'proposal' only, R1 or R2 only (ADR-0029 section 6): the role keys of positions whose agents may approve
   // a proposal of this command, within their max_risk and only when the proposal's outcome names none of P03 to
