@@ -419,8 +419,8 @@ suite('keyed input hash on PostgreSQL (#1732)', () => {
       async (c) =>
         (
           await c.query<{ h: string }>(
-            `SELECT input_sha256 AS h FROM crove_kernel.audit_event WHERE org_id = $1 AND actor_type = 'system' AND command = 'kernel.agent.run.start' AND outcome = 'ok' ORDER BY id DESC LIMIT 1`,
-            [orgs.a],
+            `SELECT input_sha256 AS h FROM crove_kernel.audit_event WHERE org_id = $1 AND actor_type = 'system' AND command = 'kernel.agent.run.start' AND outcome = 'ok' AND target_id = $2 ORDER BY id DESC LIMIT 1`,
+            [orgs.a, agentId],
           )
         ).rows[0]?.h,
     );
@@ -435,6 +435,7 @@ suite('keyed input hash on PostgreSQL (#1732)', () => {
     const comment = { id: taskId, fence, body: 'Số tài khoản 0123 4567' };
     const first = await keyedWorker.execute(COMMENT, comment, { actor, orgId: orgs.a, idempotencyKey: key });
     expect(await keyedWorker.execute(COMMENT, comment, { actor, orgId: orgs.a, idempotencyKey: key })).toEqual(first);
+    expect(await refusalCode(keyedWorker.execute(COMMENT, { ...comment, body: 'Số tài khoản khác' }, { actor, orgId: orgs.a, idempotencyKey: key }))).toBe('IDEMPOTENCY_MISMATCH');
     const expected = `k1:${await hmacOf(orgs.a, agentKey, COMMENT, canonical(comment))}`;
     expect(await lastHash(orgs.a, agentId, COMMENT)).toBe(expected);
     const request = await admin(
