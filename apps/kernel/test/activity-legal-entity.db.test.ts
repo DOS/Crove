@@ -229,6 +229,10 @@ suite('activity per legal entity on PostgreSQL (#1716)', () => {
   });
 
   it('keeps a member limited to entity A out of every row of entity B in the database, and shows it the org-level rows', async () => {
+    // An org-level row (the org's own settings): since #1538 the proposals' rows are the branch's, not org-level.
+    await asMember(owner, (c) =>
+      c.query(`INSERT INTO crove_kernel.activity (org_id, record_type, record_id, kind, summary, actor_id) VALUES ($1, 'kernel.org', $1, 'org.updated', 'Sửa thông tin tổ chức', $2)`, [orgId, owner]),
+    );
     const counts = (userId: string) =>
       asMember(userId, async (c) => {
         const { rows } = await c.query<{ b: number; a: number; org: number }>(
