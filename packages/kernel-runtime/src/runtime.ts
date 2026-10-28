@@ -770,6 +770,55 @@ function checkedWrites(command: string, writes: readonly CommandWrite[], manifes
   return out;
 }
 
+// A frozen copy of a plain object's own enumerable properties, each read once, or the value as it is when it is not
+// one (register() then refuses it with its usual message).
+function frozenCopy<T>(value: T, fields: (copy: Record<string, unknown>) => void = () => {}): T {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return value;
+  const copy: Record<string, unknown> = { ...(value as Record<string, unknown>) };
+  fields(copy);
+  return Object.freeze(copy) as T;
+}
+
+const frozenList = <T>(value: T): T => (Array.isArray(value) ? (Object.freeze([...value]) as T) : value);
+
+// What register() keeps of an agent access declaration: the roles list copied too.
+const snapshotAgent = <A>(agent: A): A =>
+  frozenCopy(agent, (copy) => {
+    copy.roles = frozenList(copy.roles);
+  });
+
+// A command definition as register() checks and keeps it (#1766): a frozen copy, with the policy fields it holds
+// (access, agent, agentApprovers, writes) copied and frozen as well. The handler and the other functions are kept as
+// they are.
+function snapshotCommand(def: CommandDef<any, any>): CommandDef<unknown, unknown> {
+  return frozenCopy(def, (copy) => {
+    copy.access = frozenList(copy.access);
+    copy.agent = snapshotAgent(copy.agent);
+    copy.agentApprovers = snapshotAgent(copy.agentApprovers);
+    if (Array.isArray(copy.writes)) {
+      copy.writes = Object.freeze(
+        copy.writes.map((w: unknown) =>
+          frozenCopy(w, (write) => {
+            write.columns = frozenList(write.columns);
+            write.classes = frozenCopy(write.classes);
+          }),
+        ),
+      );
+    }
+    // Keys the definition did not have stay absent, so `'agent' in def` and hasOwn checks read as before.
+    for (const key of ['access', 'agent', 'agentApprovers', 'writes']) if (!Object.hasOwn(def, key)) delete copy[key];
+  }) as CommandDef<unknown, unknown>;
+}
+
+// A query definition as register() keeps it: a frozen copy, its access and agent roles copied too.
+function snapshotQuery(def: QueryDef<any, any>): QueryDef<unknown, unknown> {
+  return frozenCopy(def, (copy) => {
+    copy.access = frozenList(copy.access);
+    copy.agent = snapshotAgent(copy.agent);
+    for (const key of ['access', 'agent']) if (!Object.hasOwn(def, key)) delete copy[key];
+  }) as QueryDef<unknown, unknown>;
+}
+
 export class Runtime {
   private readonly commands = new Map<string, CommandDef<unknown, unknown>>();
   private readonly queries = new Map<string, QueryDef<unknown, unknown>>();
@@ -816,7 +865,11 @@ export class Runtime {
 
   // Checks each definition on its own; validate() checks how they fit together once every module is registered.
   register(defs: { commands?: CommandDef<any, any>[]; queries?: QueryDef<any, any>[] }): this {
-    for (const c of defs.commands ?? []) {
+    for (const given of defs.commands ?? []) {
+      // The runtime checks, stores and later runs this frozen copy, never the caller's object, so a definition changed
+      // after it registers (agent access set on a contact writer, a getter that answers differently later) changes
+      // nothing: P04 and authorizeAgent read the same values (#1766).
+      const c = snapshotCommand(given);
       if (this.commands.has(c.name)) throw new Error(`duplicate command ${c.name}`);
       if (c.sideEffect !== undefined) {
         if (!(SIDE_EFFECTS as readonly string[]).includes(c.sideEffect)) throw new Error(`command ${c.name}: unknown side effect ${String(c.sideEffect)}`);
@@ -873,7 +926,8 @@ export class Runtime {
       this.installedModules.add(moduleOf(c.name));
       if (c.revises) this.revisers.set(c.revises, [...(this.revisers.get(c.revises) ?? []), c.name]);
     }
-    for (const q of defs.queries ?? []) {
+    for (const given of defs.queries ?? []) {
+      const q = snapshotQuery(given);
       if (this.queries.has(q.name)) throw new Error(`duplicate query ${q.name}`);
       this.queries.set(q.name, q as QueryDef<unknown, unknown>);
       this.installedModules.add(moduleOf(q.name));
