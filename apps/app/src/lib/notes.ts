@@ -13,6 +13,9 @@ export function parseTags(input: string): string[] {
 // A line that looks like it holds a password ("mật khẩu:", "password:", "pass:"): a note is not a password store, so
 // the editor warns (notes.md §3.9). Marks are folded first, so "mat khau:" warns too.
 export function looksLikePassword(text: string): boolean {
+  // It runs on every keystroke, on up to 100,000 characters: a cheap look for "pass" or "kh..u" (marks composed or
+  // not) first, and the fold only when one is there.
+  if (!/pass|kh\S{0,3}u/i.test(text)) return false;
   const folded = text
     .normalize('NFD')
     .replace(/\p{M}/gu, '')

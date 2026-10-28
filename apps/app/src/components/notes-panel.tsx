@@ -74,8 +74,9 @@ function AddNote({ target, onDone }: { target: NoteLinkTargetInput | undefined; 
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
   const [onlyMe, setOnlyMe] = useState(false);
+  // The values go in as the mutation's variables, so a field changed while it is out cannot change what it sends.
   const create = useMutation({
-    mutationFn: () => client.notes.create({ title, body, visibility: onlyMe ? 'private' : 'org', ...(target ? { link: target } : {}) }),
+    mutationFn: (note: { title: string; body: string; visibility: 'private' | 'org' }) => client.notes.create({ ...note, ...(target ? { link: target } : {}) }),
     onSuccess: () => {
       void refreshNotes();
       onDone();
@@ -83,7 +84,7 @@ function AddNote({ target, onDone }: { target: NoteLinkTargetInput | undefined; 
   });
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    if (title.trim() !== '' && !create.isPending) create.mutate();
+    if (title.trim() !== '' && !create.isPending) create.mutate({ title, body, visibility: onlyMe ? 'private' : 'org' });
   };
   return (
     <form onSubmit={submit} className="space-y-2 px-4 py-3">
