@@ -322,6 +322,21 @@ export function createRpcHandler(
     <I, O>({ context, input }: { context: RpcContext; input: I }): Promise<O> =>
       inCrm(context, (orgId, actor) => runtime.execute<O>(name, input, { actor, orgId }));
 
+  // The notes module (#1671): its procedures answer 404 when the deployment leaves it out, as CRM's do.
+  const notes = runtime.installed('notes');
+  const inNotes = async <T>(context: RpcContext, fn: (orgId: string, actor: UserActor) => Promise<T>) => {
+    if (!notes) throw new ORPCError('NOT_FOUND', { status: 404, message: 'Mô-đun Ghi chú chưa được bật' });
+    return inOrg(context, fn);
+  };
+  const notesCommand =
+    (name: string) =>
+    <I, O>({ context, input }: { context: RpcContext; input: I }): Promise<O> =>
+      inNotes(context, (orgId, actor) => runtime.execute<O>(name, input, { actor, orgId }));
+  const notesQuery =
+    (name: string) =>
+    <I, O>({ context, input }: { context: RpcContext; input: I }): Promise<O> =>
+      inNotes(context, (orgId, actor) => runtime.query<O>(name, input, { actor, orgId }));
+
   // The connector of an OAuth provider this deployment configured, for an owner or admin of the org in the header.
   // The commands check the role again; checking first keeps a member from learning how the deployment is set up.
   const oauthConnector = async (context: RpcContext, provider: string) => {
@@ -540,6 +555,23 @@ export function createRpcHandler(
         }),
       ),
       export: os.org.export.handler(({ context }) => inOrg(context, (orgId, actor) => runtime.query('kernel.org.export.get', {}, { actor, orgId }))),
+    },
+    notes: {
+      list: os.notes.list.handler(notesQuery('notes.note.list')),
+      get: os.notes.get.handler(notesQuery('notes.note.get')),
+      search: os.notes.search.handler(notesQuery('notes.note.search')),
+      panel: os.notes.panel.handler(notesQuery('notes.record.panel')),
+      create: os.notes.create.handler(notesCommand('notes.note.create')),
+      update: os.notes.update.handler(notesCommand('notes.note.update')),
+      setVisibility: os.notes.setVisibility.handler(notesCommand('notes.note.set_visibility')),
+      pin: os.notes.pin.handler(notesCommand('notes.note.pin')),
+      unpin: os.notes.unpin.handler(notesCommand('notes.note.unpin')),
+      archive: os.notes.archive.handler(notesCommand('notes.note.archive')),
+      restore: os.notes.restore.handler(notesCommand('notes.note.restore')),
+      delete: os.notes.delete.handler(notesCommand('notes.note.delete')),
+      linkAdd: os.notes.linkAdd.handler(notesCommand('notes.link.add')),
+      linkRemove: os.notes.linkRemove.handler(notesCommand('notes.link.remove')),
+      privateCounts: os.notes.privateCounts.handler(notesQuery('notes.private_counts')),
     },
     crm: {
       eventTypes: {

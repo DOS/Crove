@@ -267,7 +267,7 @@ suite('module manifests against the catalog (#1588, #1599)', () => {
       const types = manifest.entities.map((e) => e.type);
       expect(types, file).toEqual([...types].sort());
     }
-    for (const id of ['finance', 'social', 'crm']) expect(Object.keys(MANIFESTS[id]!.manifest.tables), id).toEqual([`crove_${id}`]);
+    for (const id of ['finance', 'social', 'crm', 'notes']) expect(Object.keys(MANIFESTS[id]!.manifest.tables), id).toEqual([`crove_${id}`]);
   });
 });
 

@@ -8,6 +8,7 @@ import { LEDGER_APPROVE_PERMISSION, kernelManifest } from '@crove/kernel';
 import type { ModuleManifest, PermissionDeclaration } from '@crove/kernel-contract';
 import { crmManifest } from '@crove/mod-crm';
 import { financeManifest } from '@crove/mod-finance';
+import { notesManifest } from '@crove/mod-notes';
 import { socialManifest } from '@crove/mod-social';
 import { loadConfig } from '../src/config.ts';
 import { moduleDefinitions } from '../src/kernel.ts';
@@ -25,6 +26,7 @@ export const MODULE_MANIFESTS: Manifests = {
   finance: { manifest: financeManifest, file: 'modules/finance/src/manifest.ts' },
   social: { manifest: socialManifest, file: 'modules/social/src/manifest.ts' },
   crm: { manifest: crmManifest, file: 'modules/crm/src/manifest.ts' },
+  notes: { manifest: notesManifest, file: 'modules/notes/src/manifest.ts' },
 };
 
 // Something that checks a permission: a command (with its risk), the approval policy, a database function or policy.
