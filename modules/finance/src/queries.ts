@@ -117,83 +117,103 @@ function correctionOf(r: { correction_kind: CorrectionKind | null; corrected_ser
     : null;
 }
 
+// Recorded documents as the documents screen shows them: one legal entity's in a date range, or one by id in
+// whichever entity the caller's scope reaches (the le_scope row policy decides).
+async function loadDocuments(ctx: QueryContext, filter: { legalEntityId: string; from?: string | undefined; to?: string | undefined } | { id: string }) {
+  let query = ctx.trx
+    .selectFrom('crove_finance.purchase_document as d')
+    .innerJoin('crove_kernel.party as p', (join) => join.onRef('p.org_id', '=', 'd.org_id').onRef('p.id', '=', 'd.party_id'))
+    .leftJoin('crove_finance.journal_entry as j', (join) =>
+      join.onRef('j.org_id', '=', 'd.org_id').onRef('j.source_id', '=', 'd.id').on('j.source_type', '=', 'finance.purchase_document'),
+    )
+    .leftJoin('crove_finance.purchase_document_void as v', (join) => join.onRef('v.org_id', '=', 'd.org_id').onRef('v.document_id', '=', 'd.id'))
+    .select([
+      'd.id',
+      'd.direction',
+      'd.party_id',
+      'p.name as party_name',
+      'd.invoice_series',
+      'd.invoice_number',
+      'd.invoice_date',
+      'd.subtotal',
+      'd.vat_amount',
+      'd.total',
+      'd.source_file_id',
+      'd.replaces_document_id',
+      'd.currency',
+      'd.exchange_rate',
+      'd.exchange_rate_source',
+      'd.foreign_total',
+      'd.correction_kind',
+      'd.corrected_series',
+      'd.corrected_number',
+      'd.corrects_document_id',
+      'j.id as journal_entry_id',
+      'v.reversal_entry_id as void_entry_id',
+      'v.reason as void_reason',
+      'v.created_at as voided_at',
+    ])
+    .where('d.org_id', '=', ctx.orgId)
+    .orderBy('d.invoice_date', 'desc')
+    .orderBy('d.created_at', 'desc')
+    .orderBy('d.id', 'desc')
+    .limit(1000);
+  if ('id' in filter) query = query.where('d.id', '=', filter.id);
+  else {
+    query = query.where('d.legal_entity_id', '=', filter.legalEntityId);
+    if (filter.from) query = query.where('d.invoice_date', '>=', filter.from);
+    if (filter.to) query = query.where('d.invoice_date', '<=', filter.to);
+  }
+  const rows = await query.execute();
+  const correctedBy = await correctionsOf(
+    ctx,
+    rows.map((r) => r.id),
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    direction: r.direction,
+    partyId: r.party_id,
+    partyName: r.party_name,
+    series: r.invoice_series,
+    number: r.invoice_number,
+    issueDate: r.invoice_date,
+    subtotal: r.subtotal,
+    vatAmount: r.vat_amount,
+    total: r.total,
+    journalEntryId: r.journal_entry_id,
+    sourceFileId: r.source_file_id,
+    voided:
+      r.void_entry_id && r.voided_at
+        ? { reversalEntryId: r.void_entry_id, reason: r.void_reason ?? '', voidedAt: new Date(r.voided_at).toISOString() }
+        : null,
+    replacesDocumentId: r.replaces_document_id,
+    foreign:
+      r.exchange_rate && r.exchange_rate_source && r.foreign_total
+        ? { currency: r.currency, rate: money(r.exchange_rate).toFixed(), source: r.exchange_rate_source, total: money(r.foreign_total).toFixed() }
+        : null,
+    corrects: correctionOf(r),
+    correctedBy: correctedBy.get(r.id) ?? [],
+  }));
+}
+
 // Recorded documents, purchases and sales (issue #313) together, newest first.
 export const documentsList = defineQuery({
   name: 'finance.documents.list',
   input: zRange,
   access: ALL,
+  handler: async (ctx, input) => loadDocuments(ctx, { legalEntityId: await resolveLegalEntity(ctx, input.legalEntityId), from: input.from, to: input.to }),
+});
+
+// One recorded document, for a record that names it (a note's link, #1672). A document of a legal entity outside the
+// caller's scope, or of another org, is not found, as if it did not exist.
+export const documentGet = defineQuery({
+  name: 'finance.documents.get',
+  input: z.object({ id: zId }),
+  access: ALL,
   handler: async (ctx, input) => {
-    const legalEntityId = await resolveLegalEntity(ctx, input.legalEntityId);
-    let query = ctx.trx
-      .selectFrom('crove_finance.purchase_document as d')
-      .innerJoin('crove_kernel.party as p', (join) => join.onRef('p.org_id', '=', 'd.org_id').onRef('p.id', '=', 'd.party_id'))
-      .leftJoin('crove_finance.journal_entry as j', (join) =>
-        join.onRef('j.org_id', '=', 'd.org_id').onRef('j.source_id', '=', 'd.id').on('j.source_type', '=', 'finance.purchase_document'),
-      )
-      .leftJoin('crove_finance.purchase_document_void as v', (join) => join.onRef('v.org_id', '=', 'd.org_id').onRef('v.document_id', '=', 'd.id'))
-      .select([
-        'd.id',
-        'd.direction',
-        'd.party_id',
-        'p.name as party_name',
-        'd.invoice_series',
-        'd.invoice_number',
-        'd.invoice_date',
-        'd.subtotal',
-        'd.vat_amount',
-        'd.total',
-        'd.source_file_id',
-        'd.replaces_document_id',
-        'd.currency',
-        'd.exchange_rate',
-        'd.exchange_rate_source',
-        'd.foreign_total',
-        'd.correction_kind',
-        'd.corrected_series',
-        'd.corrected_number',
-        'd.corrects_document_id',
-        'j.id as journal_entry_id',
-        'v.reversal_entry_id as void_entry_id',
-        'v.reason as void_reason',
-        'v.created_at as voided_at',
-      ])
-      .where('d.org_id', '=', ctx.orgId)
-      .where('d.legal_entity_id', '=', legalEntityId)
-      .orderBy('d.invoice_date', 'desc')
-      .orderBy('d.created_at', 'desc')
-      .limit(1000);
-    if (input.from) query = query.where('d.invoice_date', '>=', input.from);
-    if (input.to) query = query.where('d.invoice_date', '<=', input.to);
-    const rows = await query.execute();
-    const correctedBy = await correctionsOf(
-      ctx,
-      rows.map((r) => r.id),
-    );
-    return rows.map((r) => ({
-      id: r.id,
-      direction: r.direction,
-      partyId: r.party_id,
-      partyName: r.party_name,
-      series: r.invoice_series,
-      number: r.invoice_number,
-      issueDate: r.invoice_date,
-      subtotal: r.subtotal,
-      vatAmount: r.vat_amount,
-      total: r.total,
-      journalEntryId: r.journal_entry_id,
-      sourceFileId: r.source_file_id,
-      voided:
-        r.void_entry_id && r.voided_at
-          ? { reversalEntryId: r.void_entry_id, reason: r.void_reason ?? '', voidedAt: new Date(r.voided_at).toISOString() }
-          : null,
-      replacesDocumentId: r.replaces_document_id,
-      foreign:
-        r.exchange_rate && r.exchange_rate_source && r.foreign_total
-          ? { currency: r.currency, rate: money(r.exchange_rate).toFixed(), source: r.exchange_rate_source, total: money(r.foreign_total).toFixed() }
-          : null,
-      corrects: correctionOf(r),
-      correctedBy: correctedBy.get(r.id) ?? [],
-    }));
+    const [document] = await loadDocuments(ctx, { id: input.id });
+    if (!document) throw new DomainError('DOCUMENT_NOT_FOUND', 404, 'Không tìm thấy chứng từ');
+    return document;
   },
 });
 

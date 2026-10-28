@@ -617,7 +617,19 @@ export const vi = {
       privateOnly: 'Chỉ mình tôi xem',
       save: 'Lưu ghi chú',
       empty: 'Ghi lại điều cần nhớ về khách hàng này',
+      emptyRecord: 'Ghi lại điều cần nhớ về bản ghi này',
       toggleOf: 'Ghi chú về {name}',
+    },
+    links: {
+      title: 'Gắn với',
+      unavailable: 'Bản ghi không mở được',
+      types: {
+        party: 'Khách hàng hoặc nhà cung cấp',
+        file: 'Tệp',
+        purchase_document: 'Chứng từ',
+        journal_entry: 'Bút toán',
+        booking: 'Lịch hẹn',
+      },
     },
   },
   bookings: {
@@ -5198,6 +5210,7 @@ export const vi = {
       NOTE_IN_TRASH: 'Ghi chú đang ở thùng rác; hãy khôi phục trước',
       NOTE_REVISION_CONFLICT: 'Ghi chú vừa được sửa ở nơi khác; hãy tải lại trước khi lưu',
       NOTE_LINK_EXISTS: 'Ghi chú đã gắn với bản ghi này',
+      NOTE_LINK_LIMIT: 'Một ghi chú gắn được tối đa 50 bản ghi',
       NOTE_LINK_NOT_FOUND: 'Không tìm thấy liên kết này',
       NOTE_LINK_TARGET_NOT_FOUND: 'Không tìm thấy bản ghi để gắn ghi chú',
       BOOKING_LINK_NOT_FOUND: 'Liên kết này không còn dùng được',
@@ -5216,6 +5229,7 @@ export const vi = {
       ALREADY_REVERSED: 'Bút toán này đã được đảo',
       ENTRY_IS_REVERSAL: 'Đây là bút toán đảo nên không đảo lại được; hãy ghi một bút toán mới',
       ENTRY_NOT_FOUND: 'Không tìm thấy bút toán',
+      DOCUMENT_NOT_FOUND: 'Không tìm thấy chứng từ',
       REVERSAL_DATE_BEFORE_ENTRY: 'Ngày bút toán đảo không được trước ngày của bút toán gốc',
       REVERSAL_PENDING: 'Bút toán này đã có đề xuất đảo đang chờ duyệt; hãy duyệt hoặc từ chối đề xuất đó trong Hộp thư',
       OPENING_BALANCE_EXISTS: 'Tổ chức đã có bút toán số dư đầu kỳ; hãy đảo bút toán đó trước khi nhập lại',
@@ -5596,6 +5610,7 @@ export const vi = {
       booking: {
         cancel: 'Hủy lịch hẹn',
         confirm: 'Xác nhận lịch hẹn',
+        get: 'Xem một lịch hẹn',
         list: 'Xem danh sách lịch hẹn',
         mail_data: 'Lấy thông tin cho thư về lịch hẹn',
         manage: 'Thực hiện yêu cầu đổi hoặc hủy lịch hẹn của khách',
@@ -5662,6 +5677,7 @@ export const vi = {
         exports: 'Xem các lần xuất của chứng từ',
       },
       documents: {
+        get: 'Xem một chứng từ',
         list: 'Xem danh sách chứng từ',
         voided_proposals: 'Tìm đề xuất có chứng từ đã hủy',
       },

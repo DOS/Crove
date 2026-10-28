@@ -619,7 +619,19 @@ export const en = {
       privateOnly: 'Only me',
       save: 'Save note',
       empty: 'Write down what to remember about this client',
+      emptyRecord: 'Write down what to remember about this record',
       toggleOf: 'Notes about {name}',
+    },
+    links: {
+      title: 'Linked to',
+      unavailable: 'You cannot open this record',
+      types: {
+        party: 'Customer or vendor',
+        file: 'File',
+        purchase_document: 'Document',
+        journal_entry: 'Journal entry',
+        booking: 'Booking',
+      },
     },
   },
   bookings: {
@@ -5198,6 +5210,7 @@ export const en = {
       NOTE_IN_TRASH: 'This note is in the trash; restore it first.',
       NOTE_REVISION_CONFLICT: 'This note was just changed elsewhere; reload it before saving.',
       NOTE_LINK_EXISTS: 'This note is already linked to that record.',
+      NOTE_LINK_LIMIT: 'A note can be linked to at most 50 records.',
       NOTE_LINK_NOT_FOUND: 'This link was not found.',
       NOTE_LINK_TARGET_NOT_FOUND: 'The record to link was not found.',
       BOOKING_LINK_NOT_FOUND: 'This link no longer works.',
@@ -5216,6 +5229,7 @@ export const en = {
       ALREADY_REVERSED: 'This journal entry was already reversed.',
       ENTRY_IS_REVERSAL: 'This is a reversal, so it cannot be reversed. Post a new entry instead.',
       ENTRY_NOT_FOUND: 'Journal entry not found.',
+      DOCUMENT_NOT_FOUND: 'Document not found.',
       REVERSAL_DATE_BEFORE_ENTRY: 'The reversal cannot be dated before the original entry.',
       REVERSAL_PENDING: 'This entry already has a reversal proposal waiting for approval. Approve or reject it in the inbox.',
       OPENING_BALANCE_EXISTS: 'The organization already has an opening entry. Reverse it before importing again.',
@@ -5596,6 +5610,7 @@ export const en = {
       booking: {
         cancel: 'Cancel a booking',
         confirm: 'Confirm a booking',
+        get: 'Read a booking',
         list: 'List bookings',
         mail_data: 'Read the details of a booking mail',
         manage: "Carry out a visitor's change or cancellation of a booking",
@@ -5662,6 +5677,7 @@ export const en = {
         exports: "List a document's exports",
       },
       documents: {
+        get: 'Read a document',
         list: 'List documents',
         voided_proposals: 'Find proposals whose document was voided',
       },

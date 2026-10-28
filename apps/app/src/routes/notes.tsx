@@ -15,6 +15,7 @@ import { Button } from '@crove/ui/components/button';
 import { Input } from '@crove/ui/components/input';
 import { Tabs, TabsList, TabsTrigger } from '@crove/ui/components/tabs';
 import { Textarea } from '@crove/ui/components/textarea';
+import { NoteLinks } from '../components/note-links.tsx';
 import { VisibilityBadge, refreshNotes } from '../components/notes-panel.tsx';
 import { Empty, ErrorText, ListSkeleton, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
@@ -180,6 +181,8 @@ function Editor({ note, slug, role, back, focusTitle }: { note: Note; slug: stri
           {!note.mine && <p className="text-xs text-subtle-foreground">{t('readOnly')}</p>}
         </>
       )}
+
+      <NoteLinks links={note.links} slug={slug} />
 
       {state === 'conflict' && (
         <div className="flex flex-wrap items-center gap-2" role="alert">
