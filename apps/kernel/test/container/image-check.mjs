@@ -143,7 +143,7 @@ try {
     await new ExcelJS.Workbook().xlsx.load(journal);
     failures.push('exceljs read a workbook in the kernel image: an XML reader is reachable');
   } catch (error) {
-    if (error?.code !== 'MODULE_NOT_FOUND' || !String(error?.message).includes("'saxes'")) {
+    if (error?.code !== 'MODULE_NOT_FOUND' || !error?.message?.includes("'saxes'")) {
       failures.push(`reading a workbook failed, but not for want of saxes: ${error?.code ?? ''} ${error?.message ?? error}`);
     }
   }
