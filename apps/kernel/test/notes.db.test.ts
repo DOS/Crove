@@ -311,5 +311,10 @@ suite('notes on PostgreSQL (#1671)', () => {
     const kept = await o.exec<NoteWritten>(o.other, 'notes.note.create', { title: PRIVATE_TITLE });
     await sweepNotesFormerMembers({ runtime: worker, workerDb });
     expect(await notesOf()).toEqual([kept.noteId, n.shared].sort());
+    // Nor one whose membership ended with no removal in the audit trail (an SQL delete): no date to count from, so the
+    // sweep keeps their items (fails closed).
+    await admin((c) => c.query('DELETE FROM crove_kernel.tenant_member WHERE org_id = $1 AND user_id = $2', [o.orgId, o.other]));
+    await sweepNotesFormerMembers({ runtime: worker, workerDb });
+    expect(await notesOf()).toEqual([kept.noteId, n.shared].sort());
   });
 });

@@ -2,7 +2,8 @@
 // whatever their caller passes. crove_notes.trash_empty removes nothing put in the trash less than 30 days ago;
 // crove_notes.member_items_purge removes nothing of a user removed from the org less than 30 days ago by the audit
 // trail; crove_notes.former_members_due, the daily sweep's list, is the worker login's alone, outside every context,
-// returns ids only and names a former member only once that delay has passed. Part of the invariant suite; it imports
+// returns ids only, names a former member only once that delay has passed, and marks one whose removal the audit
+// trail does not record, which the sweep keeps (fails closed). Part of the invariant suite; it imports
 // package code under test, never helpers from outside test/invariant/. Set CROVE_TEST_ADMIN_URL to a superuser URL;
 // each run makes its own database.
 import { randomUUID } from 'node:crypto';
@@ -29,8 +30,9 @@ suite('notes purge delays on PostgreSQL (#1733, ADR-0037)', () => {
   const pools: pg.Pool[] = [];
   let app: Runtime;
   let orgId = '';
-  // stay is a member; recent was removed today; old was removed today too, then moved 31 days back.
-  const users = { owner: '', stay: '', recent: '', old: '' };
+  // stay is a member; recent was removed today; old was removed today too, then moved 31 days back; unrecorded left
+  // with no removal in the audit trail (an SQL delete).
+  const users = { owner: '', stay: '', recent: '', old: '', unrecorded: '' };
   const trashed = { fresh: randomUUID(), stale: randomUUID() };
   const asUser = (userId: string) => ({ type: 'user' as const, userId, aal: 'aal1' as const });
   const asMfa = (userId: string) => ({ type: 'user' as const, userId, aal: 'aal2' as const, sessionId: randomUUID(), mfaAt: Math.floor(Date.now() / 1000) });
@@ -89,15 +91,16 @@ suite('notes purge delays on PostgreSQL (#1733, ADR-0037)', () => {
     }
     orgId = (await createOrg(app, asUser(users.owner), 'Hạn xóa ghi chú')).orgId;
     await admin(async (c) => {
-      await c.query(`INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member'), ($1, $3, 'member'), ($1, $4, 'member')`, [
+      await c.query(`INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member'), ($1, $3, 'member'), ($1, $4, 'member'), ($1, $5, 'member')`, [
         orgId,
         users.stay,
         users.recent,
         users.old,
+        users.unrecorded,
       ]);
       // A private note and a to-do of each member; two notes of the member who stays in the trash, one since yesterday
       // and one for 31 days.
-      for (const [i, user] of [users.stay, users.recent, users.old].entries()) {
+      for (const [i, user] of [users.stay, users.recent, users.old, users.unrecorded].entries()) {
         await c.query(`INSERT INTO crove_notes.note (org_id, id, author_user_id, title, body, visibility) VALUES ($1, $2, $3, $4, $4, 'private')`, [orgId, randomUUID(), user, SECRET]);
         await c.query(`INSERT INTO crove_notes.todo (org_id, id, owner_user_id, title, status, sort_key) VALUES ($1, $2, $3, $4, 'open', $5)`, [orgId, randomUUID(), user, SECRET, `k${i}`]);
       }
@@ -108,6 +111,7 @@ suite('notes purge delays on PostgreSQL (#1733, ADR-0037)', () => {
       );
     });
     for (const user of [users.recent, users.old]) await app.execute('kernel.member.remove', { userId: user }, { actor: asMfa(users.owner), orgId });
+    await admin((c) => c.query('DELETE FROM crove_kernel.tenant_member WHERE org_id = $1 AND user_id = $2', [orgId, users.unrecorded]));
     // The old removal, 31 days back. The audit trail is append-only, so its trigger is set aside for this statement.
     await admin(async (c) => {
       await c.query('BEGIN');
@@ -159,7 +163,7 @@ suite('notes purge delays on PostgreSQL (#1733, ADR-0037)', () => {
     expect(await purge(users.old)).toBe('2');
   });
 
-  it('lists for the sweep only former members past the delay, with ids only, to the worker login outside every context', async () => {
+  it('lists for the sweep only former members past the delay, with ids only, marking the unrecorded, to the worker login outside every context', async () => {
     const callers: Array<[string, string, (c: pg.Client) => Promise<unknown>]> = [
       ['the app login, no context', appUrl, async () => {}],
       ['an owner of the org', appUrl, (c) => c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [users.owner, orgId])],
@@ -169,8 +173,12 @@ suite('notes purge delays on PostgreSQL (#1733, ADR-0037)', () => {
       expect(await outcome(inContext(url, enter, (c) => c.query(DUE))), name).toMatchObject({ ok: false, code: '42501' });
     }
     const due = await inContext(workerUrl, async () => {}, (c) => c.query(DUE));
-    expect(due.fields.map((f) => f.name)).toEqual(['org_id', 'user_id']);
-    expect(due.rows).toEqual([{ org_id: orgId, user_id: users.old }]);
+    expect(due.fields.map((f) => f.name)).toEqual(['org_id', 'user_id', 'recorded']);
+    // The recorded one first; the one whose membership ended with no removal row is marked, for the sweep to keep.
+    expect(due.rows).toEqual([
+      { org_id: orgId, user_id: users.old, recorded: true },
+      { org_id: orgId, user_id: users.unrecorded, recorded: false },
+    ]);
     expect(JSON.stringify(due.rows)).not.toContain(SECRET);
   });
 });

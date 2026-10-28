@@ -88,12 +88,18 @@ export async function sweepNotesReminders(deps: { runtime: Runtime; workerDb: Db
 // One pass of the former members (#1733), after the trash: the users who own private notes or to-dos in an org they
 // left more than NOTE_MEMBER_PURGE_DAYS ago, whose removal queued no purge (the module off when they left, a job
 // dropped), each purged in the org's system context. The definer itself refuses a member or a removal younger than
-// that, so this sweep cannot purge early. Logs ids and codes only.
+// that, so this sweep cannot purge early. A user whose membership ended with no removal in the audit trail (an SQL
+// delete, a restore) has no date to count from: their items are kept and logged, never purged here. Logs org prefixes
+// and codes only.
 export async function sweepNotesFormerMembers(deps: { runtime: Runtime; workerDb: Db }): Promise<number> {
-  const { rows } = await sql<{ org_id: string; user_id: string }>`
-    SELECT org_id, user_id FROM crove_notes.former_members_due(${FORMER_MEMBER_SWEEP_LIMIT}::int)`.execute(deps.workerDb);
+  const { rows } = await sql<{ org_id: string; user_id: string; recorded: boolean }>`
+    SELECT org_id, user_id, recorded FROM crove_notes.former_members_due(${FORMER_MEMBER_SWEEP_LIMIT}::int)`.execute(deps.workerDb);
   let removed = 0;
   for (const row of rows) {
+    if (!row.recorded) {
+      console.warn(`[notes-member-purge] org ${row.org_id.slice(0, 8)}: a former member with no recorded removal, items kept`);
+      continue;
+    }
     try {
       removed += (await runNotesMemberPurge(deps.runtime, { orgId: row.org_id, userId: row.user_id })).removed;
     } catch (error) {

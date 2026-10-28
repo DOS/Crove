@@ -63,8 +63,9 @@ A private note or to-do is read and changed only in a context whose user is its 
 - Other code reaches private rows only through `SECURITY DEFINER` functions in `crove_notes`, each returning or touching the minimum and never returning text:
   - worker login only (EXECUTE and `session_user`):
     - `todo_reminders_claim(limit)`: one `UPDATE ... SET reminded_at = now() ... RETURNING` of due, unreminded to-dos, answering `org_id`, `id`, `owner_user_id`, `remind_at`;
-    - `trash_empty(org, before)`: deletes items 30 days in the trash, never fewer whatever `before` says (#1733), returns counts;
-    - `member_items_purge(org, user)`: deletes a former member's private items when the user is still not a member and their latest removal in the audit trail is 30 days old (#1733), returns counts;
+    - `trash_empty(org, before)`: deletes items in the trash since before `before`, and never one there for less than 30 days (#1733): the floor stops it removing more, and `before` can only make it remove fewer; returns counts;
+    - `member_items_purge(org, user)`: deletes a former member's private items when the user is still not a member and was not removed from the org (`kernel.member.remove` in the audit trail) in the last 30 days (#1733), returns counts;
+    - `former_members_due(limit)`: for the nightly sweep (section 4), the former members with private items past that delay, ids only, each marked whether the audit trail records their removal;
   - callable in a user context, checked inside to be an owner or admin of the context's org (the members screen and the personal-data screen run as that user, not as the worker):
     - `private_counts()`: items per author, for the removal warning;
     - `private_matches(kind, value)`: per author, how many private items contain a value, for the finder (section 5);
@@ -83,7 +84,8 @@ A private note or to-do is read and changed only in a context whose user is its 
 
 When `kernel.member.removed` is emitted (the module subscribes to it and schedules a job 30 days later, with ids only in its payload):
 - Shared notes stay, shown with "Thành viên cũ" as the author.
-- Private notes and to-dos stay sealed: the member cannot enter the org, so nobody reads them. If the member is added back within 30 days, they find them again (no foreign key cascaded them away). After 30 days the job runs `notes.member_items.purge` (system, R3, `irreversible`), which deletes them unless the user is a member again.
+- Private notes and to-dos stay sealed: the member cannot enter the org, so nobody reads them. If the member is added back within 30 days, they find them again (no foreign key cascaded them away). After 30 days the job runs `notes.member_items.purge` (system, R3, `irreversible`), which deletes them unless the user is a member again; the definer counts the 30 days from the removal's audit row, whenever the job runs (#1733).
+- A nightly sweep, after the trash, catches a removal that queued no job (the notes module off when the member left, a dropped job): `former_members_due` lists the former members past the delay and the sweep runs the same command for each. It fails closed: a user whose membership ended with no removal in the audit trail (an SQL delete, a restore) has no date to count from, so the sweep keeps their items and logs the org, never purges them.
 - Before the removal, the members screen warns the owner how many private items the member has (`private_counts`), so the owner can ask them to share what the firm needs first.
 - To-dos already handed over are tasks of a position; they stay with the position (ADR-0029).
 

@@ -18,7 +18,8 @@
 --
 -- New: crove_notes.former_members_due, for the worker's daily sweep: the users who own private notes or to-dos in an
 -- org they are no longer a member of, past that delay. It catches a removal that queued no purge job (the notes
--- module off when the member left, a job pg-boss dropped).
+-- module off when the member left, a job pg-boss dropped). The sweep fails closed: it purges only a user whose removal
+-- the audit trail records, never one whose membership ended without that row.
 SET LOCAL lock_timeout = '2s';
 
 -- Marks up to p_limit due reminders sent and returns them, oldest first: open to-dos outside the trash whose
@@ -141,24 +142,32 @@ REVOKE ALL ON FUNCTION crove_notes.member_items_purge(uuid) FROM PUBLIC, crove_t
 GRANT EXECUTE ON FUNCTION crove_notes.member_items_purge(uuid) TO crove_worker;
 
 -- The users who own private notes or to-dos in an org they are no longer a member of and were not removed from in the
--- last 30 days, for the daily sweep (worker login only, outside every context): what member_items_purge would remove.
--- Ids only.
+-- last 30 days, for the daily sweep (worker login only, outside every context). Ids only, and recorded: whether the
+-- audit trail holds their removal (kernel.member.remove, outcome ok), so older than 30 days. The sweep purges only a
+-- recorded one; a membership that ended with no such row (an SQL delete, a restore) gives no date to count the 30
+-- days from, so the sweep keeps their items and logs it rather than purge at once. Recorded ones come first, so the
+-- unrecorded never crowd them out of p_limit.
 CREATE OR REPLACE FUNCTION crove_notes.former_members_due(p_limit integer)
-RETURNS TABLE (org_id uuid, user_id uuid) LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
+RETURNS TABLE (org_id uuid, user_id uuid, recorded boolean) LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
 BEGIN
   IF NOT pg_catalog.pg_has_role(SESSION_USER, 'crove_worker', 'MEMBER') OR crove_kernel.ctx_actor_type() IS NOT NULL THEN
     RAISE EXCEPTION 'NOTES_WORKER_ONLY' USING ERRCODE = '42501';
   END IF;
-  RETURN QUERY SELECT d.org_id, d.user_id FROM (
-      SELECT n.org_id, n.author_user_id AS user_id FROM crove_notes.note n WHERE n.visibility = 'private'
-      UNION
-      SELECT t.org_id, t.owner_user_id FROM crove_notes.todo t) AS d
-    WHERE NOT EXISTS (SELECT 1 FROM crove_kernel.tenant_member m WHERE m.org_id = d.org_id AND m.user_id = d.user_id)
-      AND NOT EXISTS (
-        SELECT 1 FROM crove_kernel.audit_event a
-        WHERE a.org_id = d.org_id AND a.occurred_at > pg_catalog.now() - interval '30 days'
-          AND a.command = 'kernel.member.remove' AND a.outcome = 'ok' AND a.target_id = d.user_id)
-    ORDER BY 1, 2 LIMIT LEAST(GREATEST(p_limit, 1), 1000);
+  RETURN QUERY SELECT f.org_id, f.user_id, f.recorded FROM (
+      SELECT d.org_id, d.user_id, EXISTS (
+          SELECT 1 FROM crove_kernel.audit_event a
+          WHERE a.org_id = d.org_id AND a.command = 'kernel.member.remove' AND a.outcome = 'ok' AND a.target_id = d.user_id
+        ) AS recorded
+      FROM (
+          SELECT n.org_id, n.author_user_id AS user_id FROM crove_notes.note n WHERE n.visibility = 'private'
+          UNION
+          SELECT t.org_id, t.owner_user_id FROM crove_notes.todo t) AS d
+      WHERE NOT EXISTS (SELECT 1 FROM crove_kernel.tenant_member m WHERE m.org_id = d.org_id AND m.user_id = d.user_id)
+        AND NOT EXISTS (
+          SELECT 1 FROM crove_kernel.audit_event a
+          WHERE a.org_id = d.org_id AND a.occurred_at > pg_catalog.now() - interval '30 days'
+            AND a.command = 'kernel.member.remove' AND a.outcome = 'ok' AND a.target_id = d.user_id)) AS f
+    ORDER BY f.recorded DESC, f.org_id, f.user_id LIMIT LEAST(GREATEST(p_limit, 1), 1000);
 END $$;
 REVOKE ALL ON FUNCTION crove_notes.former_members_due(integer) FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant;
 GRANT EXECUTE ON FUNCTION crove_notes.former_members_due(integer) TO crove_worker;

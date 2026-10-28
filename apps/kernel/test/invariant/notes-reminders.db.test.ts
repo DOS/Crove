@@ -252,6 +252,17 @@ suite('to-do reminders on PostgreSQL (#1675, ADR-0037)', () => {
     expect(marked).toEqual({ n: 3 });
   });
 
+  // The UPDATE's own re-check (#1752) cannot be reached through the function while its scan locks with FOR UPDATE SKIP
+  // LOCKED: the lock reads the row's latest version and re-applies the scan's reminded_at IS NULL, so the UPDATE never
+  // meets a row another claim marked. It is the second guard for an edit that drops the lock, so it is pinned in the
+  // function's definition instead.
+  it('keeps the re-check of reminded_at in the claim UPDATE (#1752)', async () => {
+    const def = await admin(async (c) => (await c.query<{ d: string }>(`SELECT pg_get_functiondef('crove_notes.todo_reminders_claim(integer)'::regprocedure) AS d`)).rows[0]?.d ?? '');
+    const update = def.slice(def.indexOf('UPDATE crove_notes.todo'), def.indexOf('RETURNING'));
+    expect(update).toMatch(/WHERE[\s\S]*t\.reminded_at IS NULL/);
+    expect(def).toContain('FOR UPDATE SKIP LOCKED');
+  });
+
   it('sends no reminder to an owner who left the org after the claim (#1752)', async () => {
     const [todoId] = await dueTodos(1);
     const claimed = await inContext(workerUrl, async () => {}, async (c) => {
