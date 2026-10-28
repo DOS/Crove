@@ -33,6 +33,7 @@ import { timelineQueries } from './timeline.ts';
 import { auditLogQueries } from './audit-log.ts';
 import { personalDataQueries } from './personal-data.ts';
 import { notificationQueries } from './notifications.ts';
+import { inboxItemQueries } from './inbox-items.ts';
 import { offboardingQueries } from './offboarding.ts';
 import { memberProfiles } from './profiles.ts';
 import { orgOverviewQuery, RECENT_FILES, type OverviewContribution } from './overview.ts';
@@ -497,5 +498,5 @@ export const streamCheck = defineQuery({
 
 // overview: the home screen's figures of the modules this deployment enables (#1261), from the composition root.
 export function kernelQueries(options: OrgDetailOptions & { overview?: readonly OverviewContribution[] }) {
-  return [orgDetailQuery(options), orgOverviewQuery({ contributions: options.overview ?? [] }), streamCheck, inboxList, inboxGet, filesRecent, inboundRecent, inboundText, fileGet, ...archiveQueries, sessionsList, ...inviteQueries, ...offboardingQueries, ...agentQueries, ...channelQueries, ...mailQueries, ...proposalReminderQueries, ...taxCalendarQueries, ...legalEntityQueries, ...numberingQueries, ...roleQueries, ...calendarQueries, ...timelineQueries, ...auditLogQueries, ...personalDataQueries, ...partyQueries, ...notificationQueries, ...usageQueries];
+  return [orgDetailQuery(options), orgOverviewQuery({ contributions: options.overview ?? [] }), streamCheck, inboxList, inboxGet, filesRecent, inboundRecent, inboundText, fileGet, ...archiveQueries, sessionsList, ...inviteQueries, ...offboardingQueries, ...agentQueries, ...channelQueries, ...mailQueries, ...proposalReminderQueries, ...taxCalendarQueries, ...legalEntityQueries, ...numberingQueries, ...roleQueries, ...calendarQueries, ...timelineQueries, ...auditLogQueries, ...personalDataQueries, ...partyQueries, ...notificationQueries, ...inboxItemQueries, ...usageQueries];
 }

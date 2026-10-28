@@ -11,7 +11,8 @@ import { CHANNEL_PROVIDERS } from '@crove/channel';
 
 export const JOB_SCHEMA = 'crove_jobs';
 
-// Created by the migration that vendors the schema. A new queue, or a new policy, needs a new migration.
+// Created by the migration that vendors the schema. A new queue, or a new policy, needs a new migration; a new queue
+// names QUEUES.deadLetter as its dead letter queue there ('{"policy":"standard","deadLetter":"kernel-job.dlq"}', #1720).
 export const QUEUES = {
   extract: 'finance-file-extract',
   inbound: 'kernel-inbound-email',
@@ -54,6 +55,8 @@ export const QUEUES = {
   crmBookingRemind: 'crm-booking-remind',
   // Created by the period balance migration (20261101160000).
   periodBalanceVerify: 'finance-period-balance-verify',
+  // Created by the dead letter migration (20261103130000): every other queue's dead letters (#1720, dead-letter.ts).
+  deadLetter: 'kernel-job.dlq',
 } as const;
 type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
 
@@ -117,6 +120,7 @@ const QUEUE_EGRESS: { readonly [Q in QueueName]: JobEgress } = {
   [QUEUES.crmBooking]: 'none',
   [QUEUES.crmBookingRemind]: 'none',
   [QUEUES.periodBalanceVerify]: 'none',
+  [QUEUES.deadLetter]: 'none',
 };
 
 // The channel providers whose host the tenant names: their adapters get the egress guard (channelPublishers).

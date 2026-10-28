@@ -1594,6 +1594,26 @@ export const vi = {
     listShortcuts: 'Phím tắt: J hoặc N sang đề xuất tiếp theo · K hoặc P về đề xuất trước · Enter mở đề xuất đang chọn',
     addressCopied: 'Đã chép địa chỉ',
     copyRefused: 'Trình duyệt không cho chép. Hãy chọn địa chỉ trên màn hình rồi chép bằng tay.',
+    failedJobs: {
+      title: 'Việc chạy nền bị lỗi ({count, number})',
+      hint: '{brand} đã thử lại nhiều lần rồi dừng; ngoài việc này không có gì bị thay đổi. Nếu lỗi cứ lặp lại, hãy báo cho người quản trị máy chủ {brand} của bạn, kèm mã việc.',
+      item: '{work}: lỗi sau {count, number} lần thử',
+      meta: '{when} · mã việc {job}',
+      work: {
+        extract: 'Đọc chứng từ',
+        portalList: 'Nhập bảng kê từ cổng thuế',
+        yearArchive: 'Đóng gói lưu trữ năm',
+        mail: 'Gửi thư',
+        socialPublish: 'Đăng bài',
+        social: 'Một việc của Mạng xã hội',
+        notify: 'Gửi thông báo',
+        booking: 'Lịch hẹn',
+        agent: 'Việc của trợ lý AI',
+        other: 'Việc chạy nền ({queue})',
+      },
+      dismiss: 'Đã xem',
+      more: 'Còn {count, number} mục chưa hiện',
+    },
     socialAttention: {
       title: 'Mạng xã hội cần bạn xử lý ({count, number})',
       noText: 'Bài chưa có nội dung',
@@ -5764,8 +5784,13 @@ export const vi = {
         text: 'Đọc nội dung thư gửi đến',
       },
       inbox: {
+        dismiss: 'Ẩn một mục trong hộp thư',
         get: 'Xem một mục trong hộp thư chứng từ',
         list: 'Xem hộp thư chứng từ',
+        raised: 'Xem các mục hệ thống đưa vào hộp thư',
+      },
+      job: {
+        dead_letter: 'Đưa việc chạy nền bị lỗi vào hộp thư',
       },
       legal_entity: {
         create: 'Thêm pháp nhân',

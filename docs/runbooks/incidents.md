@@ -123,6 +123,8 @@ docker compose exec db psql -U postgres -c "SELECT pid, application_name, state,
 
 **Symptom.** Often none a user notices: a background job (a sign-out in Supabase Auth, a report mail, an export) failed after its last retry.
 
+Since #1720 a failed job of an org also shows in that org's Inbox, for its owners and admins: the card *Việc chạy nền bị lỗi* (*Background work that failed*) names the kind of work, when, and the first 8 characters of the job id, never what the job carried or its error. pg-boss copies every failed job to the queue `kernel-job.dlq`, whose worker raises that item (`[dead-letter] <queue> job <id>: Inbox item raised` in the worker log); a job of no org (a schedule, a sweep, raw inbound mail) raises none (`[dead-letter] ... a job of no org, so no Inbox item`). The failed job itself stays where this alert counts it either way. A failed `kernel-job.dlq` job means the item could not be raised (the org closed, the database refused): its `output` says why, and the original job is still listed.
+
 **Alert.** `dead_letters`: `N job(s) failed after their last retry in the last W s (limit 0): see the worker log`. The limit is `PROBER_MAX_DEAD_LETTERS` (default 0: every failed job alerts once); the window is `PROBER_DEAD_LETTER_WINDOW_SECONDS` (default: the probe interval plus 60 s).
 
 Some jobs never end up here, because they record their own failure instead: a document that could not be read is marked failed in the app with a message for the user (section 6), mail for an unknown address is dropped (`[inbound] ... dropped: <code>`), and a few jobs log an `ALERT` line only: `[signout] ALERT ... revoked in Crove only` and `[org-export] ALERT export of org ... failed after N attempts`. Search the log for `ALERT` too.
