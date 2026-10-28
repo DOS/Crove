@@ -475,13 +475,24 @@ export const sessionsList = defineQuery({
   },
 });
 
+// The legal entities a stream may hear about (#1692): '*' for every entity of the org, else the ids its context's
+// le_scope names (none for an empty or missing scope, which is deny, never "everything").
+export type StreamLegalEntities = '*' | string[];
+
 // The re-check of an open invalidation stream (issue #69): the same session check (for the org), context entry and
-// membership as every other read, returning only the caller's role. Runs every STREAM_RECHECK_SECONDS per stream.
+// membership as every other read, returning the caller's role and the legal-entity scope of its sealed context, by
+// which the API drops the hints of entity-scoped rows outside it (#1692). Runs every STREAM_RECHECK_SECONDS per stream.
 export const streamCheck = defineQuery({
   name: 'kernel.stream.check',
   input: z.object({}),
   access: ALL,
-  handler: async (ctx) => ({ role: ctx.role }),
+  handler: async (ctx) => {
+    const { rows } = await sql<{ scope: string[] | null }>`SELECT crove_kernel.ctx_le_scope() AS scope`.execute(ctx.trx);
+    // As stored by enter_context (uuid::text); the API refuses anything that is not an id (streamScopeOf).
+    const scope = rows[0]?.scope ?? [];
+    const legalEntities: StreamLegalEntities = scope.includes('*') ? '*' : scope;
+    return { role: ctx.role, legalEntities };
+  },
 });
 
 // overview: the home screen's figures of the modules this deployment enables (#1261), from the composition root.
