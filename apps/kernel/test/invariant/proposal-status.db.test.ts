@@ -2,7 +2,8 @@
 // proposal moves pending -> approved -> executed, or pending -> rejected or expired, and nothing else. Every other change
 // of status, out of a terminal state, back from 'approved' or 'pending' straight to 'executed', is refused for every
 // tenant writer (owner, member and viewer contexts on crove_app, the system context on crove_worker); an agent context
-// writes no proposal at all. A decided proposal's decision, and a terminal one's content and result, stay as they were.
+// writes no proposal at all. A decided proposal's decision, and a terminal one's content and result, stay as they were,
+// and it cannot be rebuilt: no insert of an approved or executed proposal, no delete of a decided one, no new id.
 // Staff (the database owner) are not checked. Approval, rejection and expiry through the runtime still pass. Part of the
 // invariant suite: keep it self-contained (package code under test, no helpers from outside test/invariant/). Set
 // CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
@@ -217,6 +218,39 @@ suite('proposal status transitions on PostgreSQL (#1707)', () => {
       // Columns outside the decision stay writable, as the reminders write them.
       const reminded = await as(writer, (c) => c.query('UPDATE crove_kernel.proposal SET reminded_at = now() WHERE id = $1', [executed]));
       expect(reminded, `${writer.name}: reminded_at`).toMatchObject({ ok: true });
+    }
+  });
+
+  it('keeps a decided proposal from being rebuilt: no insert of an approved or executed one, no delete of a decided one, no new id', async () => {
+    const insert = (status: Status, command: string | null) =>
+      `INSERT INTO crove_kernel.proposal (org_id, kind, command, status, title, payload, eligible_approvers, authors, executed_command_id)
+       VALUES ($1, 't1707', 't1707.prop', '${status}', 'T1707', '{}', ARRAY[$2::uuid], '[]', ${command === null ? 'NULL' : `'${command}'::uuid`})`;
+    for (const writer of writers()) {
+      for (const status of ['approved', 'executed'] as const) {
+        await expect(as(writer, (c) => c.query(insert(status, randomUUID()), [orgId, owner])), `${writer.name}: insert ${status}`).resolves.toMatchObject({ ok: false, ...REFUSED });
+      }
+      await expect(as(writer, (c) => c.query(insert('pending', randomUUID()), [orgId, owner])), `${writer.name}: insert naming a command`).resolves.toMatchObject({
+        ok: false,
+        ...REFUSED,
+      });
+      // A pending one, as the runtime writes it, and a decided one that names no command (it decides nothing).
+      for (const status of ['pending', 'rejected'] as const) {
+        await expect(as(writer, (c) => c.query(insert(status, null), [orgId, owner])), `${writer.name}: insert ${status}`).resolves.toMatchObject({ ok: true });
+      }
+      for (const status of STATUSES.filter((s) => s !== 'pending')) {
+        const id = await proposal(status);
+        await expect(as(writer, (c) => c.query('DELETE FROM crove_kernel.proposal WHERE id = $1', [id])), `${writer.name}: delete ${status}`).resolves.toMatchObject({
+          ok: false,
+          ...REFUSED,
+        });
+        await expect(as(writer, (c) => c.query('UPDATE crove_kernel.proposal SET id = gen_random_uuid() WHERE id = $1', [id])), `${writer.name}: new id ${status}`).resolves.toMatchObject({
+          ok: false,
+          ...REFUSED,
+        });
+      }
+      const pending = await proposal('pending');
+      const deleted = await as(writer, (c) => c.query('DELETE FROM crove_kernel.proposal WHERE id = $1', [pending]));
+      expect(deleted.ok && deleted.value.rowCount, `${writer.name}: delete pending`).toBe(1);
     }
   });
 

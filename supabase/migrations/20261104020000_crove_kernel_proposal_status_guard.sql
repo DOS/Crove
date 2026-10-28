@@ -7,7 +7,8 @@
 -- audit row under the proposal's own command (which audit_event_proposal, #1695, accepts for an 'approved' proposal),
 -- and move the status back; or move a pending proposal to 'approved' and on to 'executed' without any approval.
 --
--- proposal_status_guard (BEFORE UPDATE, ENABLE ALWAYS) allows exactly the transitions the runtime makes:
+-- proposal_status_guard (BEFORE INSERT OR UPDATE OR DELETE, ENABLE ALWAYS). On UPDATE it allows exactly the transitions
+-- the runtime makes:
 --     pending  -> approved   kernel.proposal.approve (and approve_many through it), an agent's approval
 --                            (kernel.agent.proposal.approve): it names the command that runs it (executed_command_id)
 --     pending  -> rejected   kernel.proposal.reject: it names who decided and when
@@ -17,8 +18,12 @@
 -- (23514): out of a terminal state (executed, rejected, failed, expired), back from 'approved' (the runtime rolls the
 -- transaction back instead), and 'pending' straight to 'executed'. A decided proposal's record is frozen too: once
 -- 'approved', who decided, when and the executing command do not change; in a terminal state neither does its content
--- (payload, revision), its decision note or its result. Other columns (reminded_at, escalated_at) stay writable as
--- before.
+-- (payload, revision), its decision note or its result, and no proposal's id changes. Other columns (reminded_at,
+-- escalated_at) stay writable as before.
+-- So that a decided proposal cannot be rebuilt either: an INSERT may not write one 'approved' or 'executed', or naming
+-- an executing command (the runtime inserts 'pending' only; a 'rejected', 'failed' or 'expired' row decides nothing an
+-- audit row could lean on, and the RLS matrix's factory writes one), and a DELETE may not remove a proposal that is no
+-- longer 'pending' (no tenant code deletes proposals; the org purge, a definer run as the table's owner, still does).
 --
 -- What it does not do: tie the move to 'approved' to a real approval. A session that may update proposals can still
 -- approve a pending proposal itself and mark it executed on paper (no command runs). Requiring decided_by on that move
@@ -27,9 +32,10 @@
 -- execution of approved proposals (plan §4.7, P13). Agents write no proposal at all (agent_write_guard fires first, by
 -- name).
 --
--- Staff (a superuser, or a role that can act as the table's owner: the migration runner) are not checked, as in
--- audit_event_proposal (20261103100000), so a support fix or a test that builds history is not changed. An invoker: it
--- reads only the row and the session's role.
+-- Staff (a session user that is a superuser or can act as the table's owner: the migration runner) are not checked, as
+-- in audit_event_proposal (20261103100000), so a support fix or a test that builds history is not changed; nor is a
+-- definer owned by the table's owner (the current user can act as the owner: the org purge). An invoker: it reads only
+-- the row and the session's roles.
 SET LOCAL lock_timeout = '2s';
 
 CREATE OR REPLACE FUNCTION crove_kernel.proposal_status_guard() RETURNS trigger
@@ -40,10 +46,31 @@ DECLARE
 BEGIN
   SELECT r.rolsuper
          OR pg_catalog.pg_has_role(r.oid, (SELECT c.relowner FROM pg_catalog.pg_class c WHERE c.oid = TG_RELID), 'USAGE')
+         OR pg_catalog.pg_has_role(CURRENT_USER, (SELECT c.relowner FROM pg_catalog.pg_class c WHERE c.oid = TG_RELID), 'USAGE')
     INTO v_staff
   FROM pg_catalog.pg_roles r WHERE r.rolname = SESSION_USER;
   IF COALESCE(v_staff, false) THEN
+    RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+  END IF;
+
+  IF TG_OP = 'INSERT' THEN
+    IF NEW.status IN ('approved', 'executed') OR NEW.executed_command_id IS NOT NULL THEN
+      RAISE EXCEPTION 'PROPOSAL_STATUS_TRANSITION' USING ERRCODE = '23514',
+        DETAIL = pg_catalog.json_build_object('to', NEW.status)::text;
+    END IF;
     RETURN NEW;
+  END IF;
+  IF TG_OP = 'DELETE' THEN
+    IF OLD.status <> 'pending' THEN
+      RAISE EXCEPTION 'PROPOSAL_STATUS_TRANSITION' USING ERRCODE = '23514',
+        DETAIL = pg_catalog.json_build_object('from', OLD.status, 'deleted', true)::text;
+    END IF;
+    RETURN OLD;
+  END IF;
+
+  IF NEW.id IS DISTINCT FROM OLD.id THEN
+    RAISE EXCEPTION 'PROPOSAL_STATUS_TRANSITION' USING ERRCODE = '23514',
+      DETAIL = pg_catalog.json_build_object('from', OLD.status, 'frozen', 'id')::text;
   END IF;
 
   IF NEW.status IS DISTINCT FROM OLD.status THEN
@@ -81,10 +108,10 @@ END $$;
 -- A trigger function only; nobody calls it directly.
 REVOKE ALL ON FUNCTION crove_kernel.proposal_status_guard() FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant;
 
--- It fires by name after agent_write_guard (an agent's write is refused there first), b_legal_entity and
--- proposal_keep_provenance; none of them changes status or a decision column.
+-- It fires by name after agent_write_guard (an agent's write is refused there first), b_legal_entity,
+-- proposal_before_insert and proposal_keep_provenance; none of them changes id, status or a decision column.
 DROP TRIGGER IF EXISTS proposal_status_guard ON crove_kernel.proposal;
-CREATE TRIGGER proposal_status_guard BEFORE UPDATE ON crove_kernel.proposal
+CREATE TRIGGER proposal_status_guard BEFORE INSERT OR UPDATE OR DELETE ON crove_kernel.proposal
   FOR EACH ROW EXECUTE FUNCTION crove_kernel.proposal_status_guard();
 -- Also in replica mode, where ordinary triggers stay silent.
 ALTER TABLE crove_kernel.proposal ENABLE ALWAYS TRIGGER proposal_status_guard;
