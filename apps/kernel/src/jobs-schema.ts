@@ -58,15 +58,15 @@ export const QUEUES = {
 type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
 
 // One publish queue per channel provider (Social plan §3.6), so each provider gets its own concurrency; only providers
-// a deployment can publish to are worked. 'stately' with the singleton key <org>:<variant>: one queued and one active
-// job per variant; a job active longer than 300 seconds is retried (its begin then finds the variant in flight and
-// waits until it is stale). Created by the Social publish migration (20261019040000).
+// a deployment can publish to are worked. 'stately' with the singleton key <org>:<queue>:<variant> (job-keys.ts): one
+// queued and one active job per variant; a job active longer than 300 seconds is retried (its begin then finds the
+// variant in flight and waits until it is stale). Created by the Social publish migration (20261019040000).
 export const socialPublishQueue = (provider: string) => `social-publish-${provider}`;
 export const SOCIAL_PUBLISH_QUEUES: readonly string[] = CHANNEL_PROVIDERS.map(socialPublishQueue);
 
 // Queued mail (Email plan §3.2, #548): system and transactional mail at once, marketing throttled. 'stately' with the
-// mail's id as singleton key, so a sweep never queues a mail twice. Created by the mail queue migration
-// (20261022050000).
+// singleton key <org>:<queue>:<mail> (job-keys.ts), so a sweep never queues a mail twice. Created by the mail queue
+// migration (20261022050000).
 export const MAIL_QUEUES: readonly string[] = ['kernel-mail-send', 'kernel-mail-bulk'];
 
 // What a queue's jobs reach over the network (plan §4.6 `defineJob`, §7.7, #1653):
@@ -132,8 +132,8 @@ export function queueEgress(queue: string): JobEgress {
 }
 
 // The pg-boss policy of each queue that is not 'standard'. kernel-agent-wake is 'stately' with the singleton key
-// <org>:<agent>: at most one queued and one active job per agent, so wake-ups coalesce and an agent runs once at a
-// time (ADR-0029 section 5; the database also allows one running ai_run per agent).
+// <org>:<queue>:<agent> (job-keys.ts): at most one queued and one active job per agent, so wake-ups coalesce and an
+// agent runs once at a time (ADR-0029 section 5; the database also allows one running ai_run per agent).
 const QUEUE_POLICIES: Partial<Record<QueueName, 'stately'>> = { [QUEUES.agentWake]: 'stately' };
 
 // What `boss.createQueue(name, { policy })` sends to crove_jobs.create_queue.
