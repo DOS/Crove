@@ -59,6 +59,7 @@ describe('entityProblems() on planted mismatches', () => {
     finance: {
       manifest: defineModule({
         id: 'finance',
+        dependsOn: ['kernel'],
         tables: { crove_finance: { rule: columns(['org_id', 'id']), voucher: columns(['org_id', 'id', 'kind', 'legal_entity_id']) } },
         permissions: [],
         routes: [],

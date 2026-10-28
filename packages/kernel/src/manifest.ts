@@ -8,6 +8,7 @@ import { MODULE_SCREENS, columns, defineModule } from '@crove/kernel-contract';
 
 export const kernelManifest = defineModule({
   id: 'kernel',
+  dependsOn: [],
   tables: {
     crove_kernel: {
       activity: columns(['org_id', 'id', 'record_type', 'record_id', 'kind', 'summary', 'actor_id', 'occurred_at', 'agent_id']),

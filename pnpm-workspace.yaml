@@ -34,6 +34,7 @@ catalog:
   class-variance-authority: 0.7.1
   cn: 0.4.0
   decimal.js: 10.6.0
+  dependency-cruiser: 18.7.0
   exceljs: 4.4.0
   fast-check: 4.10.2
   fast-xml-parser: 5.11.2
@@ -99,3 +100,11 @@ minimumReleaseAgeExclude:
 
 allowBuilds:
   sharp: true
+
+# dependency-cruiser parses TypeScript with the TypeScript compiler API, which the native TypeScript 7 the workspace
+# typechecks with does not ship; it accepts typescript <7. TypeScript 6, the last release with the JS API, is its own
+# dependency here and nobody else's (#1651).
+packageExtensions:
+  dependency-cruiser@18:
+    dependencies:
+      typescript: 6.0.3

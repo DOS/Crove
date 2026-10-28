@@ -5,6 +5,7 @@ import { MODULE_SCREENS, columns, defineModule } from '@crove/kernel-contract';
 
 export const socialManifest = defineModule({
   id: 'social',
+  dependsOn: ['kernel'],
   tables: {
     crove_social: {
       account_snapshot: columns(['org_id', 'id', 'channel_connection_id', 'captured_on', 'followers', 'reach', 'error', 'captured_at', 'audience', 'performance']),
