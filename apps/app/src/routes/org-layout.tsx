@@ -67,8 +67,13 @@ export function OrgLayout() {
   const reviews = useQuery({ ...orpc.social.reviewInbox.queryOptions({ input: {} }), enabled: socialOn, refetchInterval: pollEvery(live, 30_000, SAFETY_POLL_MS) });
   // And what needs a person there (#771): channels to reconnect, posts that did not go out.
   const attention = useQuery({ ...orpc.social.attentionInbox.queryOptions({ input: {} }), enabled: socialOn, refetchInterval: pollEvery(live, 30_000, SAFETY_POLL_MS) });
-  // And background work that failed (#1720); the list is empty but for owners and admins.
-  const failedJobs = useQuery({ ...orpc.inbox.raised.queryOptions({ input: {} }), refetchInterval: pollEvery(live, 60_000, SAFETY_POLL_MS) });
+  // And background work that failed (#1720), which only owners and admins see.
+  const roleHere = me.data?.orgs.find((o) => o.slug === slug)?.role;
+  const failedJobs = useQuery({
+    ...orpc.inbox.raised.queryOptions({ input: {} }),
+    enabled: roleHere === 'owner' || roleHere === 'admin',
+    refetchInterval: pollEvery(live, 60_000, SAFETY_POLL_MS),
+  });
   const inboxCount = (pending.data?.length ?? 0) + (reviews.data?.total ?? 0) + (attention.data?.total ?? 0) + (failedJobs.data?.total ?? 0);
   // The member's unread notifications (#637), where Social runs.
   const notifications = useNotifications(NAV.some((n) => n.module === 'social'));

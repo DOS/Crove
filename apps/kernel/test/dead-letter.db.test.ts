@@ -191,6 +191,20 @@ suite('dead letters raise an Inbox item in their own org (#1720)', () => {
     expect(await items()).toEqual(before);
   });
 
+  it('raises nothing, and completes, for an org the system may not enter', async () => {
+    const before = await items();
+    const gone = randomUUID();
+    const { letter } = await deadLetter(QUEUES.portalList, { orgId: gone, listId: 'l' }, { singletonKey: jobKey(gone, QUEUES.portalList, 'l') });
+    expect(await takeDeadLetter(workerRuntime, letter)).toBe('refused');
+    expect(await items()).toEqual(before);
+  });
+
+  it('fails a job that is not a copy pg-boss made, so the prober counts it', async () => {
+    await expect(takeDeadLetter(workerRuntime, { id: randomUUID(), data: { orgId: orgA.orgId }, singletonKey: null, groupId: null, sourceName: null, sourceId: null, sourceRetryCount: null })).rejects.toThrow(
+      /not a dead letter pg-boss made/,
+    );
+  });
+
   it('refuses an item a member context makes up', async () => {
     const client = new pg.Client({ connectionString: loginUrl('crove_app', 'test-app-pw') });
     await client.connect();
@@ -199,7 +213,7 @@ suite('dead letters raise an Inbox item in their own org (#1720)', () => {
       await client.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [people.owner, orgA.orgId]);
       await expect(
         client.query(`INSERT INTO crove_kernel.inbox_item (org_id, kind, dedupe_key) VALUES ($1, 'kernel.job.dead_lettered', 'job:made-up')`, [orgA.orgId]),
-      ).rejects.toMatchObject({ code: '42501' });
+      ).rejects.toMatchObject({ code: '42501', message: expect.stringContaining('inbox_item_raise') });
       await client.query('ROLLBACK');
     } finally {
       await client.end();

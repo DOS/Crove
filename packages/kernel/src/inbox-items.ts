@@ -78,13 +78,14 @@ export const inboxRaised = defineQuery({
   access: ALL,
   handler: async (ctx): Promise<{ items: RaisedInboxItem[]; total: number }> => {
     if (ctx.actor.type !== 'user' || (ctx.role !== 'owner' && ctx.role !== 'admin')) return { items: [], total: 0 };
-    const open = ctx.trx.selectFrom('crove_kernel.inbox_item').where('org_id', '=', ctx.orgId).where('dismissed_at', 'is', null);
+    const open = ctx.trx.selectFrom('crove_kernel.inbox_item').where('org_id', '=', ctx.orgId).where('kind', '=', DEAD_LETTERED).where('dismissed_at', 'is', null);
     const rows = await open.select(['id', 'kind', 'detail', 'raised_at']).orderBy('raised_at', 'desc').orderBy('id', 'desc').limit(RAISED_ITEMS_MAX).execute();
     const { total } = await open.select((eb) => eb.fn.countAll<string>().as('total')).executeTakeFirstOrThrow();
     const items: RaisedInboxItem[] = [];
     for (const row of rows) {
       const detail = zDeadLetterDetail.safeParse(row.detail);
-      if (row.kind !== DEAD_LETTERED || !detail.success) continue;
+      // Written by kernel.job.dead_letter alone, from checked input; a row that does not parse is left out.
+      if (!detail.success) continue;
       items.push({ id: row.id, kind: DEAD_LETTERED, queue: detail.data.queue, jobId: detail.data.jobId, retries: detail.data.retries, raisedAt: row.raised_at.toISOString() });
     }
     return { items, total: Number(total) };

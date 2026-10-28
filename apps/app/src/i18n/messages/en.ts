@@ -1598,8 +1598,8 @@ export const en = {
     copyRefused: 'The browser refused to copy. Select the address on screen and copy it by hand.',
     failedJobs: {
       title: 'Background work that failed ({count, number})',
-      hint: '{brand} tried each of these again several times, then stopped. Nothing else was changed. If one keeps coming back, tell whoever runs your {brand} server and give them the job number.',
-      item: '{work}: failed after {count, plural, one {# try} other {# tries}}',
+      hint: 'Each of these failed on its last try, and {brand} stopped trying. Part of the work may have been done before it failed: check the result where it shows. If one keeps coming back, tell whoever runs your {brand} server and give them the job number.',
+      item: '{work}: failed after {count, plural, one {# attempt} other {# attempts}}',
       meta: '{when} · job {job}',
       work: {
         extract: 'Reading a document',

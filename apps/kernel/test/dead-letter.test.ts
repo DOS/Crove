@@ -2,7 +2,7 @@
 // dead-letter.db.test.ts runs the whole path on PostgreSQL.
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { deadLetterOrg, type DeadLetter } from '../src/dead-letter.ts';
+import { DEAD_LETTER_WORK, deadLetterOrg, type DeadLetter } from '../src/dead-letter.ts';
 import { jobGroup, jobKey, keyOrg, systemJobKey } from '../src/job-keys.ts';
 import { QUEUES } from '../src/jobs-schema.ts';
 
@@ -35,6 +35,11 @@ describe('keyOrg (#1720)', () => {
 });
 
 describe('deadLetterOrg (#1720)', () => {
+  it('is worked with the metadata that names its source', () => {
+    // Without it every copy has no sourceName and fails as not a dead letter.
+    expect(DEAD_LETTER_WORK).toMatchObject({ batchSize: 1, includeMetadata: true });
+  });
+
   it('names the org of an org job from its key, group and data', () => {
     expect(deadLetterOrg(letter({ singletonKey: jobKey(orgA, QUEUES.portalList, 'l'), data: { orgId: orgA, listId: 'l' } }))).toEqual({ orgId: orgA });
     expect(deadLetterOrg(letter({ sourceName: QUEUES.extract, groupId: jobGroup(orgB, QUEUES.extract).id, data: { orgId: orgB } }))).toEqual({ orgId: orgB });

@@ -1596,7 +1596,7 @@ export const vi = {
     copyRefused: 'Trình duyệt không cho chép. Hãy chọn địa chỉ trên màn hình rồi chép bằng tay.',
     failedJobs: {
       title: 'Việc chạy nền bị lỗi ({count, number})',
-      hint: '{brand} đã thử lại nhiều lần rồi dừng; ngoài việc này không có gì bị thay đổi. Nếu lỗi cứ lặp lại, hãy báo cho người quản trị máy chủ {brand} của bạn, kèm mã việc.',
+      hint: 'Mỗi việc dưới đây lỗi ở lần thử cuối và {brand} đã ngừng thử. Có thể một phần việc đã xong trước khi lỗi: hãy kiểm tra kết quả ở nơi nó hiện ra. Nếu lỗi cứ lặp lại, hãy báo cho người quản trị máy chủ {brand} của bạn, kèm mã việc.',
       item: '{work}: lỗi sau {count, number} lần thử',
       meta: '{when} · mã việc {job}',
       work: {

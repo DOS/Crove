@@ -18,7 +18,7 @@ import { ACCOUNT_SWEEP_MS, CHAT_ALERT_TEST_EVENT, CHAT_ALERTING_EVENTS, DIGEST_S
 import { sweepFeeds } from './feeds.ts';
 import { SECURITY_SWEEP_MS, sweepSecuritySignals, type SecurityThresholds } from './security-signals.ts';
 import { BACK_PRESSURE_CHECK_MS, DEFAULT_OUTBOX_LAG_PAUSE_SECONDS, PausableWork, checkBackPressure, outboxLagSeconds } from './back-pressure.ts';
-import { DEAD_LETTER_POLL_SECONDS, takeDeadLetter } from './dead-letter.ts';
+import { DEAD_LETTER_WORK, takeDeadLetter } from './dead-letter.ts';
 import { ChatAlertSender } from './chat-alerts.ts';
 import { archiveSource, expandArchive, recordArchiveFailure, type ArchiveSource } from './archive.ts';
 import { backfillImageSizes, IMAGE_SIZE_SWEEP_MS } from './image-size-backfill.ts';
@@ -727,7 +727,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   });
 
   // Dead letters (#1720): a job that failed its last retry raises an Inbox item in its org (dead-letter.ts).
-  await boss.work(QUEUES.deadLetter, { batchSize: 1, includeMetadata: true, pollingIntervalSeconds: DEAD_LETTER_POLL_SECONDS }, async ([job]) => {
+  await boss.work(QUEUES.deadLetter, DEAD_LETTER_WORK, async ([job]) => {
     if (job) await takeDeadLetter(deps.runtime, job);
   });
 

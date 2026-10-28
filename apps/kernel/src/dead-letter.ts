@@ -11,15 +11,21 @@
 //   nothing in any org. It is logged here, and the failed job stays where the prober counts it, which alerts the
 //   operator (docs/runbooks/incidents.md).
 //
+// - An org the system may not enter (a closed org, one that no longer exists) gets no item either: logged, and the copy completes,
+//   so the one failure does not alert twice.
+// - A job that is not a copy pg-boss made (no source queue or id, as when the worker forgot includeMetadata) fails, so
+//   the prober counts the dead letter queue's own job too.
+//
 // A copy taken twice (a retry after the command committed) raises nothing new: the item's key is the failed job's id.
 import type { JobWithMetadata } from 'pg-boss';
-import type { Runtime } from '@crove/kernel-runtime';
+import { DomainError, type Runtime } from '@crove/kernel-runtime';
 import { keyOrg } from './job-keys.ts';
 
 const QUEUE_NAME = /^[a-z][a-z0-9_.-]{0,99}$/;
 const ORG_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-export const DEAD_LETTER_POLL_SECONDS = 10;
+// How the worker works the dead letter queue: one copy at a time, with the metadata that names its source.
+export const DEAD_LETTER_WORK = { batchSize: 1, includeMetadata: true, pollingIntervalSeconds: 10 } as const;
 
 /** What the dead letter queue's worker reads of a copy (work() with includeMetadata). */
 export type DeadLetter = Pick<JobWithMetadata<unknown>, 'id' | 'data' | 'singletonKey' | 'groupId' | 'sourceName' | 'sourceId' | 'sourceRetryCount'>;
@@ -57,20 +63,29 @@ const WHY: Readonly<Record<Exclude<DeadLetterOwner, { orgId: string }>['reason']
 };
 
 /** Takes one dead letter: the Inbox item of its org, or a log line when it has none. */
-export async function takeDeadLetter(runtime: Runtime, job: DeadLetter): Promise<'raised' | 'repeat' | 'no_source' | 'system' | 'conflict'> {
+export async function takeDeadLetter(runtime: Runtime, job: DeadLetter): Promise<'raised' | 'repeat' | 'system' | 'conflict' | 'refused'> {
   const owner = deadLetterOrg(job);
   const queue = job.sourceName && QUEUE_NAME.test(job.sourceName) ? job.sourceName : 'an unknown queue';
   const ref = (job.sourceId ?? job.id).slice(0, 8);
   if (owner.orgId === null) {
+    if (owner.reason === 'no_source') throw new Error(`[dead-letter] job ${ref}: ${WHY.no_source}`);
     console.warn(`[dead-letter] ${queue} job ${ref}: ${WHY[owner.reason]}, so no Inbox item; the prober counts the failed job`);
     return owner.reason;
   }
-  const { raised } = await runtime.execute<{ raised: boolean }>(
-    'kernel.job.dead_letter',
-    // deadLetterOrg checked the source queue and job id.
-    { queue, jobId: job.sourceId as string, retries: Math.max(0, job.sourceRetryCount ?? 0) },
-    { actor: { type: 'system', component: 'kernel.job' }, orgId: owner.orgId },
-  );
+  let raised: boolean;
+  try {
+    ({ raised } = await runtime.execute<{ raised: boolean }>(
+      'kernel.job.dead_letter',
+      // deadLetterOrg checked the source queue and job id.
+      { queue, jobId: job.sourceId as string, retries: Math.max(0, job.sourceRetryCount ?? 0) },
+      { actor: { type: 'system', component: 'kernel.job' }, orgId: owner.orgId },
+    ));
+  } catch (error) {
+    // The system context refuses an org that is not active (TENANT_NOT_ACTIVE, answered FORBIDDEN).
+    if (!(error instanceof DomainError) || error.code !== 'FORBIDDEN') throw error;
+    console.warn(`[dead-letter] ${queue} job ${ref} of org ${owner.orgId.slice(0, 8)}: the org refused it (closed?), so no Inbox item; the prober counts the failed job`);
+    return 'refused';
+  }
   console.log(`[dead-letter] ${queue} job ${ref} of org ${owner.orgId.slice(0, 8)}: ${raised ? 'Inbox item raised' : 'already raised'}`);
   return raised ? 'raised' : 'repeat';
 }
