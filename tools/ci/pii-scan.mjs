@@ -9,6 +9,9 @@
 //   is valid (12-digit individual codes are CCCD numbers since Circular 86/2024, covered above);
 // - an email address outside the reserved example domains (RFC 2606 and RFC 6761: example.com, example.net,
 //   example.org, .test, .example, .invalid, .localhost) and the public addresses on the allowlist.
+// And, by its name alone, any office or data file (PDF, Word, Excel, OpenDocument, PowerPoint, CSV) outside a fixture
+// directory (#1640): the scan cannot read inside most of these (compressed or binary), and an accounting export
+// committed by mistake is the likeliest way real data reaches this repository.
 //
 // Values made up on purpose pass without an entry (see looksSynthetic). Anything else that is not personal data goes on
 // the allowlist, tools/ci/pii-scan-allowlist.json: each entry names a kind, the paths, domains or values it covers, and a
@@ -42,6 +45,8 @@ const EMAIL = /(?<![\w.%])[A-Za-z0-9_][A-Za-z0-9._%+-]*@((?:[A-Za-z0-9-]+\.)+[A-
 const RESERVED_DOMAIN = /(^|\.)(example\.(com|net|org)|test|example|invalid|localhost)$/i;
 // Where test data lives: an individual's tax code is only looked for there (a company's is public).
 const FIXTURE_PATH = /(^|\/)(test|tests|__tests__|fixtures|__fixtures__|testdata|mocks|__mocks__|e2e|seed|seeds)\/|\.(test|spec)\.([cm]?[jt]sx?|sql)$|(fixture|seed)[^/]*$/i;
+// Office and data files, by extension (#1640): outside a fixture path they fail unless a `document` entry names them.
+export const DOCUMENT = /\.(pdf|docx?|docm|xlsx?|xlsm|xlsb|ods|odt|odp|pptx?|csv|tsv)$/i;
 // Files that are not text are skipped: a NUL byte in the first 8 KiB, unless the file starts with a UTF-16 byte order
 // mark (an Excel "Unicode text" export, for one), which is decoded and scanned.
 const BINARY_PROBE = 8192;
@@ -160,7 +165,7 @@ export function entryAllows(entry, finding, path) {
     (entry.values === undefined || entry.values.some((v) => v.toLowerCase() === finding.value.toLowerCase()));
 }
 
-const KINDS = new Set(['cccd', 'mobile', 'tax-code', 'email']);
+const KINDS = new Set(['cccd', 'mobile', 'tax-code', 'email', 'document']);
 const DOMAIN_NAME = /^[a-z0-9-]+(\.[a-z0-9-]+)+$/;
 // Second-level public suffixes such as com.vn, edu.vn, gov.vn or co.uk: as broad as a bare TLD.
 const PUBLIC_SUFFIX = /^(com|net|org|edu|gov|ac|co|int|info|biz|name|health|pro)\.[a-z]{2}$/;
@@ -183,6 +188,10 @@ export function allowlistErrors(allowlist) {
       if (!Array.isArray(entry[k]) || entry[k].length === 0 || !entry[k].every((v) => typeof v === 'string' && v.length > 0)) errors.push(`entry ${i}: ${k} must be a non-empty list of strings`);
     }
     if (entry.domains !== undefined && entry.kind !== 'email') errors.push(`entry ${i}: domains apply to email only`);
+    // A document entry names its files, each one exactly: a directory prefix would let any later export in.
+    if (entry.kind === 'document' && (entry.values !== undefined || entry.paths === undefined || (Array.isArray(entry.paths) && entry.paths.some((p) => typeof p === 'string' && p.endsWith('/'))))) {
+      errors.push(`entry ${i}: a document entry names exact file paths only`);
+    }
     // A bare TLD ("vn"), a public suffix ("com.vn"), a webmail domain without paths ("gmail.com") or a top-level
     // directory ("apps/") would exempt far more than one reason can cover.
     for (const d of Array.isArray(entry.domains) ? entry.domains : []) {
@@ -208,6 +217,12 @@ export function scanFiles(paths, read, allowlist) {
   const skipped = [];
   for (const given of paths) {
     const path = given.replaceAll('\\', '/');
+    if (DOCUMENT.test(path) && !FIXTURE_PATH.test(path)) {
+      const finding = { line: 1, kind: 'document', value: path };
+      const entry = allowlist.findIndex((e) => entryAllows(e, finding, path));
+      if (entry === -1) findings.push({ path, ...finding });
+      else used.add(entry);
+    }
     const text = read(given);
     if (text === null) {
       skipped.push(path);
@@ -264,6 +279,13 @@ export function commandProperty(value) {
   return value.replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A').replace(/:/g, '%3A').replace(/,/g, '%2C');
 }
 
+// The paths git tracks. `git ls-files -z` prints them on one stream: Node's default 1 MiB buffer runs out near 15k
+// paths (#1640), so the buffer allows 256 MiB. `run` is execFileSync, or a stand-in in the tests.
+export const LS_FILES_MAX_BUFFER = 256 * 1024 * 1024;
+export function trackedPaths(run = execFileSync, command = 'git', args = ['ls-files', '-z']) {
+  return run(command, args, { encoding: 'utf8', maxBuffer: LS_FILES_MAX_BUFFER }).split('\0').filter(Boolean);
+}
+
 // The allowlist from its JSON text: { allowlist, errors }. Invalid JSON is an error, not an exception, so its message
 // (which can quote the file) never reaches the log.
 export function loadAllowlist(text) {
@@ -282,11 +304,15 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   for (const e of errors) console.error(`::error file=${ALLOWLIST_PATH}::${commandData(e)}`);
   if (errors.length > 0) process.exit(1);
   const args = process.argv.slice(2);
-  const paths = args.length > 0 ? args : execFileSync('git', ['ls-files', '-z'], { encoding: 'utf8' }).split('\0').filter(Boolean);
+  const paths = args.length > 0 ? args : trackedPaths();
   const { findings, skipped } = scanFiles(paths, readText, allowlist);
   // Paths only, so a skipped file that should have been scanned is visible in the log.
   for (const path of skipped) console.log(`pii-scan: skipped ${commandData(path)} (binary, symlink or missing)`);
   for (const f of findings) {
+    if (f.kind === 'document') {
+      console.error(`::error file=${commandProperty(f.path)}::an office or data file outside a fixture directory, whose content this scan cannot read: move it under a fixtures directory if it is synthetic test data, or add a reasoned document entry naming it to tools/ci/pii-scan-allowlist.json`);
+      continue;
+    }
     console.error(`::error file=${commandProperty(f.path)},line=${f.line}::line ${f.line} holds what looks like personal data (${f.kind} ${mask(f.kind, f.value)}); use a synthetic value (an address at example.com, a number that fails the check), or add a reasoned entry to tools/ci/pii-scan-allowlist.json`);
   }
   if (findings.length > 0) process.exitCode = 1;
