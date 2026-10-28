@@ -6,7 +6,7 @@
 // Usage: node image-check.mjs [app root, default /app]
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { basename, join } from 'node:path';
+import { basename, join, relative, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const root = process.argv[2] ?? '/app';
@@ -57,23 +57,48 @@ const PARSERS = [
 // A name, or `@scope/*` for every package of the scope.
 const isParser = (name) => PARSERS.some((p) => (p.endsWith('/*') ? name.startsWith(p.slice(0, -1)) && !name.slice(p.length - 1).includes('/') : p === name));
 
-// Parser code bundled inside another package, which no name shows (#1740): a parser defined by its name (parseXML,
-// class AwsXmlParser, function multipartFormDataParser), a DOM parser at work, or the PDF cross-reference table a
-// PDF reader looks for. A tripwire, not a proof: the names are what bundled parsers call themselves.
+// Parser code no package name shows (#1740), in a package's JavaScript or in the workspace's own code: a parser
+// defined under its name (parseXML, class AwsXmlParser, function multipartFormDataParser; parseMIMEType, a
+// Content-Type helper, is not one), a DOM parser at work, or the cross-reference lookup of a PDF reader. A tripwire,
+// not a proof: a parser under a plain or minified name (class Parser, function parse) passes it, and the name list,
+// the dependency rule (tools/test/parser-imports.test.ts) and review stay the main guard. A PDF writer also says
+// startxref; one would need its own reasoned exception.
 const PARSER_CODE = [
-  /\b(?:class|function\*?)\s+(?:\w*(?:xml|sax|pdf|mime|html|multipart|formdata|mail|eml)\w*(?:parser|reader|tokeni[sz]er)|parse_?(?:xml|pdf|mime|html|mail|eml|multipart)\w*)\b/i,
-  /\b(?:const|let|var)\s+parse_?(?:xml|pdf|mime|html|mail|eml|multipart)\w*\s*=/i,
-  /^\s*(?:async\s+)?parse_?(?:xml|pdf|mime|html|mail|eml|multipart)\w*\s*\([^)]*\)\s*\{/im,
+  /\b(?:class|function\*?)\s+(?:\w*(?:xml|sax|pdf|mime|html|multipart|formdata|mail|eml)\w*(?:parser|reader|tokeni[sz]er)|parse_?(?:xml|pdf|mime(?!type)|html|mail|eml|multipart)\w*)\b/i,
+  /\b(?:const|let|var)\s+parse_?(?:xml|pdf|mime(?!type)|html|mail|eml|multipart)\w*\s*=/i,
+  /^\s*(?:async\s+)?parse_?(?:xml|pdf|mime(?!type)|html|mail|eml|multipart)\w*\s*\([^)]*\)\s*\{/im,
   /\bnew\s+DOMParser\b|\.parseFromString\s*\(/,
   /\bstartxref\b/,
 ];
-// Packages whose parser code is accepted, each with its reason. Anything else that matches PARSER_CODE fails.
-const BUNDLED_PARSERS = new Map([
-  ['@aws-sdk/xml-builder', "its hand-written parseXML reads only the S3 answers of the operator's own endpoint"],
-  ['@aws-sdk/core', 'the S3 client\'s protocol layer, which hands those answers to @aws-sdk/xml-builder'],
-  ['undici', "fetch's multipart/form-data reader (Request.formData()), the same one Node ships built in"],
+// The files whose parser code is accepted, by package and path inside it, each with its reason. Parser code in any
+// other file fails, in these packages too, and so does an accepted file the image no longer holds (an upgrade moved
+// it, or the scan stopped reading files): update the list, with its reason, after reading what changed.
+const BUNDLED_PARSERS = [
+  {
+    pkg: '@aws-sdk/xml-builder',
+    files: ['dist-cjs/index.js', 'dist-es/xml-parser.js', 'dist-es/xml-parser.browser.js'],
+    reason: "its hand-written parseXML reads only the S3 answers of the operator's own endpoint",
+  },
+  {
+    pkg: '@aws-sdk/core',
+    files: ['dist-cjs/submodules/protocols/index.js', 'dist-es/submodules/protocols/xml/parseXmlBody.js', 'dist-es/submodules/protocols/xml/XmlShapeDeserializer.js'],
+    reason: "the S3 client's protocol layer, which hands those answers to @aws-sdk/xml-builder",
+  },
+  {
+    pkg: 'undici',
+    files: ['lib/web/fetch/formdata-parser.js'],
+    reason: "fetch's multipart/form-data reader (Request.formData()), the same one Node ships built in",
+  },
+];
+const ACCEPTED = new Map(BUNDLED_PARSERS.flatMap(({ pkg, files, reason }) => files.map((file) => [`${pkg}/${file}`, reason])));
+// Workspace files (by path from the app root) whose matches are not parser code.
+const WORKSPACE_ACCEPTED = new Map([
+  ['apps/kernel/test/container/image-check.mjs', 'this check, whose patterns and comments name the parsers it looks for'],
 ]);
-const accepted = new Set();
+const seen = new Set();
+// Native and WebAssembly modules, whose code no text check reads (a PDF engine such as mupdf or pdfium ships as
+// one), are refused outright; the image holds none.
+const BINARY = /\.(?:node|wasm)$/;
 let scannedFiles = 0;
 const failures = [];
 
@@ -91,20 +116,26 @@ for (const entry of entries) {
 // 2. No parser directory or link in any node_modules, the store's included: the links each store entry holds to
 // its dependencies (<entry>/node_modules/<name>) and pnpm's hidden hoisting (.pnpm/node_modules/<name>). A link
 // counts by its name, whether its target exists or not, and is never followed. No crove-extract app either.
-// 3. On the way, every JavaScript file of a package (`pkg`, the package the walk is in) is read for PARSER_CODE.
+// 3. On the way, every JavaScript file of a package (`pkg`: the package the walk is in, { name, dir }) and every
+// source file of the workspace's own code is read for PARSER_CODE, and no native or WebAssembly module may be
+// anywhere. The web app's build is browser code, which never runs in the kernel, so it is not read.
+const WEB_DIST = join(root, 'apps/app/dist');
 function walk(dir, scope, pkg) {
   const inNodeModules = basename(dir) === 'node_modules';
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name);
-    if (entry.isFile() && pkg !== undefined && /\.[cm]?js$/.test(entry.name)) scanFile(path, pkg);
+    if (entry.isFile()) {
+      if (BINARY.test(entry.name)) failures.push(`native or WebAssembly module in the image: ${path}`);
+      else if (pkg !== undefined ? /\.[cm]?js$/.test(entry.name) : /\.(?:[cm]?[jt]s|tsx)$/.test(entry.name)) scanFile(path, pkg);
+    }
     if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
     let inside = pkg;
     if (inNodeModules || scope) {
       const name = scope ? `${scope}/${entry.name}` : entry.name;
       if (isParser(name)) failures.push(`parser package in the image: ${path}`);
-      inside = name.startsWith('.') || (inNodeModules && name.startsWith('@')) ? undefined : name;
+      inside = name.startsWith('.') || (inNodeModules && name.startsWith('@')) ? undefined : { name, dir: path };
     }
-    if (entry.isDirectory()) walk(path, inNodeModules && entry.name.startsWith('@') ? entry.name : undefined, inside);
+    if (entry.isDirectory() && path !== WEB_DIST) walk(path, inNodeModules && entry.name.startsWith('@') ? entry.name : undefined, inside);
   }
 }
 function scanFile(path, pkg) {
@@ -112,11 +143,16 @@ function scanFile(path, pkg) {
   const code = readFileSync(path, 'utf8');
   const match = PARSER_CODE.map((re) => re.exec(code)?.[0]).find((m) => m !== undefined);
   if (match === undefined) return;
-  if (BUNDLED_PARSERS.has(pkg)) accepted.add(pkg);
-  else failures.push(`parser code in the image, in ${pkg}: ${path} (${match.trim().slice(0, 60)})`);
+  const key = pkg === undefined ? undefined : `${pkg.name}/${relative(pkg.dir, path).split(sep).join('/')}`;
+  if (key !== undefined && ACCEPTED.has(key)) seen.add(key);
+  else if (pkg === undefined && WORKSPACE_ACCEPTED.has(relative(root, path).split(sep).join('/'))) return;
+  else failures.push(`parser code in the image, ${pkg === undefined ? 'outside node_modules' : `in ${pkg.name}`}: ${path} (${match.trim().slice(0, 60)})`);
 }
 walk(root);
-if (scannedFiles === 0) failures.push(`no JavaScript file of a package was read under ${root}`);
+if (scannedFiles === 0) failures.push(`no JavaScript file was read under ${root}`);
+for (const key of ACCEPTED.keys()) {
+  if (!seen.has(key)) failures.push(`the reasoned exception ${key} has no parser code in the image any more: update BUNDLED_PARSERS`);
+}
 if (existsSync(join(root, 'apps/extract'))) failures.push('apps/extract is in the kernel image');
 if (!existsSync(join(root, 'apps/app/dist/index.html'))) failures.push('the web app build (apps/app/dist) is missing');
 
@@ -202,7 +238,7 @@ try {
 }
 
 console.log(`checked ${entries.length} store entries, ${scannedFiles} package files and ${modules.length} kernel modules, wrote 2 workbooks`);
-for (const pkg of accepted) console.log(`accepted parser code in ${pkg}: ${BUNDLED_PARSERS.get(pkg)}`);
+for (const key of seen) console.log(`accepted parser code in ${key}: ${ACCEPTED.get(key)}`);
 if (failures.length > 0) {
   console.error(failures.join('\n'));
   process.exit(1);
