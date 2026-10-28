@@ -203,4 +203,78 @@ suite('to-do reminders on PostgreSQL (#1675, ADR-0037)', () => {
     ).resolves.toMatchObject({ rowCount: 0 });
     await expect(app.execute('notes.todo.remind', input, { actor: asUser(users.other), orgId })).rejects.toMatchObject({ status: 403 });
   });
+
+  // Due reminders of the other member, written for one test and claimed by it.
+  const dueTodos = async (count: number): Promise<string[]> => {
+    const ids = Array.from({ length: count }, () => randomUUID());
+    await admin(async (c) => {
+      for (const [i, id] of ids.entries()) {
+        await c.query(`INSERT INTO crove_notes.todo (org_id, id, owner_user_id, title, status, sort_key, remind_at) VALUES ($1, $2, $3, $4, 'open', $5, now() - interval '1 minute')`, [
+          orgId,
+          id,
+          users.other,
+          SECRET,
+          `z${i}`,
+        ]);
+      }
+    });
+    return ids;
+  };
+
+  it('never returns a reminder to two claims running at once, and one claim does not wait for the other (#1752)', async () => {
+    const ids = await dueTodos(3);
+    const first = new pg.Client({ connectionString: workerUrl });
+    const second = new pg.Client({ connectionString: workerUrl });
+    await first.connect();
+    await second.connect();
+    try {
+      // The first claim stays open, holding its rows; the second runs meanwhile and must neither wait for it nor return
+      // the same reminders.
+      await first.query('BEGIN');
+      const held = (await first.query<{ id: string }>(CLAIM)).rows.map((r) => r.id);
+      expect(held.sort()).toEqual([...ids].sort());
+      await second.query('BEGIN');
+      await second.query(`SET LOCAL lock_timeout = '2s'`);
+      const meanwhile = await outcome(second.query<{ id: string }>(CLAIM));
+      expect(meanwhile).toMatchObject({ ok: true });
+      expect(meanwhile.ok ? meanwhile.value.rows : null).toEqual([]);
+      await second.query('COMMIT');
+      // Once the first commits, a new claim finds nothing either: each reminder went out once.
+      await first.query('COMMIT');
+      expect((await second.query(CLAIM)).rows).toEqual([]);
+    } finally {
+      await first.query('ROLLBACK').catch(() => {});
+      await second.query('ROLLBACK').catch(() => {});
+      await first.end();
+      await second.end();
+    }
+    const marked = await admin(async (c) => (await c.query(`SELECT count(*)::int AS n FROM crove_notes.todo WHERE org_id = $1 AND id = ANY($2::uuid[]) AND reminded_at IS NOT NULL`, [orgId, ids])).rows[0]);
+    expect(marked).toEqual({ n: 3 });
+  });
+
+  it('sends no reminder to an owner who left the org after the claim (#1752)', async () => {
+    const [todoId] = await dueTodos(1);
+    const claimed = await inContext(workerUrl, async () => {}, async (c) => {
+      const rows = (await c.query<{ id: string; remind_at: Date }>(CLAIM)).rows;
+      await c.query('COMMIT');
+      return rows;
+    });
+    expect(claimed.map((r) => r.id)).toEqual([todoId]);
+    const remindAt = (claimed[0] as { remind_at: Date }).remind_at.toISOString();
+    const owner = () =>
+      inContext(workerUrl, (c) => c.query('SELECT crove_kernel.enter_system_context($1::uuid)', [orgId]), (c) =>
+        c.query<{ owner: string | null }>('SELECT crove_notes.todo_reminder_owner($1::uuid, $2::timestamptz) AS owner', [todoId, remindAt]),
+      ).then((r) => r.rows[0]?.owner);
+    expect(await owner()).toBe(users.other);
+    await admin((c) => c.query('DELETE FROM crove_kernel.tenant_member WHERE org_id = $1 AND user_id = $2', [orgId, users.other]));
+    try {
+      // The definer no longer answers the former member, and the command writes no notification for them.
+      expect(await owner()).toBeNull();
+      expect(await worker.execute('notes.todo.remind', { todoId, remindAt }, { actor: { type: 'system', component: 'notes' }, orgId })).toEqual({ sent: 0 });
+      const rows = await admin(async (c) => (await c.query(`SELECT 1 FROM crove_kernel.notification WHERE org_id = $1 AND kind = 'notes.todo_due' AND subject_id = $2`, [orgId, todoId])).rowCount);
+      expect(rows).toBe(0);
+    } finally {
+      await admin((c) => c.query(`INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member')`, [orgId, users.other]));
+    }
+  });
 });

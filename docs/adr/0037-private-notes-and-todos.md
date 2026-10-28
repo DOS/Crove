@@ -63,8 +63,8 @@ A private note or to-do is read and changed only in a context whose user is its 
 - Other code reaches private rows only through `SECURITY DEFINER` functions in `crove_notes`, each returning or touching the minimum and never returning text:
   - worker login only (EXECUTE and `session_user`):
     - `todo_reminders_claim(limit)`: one `UPDATE ... SET reminded_at = now() ... RETURNING` of due, unreminded to-dos, answering `org_id`, `id`, `owner_user_id`, `remind_at`;
-    - `trash_empty(org, before)`: deletes items 30 days in the trash, returns counts;
-    - `member_items_purge(org, user)`: deletes a former member's private items when the user is still not a member, returns counts;
+    - `trash_empty(org, before)`: deletes items 30 days in the trash, never fewer whatever `before` says (#1733), returns counts;
+    - `member_items_purge(org, user)`: deletes a former member's private items when the user is still not a member and their latest removal in the audit trail is 30 days old (#1733), returns counts;
   - callable in a user context, checked inside to be an owner or admin of the context's org (the members screen and the personal-data screen run as that user, not as the worker):
     - `private_counts()`: items per author, for the removal warning;
     - `private_matches(kind, value)`: per author, how many private items contain a value, for the finder (section 5);

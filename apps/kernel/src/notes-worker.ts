@@ -1,5 +1,5 @@
 // The worker's part of the notes module (issue #1671, ADR-0037 §4): a former member's private notes are removed 30 days
-// after they left, the trash is emptied daily, and every 5 minutes the due to-do reminders are sent (#1675). startWorker() works and queues these jobs only when the module is
+// after they left (a queued job, and a daily sweep for a removal that queued none, #1733), the trash is emptied daily, and every 5 minutes the due to-do reminders are sent (#1675). startWorker() works and queues these jobs only when the module is
 // installed (Runtime.installed('notes'), CROVE_MODULES), so a deployment without notes neither queues nor works them.
 // Jobs carry ids only; the commands run in the org's system context and reach private notes through definers that
 // answer counts, never text.
@@ -21,6 +21,8 @@ const TRASH_SWEEP_ORGS = 500;
 export const NOTES_REMIND_CRON = '*/5 * * * *';
 const REMIND_SWEEP_LIMIT = 1000;
 const MEMBER_PURGE_RETRY_LIMIT = 5;
+// Former members one daily pass purges at most; the rest wait for the next night.
+const FORMER_MEMBER_SWEEP_LIMIT = 500;
 
 export interface NotesMemberPurgeJob {
   orgId: string;
@@ -83,8 +85,28 @@ export async function sweepNotesReminders(deps: { runtime: Runtime; workerDb: Db
   return sent;
 }
 
+// One pass of the former members (#1733), after the trash: the users who own private notes or to-dos in an org they
+// left more than NOTE_MEMBER_PURGE_DAYS ago, whose removal queued no purge (the module off when they left, a job
+// dropped), each purged in the org's system context. The definer itself refuses a member or a removal younger than
+// that, so this sweep cannot purge early. Logs ids and codes only.
+export async function sweepNotesFormerMembers(deps: { runtime: Runtime; workerDb: Db }): Promise<number> {
+  const { rows } = await sql<{ org_id: string; user_id: string }>`
+    SELECT org_id, user_id FROM crove_notes.former_members_due(${FORMER_MEMBER_SWEEP_LIMIT}::int)`.execute(deps.workerDb);
+  let removed = 0;
+  for (const row of rows) {
+    try {
+      removed += (await runNotesMemberPurge(deps.runtime, { orgId: row.org_id, userId: row.user_id })).removed;
+    } catch (error) {
+      console.warn(`[notes-member-purge] org ${row.org_id.slice(0, 8)}`, error instanceof DomainError ? error.code : error instanceof Error ? error.name : 'error');
+    }
+  }
+  return removed;
+}
+
 // A queued purge: the former member's private notes in that org, unless they are a member again.
-export async function runNotesMemberPurge(runtime: Runtime, job: NotesMemberPurgeJob): Promise<void> {
-  const done = await runtime.execute<{ removed: number }>('notes.member_items.purge', { userId: job.userId, eventId: job.eventId }, { actor: ACTOR, orgId: job.orgId });
+export async function runNotesMemberPurge(runtime: Runtime, job: { orgId: string; userId: string; eventId?: string }): Promise<{ removed: number }> {
+  const input = job.eventId === undefined ? { userId: job.userId } : { userId: job.userId, eventId: job.eventId };
+  const done = await runtime.execute<{ removed: number }>('notes.member_items.purge', input, { actor: ACTOR, orgId: job.orgId });
   console.log(`[notes-member-purge] org ${job.orgId.slice(0, 8)}: removed ${done.removed}`);
+  return done;
 }
