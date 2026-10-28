@@ -22,7 +22,8 @@ const src = join(import.meta.dirname, '..', 'src');
 const app = join(import.meta.dirname, '..');
 
 // What the browser shows before main.tsx knows the configured name, or without it: the page title, the installed app's
-// name and a push notification's fallback title. A comment there is not shown; none of them may say Crove.
+// name and a push notification's fallback title. None of them may say Crove. The HTML comments are scanned with the
+// rest: they are short, and stripping them with a pattern is the kind of HTML sanitizing CodeQL rightly distrusts.
 const STATIC_FILES = ['index.html', 'public/assets/manifest.webmanifest', 'public/assets/sw.js'];
 
 function messages(node: unknown, prefix = ''): Array<[string, string]> {
@@ -113,7 +114,6 @@ describe('brand name (#1040)', () => {
     expect(guides).not.toMatch(/\bCrove\b/);
     for (const file of STATIC_FILES) {
       const shown = readFileSync(join(app, file), 'utf8')
-        .replace(/<!--[\s\S]*?-->/g, '')
         .split('\n')
         .map(code)
         .join('\n');
