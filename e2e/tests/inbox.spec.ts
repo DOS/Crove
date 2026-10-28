@@ -98,9 +98,9 @@ test('sign up, upload an e-invoice, approve it, then find it in the lists, the e
     const vendor = page.getByRole('row').filter({ hasText: SELLER });
     await expect(vendor).toHaveCount(1);
     // The fifth cell is the vendor's default account (#319): for an owner, a picker on the account approving set. The
-    // last one opens the edit form (#887).
+    // last one opens the edit form (#887) and the vendor's notes (#1671).
     // Under the name, the contact the invoice gave: the seller's email.
-    await expect(vendor.getByRole('cell')).toHaveText([`${SELLER}hoadon@example.com`, SELLER_TAX_CODE, /Hà Nội/, '1', /6422 · Chi phí quản lý doanh nghiệp/, 'Sửa']);
+    await expect(vendor.getByRole('cell')).toHaveText([`${SELLER}hoadon@example.com`, SELLER_TAX_CODE, /Hà Nội/, '1', /6422 · Chi phí quản lý doanh nghiệp/, 'SửaGhi chú']);
     await expect(vendor.getByRole('combobox', { name: `Tài khoản mặc định của ${SELLER}` })).toHaveValue('6422');
 
     // A member of the team adds the vendor's phone (#887); the tax code from the invoice stays locked.
@@ -116,7 +116,7 @@ test('sign up, upload an e-invoice, approve it, then find it in the lists, the e
     await nav.getByRole('link', { name: 'Chứng từ', exact: true }).click();
     const document = page.getByRole('row').filter({ hasText: 'C26TAB-1234' });
     await expect(document).toHaveCount(1);
-    await expect(document.getByRole('cell')).toHaveText(['15/09/2026', 'C26TAB-1234', 'Mua vào', SELLER, /^1\.800\.000/, /^180\.000/, /^1\.980\.000/, 'Đã ghi sổ']);
+    await expect(document.getByRole('cell')).toHaveText(['15/09/2026', 'C26TAB-1234', 'Mua vào', SELLER, /^1\.800\.000/, /^180\.000/, /^1\.980\.000/, 'Đã ghi sổ', 'Ghi chú']);
 
     await nav.getByRole('link', { name: 'Kế toán', exact: true }).click();
     await nav.getByRole('link', { name: 'Bút toán' }).click();

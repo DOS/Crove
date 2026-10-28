@@ -8,7 +8,7 @@ import { prepareYearClosing, recordYearClosing } from './year-closing.ts';
 import { prepareReversal, reverseEntry } from './reversal.ts';
 import { openingBalancePost, openingBalancePreview } from './opening-balance.ts';
 import { fileForExtraction, purchaseLookup } from './extract.ts';
-import { accountsList, documentsList, journalExport, journalGet, journalList, purchaseVouchers, salesVouchers, vendorsList, voidedProposals } from './queries.ts';
+import { accountsList, documentGet, documentsList, journalExport, journalGet, journalList, purchaseVouchers, salesVouchers, vendorsList, voidedProposals } from './queries.ts';
 import { vatDeclarationQuery, vatExport, vatPaymentMark, vatPeriodQuery, vatReturnMark } from './vat.ts';
 import { ledgerAccountQuery, ledgerBookQuery, ledgerExport, ledgerPeriodQuery } from './ledger-reports.ts';
 import { portalListImport, portalListReconcile, portalListRecord, portalListRemove, portalListSource } from './portal-list.ts';
@@ -141,6 +141,7 @@ export const financeQueries = [
   vendorsList,
   customersList,
   documentsList,
+  documentGet,
   documentExports,
   journalList,
   journalGet,

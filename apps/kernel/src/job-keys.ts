@@ -9,7 +9,8 @@
 // which no org id can be.
 
 const ORG_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const JOB = /^[a-z][a-z0-9_-]*$/;
+// A queue name: no colon, so a key reads back one way only (kernel-job.dlq has a dot).
+const JOB = /^[a-z][a-z0-9_.-]*$/;
 export const SYSTEM_SCOPE = 'system';
 
 function build(scope: string, job: string, key: string): string {
@@ -36,4 +37,16 @@ export function systemJobKey(job: string, key: string): string {
 /** The pg-boss group of an org's jobs on a queue: `<org_id>:<job>:org`. */
 export function jobGroup(orgId: string, job: string): { id: string } {
   return { id: build(org(orgId), job, 'org') };
+}
+
+/**
+ * The org a key or group of `job` was built for (jobKey or jobGroup), or null: a system key, a key of another job, or
+ * one this file did not build. A dead letter keeps its job's key and group (dead-letter.ts reads its org from them).
+ */
+export function keyOrg(key: string | null | undefined, job: string): string | null {
+  if (!key || !JOB.test(job)) return null;
+  const at = key.indexOf(':');
+  const scope = at < 0 ? '' : key.slice(0, at);
+  if (!ORG_ID.test(scope) || !key.startsWith(`${scope}:${job}:`)) return null;
+  return scope;
 }

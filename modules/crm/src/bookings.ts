@@ -24,7 +24,7 @@ import { sql } from 'kysely';
 import { freeSlots, zBookingCancel, zBookingListQuery, zBookingMove, zId, zonedDate, zoneOffsetMs, type BookingItem, type Interval, type WorkingHours } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { busyOf, createMailMessage, workingHoursOf } from '@crove/kernel';
-import { DomainError, defineCommand, defineQuery, type CommandContext } from '@crove/kernel-runtime';
+import { DomainError, defineCommand, defineQuery, type CommandContext, type QueryContext } from '@crove/kernel-runtime';
 
 const DAY_MS = 86_400_000;
 // Who may still host a booking: anyone who can change their own calendar.
@@ -640,75 +640,106 @@ export const bookingRemind = defineCommand({
   },
 });
 
-// The bookings of the screen (#1320): confirmed and cancelled ones (requests the worker refused are not bookings), of the
-// types the member leads or held on their calendar (#1373), or of the whole org for owners and admins. At most 200 a
-// page.
+// The bookings a member sees (#1320): confirmed and cancelled ones (requests the worker refused are not bookings), of
+// the types the member leads or held on their calendar (#1373), or of the whole org for owners and admins (scope
+// 'org'). The screen pages them by period; a record that names one (a note's link, #1672) reads it by id.
+async function loadBookings(
+  ctx: QueryContext,
+  userId: string,
+  filter: { scope: 'mine' | 'org'; period: 'upcoming' | 'past' } | { scope: 'mine' | 'org'; id: string },
+): Promise<BookingItem[]> {
+  const upcoming = 'period' in filter && filter.period === 'upcoming';
+  let query = ctx.trx
+    .selectFrom('crove_crm.booking as b')
+    .innerJoin('crove_crm.event_type as e', (j) => j.onRef('e.org_id', '=', 'b.org_id').onRef('e.id', '=', 'b.event_type_id'))
+    // Confirmed and cancelled bookings always hold their event (booking_confirmed_event).
+    .innerJoin('crove_kernel.calendar_event as ev', (j) => j.onRef('ev.org_id', '=', 'b.org_id').onRef('ev.id', '=', 'b.calendar_event_id'))
+    .select([
+      'b.id',
+      'b.status',
+      'b.starts_at',
+      'b.ends_at',
+      'b.time_zone',
+      'b.visitor_name',
+      'b.email',
+      'b.phone',
+      'b.note',
+      'b.party_id',
+      'e.id as type_id',
+      'e.slug',
+      'e.title',
+      'e.active',
+      'ev.user_id as host_user_id',
+      sql<string[]>`coalesce((SELECT array_agg(h.user_id ORDER BY array_position(b.hold_event_ids, h.id)) FROM crove_kernel.calendar_event h
+        WHERE h.org_id = b.org_id AND h.id = ANY (b.hold_event_ids)), '{}')`.as('hold_user_ids'),
+    ])
+    .where('b.org_id', '=', ctx.orgId)
+    .where('b.status', 'in', ['confirmed', 'cancelled'])
+    .$if(filter.scope === 'mine', (q) =>
+      q.where((eb) =>
+        eb.or([
+          eb('e.host_user_id', '=', userId),
+          eb('ev.user_id', '=', userId),
+          sql<boolean>`EXISTS (SELECT 1 FROM crove_kernel.calendar_event h WHERE h.org_id = b.org_id AND h.id = ANY (b.hold_event_ids) AND h.user_id = ${userId})`,
+        ]),
+      ),
+    );
+  if ('id' in filter) query = query.where('b.id', '=', filter.id);
+  else query = query.where('b.ends_at', upcoming ? '>' : '<=', new Date());
+  const rows = await query
+    .orderBy('b.starts_at', upcoming ? 'asc' : 'desc')
+    .orderBy('b.id')
+    .limit(200)
+    .execute();
+  return rows.map((r) => ({
+    id: r.id,
+    eventType: { id: r.type_id, slug: r.slug, title: r.title, active: r.active },
+    hostUserId: r.host_user_id,
+    hostUserIds: [r.host_user_id, ...r.hold_user_ids],
+    status: r.status,
+    startsAt: new Date(r.starts_at).toISOString(),
+    endsAt: new Date(r.ends_at).toISOString(),
+    timeZone: r.time_zone,
+    visitor: { name: r.visitor_name, email: r.email, phone: r.phone, note: r.note },
+    partyId: r.party_id,
+  }));
+}
+
+function bookingUser(ctx: QueryContext): string {
+  if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
+  return ctx.actor.userId;
+}
+
+const manages = (ctx: QueryContext) => ctx.role === 'owner' || ctx.role === 'admin';
+
+// The bookings of the screen (#1320), at most 200 a page.
 export const bookingList = defineQuery({
   name: 'crm.booking.list',
   input: zBookingListQuery,
   access: STAFF,
   handler: async (ctx, input): Promise<BookingItem[]> => {
-    if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
-    const userId = ctx.actor.userId;
-    if (input.scope === 'org' && ctx.role !== 'owner' && ctx.role !== 'admin') {
+    const userId = bookingUser(ctx);
+    if (input.scope === 'org' && !manages(ctx)) {
       throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu hoặc quản trị viên mới xem được lịch hẹn của cả tổ chức');
     }
-    const upcoming = input.period === 'upcoming';
-    const rows = await ctx.trx
-      .selectFrom('crove_crm.booking as b')
-      .innerJoin('crove_crm.event_type as e', (j) => j.onRef('e.org_id', '=', 'b.org_id').onRef('e.id', '=', 'b.event_type_id'))
-      // Confirmed and cancelled bookings always hold their event (booking_confirmed_event).
-      .innerJoin('crove_kernel.calendar_event as ev', (j) => j.onRef('ev.org_id', '=', 'b.org_id').onRef('ev.id', '=', 'b.calendar_event_id'))
-      .select([
-        'b.id',
-        'b.status',
-        'b.starts_at',
-        'b.ends_at',
-        'b.time_zone',
-        'b.visitor_name',
-        'b.email',
-        'b.phone',
-        'b.note',
-        'b.party_id',
-        'e.id as type_id',
-        'e.slug',
-        'e.title',
-        'e.active',
-        'ev.user_id as host_user_id',
-        sql<string[]>`coalesce((SELECT array_agg(h.user_id ORDER BY array_position(b.hold_event_ids, h.id)) FROM crove_kernel.calendar_event h
-          WHERE h.org_id = b.org_id AND h.id = ANY (b.hold_event_ids)), '{}')`.as('hold_user_ids'),
-      ])
-      .where('b.org_id', '=', ctx.orgId)
-      .where('b.status', 'in', ['confirmed', 'cancelled'])
-      .$if(input.scope === 'mine', (q) =>
-        q.where((eb) =>
-          eb.or([
-            eb('e.host_user_id', '=', userId),
-            eb('ev.user_id', '=', userId),
-            sql<boolean>`EXISTS (SELECT 1 FROM crove_kernel.calendar_event h WHERE h.org_id = b.org_id AND h.id = ANY (b.hold_event_ids) AND h.user_id = ${userId})`,
-          ]),
-        ),
-      )
-      .where('b.ends_at', upcoming ? '>' : '<=', new Date())
-      .orderBy('b.starts_at', upcoming ? 'asc' : 'desc')
-      .orderBy('b.id')
-      .limit(200)
-      .execute();
-    return rows.map((r) => ({
-      id: r.id,
-      eventType: { id: r.type_id, slug: r.slug, title: r.title, active: r.active },
-      hostUserId: r.host_user_id,
-      hostUserIds: [r.host_user_id, ...r.hold_user_ids],
-      status: r.status,
-      startsAt: new Date(r.starts_at).toISOString(),
-      endsAt: new Date(r.ends_at).toISOString(),
-      timeZone: r.time_zone,
-      visitor: { name: r.visitor_name, email: r.email, phone: r.phone, note: r.note },
-      partyId: r.party_id,
-    }));
+    return loadBookings(ctx, userId, { scope: input.scope, period: input.period });
   },
 });
 
-export const bookingQueries = [bookingList];
+// One booking, as the screen would show it to the caller: any of the org's for owners and admins, otherwise one of
+// the types they lead or held on their calendar. Any other booking, or one of another org, is not found.
+export const bookingGet = defineQuery({
+  name: 'crm.booking.get',
+  input: z.strictObject({ id: zId }),
+  access: STAFF,
+  handler: async (ctx, input): Promise<BookingItem> => {
+    const userId = bookingUser(ctx);
+    const [booking] = await loadBookings(ctx, userId, { scope: manages(ctx) ? 'org' : 'mine', id: input.id });
+    if (!booking) throw new DomainError('BOOKING_NOT_FOUND', 404, 'Không tìm thấy lịch hẹn');
+    return booking;
+  },
+});
+
+export const bookingQueries = [bookingList, bookingGet];
 
 export const bookingCommands = [bookingConfirm, bookingMailData, bookingManage, bookingRemind, bookingCancel, bookingMove];

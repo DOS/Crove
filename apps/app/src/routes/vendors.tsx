@@ -7,6 +7,7 @@ import { Button, buttonVariants } from '@crove/ui/components/button';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { TableCell, TableRow } from '@crove/ui/components/table';
+import { RecordNotesPanel, notesInstalled } from '../components/notes-panel.tsx';
 import { EditParty, MergeParty, PartyDuplicates, refreshParties } from '../components/party-edit.tsx';
 import { DataTable, Empty, ErrorText, PageHeader, TableSkeleton } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
@@ -90,6 +91,9 @@ function VendorRow({
   const t = useTranslations('vendors');
   const f = useFormat();
   const [editing, setEditing] = useState(false);
+  const tn = useTranslations('notes');
+  const { slug } = useParams({ strict: false }) as { slug: string };
+  const [notesOpen, setNotesOpen] = useState(false);
   return (
     <>
       <TableRow>
@@ -111,6 +115,12 @@ function VendorRow({
                 {t('edit')}
               </Button>
             )}
+            {/* The party's notes (#1671), beside its other actions. */}
+            {notesInstalled() && (
+              <Button variant="ghost" size="sm" onClick={() => setNotesOpen((o) => !o)} aria-expanded={notesOpen} aria-label={tn('panel.toggleOf', { name: vendor.name })}>
+                {tn('panel.title')}
+              </Button>
+            )}
           </TableCell>
         )}
       </TableRow>
@@ -123,6 +133,13 @@ function VendorRow({
                 <MergeParty party={vendor} others={others} ns="vendors" />
               </div>
             )}
+          </TableCell>
+        </TableRow>
+      )}
+      {notesOpen && (
+        <TableRow>
+          <TableCell colSpan={6} className="px-4 py-3">
+            <RecordNotesPanel slug={slug} target={{ targetType: 'kernel.party', targetId: vendor.id }} headingId={`notes-${vendor.id}`} label={tn('panel.toggleOf', { name: vendor.name })} />
           </TableCell>
         </TableRow>
       )}
