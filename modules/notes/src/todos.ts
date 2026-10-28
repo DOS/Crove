@@ -32,7 +32,7 @@ import {
   type TodoWritten,
 } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
-import { createTaskFromTodo } from '@crove/kernel';
+import { TASK_LIST_LIMIT, createTaskFromTodo } from '@crove/kernel';
 import { DomainError, defineCommand, defineQuery, type CommandContext, type QueryContext } from '@crove/kernel-runtime';
 import { notesManifest } from './manifest.ts';
 import { REBALANCE_AT, keyBetween, spreadKeys } from './sort-key.ts';
@@ -451,7 +451,8 @@ export const myWork = defineQuery({
       .execute();
     const found = await ctx.query<{ tasks: KernelTask[] }>('kernel.task.list', { mine: true, status: [...OPEN_TASK_STATUSES] });
     const now = new Date();
-    const tasks: MyWorkTask[] = (found.status === 'ok' ? found.value.tasks : [])
+    const listed = found.status === 'ok' ? found.value.tasks : [];
+    const tasks: MyWorkTask[] = listed
       .map((t) => ({
         id: t.id,
         title: t.title,
@@ -462,7 +463,8 @@ export const myWork = defineQuery({
         ...taskStanding(t.due === null ? null : new Date(t.due), input.timeZone, now),
       }))
       .sort((a, b) => (a.due === b.due ? 0 : a.due === null ? 1 : b.due === null ? -1 : a.due < b.due ? -1 : 1));
-    return { todos: rows.map((r) => summary(r, now)), tasks };
+    // The kernel lists at most TASK_LIST_LIMIT tasks, the newest; a full page says the screen may miss older ones.
+    return { todos: rows.map((r) => summary(r, now)), tasks, tasksTruncated: listed.length >= TASK_LIST_LIMIT };
   },
 });
 

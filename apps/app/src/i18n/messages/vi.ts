@@ -2423,6 +2423,12 @@ export const vi = {
     handOverDescription: 'Mô tả cho nhóm',
     handOverNoPositions: 'Tổ chức chưa có vị trí nào. Hãy tạo vị trí trong Sơ đồ tổ chức trước.',
     handOverConfirm: 'Giao việc',
+    handOverAgentHeld: '{position} (tác tử AI giữ)',
+    handOverSaveFirst: 'Hãy lưu thay đổi trước khi giao việc này.',
+    handOverDue: 'Hạn của việc nhóm: {due}',
+    handOverNoDue: 'Việc nhóm không có hạn.',
+    tasksTruncated: 'Chỉ hiện các việc nhóm mới nhất của vị trí bạn giữ; việc cũ hơn có thể không có ở đây.',
+    openTasks: 'Xem tất cả việc nhóm của tôi',
   },
   social: {
     title: 'Mạng xã hội',

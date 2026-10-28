@@ -2424,6 +2424,12 @@ export const en = {
     handOverDescription: 'Description for the team',
     handOverNoPositions: 'The organization has no positions yet. Create one in the org chart first.',
     handOverConfirm: 'Hand over',
+    handOverAgentHeld: '{position} (held by an AI agent)',
+    handOverSaveFirst: 'Save your changes before you hand this to-do over.',
+    handOverDue: 'The team task is due {due}',
+    handOverNoDue: 'The team task has no due date.',
+    tasksTruncated: 'Only the newest team tasks of your positions show here; older ones may be missing.',
+    openTasks: 'See all my team tasks',
   },
   social: {
     title: 'Social',

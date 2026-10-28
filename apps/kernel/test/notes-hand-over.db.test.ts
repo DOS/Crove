@@ -212,6 +212,7 @@ suite('to-do hand-over and My work on PostgreSQL (#1674)', () => {
 
     const work = await o.query<MyWork>(o.mine, 'notes.my_work', { timeZone: 'Asia/Ho_Chi_Minh' });
     expect(work.todos.map((t) => t.id)).toEqual([todoId]);
+    expect(work.tasksTruncated).toBe(false);
     // Soonest first, an undated one last; never another position's, the owners' or a closed one.
     expect(work.tasks.map((t) => t.id)).toEqual([ownTask, laterTask]);
     expect(work.tasks[0]).toMatchObject({ positionId: o.positions.own, group: 'overdue', overdue: true });

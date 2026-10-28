@@ -616,7 +616,8 @@ async function insertHumanTask(
 // A member's own to-do handed over to a position (notes plan docs/plan/notes.md §3.1 and step N5, #1674): the notes
 // module calls this inside its notes.todo.hand_over command, so the task and the to-do's change commit together. The
 // task takes the text the member confirmed, the rules of kernel.task.create (an archived position is refused with
-// POSITION_ARCHIVED) and a `notes.todo` source_ref this helper sets itself; the to-do's taint carries over.
+// POSITION_ARCHIVED) and a `notes.todo` source_ref this helper sets itself; the to-do's taint carries over. For the
+// notes module only: it trusts the caller to have read and locked the to-do under its owner-only row policies.
 export async function createTaskFromTodo(
   ctx: CommandContext,
   input: { todoId: string; title: string; description: string | null; positionId: string; due: Date | null; tainted: boolean },

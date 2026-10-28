@@ -46,10 +46,12 @@ function DueChip({ todo }: { todo: TodoSummary }) {
 }
 
 // Hands a to-do over to a position as a team task (#1674). The dialog shows the title and description the team will
-// read, proposed from the to-do and editable; nothing goes to the task but what the member confirms here.
-function HandOverDialog({ todo, onDone }: { todo: Todo; onDone: () => void }) {
+// read, proposed from the to-do and editable; nothing goes to the task but what the member confirms here. It hands over
+// the to-do as saved, so it waits while the editor holds unsaved changes (`disabled`), and it says when the task is due.
+function HandOverDialog({ todo, disabled, onDone }: { todo: Todo; disabled: boolean; onDone: () => void }) {
   const t = useTranslations('myWork');
   const common = useTranslations('common');
+  const f = useFormat();
   const chart = useQuery(orpc.chart.get.queryOptions());
   const positions = (chart.data?.positions ?? []).filter((p) => p.status !== 'archived');
   const [open, setOpen] = useState(false);
@@ -75,7 +77,7 @@ function HandOverDialog({ todo, onDone }: { todo: Todo; onDone: () => void }) {
   };
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <Button type="button" variant="outline" onClick={() => setOpen(true)} data-testid="todo-hand-over">
+      <Button type="button" variant="outline" disabled={disabled} title={disabled ? t('handOverSaveFirst') : undefined} onClick={() => setOpen(true)} data-testid="todo-hand-over">
         {t('handOver')}
       </Button>
       <DialogContent closeLabel={common('close')} className="sm:max-w-lg">
@@ -90,7 +92,7 @@ function HandOverDialog({ todo, onDone }: { todo: Todo; onDone: () => void }) {
               <NativeSelectOption value="">{t('handOverPick')}</NativeSelectOption>
               {positions.map((p) => (
                 <NativeSelectOption key={p.id} value={p.id}>
-                  {p.title}
+                  {p.holder?.type === 'agent' ? t('handOverAgentHeld', { position: p.title }) : p.title}
                 </NativeSelectOption>
               ))}
             </NativeSelect>
@@ -103,6 +105,9 @@ function HandOverDialog({ todo, onDone }: { todo: Todo; onDone: () => void }) {
             <span className="text-subtle-foreground">{t('handOverDescription')}</span>
             <Textarea rows={6} maxLength={10000} value={description} onChange={(e) => setDescription(e.target.value)} className="mt-1" />
           </label>
+          <p className="text-xs text-subtle-foreground" data-testid="hand-over-due">
+            {todo.dueOn === null ? t('handOverNoDue') : t('handOverDue', { due: todo.dueTime ? t('dueAt', { day: f.date(todo.dueOn), time: todo.dueTime }) : f.date(todo.dueOn) })}
+          </p>
           {chart.data && positions.length === 0 && <p className="text-xs text-subtle-foreground">{t('handOverNoPositions')}</p>}
           {handOver.error && <ErrorText>{errorMessage(handOver.error)}</ErrorText>}
           <DialogFooter>
@@ -161,6 +166,14 @@ function TodoEditor({ todo, onClose }: { todo: Todo; onClose: () => void }) {
   const [dueTime, setDueTime] = useState(todo.dueTime ?? '');
   const titleRef = useRef<HTMLInputElement>(null);
   useEffect(() => titleRef.current?.focus(), []);
+  // A change not saved yet: the hand-over waits for it, so it never hands over a to-do other than the one shown.
+  const dirty =
+    title !== todo.title ||
+    details !== todo.details ||
+    JSON.stringify(steps) !== JSON.stringify(todo.checklist) ||
+    dueOn !== (todo.dueOn ?? '') ||
+    dueTime !== (todo.dueTime ?? '') ||
+    newStep.trim() !== '';
   // The values of one save are its variables, so an edit made while it runs does not change what it sends.
   const save = useMutation({
     mutationFn: (v: { title: string; details: string; steps: TodoStep[]; dueOn: string; dueTime: string }) =>
@@ -269,11 +282,12 @@ function TodoEditor({ todo, onClose }: { todo: Todo; onClose: () => void }) {
           <Button type="button" variant="outline" onClick={onClose}>
             {t('cancel')}
           </Button>
-          {todo.status === 'open' && todo.deletedAt === null && <HandOverDialog todo={todo} onDone={onClose} />}
+          {todo.status === 'open' && todo.deletedAt === null && <HandOverDialog todo={todo} disabled={dirty} onDone={onClose} />}
           <Button type="button" variant="destructive" className="ml-auto" disabled={remove.isPending} onClick={() => remove.mutate()}>
             {t('delete')}
           </Button>
         </div>
+        {dirty && todo.status === 'open' && <p className="text-xs text-subtle-foreground">{t('handOverSaveFirst')}</p>}
         {save.error && <ErrorText>{errorMessage(save.error)}</ErrorText>}
         {remove.error && <ErrorText>{errorMessage(remove.error)}</ErrorText>}
       </form>
@@ -500,6 +514,14 @@ export function MyWorkPage() {
         </Card>
       )}
       {todos.length >= LIST_LIMIT && <p className="text-xs text-subtle-foreground">{t('truncated', { count: String(LIST_LIMIT) })}</p>}
+      {view === 'open' && work.data?.tasksTruncated && (
+        <p className="text-xs text-subtle-foreground">
+          {t('tasksTruncated')}{' '}
+          <Link to="/o/$slug/tasks" params={{ slug }} search={{ filter: 'mine' }} className="text-link underline">
+            {t('openTasks')}
+          </Link>
+        </p>
+      )}
       {act.error && <ErrorText>{errorMessage(act.error)}</ErrorText>}
       <p className="text-xs text-subtle-foreground">{t('shortcuts')}</p>
     </div>

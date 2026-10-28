@@ -224,7 +224,8 @@ export const zMyWorkTask = z.object({
   tainted: z.boolean(),
 });
 export type MyWorkTask = z.infer<typeof zMyWorkTask>;
-export const zMyWork = z.object({ todos: z.array(zTodoSummary), tasks: z.array(zMyWorkTask) });
+// tasksTruncated: the kernel's task list was full, so older tasks of my positions may be missing.
+export const zMyWork = z.object({ todos: z.array(zTodoSummary), tasks: z.array(zMyWorkTask), tasksTruncated: z.boolean() });
 export type MyWork = z.infer<typeof zMyWork>;
 
 const DAY_MS = 86_400_000;
