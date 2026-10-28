@@ -100,6 +100,9 @@ describe('migration lint: contract-header', () => {
       'ALTER SEQUENCE IF EXISTS crove_social.s RENAME TO s2;',
       'ALTER ROLE crove_old RENAME TO crove_new;',
       'ALTER TEXT SEARCH DICTIONARY crove_social.d RENAME TO d2;',
+      // Escapes are decoded before the command is read (#1709 review).
+      String.raw`DO $$ BEGIN EXECUTE E'\x44ROP TABLE crove_social.sample'; END $$;`,
+      String.raw`DO $$ BEGIN EXECUTE U&'DROP \0054ABLE crove_social.sample'; END $$;`,
     ]) {
       expect(rules(sql), sql).toEqual([1]);
       expect(rules(`-- crove:contract adr=0028\n${sql}`), sql).toEqual([]);
@@ -168,6 +171,8 @@ describe('migration lint: contract-header', () => {
     expect(rules(`${create('int')}\nDROP FUNCTION crove_social.h(int), crove_social.h(text);`)).toEqual([2]);
     expect(rules(`${create('VARIADIC a int[]')}\nDROP FUNCTION crove_social.h(VARIADIC integer[]);`)).toEqual([]);
     expect(rules(`${create('ts timestamptz, x double precision')}\nDROP FUNCTION crove_social.h(timestamp with time zone, float8);`)).toEqual([]);
+    // Type modifiers are not part of a signature (review probe).
+    expect(rules(`${create('a numeric(10,2), b varchar(5)')}\nDROP FUNCTION crove_social.h(numeric, character varying(9));`)).toEqual([]);
   });
 
   it('needs the header on the comment lines right before the statement, one statement per header', () => {

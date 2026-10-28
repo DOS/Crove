@@ -88,8 +88,31 @@ const TRANSACTION_WORDS = new Set(['begin', 'start', 'commit', 'end', 'rollback'
 
 // --- Lexer -------------------------------------------------------------------------------------------------------
 
+// The value of an E'...' string's content: '' and the backslash escapes decoded as PostgreSQL does, so a name spelled
+// with escapes (E'lock\x5ftimeout') reads as the name it is (#1709 review).
+function decodeE(raw) {
+  return raw.replace(/''|\\(?:([0-7]{1,3})|x([0-9A-Fa-f]{1,2})|u([0-9A-Fa-f]{4})|U([0-9A-Fa-f]{8})|([\s\S]))/g, (all, oct, hex, u4, u8, other) => {
+    if (all === "''") return "'";
+    if (oct !== undefined) return String.fromCharCode(parseInt(oct, 8) & 0xff);
+    if (hex !== undefined) return String.fromCharCode(parseInt(hex, 16));
+    if (u4 !== undefined || u8 !== undefined) return codePoint(parseInt(u4 ?? u8, 16));
+    return { b: '\b', f: '\f', n: '\n', r: '\r', t: '\t' }[other] ?? other;
+  });
+}
+
+// The value of a U&'...' string's or U&"..." identifier's content, with `escape` as the escape character (UESCAPE,
+// default backslash): the doubled quote, the doubled escape, <escape>XXXX and <escape>+XXXXXX decoded.
+function decodeU(raw, quote, escape) {
+  const e = escape.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
+  const pattern = new RegExp(`${quote}${quote}|${e}${e}|${e}\\+([0-9A-Fa-f]{6})|${e}([0-9A-Fa-f]{4})`, 'g');
+  return raw.replace(pattern, (all, u6, u4) => (all === quote + quote ? quote : u6 === undefined && u4 === undefined ? escape : codePoint(parseInt(u6 ?? u4, 16))));
+}
+
+const codePoint = (cp) => (cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : '\ufffd');
+
 // Tokens: { t: 'word' | 'qident' | 'string' | 'punct' | 'other', v, line, body? }. A word's v is lowercased; a
-// quoted identifier keeps its case. A string's body is its content, with bodyLine the line it starts on. Line
+// quoted identifier keeps its case, with U& escapes decoded. A string's body is its value (E and U& escapes decoded),
+// with bodyLine the line it starts on. Line
 // comments are pushed to `comments` as { line, text, alone } when it is given; `alone` is true when no code comes
 // before the comment on its line (`afterCode`: the first line starts after code, as a DO body does after its $).
 export function lex(sql, firstLine = 1, comments = undefined, afterCode = false) {
@@ -121,6 +144,23 @@ export function lex(sql, firstLine = 1, comments = undefined, afterCode = false)
         else k++;
       }
       advance(k);
+    } else if ((c === 'u' || c === 'U') && next === '&' && (sql[i + 2] === "'" || sql[i + 2] === '"')) {
+      // U&'...' or U&"...", with an optional UESCAPE '<c>' after it.
+      const quote = sql[i + 2];
+      let k = i + 3;
+      while (k < n) {
+        if (sql[k] === quote && sql[k + 1] === quote) k += 2;
+        else if (sql[k] === quote) break;
+        else k++;
+      }
+      const raw = sql.slice(i + 3, k);
+      const uescape = /^\s*uescape\s*'([^'])'/i.exec(sql.slice(k + 1, k + 64));
+      const end = k + 1 + (uescape?.[0].length ?? 0);
+      const value = decodeU(raw, quote, uescape?.[1] ?? '\\');
+      const tokenLine = line;
+      if (quote === "'") tokens.push({ t: 'string', v: sql.slice(i, end), body: value, line: tokenLine, bodyLine: tokenLine });
+      else tokens.push({ t: 'qident', v: value, line: tokenLine });
+      advance(end);
     } else if (c === "'" || ((c === 'e' || c === 'E') && next === "'")) {
       const escapes = c !== "'";
       const start = escapes ? i + 2 : i + 1;
@@ -132,7 +172,8 @@ export function lex(sql, firstLine = 1, comments = undefined, afterCode = false)
         else k++;
       }
       const tokenLine = line;
-      tokens.push({ t: 'string', v: sql.slice(i, k + 1), body: sql.slice(start, k).replaceAll("''", "'"), line: tokenLine, bodyLine: tokenLine });
+      const body = escapes ? decodeE(sql.slice(start, k)) : sql.slice(start, k).replaceAll("''", "'");
+      tokens.push({ t: 'string', v: sql.slice(i, k + 1), body, line: tokenLine, bodyLine: tokenLine });
       advance(k + 1);
     } else if (c === '"') {
       let k = i + 1;
@@ -560,6 +601,14 @@ export function signature(tokens, k) {
     if (stop !== -1) rest = rest.slice(0, stop);
     if (isWord(rest[0], 'out')) return [];
     if (isWord(rest[0], 'in', 'inout', 'variadic') && rest.length > 1) rest = rest.slice(1);
+    // Type modifiers are not part of a signature: numeric(10,2) is numeric.
+    let typmod = 0;
+    rest = rest.filter((t) => {
+      if (isPunct(t, '(')) typmod++;
+      const keep = typmod === 0;
+      if (isPunct(t, ')')) typmod--;
+      return keep;
+    });
     rest = rest.filter((t, j) => !(isWord(t, 'pg_catalog') && isPunct(rest[j + 1], '.')) && !(isPunct(t, '.') && isWord(rest[j - 1], 'pg_catalog')));
     const spell = (ts) => ts.map((t) => (t.t === 'qident' ? `"${t.v}"` : t.t === 'word' ? TYPE_ALIASES.get(t.v) ?? t.v : t.v)).join(' ');
     const ways = [spell(rest)];
@@ -671,7 +720,8 @@ const touchesTimeout = (tokens, k) => {
   if ((token.t === 'word' || token.t === 'qident') && token.v.toLowerCase() === 'lock_timeout') return true;
   if (token.t === 'string' && /lock_timeout/i.test(token.body)) return true;
   if (isWord(token, 'reset') && isWord(tokens[k + 1], 'all')) return true;
-  return isWord(token, 'set_config') && !(isPunct(tokens[k + 1], '(') && tokens[k + 2]?.t === 'string' && isPunct(tokens[k + 3], ','));
+  const setConfig = isWord(token, 'set_config') || (token.t === 'qident' && token.v === 'set_config');
+  return setConfig && !(isPunct(tokens[k + 1], '(') && tokens[k + 2]?.t === 'string' && isPunct(tokens[k + 3], ','));
 };
 
 // Whether a PL/pgSQL statement starts at token k: the token before it ends a statement, a label (>>) or opens a body.

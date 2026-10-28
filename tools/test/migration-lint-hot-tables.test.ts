@@ -108,6 +108,10 @@ describe('migration lint: hot-table-retry', () => {
     const finding = lint('ALTER TABLE crove_kernel.audit_event ADD COLUMN x text;')[0]!;
     expect(finding.message).toContain('DDL on the hot table crove_kernel.audit_event runs in the lock-retry block (plan §5.5)');
     expect(rules("DO $$ BEGIN\n  EXECUTE 'ALTER TABLE crove_jobs.job ADD COLUMN x int';\nEND $$;")).toEqual([2]);
+    // The command string is read as PostgreSQL reads it, escapes decoded (#1709 review).
+    expect(rules(String.raw`DO $$ BEGIN EXECUTE E'ALTER\x20TABLE crove_kernel.audit_event ADD COLUMN y int'; END $$;`)).toEqual([1]);
+    expect(rules(String.raw`DO $$ BEGIN EXECUTE U&'\0041LTER TABLE crove_kernel.audit_event ADD COLUMN y int'; END $$;`)).toEqual([1]);
+    expect(rules(String.raw`ALTER TABLE U&"crove\005fkernel".audit_event ADD COLUMN y int;`)).toEqual([1]);
   });
 
   it('refuses a block that does not retry, does not bound, sets no timeout or never exits', () => {
@@ -150,6 +154,15 @@ describe('migration lint: hot-table-retry', () => {
       'a later EXECUTE of a built string': before("EXECUTE 'SET LOCAL lock_' || 'timeout = 0';"),
       'a later EXECUTE of format()': before("EXECUTE format('SET LOCAL %s = 0', v_name);"),
       'a later EXECUTE of a variable': before('EXECUTE v_sql;'),
+      // The name spelled with escapes or quotes (review probes).
+      'a later U& identifier': before(String.raw`SET LOCAL U&"lock\005ftimeout" = 0;`),
+      'a later U& identifier with UESCAPE': before(`SET LOCAL u&"lock!005ftimeout" UESCAPE '!' TO DEFAULT;`),
+      'a later set_config of an E string': before(String.raw`PERFORM set_config(E'lock\x5ftimeout', '0', true);`),
+      'a later set_config of a U& string': before(String.raw`PERFORM set_config(U&'lock\005Ftimeout', '0', true);`),
+      'a later EXECUTE of an E string': before(String.raw`EXECUTE E'SET LOCAL lock\x5ftimeout = 0';`),
+      'a later quoted set_config': before(`PERFORM "set_config"(chr(108) || 'ock_timeout', '0', true);`),
+      'a later qualified quoted set_config': before(`PERFORM pg_catalog."set_config"(chr(108) || 'ock_timeout', '0', true);`),
+      'a reset in an E string statement': base.replace(`${statement};`, String.raw`EXECUTE E'SET LOCAL lock\x5ftimeout = 0; ${statement}';`),
       'a reset in the statement itself': base.replace(`${statement};`, `EXECUTE 'SET LOCAL lock_timeout = 0; ${statement}';`),
       'the timeout in an IF': base.replace(setting, `IF false THEN ${setting} END IF;`),
       'the timeout in an inner block': base.replace(setting, `BEGIN ${setting} END;`),
