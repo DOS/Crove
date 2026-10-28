@@ -743,8 +743,11 @@ function checkedWrites(command: string, writes: readonly CommandWrite[], manifes
     }
     if (tables.has(w.table)) refuse(`list ${w.table} twice`);
     tables.add(w.table);
-    const classes = w.classes;
-    if (typeof classes !== 'object' || classes === null || Array.isArray(classes) || Object.keys(classes).length === 0) refuse(`of ${w.table} carry no column classes`);
+    if (typeof w.classes !== 'object' || w.classes === null || Array.isArray(w.classes)) refuse(`of ${w.table} carry no column classes`);
+    // One copy of the own enumerable classes, read once: every check below and the P04 answer use it, so a getter or
+    // a hidden key cannot answer one class to the checks and another to P04.
+    const classes: Record<string, string> = Object.fromEntries(Object.entries(w.classes));
+    if (Object.keys(classes).length === 0) refuse(`of ${w.table} carry no column classes`);
     for (const [column, cls] of Object.entries(classes)) {
       if (!WRITE_COLUMN.test(column)) refuse(`of ${w.table} carry classes for ${column}, which is not a column name`);
       if (!(WRITE_DATA_CLASSES as readonly string[]).includes(cls)) refuse(`of ${w.table} give column ${column} the unknown class ${String(cls)}`);

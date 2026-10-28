@@ -96,6 +96,16 @@ describe('declared command writes against the manifests (#1697, #1710)', () => {
     }
   });
 
+  it('reads the classes once, so a getter cannot answer the checks one class and P04 another', () => {
+    for (const options of [{ manifests: manifests() }, {}]) {
+      let reads = 0;
+      const classes = { ...PARTY };
+      Object.defineProperty(classes, 'email', { enumerable: true, get: () => (reads++ === 0 ? 'contact' : 'internal') });
+      const runtime = new Runtime(cells, options).register({ commands: [def({ writes: [forged(classes)] })] });
+      expect(runtime.commandInfo('t1710.reg')?.contactOrPayment).toBe(true);
+    }
+  });
+
   it('refuses manifests that give one table twice', () => {
     expect(() => new Runtime(cells, { manifests: [kernelManifest.tables, kernelManifest.tables] })).toThrow(/in two manifests/);
     expect(() => new Runtime(cells, { manifests: [{ crove_kernel: { party: { email: 'secret' } } }] })).toThrow(/unknown class/);
