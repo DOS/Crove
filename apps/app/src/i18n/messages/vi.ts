@@ -617,7 +617,19 @@ export const vi = {
       privateOnly: 'Chỉ mình tôi xem',
       save: 'Lưu ghi chú',
       empty: 'Ghi lại điều cần nhớ về khách hàng này',
+      emptyRecord: 'Ghi lại điều cần nhớ về bản ghi này',
       toggleOf: 'Ghi chú về {name}',
+    },
+    links: {
+      title: 'Gắn với',
+      unavailable: 'Bản ghi không mở được',
+      types: {
+        party: 'Khách hàng hoặc nhà cung cấp',
+        file: 'Tệp',
+        purchase_document: 'Chứng từ',
+        journal_entry: 'Bút toán',
+        booking: 'Lịch hẹn',
+      },
     },
   },
   bookings: {

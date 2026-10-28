@@ -156,6 +156,7 @@ async function loadDocuments(ctx: QueryContext, filter: { legalEntityId: string;
     .where('d.org_id', '=', ctx.orgId)
     .orderBy('d.invoice_date', 'desc')
     .orderBy('d.created_at', 'desc')
+    .orderBy('d.id', 'desc')
     .limit(1000);
   if ('id' in filter) query = query.where('d.id', '=', filter.id);
   else {

@@ -619,7 +619,19 @@ export const en = {
       privateOnly: 'Only me',
       save: 'Save note',
       empty: 'Write down what to remember about this client',
+      emptyRecord: 'Write down what to remember about this record',
       toggleOf: 'Notes about {name}',
+    },
+    links: {
+      title: 'Linked to',
+      unavailable: 'You cannot open this record',
+      types: {
+        party: 'Customer or vendor',
+        file: 'File',
+        purchase_document: 'Document',
+        journal_entry: 'Journal entry',
+        booking: 'Booking',
+      },
     },
   },
   bookings: {

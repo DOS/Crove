@@ -125,6 +125,7 @@ function PanelBody({
   className,
   notes,
   error,
+  empty,
 }: {
   slug: string;
   target: NoteLinkTargetInput | undefined;
@@ -133,6 +134,8 @@ function PanelBody({
   className?: string;
   notes: NoteSummary[] | null;
   error: unknown;
+  // What an empty panel says, when the record is not a client (a document, a voucher, a booking).
+  empty?: string;
 }) {
   const t = useTranslations('notes');
   const { writer, manager } = useNotesRole(slug);
@@ -160,7 +163,7 @@ function PanelBody({
             ))}
           </ul>
         ) : (
-          !error && <p className="px-4 py-3 text-sm text-subtle-foreground">{t('panel.empty')}</p>
+          !error && <p className="px-4 py-3 text-sm text-subtle-foreground">{empty ?? t('panel.empty')}</p>
         )}
         {writer && (
           <div className="border-t">
@@ -189,11 +192,11 @@ export function OrgNotesPanel({ slug }: { slug: string }) {
   return <PanelBody slug={slug} target={undefined} headingId="overview-notes" className="mt-8" notes={notes} error={pinned.error ?? shared.error} />;
 }
 
-// A record's panel (a party): the notes linked to it.
-export function RecordNotesPanel({ slug, target, headingId, label }: { slug: string; target: NoteLinkTargetInput; headingId: string; label: string }) {
+// A record's panel (a party, a document, a voucher, a booking): the notes linked to it.
+export function RecordNotesPanel({ slug, target, headingId, label, empty }: { slug: string; target: NoteLinkTargetInput; headingId: string; label: string; empty?: string }) {
   const panel = useQuery(orpc.notes.panel.queryOptions({ input: target }));
   const notes = panel.data ? [...panel.data.pinned, ...panel.data.latest] : null;
-  return <PanelBody slug={slug} target={target} headingId={headingId} label={label} notes={notes} error={panel.error} />;
+  return <PanelBody slug={slug} target={target} headingId={headingId} label={label} notes={notes} error={panel.error} {...(empty !== undefined ? { empty } : {})} />;
 }
 
 // Before an owner removes a member (ADR-0037 §4): how many private notes they have, which nobody reads once they leave
