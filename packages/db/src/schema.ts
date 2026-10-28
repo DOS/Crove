@@ -695,9 +695,18 @@ export type CrmBookingTable = Refine<
   }
 >;
 
+// The notes module (issue #1671, ADR-0037): a note is private to its author or shared with the org, and links to a
+// party or a file.
+export const NOTE_VISIBILITIES = ['private', 'org'] as const;
+export const NOTE_LINK_TARGET_TYPES = ['kernel.party', 'kernel.file'] as const;
+export type NotesNoteTable = Refine<G.NotesNoteTable, { visibility: Generated<(typeof NOTE_VISIBILITIES)[number]> }>;
+export type NotesLinkTable = Refine<G.NotesLinkTable, { target_type: (typeof NOTE_LINK_TARGET_TYPES)[number] }>;
+
 type Refined = Tables<{
   'crove_crm.booking': CrmBookingTable;
   'crove_crm.event_type': CrmEventTypeTable;
+  'crove_notes.link': NotesLinkTable;
+  'crove_notes.note': NotesNoteTable;
   'crove_kernel.calendar_event': CalendarEventTable;
   'crove_kernel.legal_entity': LegalEntityTable;
   'crove_kernel.number_series_policy': NumberSeriesPolicyTable;

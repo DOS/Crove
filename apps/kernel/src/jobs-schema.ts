@@ -54,6 +54,9 @@ export const QUEUES = {
   crmBookingRemind: 'crm-booking-remind',
   // Created by the period balance migration (20261101160000).
   periodBalanceVerify: 'finance-period-balance-verify',
+  // Created by the notes core migration (20261103100000).
+  notesMemberPurge: 'notes-member-purge',
+  notesTrash: 'notes-trash',
 } as const;
 type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
 
@@ -117,6 +120,8 @@ const QUEUE_EGRESS: { readonly [Q in QueueName]: JobEgress } = {
   [QUEUES.crmBooking]: 'none',
   [QUEUES.crmBookingRemind]: 'none',
   [QUEUES.periodBalanceVerify]: 'none',
+  [QUEUES.notesMemberPurge]: 'none',
+  [QUEUES.notesTrash]: 'none',
 };
 
 // The channel providers whose host the tenant names: their adapters get the egress guard (channelPublishers).

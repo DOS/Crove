@@ -5098,6 +5098,13 @@ export const en = {
       EVENT_TYPE_HOST_INVALID: 'The host must be a member who can edit their calendar.',
       BOOKING_PAGE_NOT_FOUND: 'This booking page was not found.',
       BOOKING_REQUEST_NOT_FOUND: 'This booking request was not found.',
+      NOTE_NOT_FOUND: 'This note was not found.',
+      NOTE_AUTHOR_ONLY: 'Only the author can do this; owners and admins may also pin, archive or delete a shared note.',
+      NOTE_IN_TRASH: 'This note is in the trash; restore it first.',
+      NOTE_REVISION_CONFLICT: 'This note was just changed elsewhere; reload it before saving.',
+      NOTE_LINK_EXISTS: 'This note is already linked to that record.',
+      NOTE_LINK_NOT_FOUND: 'This link was not found.',
+      NOTE_LINK_TARGET_NOT_FOUND: 'The record to link was not found.',
       BOOKING_LINK_NOT_FOUND: 'This link no longer works.',
       BOOKING_CHECK_FAILED: 'The anti-bot check did not pass; try again.',
       BOOKING_NOT_FOUND: 'This booking was not found.',
@@ -5912,6 +5919,35 @@ export const en = {
       },
       user: {
         status_note: 'Note an account blocked or unblocked',
+      },
+    },
+    notes: {
+      link: {
+        add: 'Link a note to a record',
+        remove: 'Unlink a note from a record',
+      },
+      member_items: {
+        purge: 'Remove the private notes of a member who left',
+      },
+      note: {
+        archive: 'Archive a note',
+        create: 'Write a note',
+        delete: 'Move a note to the trash',
+        get: 'Read a note',
+        list: 'List notes',
+        pin: 'Pin a note',
+        restore: 'Restore a note',
+        search: 'Search notes',
+        set_visibility: 'Make a note private or shared',
+        unpin: 'Unpin a note',
+        update: 'Edit a note',
+      },
+      private_counts: "Count each member's private notes",
+      record: {
+        panel: "Read a record's notes",
+      },
+      trash: {
+        empty: 'Empty the notes trash',
       },
     },
     social: {

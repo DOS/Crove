@@ -5098,6 +5098,13 @@ export const vi = {
       EVENT_TYPE_HOST_INVALID: 'Người chủ trì phải là thành viên được sửa lịch của tổ chức',
       BOOKING_PAGE_NOT_FOUND: 'Không tìm thấy trang đặt lịch này',
       BOOKING_REQUEST_NOT_FOUND: 'Không tìm thấy yêu cầu đặt lịch này',
+      NOTE_NOT_FOUND: 'Không tìm thấy ghi chú này',
+      NOTE_AUTHOR_ONLY: 'Chỉ người viết ghi chú mới làm được việc này; với ghi chú dùng chung, chủ sở hữu và quản trị viên được ghim, lưu trữ hoặc xóa',
+      NOTE_IN_TRASH: 'Ghi chú đang ở thùng rác; hãy khôi phục trước',
+      NOTE_REVISION_CONFLICT: 'Ghi chú vừa được sửa ở nơi khác; hãy tải lại trước khi lưu',
+      NOTE_LINK_EXISTS: 'Ghi chú đã gắn với bản ghi này',
+      NOTE_LINK_NOT_FOUND: 'Không tìm thấy liên kết này',
+      NOTE_LINK_TARGET_NOT_FOUND: 'Không tìm thấy bản ghi để gắn ghi chú',
       BOOKING_LINK_NOT_FOUND: 'Liên kết này không còn dùng được',
       BOOKING_CHECK_FAILED: 'Chưa xác minh được bạn không phải máy, hãy thử lại',
       BOOKING_NOT_FOUND: 'Không tìm thấy lịch hẹn này',
@@ -5912,6 +5919,35 @@ export const vi = {
       },
       user: {
         status_note: 'Ghi nhận khóa hoặc mở khóa tài khoản',
+      },
+    },
+    notes: {
+      link: {
+        add: 'Gắn ghi chú với bản ghi',
+        remove: 'Gỡ ghi chú khỏi bản ghi',
+      },
+      member_items: {
+        purge: 'Xóa ghi chú riêng của thành viên đã rời tổ chức',
+      },
+      note: {
+        archive: 'Lưu trữ ghi chú',
+        create: 'Viết ghi chú',
+        delete: 'Chuyển ghi chú vào thùng rác',
+        get: 'Xem ghi chú',
+        list: 'Xem danh sách ghi chú',
+        pin: 'Ghim ghi chú',
+        restore: 'Khôi phục ghi chú',
+        search: 'Tìm ghi chú',
+        set_visibility: 'Đổi chế độ riêng tư hoặc dùng chung của ghi chú',
+        unpin: 'Bỏ ghim ghi chú',
+        update: 'Sửa ghi chú',
+      },
+      private_counts: 'Đếm ghi chú riêng của từng thành viên',
+      record: {
+        panel: 'Xem ghi chú của một bản ghi',
+      },
+      trash: {
+        empty: 'Dọn thùng rác ghi chú',
       },
     },
     social: {

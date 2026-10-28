@@ -72,6 +72,9 @@ export function hintMatches(hint: StreamHint, query: Query): boolean {
     // The kernel's own (#671): the bell in the org shell reads them again.
     case 'notification':
       return path === 'notifications.list';
+    // A member's note (#1671): the notes lists and panels read again, and that note.
+    case 'note':
+      return path.startsWith('notes.');
   }
 }
 

@@ -26,6 +26,7 @@
     "@crove/mail": "workspace:*",
     "@crove/mod-crm": "workspace:*",
     "@crove/mod-finance": "workspace:*",
+    "@crove/mod-notes": "workspace:*",
     "@crove/mod-social": "workspace:*",
     "@hono/node-server": "catalog:",
     "@orpc/server": "catalog:",
