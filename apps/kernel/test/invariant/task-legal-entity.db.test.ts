@@ -5,7 +5,7 @@
 //     delegated or escalated task its parent's; any other task stays org-level. A comment goes with its task.
 //   - A member limited to one entity lists, opens and comments on no task of another entity, and still sees the
 //     org-level ones; an agent limited to one entity sees the same.
-//   - Tasks written before 20261104030000 are stamped the same way, and the review and escalation titles that copied a
+//   - Tasks written before 20261104040000 are stamped the same way, and the review and escalation titles that copied a
 //     proposal's title before #1756 take the neutral wording.
 // Part of the invariant suite: keep it self-contained (package code under test, no helpers from outside
 // test/invariant/). Set CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
@@ -24,7 +24,7 @@ import { financeCommands, financeQueries } from '@crove/mod-finance';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
-const THIS_VERSION = '20261104030000';
+const THIS_VERSION = '20261104040000';
 const TEMPLATE = 'finance.chief_accountant';
 const SYSTEM = { type: 'system' as const, component: 'kernel.agent' };
 const suite = ADMIN ? describe : describe.skip;
