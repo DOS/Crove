@@ -11,6 +11,9 @@
 --   member_items_purge     removes nothing within 30 days (NOTE_MEMBER_PURGE_DAYS) of the user's latest removal from
 --                          the org that the audit trail records (kernel.member.remove, outcome ok), whenever the job
 --                          runs. audit_event is append-only and never purged, so no caller can shorten the delay.
+--                          kernel.member.remove is the only command that ends a membership (org_purge removes the
+--                          notes with the members); a membership ended without that audit row (an SQL delete by
+--                          staff) gets no delay, so a new way to remove a member must record the same row.
 -- The delays no longer come from the caller alone (the job's startAfter, the command's cutoff).
 --
 -- New: crove_notes.former_members_due, for the worker's daily sweep: the users who own private notes or to-dos in an
@@ -80,7 +83,8 @@ CREATE OR REPLACE FUNCTION crove_notes.trash_empty(p_before timestamptz)
 RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
   v_org uuid := crove_kernel.ctx_org_id();
-  v_before timestamptz := LEAST(p_before, pg_catalog.now() - interval '30 days');
+  -- A NULL cutoff removes nothing, as before (LEAST alone would ignore it).
+  v_before timestamptz := LEAST(COALESCE(p_before, '-infinity'::timestamptz), pg_catalog.now() - interval '30 days');
   v_n bigint;
   v_t bigint;
 BEGIN

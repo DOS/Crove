@@ -103,7 +103,8 @@ export async function sweepNotesFormerMembers(deps: { runtime: Runtime; workerDb
   return removed;
 }
 
-// A queued purge: the former member's private notes in that org, unless they are a member again.
+// A queued purge: the former member's private notes in that org, unless they are a member again. A job that starts a
+// moment before the database's 30 days are over (clocks apart) removes nothing; the next daily sweep then does it.
 export async function runNotesMemberPurge(runtime: Runtime, job: { orgId: string; userId: string; eventId?: string }): Promise<{ removed: number }> {
   const input = job.eventId === undefined ? { userId: job.userId } : { userId: job.userId, eventId: job.eventId };
   const done = await runtime.execute<{ removed: number }>('notes.member_items.purge', input, { actor: ACTOR, orgId: job.orgId });
