@@ -58,7 +58,7 @@ export const QUEUES = {
   // Created by the notes core migration (20261103130000).
   notesMemberPurge: 'notes-member-purge',
   notesTrash: 'notes-trash',
-  // Created by the dead letter migration (20261103130000): every other queue's dead letters (#1720, dead-letter.ts).
+  // Created by the dead letter migration (20261103150000): every other queue's dead letters (#1720, dead-letter.ts).
   deadLetter: 'kernel-job.dlq',
 } as const;
 type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
