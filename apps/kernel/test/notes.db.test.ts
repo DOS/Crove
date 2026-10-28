@@ -147,6 +147,21 @@ suite('notes on PostgreSQL (#1671)', () => {
     expect(rows.rows[2]?.detail).toMatchObject({ noteId: n.priv, revision: 2, changed: ['title', 'body', 'tags'] });
     const text = JSON.stringify(rows.rows);
     for (const secret of [PRIVATE_TITLE, PRIVATE_BODY, SHARED_TITLE, 'ngân hàng']) expect(text).not.toContain(secret);
+    // Which record a private note is about stays out too, adding and removing a link included; a shared note's link
+    // names its record.
+    const linkId = (await o.query<Note>(o.author, 'notes.note.get', { noteId: n.priv })).links[0]?.id;
+    await o.exec(o.author, 'notes.link.remove', { linkId });
+    await o.exec(o.author, 'notes.link.add', { noteId: n.priv, targetType: 'kernel.party', targetId: o.party });
+    const audits = await admin((c) =>
+      c.query<{ command: string; detail: Record<string, unknown> }>(
+        `SELECT command, detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command LIKE 'notes.%' AND detail ->> 'noteId' = $2 ORDER BY occurred_at, id`,
+        [o.orgId, n.priv],
+      ),
+    );
+    expect(audits.rows.map((r) => r.command)).toEqual(['notes.note.create', 'notes.note.update', 'notes.link.remove', 'notes.link.add']);
+    expect(JSON.stringify(audits.rows)).not.toContain(o.party);
+    expect(audits.rows.filter((r) => r.command !== 'notes.note.update').map((r) => r.detail.target)).toEqual(['private', 'private', 'private']);
+    expect(JSON.stringify(rows.rows[1]?.detail)).toContain(o.party);
   });
 
   it('lets only the author edit, refuses a stale revision, and lets owners and admins pin a shared note', async () => {

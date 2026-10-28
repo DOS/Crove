@@ -181,10 +181,13 @@ suite('private notes on PostgreSQL (#1671, ADR-0037)', () => {
       const seen = await run(actor, async (c) => ({
         notes: (await c.query<{ id: string }>('SELECT id FROM crove_notes.note')).rows.map((r) => r.id),
         byId: (await c.query('SELECT title, body, tags, search FROM crove_notes.note WHERE id = $1', [notes.private])).rowCount,
+        // The link's own read policy goes through its note: asked for by id, the private note's link is not there.
+        linkById: (await c.query('SELECT target_id FROM crove_notes.link WHERE id = $1', [notes.privateLink])).rowCount,
         searched: (await c.query(`SELECT id FROM crove_notes.note WHERE search @@ crove_kernel.search_query('mat khau')`)).rowCount,
         links: (await c.query<{ id: string }>('SELECT id FROM crove_notes.link')).rows.map((r) => r.id),
       }));
       expect(seen.byId, `${actor.name} reading the private note by id`).toBe(0);
+      expect(seen.linkById, `${actor.name} reading the private note's link by id`).toBe(0);
       expect(seen.searched, `${actor.name} searching the private note's words`).toBe(0);
       expect(seen.notes, `${actor.name}'s notes`).toEqual(readsShared ? [notes.shared] : []);
       expect(seen.links, `${actor.name}'s links`).toEqual(readsShared ? [notes.sharedLink] : []);
@@ -348,6 +351,8 @@ suite('private notes on PostgreSQL (#1671, ADR-0037)', () => {
       await c.end();
     }
     expect(purged).toBe('1');
+    // A second run finds nothing more to remove.
+    expect(await purge()).toBe('0');
     const remaining = await admin((a) => a.query<{ id: string }>('SELECT id FROM crove_notes.note WHERE org_id = $1 ORDER BY id', [orgId]));
     expect(remaining.rows.map((r) => r.id)).toEqual([notes.shared]);
   });
