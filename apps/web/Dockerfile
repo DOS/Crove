@@ -11,6 +11,8 @@ ENV CI=true \
 RUN npm install -g pnpm@10.34.7 --no-fund --no-audit
 # Dependencies first, from the manifests only, so a source change reuses the installed layer.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+# pnpm checks every patch the workspace lists (patchedDependencies), used by this app or not.
+COPY patches ./patches
 COPY apps/web/package.json ./apps/web/
 # The root `prepare` script; it skips hook installation when there is no .git, as in an image build.
 COPY tools/install-git-hooks.mjs ./tools/
