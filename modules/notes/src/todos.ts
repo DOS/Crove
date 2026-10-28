@@ -10,6 +10,7 @@ import { sql } from 'kysely';
 import { z } from 'zod';
 import {
   auditValue,
+  todoAutoReminder,
   todoDueInstant,
   todoLocalTime,
   todoStanding,
@@ -20,6 +21,7 @@ import {
   zTodoUpdate,
   type Todo,
   type TodoCount,
+  type TodoReminder,
   type TodoStatus,
   type TodoStep,
   type TodoSummary,
@@ -45,6 +47,7 @@ const SUMMARY = [
   'due_on',
   'due_at',
   'time_zone',
+  'remind_at',
   'sort_key',
   'task_id',
   'revision',
@@ -62,6 +65,7 @@ interface SummaryRow {
   due_on: string | null;
   due_at: Date | string | null;
   time_zone: string;
+  remind_at: Date | string | null;
   sort_key: string;
   task_id: string | null;
   revision: number;
@@ -86,6 +90,7 @@ function summary(r: SummaryRow, now: Date): TodoSummary {
     dueAt: dueAt?.toISOString() ?? null,
     dueTime: dueAt ? todoLocalTime(dueAt, r.time_zone) : null,
     timeZone: r.time_zone,
+    remindAt: iso(r.remind_at),
     group: standing?.group ?? null,
     overdue: standing?.overdue ?? false,
     steps: { done: list.filter((s) => s.done).length, total: list.length },
@@ -126,6 +131,22 @@ function due(input: { dueOn: string | null; dueTime: string | null; timeZone: st
     time_zone: input.timeZone,
   };
 }
+
+// When the reminder is due (notes.md §3.8): the automatic one only while it is ahead, so a to-do written for today
+// after 8:00 is not reminded at once; a picked time must be ahead.
+function remindAt(reminder: TodoReminder, at: { due_on: string | null; due_at: Date | null; time_zone: string }, now: Date): Date | null {
+  if (reminder === 'off') return null;
+  if (reminder === 'auto') {
+    const auto = todoAutoReminder({ dueOn: at.due_on, dueAt: at.due_at, timeZone: at.time_zone });
+    return auto !== null && auto.getTime() > now.getTime() ? auto : null;
+  }
+  const picked = new Date(reminder.at);
+  if (picked.getTime() <= now.getTime()) throw new DomainError('TODO_REMINDER_PAST', 400, 'Giờ nhắc đã qua; hãy chọn một giờ sắp tới');
+  return picked;
+}
+
+// How a reminder is told in the audit: its kind and time, never the to-do's text.
+const reminderKind = (reminder: TodoReminder) => (typeof reminder === 'string' ? reminder : 'custom');
 
 // The text as stored: empty details are none, and the steps are JSON for the jsonb column.
 const detailsOf = (details: string): string | null => (details.trim() === '' ? null : details);
@@ -181,6 +202,8 @@ export const todoCreate = defineCommand({
     // A new to-do goes first in the caller's list.
     const rows = await ownKeys(ctx, null);
     const sortKey = await placeBetween(ctx, rows, -1, 0);
+    const when = due(input);
+    const remind = remindAt(input.reminder, when, ctx.now);
     const row = await ctx.trx
       .insertInto('crove_notes.todo')
       .values({
@@ -189,7 +212,8 @@ export const todoCreate = defineCommand({
         title: input.title,
         details: detailsOf(input.details),
         checklist: checklistOf(input.checklist),
-        ...due(input),
+        ...when,
+        remind_at: remind,
         sort_key: sortKey,
         created_at: ctx.now,
         updated_at: ctx.now,
@@ -204,6 +228,8 @@ export const todoCreate = defineCommand({
       dueOn: input.dueOn,
       dueTime: input.dueTime !== null,
       timeZone: input.timeZone,
+      reminder: reminderKind(input.reminder),
+      remindAt: remind?.toISOString() ?? null,
     });
     return written(row);
   },
@@ -227,21 +253,30 @@ export const todoUpdate = defineCommand({
     const details = detailsOf(input.details);
     const checklist = checklistOf(input.checklist);
     const beforeDueAt = before.due_at === null ? null : new Date(before.due_at).getTime();
+    const dueMoved = before.due_on !== next.due_on || beforeDueAt !== (next.due_at?.getTime() ?? null) || before.time_zone !== next.time_zone;
+    const beforeRemind = before.remind_at === null ? null : new Date(before.remind_at);
+    // Without a reminder in the input it stays, unless it was the automatic one of the old due day and time: it moves
+    // with them.
+    const wasAuto = beforeRemind?.getTime() === todoAutoReminder({ dueOn: before.due_on, dueAt: beforeDueAt === null ? null : new Date(beforeDueAt), timeZone: before.time_zone })?.getTime();
+    const remind =
+      input.reminder !== undefined ? remindAt(input.reminder, next, ctx.now) : dueMoved && beforeRemind !== null && wasAuto ? remindAt('auto', next, ctx.now) : beforeRemind;
     const changed = [
       ...(before.title !== input.title ? ['title'] : []),
       ...(before.details !== details ? ['details'] : []),
       ...(JSON.stringify(steps(before.checklist)) !== checklist ? ['checklist'] : []),
       ...(before.due_on !== next.due_on || beforeDueAt !== (next.due_at?.getTime() ?? null) ? ['due'] : []),
       ...(before.time_zone !== next.time_zone ? ['timeZone'] : []),
+      ...((beforeRemind?.getTime() ?? null) !== (remind?.getTime() ?? null) ? ['reminder'] : []),
     ];
     const row = await ctx.trx
       .updateTable('crove_notes.todo')
-      .set({ title: input.title, details, checklist, ...next, revision: before.revision + 1, updated_at: ctx.now })
+      // A new reminder time clears reminded_at (the b_remind_reset trigger), so it is sent again.
+      .set({ title: input.title, details, checklist, ...next, remind_at: remind, revision: before.revision + 1, updated_at: ctx.now })
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', input.todoId)
       .returning(['id', 'revision'])
       .executeTakeFirstOrThrow();
-    ctx.audit({ todoId: row.id, revision: row.revision, changed, dueOn: next.due_on });
+    ctx.audit({ todoId: row.id, revision: row.revision, changed, dueOn: next.due_on, remindAt: remind?.toISOString() ?? null });
     return written(row);
   },
 });
@@ -335,6 +370,8 @@ export const todoList = defineQuery({
   handler: async (ctx, input): Promise<TodoSummary[]> => {
     userOf(ctx.actor);
     let q = ctx.trx.selectFrom('crove_notes.todo').select(SUMMARY).where('org_id', '=', ctx.orgId);
+    // Words typed without Vietnamese marks find them ("hoa don" finds "hóa đơn"), each as a prefix.
+    if (input.q !== undefined) q = q.where(sql<boolean>`search @@ crove_kernel.search_query(${input.q})`);
     if (input.view === 'trash') q = q.where('deleted_at', 'is not', null).orderBy('deleted_at', 'desc');
     else {
       q = q.where('deleted_at', 'is', null);

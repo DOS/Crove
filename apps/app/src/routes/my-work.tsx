@@ -39,20 +39,25 @@ function DueChip({ todo }: { todo: TodoSummary }) {
   );
 }
 
-// The editor of one to-do: title, details, checklist steps and the due day and time, saved against its revision.
+// The editor of one to-do: title, details, checklist steps, the due day and time and whether to be reminded (#1675),
+// saved against its revision. The reminder is on unless the member turned it off: a to-do with a due day and no
+// reminder had it turned off (or its time had passed when it was written).
 function TodoEditor({ todo, onClose }: { todo: Todo; onClose: () => void }) {
   const t = useTranslations('myWork');
+  const f = useFormat();
   const [title, setTitle] = useState(todo.title);
   const [details, setDetails] = useState(todo.details);
   const [steps, setSteps] = useState<TodoStep[]>(todo.checklist);
   const [newStep, setNewStep] = useState('');
   const [dueOn, setDueOn] = useState(todo.dueOn ?? '');
   const [dueTime, setDueTime] = useState(todo.dueTime ?? '');
+  const [remind, setRemind] = useState(todo.remindAt !== null || todo.dueOn === null);
+  const [remindTouched, setRemindTouched] = useState(false);
   const titleRef = useRef<HTMLInputElement>(null);
   useEffect(() => titleRef.current?.focus(), []);
   // The values of one save are its variables, so an edit made while it runs does not change what it sends.
   const save = useMutation({
-    mutationFn: (v: { title: string; details: string; steps: TodoStep[]; dueOn: string; dueTime: string }) =>
+    mutationFn: (v: { title: string; details: string; steps: TodoStep[]; dueOn: string; dueTime: string; remind: boolean; remindTouched: boolean }) =>
       client.notes.todos.update({
         todoId: todo.id,
         revision: todo.revision,
@@ -63,6 +68,10 @@ function TodoEditor({ todo, onClose }: { todo: Todo; onClose: () => void }) {
         dueTime: v.dueOn && v.dueTime ? v.dueTime : null,
         // A due day is read in the zone the to-do was written in, unless it gets a new day here.
         timeZone: v.dueOn && v.dueOn !== todo.dueOn ? browserTimeZone() : todo.timeZone,
+        // Sent when the member changed it or the due day or time moved; otherwise the reminder stays as it was.
+        ...(v.remindTouched || (v.dueOn || null) !== todo.dueOn || (v.dueOn && v.dueTime ? v.dueTime : null) !== todo.dueTime
+          ? { reminder: v.remind ? ('auto' as const) : ('off' as const) }
+          : {}),
       }),
     onSuccess: () => {
       refresh();
@@ -84,7 +93,7 @@ function TodoEditor({ todo, onClose }: { todo: Todo; onClose: () => void }) {
   };
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (title.trim()) save.mutate({ title, details, steps, dueOn, dueTime });
+    if (title.trim()) save.mutate({ title, details, steps, dueOn, dueTime, remind, remindTouched });
   };
   return (
     <Card className="block p-4" data-testid="todo-editor">
@@ -150,6 +159,26 @@ function TodoEditor({ todo, onClose }: { todo: Todo; onClose: () => void }) {
             <TimeInput value={dueTime} onChange={setDueTime} disabled={!dueOn} className="mt-1" aria-label={t('fieldDueTime')} />
           </label>
         </div>
+        <label className="flex items-start gap-2 text-xs">
+          <Checkbox
+            checked={remind && dueOn !== ''}
+            disabled={!dueOn}
+            onCheckedChange={(checked) => {
+              setRemind(checked === true);
+              setRemindTouched(true);
+            }}
+            className="mt-0.5"
+            data-testid="todo-remind"
+          />
+          <span>
+            <span className="block text-foreground">{t('fieldRemind')}</span>
+            <span className="block text-subtle-foreground">
+              {todo.remindAt && remind && !remindTouched && dueOn === (todo.dueOn ?? '') && dueTime === (todo.dueTime ?? '')
+                ? t('remindAt', { time: f.dateTime(todo.remindAt) })
+                : t('remindHint')}
+            </span>
+          </span>
+        </label>
         <div className="flex flex-wrap items-center gap-2">
           <Button type="submit" disabled={save.isPending || !title.trim()}>
             {save.isPending ? <Spinner /> : null}

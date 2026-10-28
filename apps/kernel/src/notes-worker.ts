@@ -1,5 +1,5 @@
 // The worker's part of the notes module (issue #1671, ADR-0037 §4): a former member's private notes are removed 30 days
-// after they left, and the trash is emptied daily. startWorker() works and queues these jobs only when the module is
+// after they left, the trash is emptied daily, and every 5 minutes the due to-do reminders are sent (#1675). startWorker() works and queues these jobs only when the module is
 // installed (Runtime.installed('notes'), CROVE_MODULES), so a deployment without notes neither queues nor works them.
 // Jobs carry ids only; the commands run in the org's system context and reach private notes through definers that
 // answer counts, never text.
@@ -17,6 +17,9 @@ export const NOTES_TRASH_CRON = '45 2 * * *';
 export const NOTES_TRASH_TZ = 'Asia/Ho_Chi_Minh';
 // Orgs one sweep empties at most; the rest wait for the next night.
 const TRASH_SWEEP_ORGS = 500;
+// The reminder sweep (notes.md §3.8): every 5 minutes, at most this many reminders a pass; the rest wait for the next.
+export const NOTES_REMIND_CRON = '*/5 * * * *';
+const REMIND_SWEEP_LIMIT = 1000;
 const MEMBER_PURGE_RETRY_LIMIT = 5;
 
 export interface NotesMemberPurgeJob {
@@ -57,6 +60,29 @@ export async function sweepNotesTrash(deps: { runtime: Runtime; workerDb: Db }, 
     }
   }
   return removed;
+}
+
+// One pass of the reminders: the due ones, claimed (marked sent) by crove_notes.todo_reminders_claim, each becoming one
+// notification for its owner through notes.todo.remind in the org's system context. A failure after the claim skips
+// that reminder rather than sending it twice. The claim returns ids, owners and times, never text; logs carry ids and
+// codes only.
+export async function sweepNotesReminders(deps: { runtime: Runtime; workerDb: Db }): Promise<number> {
+  const { rows } = await sql<{ org_id: string; id: string; owner_user_id: string; remind_at: Date }>`
+    SELECT org_id, id, owner_user_id, remind_at FROM crove_notes.todo_reminders_claim(${REMIND_SWEEP_LIMIT}::int)`.execute(deps.workerDb);
+  let sent = 0;
+  for (const row of rows) {
+    try {
+      const done = await deps.runtime.execute<{ sent: number }>(
+        'notes.todo.remind',
+        { todoId: row.id, ownerUserId: row.owner_user_id, remindAt: new Date(row.remind_at).toISOString() },
+        { actor: ACTOR, orgId: row.org_id },
+      );
+      sent += done.sent;
+    } catch (error) {
+      console.warn(`[notes-remind] org ${row.org_id.slice(0, 8)}`, error instanceof DomainError ? error.code : error instanceof Error ? error.name : 'error');
+    }
+  }
+  return sent;
 }
 
 // A queued purge: the former member's private notes in that org, unless they are a member again.

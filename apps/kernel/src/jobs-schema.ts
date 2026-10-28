@@ -57,6 +57,8 @@ export const QUEUES = {
   // Created by the notes core migration (20261103130000).
   notesMemberPurge: 'notes-member-purge',
   notesTrash: 'notes-trash',
+  // Created by the notes reminders migration (20261103180000).
+  notesRemind: 'notes-reminders',
 } as const;
 type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
 
@@ -122,6 +124,7 @@ const QUEUE_EGRESS: { readonly [Q in QueueName]: JobEgress } = {
   [QUEUES.periodBalanceVerify]: 'none',
   [QUEUES.notesMemberPurge]: 'none',
   [QUEUES.notesTrash]: 'none',
+  [QUEUES.notesRemind]: 'none',
 };
 
 // The channel providers whose host the tenant names: their adapters get the egress guard (channelPublishers).

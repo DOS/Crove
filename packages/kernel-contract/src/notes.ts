@@ -128,6 +128,14 @@ const zTime = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
 const dueTimeNeedsDay = (v: { dueOn: string | null; dueTime: string | null }) => v.dueTime === null || v.dueOn !== null;
 const DUE_TIME_NEEDS_DAY = { message: 'A due time needs a due day', path: ['dueTime'] };
 
+// The reminder (notes.md §3.8): 'auto' reminds at TODO_REMIND_TIME on the due day, or TODO_REMIND_BEFORE_MINUTES
+// before a due time, and not at all without a due day or once that time has passed; 'off' never; { at } at that
+// instant, which must be ahead.
+export const TODO_REMIND_TIME = '08:00';
+export const TODO_REMIND_BEFORE_MINUTES = 30;
+export const zTodoReminder = z.union([z.enum(['auto', 'off']), z.strictObject({ at: z.iso.datetime({ offset: true }) })]);
+export type TodoReminder = z.infer<typeof zTodoReminder>;
+
 // A new to-do: the title, and optionally its details, steps and due day and time, in the caller's time zone.
 export const zTodoCreate = z
   .strictObject({
@@ -137,10 +145,12 @@ export const zTodoCreate = z
     dueOn: zDay.nullable().default(null),
     dueTime: zTime.nullable().default(null),
     timeZone: zTimeZone.default(DEFAULT_TIME_ZONE),
+    reminder: zTodoReminder.default('auto'),
   })
   .refine(dueTimeNeedsDay, DUE_TIME_NEEDS_DAY);
 export type TodoCreateInput = z.input<typeof zTodoCreate>;
-// The owner's edit, against the revision they read (TODO_REVISION_CONFLICT when it moved on).
+// The owner's edit, against the revision they read (TODO_REVISION_CONFLICT when it moved on). Without `reminder` the
+// reminder stays as it was, unless it was the automatic one and the due day or time moved: it then follows them.
 export const zTodoUpdate = z
   .strictObject({
     todoId: zId,
@@ -151,6 +161,7 @@ export const zTodoUpdate = z
     dueOn: zDay.nullable(),
     dueTime: zTime.nullable(),
     timeZone: zTimeZone,
+    reminder: zTodoReminder.optional(),
   })
   .refine(dueTimeNeedsDay, DUE_TIME_NEEDS_DAY);
 export type TodoUpdateInput = z.input<typeof zTodoUpdate>;
@@ -160,7 +171,12 @@ export const zTodoReorder = z
   .strictObject({ todoId: zId, place: z.enum(['before', 'after']), anchorId: zId })
   .refine((v) => v.todoId !== v.anchorId, { message: 'A to-do is not moved next to itself', path: ['anchorId'] });
 export type TodoReorderInput = z.input<typeof zTodoReorder>;
-export const zTodoList = z.strictObject({ view: z.enum(TODO_LIST_VIEWS), limit: z.number().int().min(1).max(500).default(200) });
+// `q` keeps the to-dos whose title, details or steps hold every word, typed with or without Vietnamese marks.
+export const zTodoList = z.strictObject({
+  view: z.enum(TODO_LIST_VIEWS),
+  q: z.string().trim().min(1).max(200).optional(),
+  limit: z.number().int().min(1).max(500).default(200),
+});
 export type TodoListInput = z.input<typeof zTodoList>;
 
 // What a command returns: ids and the revision, never text (idempotency rows keep results, notes.md §3.5).
@@ -177,6 +193,8 @@ export const zTodoSummary = z.object({
   dueAt: z.string().nullable(),
   dueTime: z.string().nullable(),
   timeZone: z.string(),
+  // When the reminder is due, or null for none.
+  remindAt: z.string().nullable(),
   group: z.enum(TODO_DUE_GROUPS).nullable(),
   overdue: z.boolean(),
   steps: z.object({ done: z.number().int(), total: z.number().int() }),
@@ -210,6 +228,12 @@ export function todoDueGroup(dueOn: string | null, today: string): TodoDueGroup 
 export function todoDueInstant(dueOn: string, time: string, timeZone: string): Date {
   const [h, m] = time.split(':').map(Number) as [number, number];
   return new Date(zonedInstant(timeZone, dueOn, h * 60 + m));
+}
+
+/** The automatic reminder of a due day and time: TODO_REMIND_BEFORE_MINUTES before the time, else TODO_REMIND_TIME on the day. */
+export function todoAutoReminder(t: { dueOn: string | null; dueAt: Date | null; timeZone: string }): Date | null {
+  if (t.dueAt !== null) return new Date(t.dueAt.getTime() - TODO_REMIND_BEFORE_MINUTES * 60_000);
+  return t.dueOn === null ? null : todoDueInstant(t.dueOn, TODO_REMIND_TIME, t.timeZone);
 }
 
 /** The wall-clock time (HH:mm) of an instant in `timeZone`. */
