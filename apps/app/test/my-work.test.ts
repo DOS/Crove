@@ -12,6 +12,7 @@ const todo = (id: string, group: TodoSummary['group']): TodoSummary => ({
   dueAt: null,
   dueTime: null,
   timeZone: 'Asia/Ho_Chi_Minh',
+  remindAt: null,
   group,
   overdue: group === 'overdue',
   steps: { done: 0, total: 0 },

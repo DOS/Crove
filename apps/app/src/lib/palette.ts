@@ -1,10 +1,10 @@
 // The command palette (issue #439, DESIGN.md 5.2): which entries match what the user typed, in which order, and the
 // key that opens it. No browser or React imports, so it is unit tested.
 
-// parties, documents and entries hold what the org's search found (#673).
-export type PaletteGroup = 'go' | 'proposals' | 'parties' | 'documents' | 'entries' | 'orgs' | 'actions';
+// parties, documents and entries hold what the org's search found (#673); notes what the notes search found (#1675).
+export type PaletteGroup = 'go' | 'proposals' | 'parties' | 'documents' | 'entries' | 'notes' | 'orgs' | 'actions';
 
-export const PALETTE_GROUPS: readonly PaletteGroup[] = ['go', 'proposals', 'parties', 'documents', 'entries', 'orgs', 'actions'];
+export const PALETTE_GROUPS: readonly PaletteGroup[] = ['go', 'proposals', 'parties', 'documents', 'entries', 'notes', 'orgs', 'actions'];
 
 export interface PaletteItem {
   id: string;

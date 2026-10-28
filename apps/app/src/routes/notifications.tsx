@@ -46,6 +46,8 @@ function useLine() {
           : t('text.portal_attention', { period: period(n.detail.period), missing: Number(n.detail.missing ?? 0), mismatch: Number(n.detail.amountMismatch ?? 0) });
       case 'finance.period_closing':
         return t('text.period_closing', { period: period(n.detail.period), due: n.detail.dueDate ? f.date(n.detail.dueDate) : '' });
+      case 'notes.todo_due':
+        return t('text.todo_due');
       default:
         return t('text.other');
     }
@@ -100,6 +102,7 @@ export function NotificationsPage() {
     else if (target?.to === 'bank') void navigate({ to: '/o/$slug/bank', params: { slug }, search: target.account ? { account: target.account } : {} });
     else if (target?.to === 'portal') void navigate({ to: '/o/$slug/portal-invoices', params: { slug } });
     else if (target?.to === 'ledger') void navigate({ to: '/o/$slug/ledger', params: { slug } });
+    else if (target?.to === 'myWork') void navigate({ to: '/o/$slug/my-work', params: { slug } });
   };
   // A kind this version of the app does not know (a newer module) is left out rather than shown blank.
   const items = (list.data?.items ?? []).filter((n) => isKnownKind(n.kind));

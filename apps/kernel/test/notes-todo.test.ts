@@ -1,9 +1,9 @@
-// Personal to-dos (issues #1673 and #1674): the fractional order keys, the due-day groups in a to-do's own time zone,
-// the tasks of My work, the hand-over's input, and the commands' access (no agent runs any of them, ADR-0029, notes
-// plan §3.5).
+// Personal to-dos (issues #1673, #1674 and #1675): the fractional order keys, the due-day groups in a to-do's own time
+// zone, the tasks of My work, the hand-over's input, and the commands' access (no agent runs any of them, ADR-0029,
+// notes plan §3.5); the automatic reminder (#1675).
 import { describe, expect, it } from 'vitest';
-import { taskStanding, todoDueGroup, todoDueInstant, todoLocalTime, todoStanding, zTodoCreate, zTodoHandOver, zTodoReorder } from '@crove/kernel-contract';
-import { REBALANCE_AT, isSortKey, keyBetween, myWork, notesCommands, notesQueries, spreadKeys, todoCommands, todoHandOver, todoQueries } from '@crove/mod-notes';
+import { taskStanding, todoAutoReminder, todoDueGroup, todoDueInstant, todoLocalTime, todoStanding, zTodoCreate, zTodoHandOver, zTodoReorder, zTodoUpdate } from '@crove/kernel-contract';
+import { REBALANCE_AT, TODO_DUE, isSortKey, keyBetween, myWork, notesCommands, notesQueries, spreadKeys, todoCommands, todoHandOver, todoQueries, todoRemind } from '@crove/mod-notes';
 
 describe('to-do order keys', () => {
   it('finds a key between any two, and at both ends', () => {
@@ -91,7 +91,7 @@ describe('to-do due days', () => {
     expect(zTodoCreate.safeParse({ title: 'x', dueTime: '09:00' }).success).toBe(false);
     expect(zTodoCreate.safeParse({ title: 'x', dueOn: '2026-11-05', dueTime: '24:00' }).success).toBe(false);
     expect(zTodoCreate.safeParse({ title: 'x', timeZone: 'Mars/Olympus' }).success).toBe(false);
-    expect(zTodoCreate.parse({ title: '  x  ' })).toEqual({ title: 'x', details: '', checklist: [], dueOn: null, dueTime: null, timeZone: 'Asia/Ho_Chi_Minh' });
+    expect(zTodoCreate.parse({ title: '  x  ' })).toEqual({ title: 'x', details: '', checklist: [], dueOn: null, dueTime: null, timeZone: 'Asia/Ho_Chi_Minh', reminder: 'auto' });
     const id = '018f0000-0000-7000-8000-000000000001';
     expect(zTodoReorder.safeParse({ todoId: id, place: 'before', anchorId: id }).success).toBe(false);
   });
@@ -141,5 +141,32 @@ describe('to-do commands', () => {
       expect(def.access, def.name).toEqual(['owner', 'admin', 'member']);
       expect(def.risk, def.name).toBe('R1');
     }
+  });
+});
+
+describe('to-do reminders (#1675)', () => {
+  it("reminds at 8:00 on the due day, or 30 minutes before a due time, in the to-do's zone", () => {
+    expect(todoAutoReminder({ dueOn: null, dueAt: null, timeZone: 'Asia/Ho_Chi_Minh' })).toBeNull();
+    expect(todoAutoReminder({ dueOn: '2026-11-05', dueAt: null, timeZone: 'Asia/Ho_Chi_Minh' })?.toISOString()).toBe('2026-11-05T01:00:00.000Z');
+    expect(todoAutoReminder({ dueOn: '2026-11-05', dueAt: null, timeZone: 'UTC' })?.toISOString()).toBe('2026-11-05T08:00:00.000Z');
+    const dueAt = todoDueInstant('2026-11-05', '09:30', 'Asia/Ho_Chi_Minh');
+    expect(todoAutoReminder({ dueOn: '2026-11-05', dueAt, timeZone: 'Asia/Ho_Chi_Minh' })?.toISOString()).toBe('2026-11-05T02:00:00.000Z');
+  });
+
+  it('takes auto, off or a time with its offset, auto by default on a new to-do and unchanged on an edit', () => {
+    expect(zTodoCreate.parse({ title: 'Việc' }).reminder).toBe('auto');
+    expect(zTodoCreate.parse({ title: 'Việc', reminder: 'off' }).reminder).toBe('off');
+    expect(zTodoCreate.parse({ title: 'Việc', reminder: { at: '2026-11-05T09:00:00+07:00' } }).reminder).toEqual({ at: '2026-11-05T09:00:00+07:00' });
+    expect(zTodoCreate.safeParse({ title: 'Việc', reminder: { at: 'mai' } }).success).toBe(false);
+    expect(zTodoCreate.safeParse({ title: 'Việc', reminder: 'often' }).success).toBe(false);
+    const edit = { todoId: '00000000-0000-4000-8000-000000000001', revision: 1, title: 'Việc', details: '', checklist: [], dueOn: null, dueTime: null, timeZone: 'UTC' };
+    expect(zTodoUpdate.parse(edit).reminder).toBeUndefined();
+  });
+
+  it('is a system command that only the worker runs, under its own kind', () => {
+    expect(notesCommands).toContain(todoRemind);
+    expect(todoRemind.access).toBe('system');
+    expect(todoRemind.risk).toBe('R1');
+    expect(TODO_DUE).toBe('notes.todo_due');
   });
 });

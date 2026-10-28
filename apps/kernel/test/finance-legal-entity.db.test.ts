@@ -149,7 +149,9 @@ suite('finance books per legal entity (#1280)', () => {
     db = createDb(pool);
     workerPool = createPool({ connectionString: login('crove_worker', 'test-worker-pw'), max: 1 });
     worker = createDb(workerPool);
-    const runtime = new Runtime(db).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
+    // The database is still before the keyed input hash's migration (20261103180000_crove_kernel_input_hash.sql), where
+    // crove_kernel.command_input_hash does not exist yet: this runtime writes the plain hash (#1741).
+    const runtime = new Runtime(db, { inputHash: 'sha256' }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
     owner = await upsertIdentity(db, { issuer: 'test', subject: randomUUID(), email: 'owner@le-books.test', name: null });
     member = await upsertIdentity(db, { issuer: 'test', subject: randomUUID(), email: 'member@le-books.test', name: null });
     ({ orgId } = await createOrg(runtime, { type: 'user', userId: owner, aal: 'aal1' }, 'Sổ theo pháp nhân'));
