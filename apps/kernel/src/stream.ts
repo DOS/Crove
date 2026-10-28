@@ -63,6 +63,16 @@ const TICKET = /^[A-Za-z0-9_-]{43}$/;
 export const RECIPIENT_HINT_TYPES: ReadonlySet<StreamHintType> = new Set<StreamHintType>(['notification', 'todo', 'note']);
 // The hints that may add `+shared`: a shared note, which the members who read the org's shared notes may hear too.
 const SHARED_HINT_TYPES: ReadonlySet<StreamHintType> = new Set<StreamHintType>(['note']);
+// The hints about rows of tables under the RESTRICTIVE le_scope policy, whose trigger names the row's legal entity
+// (#1692): a hint of one of these types without an entity reaches no stream, rather than every stream of the org
+// (#1703). stream-legal-entity.db.test.ts checks this list against the catalog, so a table that becomes entity-scoped
+// fails it until its type is added here.
+export const ENTITY_HINT_TYPES: ReadonlySet<StreamHintType> = new Set<StreamHintType>(['journal_entry', 'document', 'extraction', 'notification']);
+
+// Whether a hint of this type may go on with this entity (undefined: none named): a type of ENTITY_HINT_TYPES needs one.
+export function entityNamed(type: StreamHintType, legalEntityId: string | undefined): boolean {
+  return legalEntityId !== undefined || !ENTITY_HINT_TYPES.has(type);
+}
 
 export interface ParsedHint {
   orgId: string;
@@ -76,9 +86,9 @@ export interface ParsedHint {
 }
 
 // A notification payload, or null for anything that is not exactly `<org_id> <known type> <id>`, optionally followed
-// by ` <legal_entity_id>`, then by ` @<user_id>`, which a shared note follows with `+shared`. A hint of a
-// RECIPIENT_HINT_TYPES type that names no recipient is null too, and so is `+shared` on any other type than a note: fail
-// closed, it reaches no stream.
+// by ` <legal_entity_id>`, then by ` @<user_id>`, which a shared note follows with `+shared`. A hint of an
+// ENTITY_HINT_TYPES type that names no entity is null too, as is one of a RECIPIENT_HINT_TYPES type that names no
+// recipient, and `+shared` on any other type than a note: fail closed, it reaches no stream.
 export function parseHint(payload: string): ParsedHint | null {
   const match = PAYLOAD.exec(payload);
   if (!match) return null;
@@ -93,6 +103,7 @@ export function parseHint(payload: string): ParsedHint | null {
   ];
   if (!TYPES.has(type)) return null;
   const hint = { type: type as StreamHintType, id };
+  if (!entityNamed(hint.type, legalEntityId)) return null;
   if (userId === undefined && RECIPIENT_HINT_TYPES.has(hint.type)) return null;
   if (shared !== undefined && !SHARED_HINT_TYPES.has(hint.type)) return null;
   return {
@@ -522,13 +533,15 @@ export class StreamConnection implements HubSubscriber {
     this.send(sseEvent('ready', { recheckSeconds }));
   }
 
-  // A hint outside the scope, or about another member's own row that this stream may not read, is dropped at once, so
-  // it neither waits nor counts toward PENDING_HINT_LIMIT; one that waits is checked again, when it is sent, against
-  // the scope then in force (a re-check may have narrowed it, or taken away shared notes). A hint that arrives while a
-  // re-check that will widen the scope runs is dropped too: fail closed, the app's poll covers it.
+  // A hint outside the scope, about another member's own row that this stream may not read, or of an entity-scoped type
+  // without its entity, is dropped at once, so it neither waits nor counts toward PENDING_HINT_LIMIT; one that waits is
+  // checked again, when it is sent, against the scope then in force (a re-check may have narrowed it, or taken away
+  // shared notes). A hint that arrives while a re-check that will widen the scope runs is dropped too: fail closed, the
+  // app's poll covers it.
   hint(hint: StreamHint, legalEntityId?: string, userId?: string, shared = false): void {
     if (this.closed) return;
     if (!forRecipient(this.scope, this.userId, hint.type, userId, shared)) return;
+    if (!entityNamed(hint.type, legalEntityId)) return;
     if (!inScope(this.scope, legalEntityId)) return;
     if (!this.resyncPending) {
       // Keyed by the entity too: an extraction hint carries its file's id, and two readings of one file may belong to

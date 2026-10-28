@@ -4,13 +4,13 @@
 // Jobs carry ids only; the commands run in the org's system context and reach private notes through definers that
 // answer counts, never text.
 import { sql } from 'kysely';
-import type { PgBoss } from 'pg-boss';
 import type { Db } from '@crove/db';
 import { NOTE_MEMBER_PURGE_DAYS } from '@crove/kernel-contract';
 import { DomainError, type Runtime } from '@crove/kernel-runtime';
 import { trashCutoff } from '@crove/mod-notes';
 import { jobKey } from './job-keys.ts';
 import { QUEUES } from './jobs-schema.ts';
+import type { JobSender } from './worker.ts';
 
 // After the nightly retention purge (02:30), on the same clock.
 export const NOTES_TRASH_CRON = '45 2 * * *';
@@ -36,7 +36,7 @@ const ACTOR = { type: 'system' as const, component: 'notes' };
 // A member removed (kernel.member.removed, payload userId): their private notes are removed NOTE_MEMBER_PURGE_DAYS later,
 // unless they are a member again by then (the definer checks). One job per removal event. pg-boss keeps a delayed job
 // for its retention window counted from its start time, so a job 30 days ahead is not dropped before it runs.
-export function queueNotesMemberPurge(boss: PgBoss, row: { org_id: string; event_id: string; type: string; payload: Record<string, unknown> }, now = new Date()) {
+export function queueNotesMemberPurge(boss: JobSender, row: { org_id: string; event_id: string; type: string; payload: Record<string, unknown> }, now = new Date()) {
   if (row.type !== 'kernel.member.removed' || typeof row.payload.userId !== 'string') return null;
   const userId = row.payload.userId;
   return boss.send(QUEUES.notesMemberPurge, { orgId: row.org_id, userId, eventId: row.event_id } satisfies NotesMemberPurgeJob, {

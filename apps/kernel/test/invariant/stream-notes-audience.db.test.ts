@@ -329,10 +329,15 @@ suite('invariant: the hints of to-dos and notes reach only the members who may r
     }
   });
 
+  // kernel.stream.check repeats note_read's rule for another author's shared note (packages/kernel/src/queries.ts): this
+  // fails when the two drift apart for any role, or for a member limited to one entity (#1703).
   it("grants sharedNotes to exactly the actors whose context reads another member's shared note", async () => {
-    const shared = await note('author', 'org');
+    const byAuthor = await note('author', 'org');
+    const byMember = await note('member', 'org');
     const results: Record<string, { sharedNotes: unknown; reads: boolean }> = {};
-    for (const name of ['admin', 'member', 'viewer', 'accountant'] as const) {
+    for (const name of ACTORS) {
+      // Always a note of someone else: the author is the owner, so the owner is asked about the member's note.
+      const shared = name === 'author' ? byMember : byAuthor;
       const check = await runtime.query<{ sharedNotes: unknown }>('kernel.stream.check', {}, { actor: actorOf(name), orgId });
       const c = await pool.connect();
       let reads = false;
@@ -346,7 +351,9 @@ suite('invariant: the hints of to-dos and notes reach only the members who may r
       }
       results[name] = { sharedNotes: check.sharedNotes, reads };
     }
+    for (const [name, r] of Object.entries(results)) expect(r.sharedNotes, `${name}: sharedNotes against note_read`).toBe(r.reads);
     expect(results).toEqual({
+      author: { sharedNotes: true, reads: true },
       admin: { sharedNotes: true, reads: true },
       member: { sharedNotes: true, reads: true },
       viewer: { sharedNotes: false, reads: false },

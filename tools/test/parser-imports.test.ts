@@ -42,13 +42,31 @@ const PARSER_PACKAGES = [
   'libxmljs',
   'libxmljs2',
   'libxml2-wasm',
+  'parse5',
+  'cheerio',
+  'jsdom',
+  'happy-dom',
+  'linkedom',
+  'node-html-parser',
+  '@oozcitak/*',
+  'pdf2json',
+  'pdfreader',
+  'mailsplit',
+  '@zone-eu/mailsplit',
+  'libmime',
+  'libqp',
+  'libbase64',
+  'emailjs-mime-parser',
 ];
-const PARSER_NAME = new RegExp(`^(${PARSER_PACKAGES.map((p) => p.replace(/[/.]/g, '\\$&')).join('|')})$`);
+// A name, or `@scope/*` for every package of a scope (#1740: the @oozcitak family under xmlbuilder2).
+const escape = (s: string) => s.replace(/[\\^$.*+?()[\]{}|/]/g, '\\$&');
+const pattern = (p: string) => p.split('*').map(escape).join(`[^/'"\`]+`);
+const PARSER_NAME = new RegExp(`^(${PARSER_PACKAGES.map(pattern).join('|')})$`);
 // Any string literal naming a parser package (or a path inside one) counts, whatever loads it: `import ... from`,
 // `export ... from`, a side-effect `import 'x'`, a dynamic `import('x')`, `require('x')`, `require.resolve('x')`
 // or a `createRequire(...)('x')`. A false alarm (the name in an ordinary string) is fixed by rewording; a missed
 // import is not caught anywhere else. Calling the e-invoice parser by name counts too.
-const PARSER_SPECIFIER = PARSER_PACKAGES.map((p) => p.replace(/[/.]/g, '\\$&')).join('|');
+const PARSER_SPECIFIER = PARSER_PACKAGES.map(pattern).join('|');
 const PARSER_IMPORT = new RegExp(`(['"\`])(${PARSER_SPECIFIER})(\\/[^'"\`]*)?\\1|\\bparseEInvoiceXml\\b`);
 
 // Workspace packages the kernel image runs; their manifests must not list a parser.
@@ -156,15 +174,28 @@ describe('parsers stay in crove-extract', () => {
       "const load = createRequire(import.meta.url);\nconst parser = load('mailparser');",
       // exceljs's XML reader (#1719).
       "import { SaxesParser } from 'saxes';",
+      // HTML parsers, the @oozcitak scope and the mailsplit and libmime family (#1740).
+      "import { parse } from 'parse5';",
+      "const { JSDOM } = require('jsdom');",
+      "import { DOMParser } from '@oozcitak/dom';",
+      "import '@oozcitak/util/lib/index.js';",
+      "import { Splitter } from '@zone-eu/mailsplit';",
+      "const libmime = require('libmime');",
+      "import PDFParser from 'pdf2json';",
     ]) {
       expect(PARSER_IMPORT.test(line), line).toBe(true);
     }
+    expect(PARSER_NAME.test('@oozcitak/infra')).toBe(true);
+    expect(PARSER_NAME.test('@oozcitak')).toBe(false);
+    expect(PARSER_NAME.test('@oozcitak/dom/x')).toBe(false);
     for (const line of [
       "import { z } from 'zod';",
       // Look-alike names are not on the list.
       "import 'saxes-plus';",
       "require('fast-xml-parser-plus');",
       "import { x } from 'my-unpdf';",
+      "import { x } from 'parse5-utils';",
+      "import { x } from '@oozcitak-x/dom';",
       '// fast-xml-parser runs only in crove-extract.',
     ]) {
       expect(PARSER_IMPORT.test(line), line).toBe(false);
