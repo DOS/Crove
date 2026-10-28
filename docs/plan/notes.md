@@ -151,7 +151,7 @@ Every write is a command through `Runtime.execute()`. Every command declares `ri
 | `notes.todo.hand_over` | the to-do's owner | R1 | internal | creates the task through the kernel (N5); the member confirms the text the team will see |
 | `notes.todo.remind` | system | R1 | internal | writes the `notes.todo_due` notification for to-dos the reminder definer claimed, no text |
 | `notes.trash.empty` | system | R3 | irreversible | daily job: removes items 30 days in the trash |
-| `notes.member_items.purge` | system | R3 | irreversible | removes a former member's private items 30 days after they left, from a job the `kernel.member.removed` subscriber schedules (ADR-0037 section 4) |
+| `notes.member_items.purge` | system | R3 | irreversible | removes a former member's private items 30 days after they left, from a job the `kernel.member.removed` subscriber schedules, or the daily sweep for a removal that queued none (ADR-0037 section 4, #1733) |
 
 Queries (R0): `notes.note.list` (mine, shared, pinned, archived, trash; by tag or link), `notes.note.get`, `notes.note.search`, `notes.todo.list` (open by due group, done, trash), `notes.todo.get`, `notes.record.panel` (the pinned and recent notes of one record), `notes.my_work` (my open to-dos plus the open tasks of the positions I hold, read through the kernel's task query). Viewers run none of them in v1, since they see no note.
 
