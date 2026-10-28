@@ -7,6 +7,7 @@
 //
 // The mail is the same whether or not the email has an account, and says nothing about one.
 import { deliver, type DeliverOptions, type DeliveryResult, type MailProvider, type OutboundMail } from './mail.ts';
+import { DEFAULT_BRAND_NAME } from './config.ts';
 
 export type InviteRole = 'admin' | 'member' | 'viewer';
 
@@ -65,7 +66,7 @@ export function formatExpiry(iso: string): string {
 }
 
 // brand: the product name users see (BRAND_NAME, #1040).
-export function inviteMail(input: InviteMailInput, publicUrl: string, brand = 'Crove'): OutboundMail {
+export function inviteMail(input: InviteMailInput, publicUrl: string, brand = DEFAULT_BRAND_NAME): OutboundMail {
   const url = acceptUrl(publicUrl, input.acceptPath);
   const org = oneLine(input.orgName);
   const inviterEmail = oneLine(input.inviterEmail, 320);
@@ -103,7 +104,7 @@ export function bounceAddress(token: string | null | undefined, inboundDomain: s
   return token && inboundDomain ? `bounce+${token}@${inboundDomain.toLowerCase()}` : undefined;
 }
 
-export function createInviteMailSender(mailer: MailProvider, publicUrl: string, options: DeliverOptions = {}, inboundDomain?: string | null, brand = 'Crove'): SendInviteMail {
+export function createInviteMailSender(mailer: MailProvider, publicUrl: string, options: DeliverOptions = {}, inboundDomain?: string | null, brand = DEFAULT_BRAND_NAME): SendInviteMail {
   // async: a template error becomes a rejected promise, never a synchronous throw past the caller's handler.
   return async (invite) => {
     const returnPath = bounceAddress(invite.bounceToken, inboundDomain);

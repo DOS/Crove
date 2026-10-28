@@ -352,7 +352,7 @@ const beforeArticle = (result: PublishResult): PublishResult =>
 // the cover. The cover is shown at the top of the article, so the other images follow the text as image blocks, in
 // order, each captioned with its alt text (Zalo's caption is optional). Comments are on unless settings.comments is
 // false (#943).
-function articleOf(input: ArticleInput, images: readonly ArticleImage[], defaultAuthor = 'Crove') {
+function articleOf(input: ArticleInput, images: readonly ArticleImage[], defaultAuthor = 'Ludy') {
   const body = input.content.body.trim();
   const description = descriptionOf(input);
   const author = typeof input.settings.author === 'string' && input.settings.author.trim() ? input.settings.author.trim().slice(0, AUTHOR_MAX) : defaultAuthor.slice(0, AUTHOR_MAX);
@@ -388,7 +388,7 @@ export class ZaloOaPublisher implements Publisher {
 
   constructor(app: ZaloAppConfig, fetchImpl?: Fetch, timing: { processingWaitMs?: number; pollMs?: number; budgetMs?: number; editWaitMs?: number } = {}) {
     this.client = new ZaloClient(app, fetchImpl);
-    this.defaultAuthor = app.defaultAuthor ?? 'Crove';
+    this.defaultAuthor = app.defaultAuthor ?? 'Ludy';
     this.processingWaitMs = timing.processingWaitMs ?? PROCESSING_WAIT_MS;
     this.pollMs = timing.pollMs ?? 5000;
     this.budgetMs = timing.budgetMs ?? this.callTimeoutMs - VIDEO_CALL_MARGIN_MS;

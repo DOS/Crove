@@ -61,7 +61,7 @@ export function createSmtpProvider(options: SmtpOptions): MailProvider {
   });
   // A bare address gets the display name Supabase Auth's mails use (GOTRUE_SMTP_SENDER_NAME, also BRAND_NAME under
   // docker compose); "Name <address>" is kept as given.
-  const from = options.from.includes('<') ? options.from : { name: options.senderName ?? 'Crove', address: options.from };
+  const from = options.from.includes('<') ? options.from : { name: options.senderName ?? 'Ludy', address: options.from };
   return {
     name: 'smtp',
     enabled: true,

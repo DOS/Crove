@@ -45,7 +45,7 @@ describe('calendar feed (#862)', () => {
     expect(text.endsWith('\r\n')).toBe(true);
     expect(text.replace(/\r\n/g, '')).not.toMatch(/[\r\n]/);
     const lines = unfold(text).split('\r\n');
-    expect(lines.slice(0, 6)).toEqual(['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Crove//Social//VI', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH', 'X-WR-CALNAME:Cửa hàng\\; Bánh\\, Trà - Crove']);
+    expect(lines.slice(0, 6)).toEqual(['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Crove//Social//VI', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH', 'X-WR-CALNAME:Cửa hàng\\; Bánh\\, Trà - Ludy']);
     expect(lines.filter((l) => l === 'BEGIN:VEVENT')).toHaveLength(2);
     expect(lines.filter((l) => l === 'END:VEVENT')).toHaveLength(2);
     expect(lines.at(-2)).toBe('END:VCALENDAR');
@@ -57,7 +57,7 @@ describe('calendar feed (#862)', () => {
       'DTSTART:20261025T020000Z',
       'DURATION:PT15M',
       'SUMMARY:Facebook: Khai trương',
-      'DESCRIPTION:Trạng thái: Đã lên lịch\\nMở trong Crove: https://crove.example/o/cua-hang/social/01900000-0000-7000-8000-0000000000aa',
+      'DESCRIPTION:Trạng thái: Đã lên lịch\\nMở trong Ludy: https://crove.example/o/cua-hang/social/01900000-0000-7000-8000-0000000000aa',
       'URL:https://crove.example/o/cua-hang/social/01900000-0000-7000-8000-0000000000aa',
       'END:VEVENT',
     ]);

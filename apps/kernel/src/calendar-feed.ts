@@ -3,6 +3,7 @@
 // the token is the only credential, and only what goes out (time, channel, status, a short title) comes back.
 import { sql } from 'kysely';
 import type { Runtime } from '@crove/kernel-runtime';
+import { DEFAULT_BRAND_NAME } from './config.ts';
 
 // Calendar apps fetch from shared provider addresses, so one client address may stand for many subscribers.
 export const CALENDAR_FEED_HITS_PER_MINUTE = 300;
@@ -93,7 +94,7 @@ export function icsTime(at: Date): string {
 
 // brand: the product name users see (BRAND_NAME, #1045), in the calendar's name and each event's link line. PRODID and
 // UID keep "Crove": they identify the software, not the product.
-export function renderIcs(feed: CalendarFeed, publicUrl: string, now: Date, brand = 'Crove'): string {
+export function renderIcs(feed: CalendarFeed, publicUrl: string, now: Date, brand = DEFAULT_BRAND_NAME): string {
   const base = publicUrl.replace(/\/+$/, '');
   const stamp = icsTime(now);
   const lines = [

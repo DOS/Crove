@@ -10,7 +10,7 @@ export function SiteFooter({ dict }: { dict: Dictionary }) {
         <div className="max-w-[40ch]">
           <div className="flex items-center gap-2">
             <CroveMark className="size-5 text-accent" />
-            <span className="font-display font-semibold">Crove</span>
+            <span className="font-display font-semibold">Ludy</span>
           </div>
           <p className="mt-3 text-sm text-muted">{footer.tagline}</p>
         </div>

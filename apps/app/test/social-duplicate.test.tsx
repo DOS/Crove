@@ -19,7 +19,7 @@ const at = '2026-10-16T02:30:00.000Z';
 describe('the same text again on a channel (#1156)', () => {
   it('says X and LinkedIn refuse it, with when the other post went out', () => {
     const x = render(<DuplicateNote provider="x" of={{ at, status: 'published' }} rewriteTarget="social-rewrite" />);
-    expect(text(x)).toMatch(/^X không nhận bài có nội dung trùng với bài đã đăng trên kênh này lúc .*16.*\. Hãy sửa nội dung trước khi bài được đăng\. Nhờ AI viết lại$/);
+    expect(text(x)).toMatch(/^X không nhận bài có nội dung trùng với bài đã đăng trên kênh này lúc .*16.*\. Hãy sửa nội dung trước khi bài được đăng\. Nhờ Vy viết lại$/);
     expect(x).toContain('text-destructive');
     const page = text(render(<DuplicateNote provider="linkedin_page" of={{ at, status: 'queued' }} rewriteTarget={null} />, 'en'));
     expect(page).toMatch(/^LinkedIn Page refuses a post whose text matches one waiting in this channel’s queue for .+\. Change the text before it goes out\.$/);
@@ -31,7 +31,7 @@ describe('the same text again on a channel (#1156)', () => {
     expect(fb).toContain('text-warning');
     expect(fb).not.toContain('<button');
     const threads = text(render(<DuplicateNote provider="threads" of={{ at, status: 'published' }} rewriteTarget="social-rewrite-c1" />, 'en'));
-    expect(threads).toMatch(/^The same text is already published on this channel, on .+, so followers would see it twice\. Consider changing a few words\. Rewrite it with AI$/);
+    expect(threads).toMatch(/^The same text is already published on this channel, on .+, so followers would see it twice\. Consider changing a few words\. Rewrite it with Vy$/);
   });
 
   it('explains the refusal and the possible duplicate on the post page, in both languages', () => {

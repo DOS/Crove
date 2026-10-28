@@ -91,6 +91,6 @@ test('fetch the period purchase list and invoice XML from the tax portal', async
     await page.reload();
     await choosePeriod(page);
     await expect(page.getByRole('heading', { name: 'Đang chờ duyệt trong Hộp thư (3)' })).toBeVisible({ timeout: 60_000 });
-    await expect(page.getByRole('heading', { name: 'Cơ quan thuế có, Crove chưa có (2)' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Cơ quan thuế có, Ludy chưa có (2)' })).toBeVisible();
   });
 });

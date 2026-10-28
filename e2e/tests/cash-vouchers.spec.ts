@@ -35,7 +35,7 @@ test('enter a bank debit note, approve it and find it numbered in the books', as
 
   let proposalUrl = '';
   await test.step('approve it in the Inbox after a fresh second factor', async () => {
-    await expect(page.getByText(/Giấy báo Nợ ngày .*Crove cấp số chứng từ và ghi bút toán/)).toBeVisible();
+    await expect(page.getByText(/Giấy báo Nợ ngày .*Ludy cấp số chứng từ và ghi bút toán/)).toBeVisible();
     proposalUrl = page.url();
     await expect(page.getByText('Số chứng từ được cấp khi duyệt.')).toBeVisible();
     await page.getByRole('button', { name: 'Duyệt và ghi sổ chứng từ' }).click();

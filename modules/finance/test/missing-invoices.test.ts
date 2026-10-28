@@ -66,9 +66,9 @@ describe('missing invoice mail (#669)', () => {
     expect(mail.text).not.toContain('chuyển tiếp');
   });
 
-  // #1040: the footer names the product by BRAND_NAME, "Crove" when not given.
+  // #1040: the footer names the product by BRAND_NAME, "Ludy" when not given (#1683).
   it('names the product by the brand it is given', () => {
-    expect(renderMissingInvoiceMail(request, { replyTo: null }).text).toContain('gửi tự động qua Crove theo yêu cầu');
+    expect(renderMissingInvoiceMail(request, { replyTo: null }).text).toContain('gửi tự động qua Ludy theo yêu cầu');
     const mail = renderMissingInvoiceMail(request, { replyTo: null, brand: "Sổ & Co's" });
     expect(mail.text).toContain("gửi tự động qua Sổ & Co's theo yêu cầu");
     expect(mail.html).toContain('gửi tự động qua Sổ &amp; Co&#39;s theo yêu cầu');

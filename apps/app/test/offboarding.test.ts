@@ -51,7 +51,7 @@ describe('offboarding helpers', () => {
     expect(formatBytes(1536, n)).toBe('1.5 KB');
     expect(formatBytes(5 * 1024 * 1024, n)).toBe('5 MB');
     expect(formatBytes(3 * 1024 ** 4, n)).toBe('3072 GB');
-    expect(exportFileName('cong-ty-a', 'manifest')).toBe('crove-cong-ty-a-manifest.json');
-    expect(exportFileName('cong-ty-a', 'kernel.party')).toBe('crove-cong-ty-a-kernel.party.ndjson');
+    expect(exportFileName('cong-ty-a', 'manifest')).toBe('ludy-cong-ty-a-manifest.json');
+    expect(exportFileName('cong-ty-a', 'kernel.party')).toBe('ludy-cong-ty-a-kernel.party.ndjson');
   });
 });

@@ -5,9 +5,9 @@ import type { Dictionary } from './vi';
 export const en: Dictionary = {
   lang: 'en',
   meta: {
-    title: 'Crove: invoices in, journal entries ready for your approval',
+    title: 'Ludy: invoices in, journal entries ready for your approval',
     description:
-      'The open-source Business OS for solo founders and small businesses. Crove reads e-invoices, checks every number, proposes a TT133 journal entry and posts it only after a person approves.',
+      'The open-source Business OS for solo founders and small businesses. Ludy reads e-invoices, checks every number, proposes a TT133 journal entry and posts it only after a person approves.',
   },
   nav: {
     label: 'Main navigation',
@@ -27,20 +27,20 @@ export const en: Dictionary = {
     closeMenu: 'Close menu',
   },
   hero: {
-    title: 'AI agents work under your authority.',
-    lead: 'Each agent is a position in your org chart, with a manager, a monthly budget, a risk limit and a kill switch. The accounting agent reads invoices and drafts the entries; only a person with the authority approves and posts them.',
+    title: 'Vy, your AI assistant, works under your authority.',
+    lead: 'Vy works as AI agents, and each agent is a position in your org chart, with a manager, a monthly budget, a risk limit and a kill switch. The accounting agent reads invoices and drafts the entries; only a person with the authority approves and posts them.',
     primary: 'Self-host for free',
     secondary: 'View the source on GitHub',
-    note: 'Open source under the AGPL. Runs on your own server with docker compose. Crove Cloud is coming soon.',
+    note: 'Open source under the AGPL. Runs on your own server with docker compose. Ludy Cloud is coming soon.',
   },
   tour: {
     title: 'A month of documents, approved from the keyboard',
-    lead: 'Crove reads Vietnamese e-invoices, checks every number and proposes a journal entry under Circular 133. You review it, change an account if needed, and approve.',
+    lead: 'Ludy reads Vietnamese e-invoices, checks every number and proposes a journal entry under Circular 133. You review it, change an account if needed, and approve.',
     sample: 'Example data',
     replay: 'Replay',
   },
   shell: {
-    label: 'Example Crove screen: AI Inbox, invoice detail and command palette',
+    label: 'Example Ludy screen: AI Inbox, invoice detail and command palette',
     org: 'Gạo Sạch Mekong',
     search: 'Search',
     inbox: 'AI Inbox',
@@ -121,13 +121,13 @@ export const en: Dictionary = {
     items: [
       { keys: ['J', 'K'], label: 'Move', body: 'Step through the rows of the AI Inbox.' },
       { keys: ['A'], label: 'Approve', body: 'Asks for a two-factor code, then posts.' },
-      { keys: ['E'], label: 'Change account', body: 'Pick another account; Crove remembers it for that vendor.' },
+      { keys: ['E'], label: 'Change account', body: 'Pick another account; Ludy remembers it for that vendor.' },
       { keys: ['⌘', 'K'], label: 'Command palette', body: 'Open a ledger, export to Excel, find a document.' },
     ],
   },
   flow: {
     title: 'Four steps from the mailbox to the ledger',
-    lead: 'Crove does the first three steps and records each one. The last one is always a person with the authority to approve, with a two-factor code.',
+    lead: 'Ludy does the first three steps and records each one. The last one is always a person with the authority to approve, with a two-factor code.',
     actorLabel: 'Handled by',
     timeLabel: 'At',
     invoice: {
@@ -164,8 +164,8 @@ export const en: Dictionary = {
     steps: [
       {
         name: 'Receive',
-        body: 'Forward an email or upload a file. Crove takes e-invoice XML under Decree 254/2026 and Circular 91/2026, plus PDFs and photos.',
-        actor: 'Crove',
+        body: 'Forward an email or upload a file. Ludy takes e-invoice XML under Decree 254/2026 and Circular 91/2026, plus PDFs and photos.',
+        actor: 'Ludy',
         time: '14/10/2026 15:58',
         confirm: 'Received',
         final: false,
@@ -173,7 +173,7 @@ export const en: Dictionary = {
       {
         name: 'Check',
         body: 'Line totals, VAT rate, the tax-code check digit, the authority code and duplicates. Fixed rules, no AI.',
-        actor: 'Crove',
+        actor: 'Ludy',
         time: '14/10/2026 15:58',
         confirm: '5/5 checks passed',
         final: false,
@@ -300,14 +300,14 @@ export const en: Dictionary = {
   },
   owner: {
     title: 'You do not need to be an accountant',
-    lead: 'Snap or forward an invoice from your phone. Crove checks every number and drafts the entry. You review it and tap approve; your accountant gets a complete Excel file.',
+    lead: 'Snap or forward an invoice from your phone. Ludy checks every number and drafts the entry. You review it and tap approve; your accountant gets a complete Excel file.',
     points: [
       'Reads XML e-invoices, PDFs and photos',
       'Nothing reaches the books until you approve',
       'Shows which document is missing information, and why',
     ],
     phone: {
-      label: 'Crove on a phone, example data',
+      label: 'Ludy on a phone, example data',
       time: '14:21',
       app: 'AI Inbox',
       org: 'Gạo Sạch Mekong',
@@ -328,7 +328,7 @@ export const en: Dictionary = {
     lead: 'The people and agents of each department work on the same data, with the same approvals and the same change log. Turn on the modules you need.',
     deptLabel: 'Department of',
     finance: {
-      name: 'Finance',
+      name: 'Ludy Accounting',
       body: 'AI Inbox for purchase and sales invoices, the general journal and ledgers, B01 and B02 statements, receipts and payments, bank statements, fixed assets, the VAT return as XML for HTKK, exports to MISA SME, books per legal entity and a monthly period lock.',
       people: [
         { name: 'Chị Lan', initials: 'L', agent: false },
@@ -342,7 +342,7 @@ export const en: Dictionary = {
         { title: 'EVN power bill, September', amount: '₫1,946,780', account: 'Acc 6422', tone: 'ok', label: 'Ready to approve' },
         { title: 'Viettel bill, September', amount: '₫880,000', account: 'Acc 6422', tone: 'ok', label: 'Ready to approve' },
       ],
-      tail: 'Accounts are learned per vendor. Next time Crove proposes the account Chị Lan picked.',
+      tail: 'Accounts are learned per vendor. Next time Ludy proposes the account Chị Lan picked.',
       taccount: {
         title: 'Subsidiary ledger, account 331',
         sub: 'Bao Bì Phú Thịnh, after Chị Lan approved',
@@ -407,7 +407,7 @@ export const en: Dictionary = {
       ],
     },
     crm: {
-      name: 'CRM & Calendar',
+      name: 'Ludy CRM',
       body: 'A public booking page for each kind of meeting. Clients pick a free time, both sides get a confirmation email with a calendar file, reminders go out on their own, and clients move or cancel with a link that works once.',
       people: [{ name: 'Chị Hoa', initials: 'H', agent: false }],
       pageTitle: 'Wholesale rice consultation',
@@ -422,12 +422,12 @@ export const en: Dictionary = {
       noSlots: 'Fully booked',
       pickedLabel: 'Picked',
       booked: { title: 'New booking', who: 'Gạo Sạch Miền Tây Co., Ltd.', when: '14:00, Tue 20/10/2026', state: 'Confirmed' },
-      suggest: 'A client writes "is Tuesday afternoon OK?": AI suggests 14:00 or 15:30, and Chị Hoa checks and sends the reply.',
+      suggest: 'A client writes "is Tuesday afternoon OK?": Vy suggests 14:00 or 15:30, and Chị Hoa checks and sends the reply.',
     },
   },
   trust: {
-    title: 'AI proposes, people approve, every change is recorded',
-    lead: 'Crove never trusts AI output on its own. Every number goes through fixed checks and every entry needs a person to approve it.',
+    title: 'Vy proposes, people approve, every change is recorded',
+    lead: 'Ludy never trusts AI output on its own. Every number goes through fixed checks and every entry needs a person to approve it.',
     points: [
       { title: 'Fixed checks decide', body: 'Line totals, VAT rates, tax codes, authority codes and duplicates are checked by rules, not by AI.' },
       { title: 'Only an approver posts', body: 'Approving entries and changing members ask for a two-factor code entered in the last 5 minutes.' },
@@ -437,7 +437,7 @@ export const en: Dictionary = {
     logTitle: 'Audit log',
     logCols: ['At', 'Who', 'Action'],
     log: [
-      ['14/10/2026 15:58', 'Crove', 'Received invoice 00001284 at the invoice mailbox'],
+      ['14/10/2026 15:58', 'Ludy', 'Received invoice 00001284 at the invoice mailbox'],
       ['14/10/2026 15:58', 'Checks', '5/5 passed: line totals, VAT rate, tax code, authority code, duplicates'],
       ['14/10/2026 15:59', 'Accounting agent', 'Proposed Dr 152, 1331 / Cr 331'],
       ['14/10/2026 16:05', 'Chị Lan', 'Approved with a two-factor code, posted'],
@@ -464,10 +464,10 @@ export const en: Dictionary = {
         primary: true,
       },
       {
-        name: 'Crove Cloud',
+        name: 'Ludy Cloud',
         price: 'Coming soon',
-        body: 'Crove runs it for you, with no server to manage.',
-        items: ['The same code as the self-hosted version', 'Backups and updates handled by Crove'],
+        body: 'Ludy runs it for you, with no server to manage.',
+        items: ['The same code as the self-hosted version', 'Backups and updates handled by Ludy'],
         cta: 'Follow on GitHub',
         href: 'github',
         primary: false,
@@ -479,14 +479,14 @@ export const en: Dictionary = {
     items: [
       {
         q: 'Can I use it if I am not an accountant?',
-        a: 'Yes. Crove drafts the entry and explains why it chose each account. You check the amount and the vendor and approve; Crove points out anything that is missing.',
+        a: 'Yes. Ludy drafts the entry and explains why it chose each account. You check the amount and the vendor and approve; Ludy points out anything that is missing.',
       },
       {
-        q: 'Does the AI post entries by itself?',
-        a: 'No. The AI only proposes. Fixed checks decide whether the numbers are right, and an entry is posted only when someone with the right role approves it with a two-factor code.',
+        q: 'Does Vy post entries by itself?',
+        a: 'No. Vy, the AI assistant, only proposes. Fixed checks decide whether the numbers are right, and an entry is posted only when someone with the right role approves it with a two-factor code.',
       },
       {
-        q: 'Which invoices can Crove read?',
+        q: 'Which invoices can Ludy read?',
         a: 'XML e-invoices under Decree 254/2026 and Circular 91/2026 (and those issued under Decree 123/2020 before) are read exactly, without AI. PDFs and photos use an OpenAI-compatible model you configure, including models that run locally such as Ollama or vLLM.',
       },
       {
@@ -506,6 +506,6 @@ export const en: Dictionary = {
     github: 'GitHub',
     docs: 'Docs',
     security: 'Security',
-    copyright: '© 2026 Crove',
+    copyright: '© 2026 Ludy',
   },
 };

@@ -100,7 +100,7 @@ describe('firm guide (#661)', () => {
     // Every string of the vi catalog, with its placeholders filled as the guide fills them.
     const catalog = new Set<string>();
     const walk = (node: unknown) => {
-      if (typeof node === 'string') catalog.add(fill(node, { count: 'N', month: 'MM/YYYY', brand: 'Crove' }));
+      if (typeof node === 'string') catalog.add(fill(node, { count: 'N', month: 'MM/YYYY', brand: 'Ludy' }));
       else if (node && typeof node === 'object') Object.values(node).forEach(walk);
     };
     walk(vi);
@@ -115,7 +115,7 @@ describe('firm guide (#661)', () => {
     expect(renamed).toContain('Tên Mới');
     expect(renamed).not.toContain('Crove');
     expect(renamed).not.toMatch(/[{}]/);
-    expect(text).toContain('trong Crove');
+    expect(text).toContain('trong Ludy');
   });
 
   it('fills ICU placeholders and leaves unknown ones', () => {

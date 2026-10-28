@@ -1,5 +1,5 @@
 // Pages and texts the kernel serves outside the app and mail name the product by BRAND_NAME (#1045): the public
-// status page, the bio page, the calendar feed and the chat alert test line. "Crove" when it is not given.
+// status page, the bio page, the calendar feed and the chat alert test line. "Ludy" when it is not given (#1683).
 import { describe, expect, it } from 'vitest';
 import { renderBioPage, type BioView } from '../src/bio-page.ts';
 import { renderIcs, type CalendarFeed } from '../src/calendar-feed.ts';
@@ -16,11 +16,11 @@ const FEED: CalendarFeed = {
 const unfold = (text: string) => text.replace(/\r\n /g, '');
 
 describe('brand name outside the app (#1045)', () => {
-  it('keeps "Crove" when no brand is given', () => {
-    expect(renderStatusPage(statusView(probeStatus(NOW, []), NOW))).toContain('<title>Trạng thái hệ thống - Crove</title>');
-    expect(renderBioPage('tiem-banh', BIO)).toContain('<footer>Crove</footer>');
-    expect(unfold(renderIcs(FEED, 'https://crove.example', NOW))).toContain('X-WR-CALNAME:Tiệm bánh - Crove');
-    expect(CHAT_ALERT_TEST_TEXT.startsWith('Crove: tin thử.')).toBe(true);
+  it('says "Ludy" when no brand is given', () => {
+    expect(renderStatusPage(statusView(probeStatus(NOW, []), NOW))).toContain('<title>Trạng thái hệ thống - Ludy</title>');
+    expect(renderBioPage('tiem-banh', BIO)).toContain('<footer>Ludy</footer>');
+    expect(unfold(renderIcs(FEED, 'https://crove.example', NOW))).toContain('X-WR-CALNAME:Tiệm bánh - Ludy');
+    expect(CHAT_ALERT_TEST_TEXT.startsWith('Ludy: tin thử.')).toBe(true);
   });
 
   it('names the configured brand, escaped in HTML, and keeps the software identifiers', () => {

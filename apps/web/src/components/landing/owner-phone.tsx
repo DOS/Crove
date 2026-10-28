@@ -28,7 +28,7 @@ export function OwnerPhone({ dict }: { dict: Dictionary }) {
           <div className="rounded-[2.25rem] border-[10px] border-fg bg-surface p-3 shadow-xl">
             <div className="flex items-center justify-between px-2 pt-1 text-[11px] font-semibold">
               <span className="num">{p.time}</span>
-              <span>Crove</span>
+              <span>Ludy</span>
             </div>
             <div className="mt-2 flex items-baseline justify-between border-b border-line px-2 pb-2">
               <span className="text-sm font-semibold">{p.app}</span>

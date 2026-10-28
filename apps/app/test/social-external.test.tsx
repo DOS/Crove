@@ -46,17 +46,17 @@ describe('mergePublished', () => {
 describe('outside posts on the Metrics tab', () => {
   it('shows the switch with its hint, and says why it is off under a label filter', () => {
     const on = render(<OutsideSwitch checked onChange={() => undefined} />);
-    expect(on).toContain('Tính cả bài đăng ngoài Crove');
+    expect(on).toContain('Tính cả bài đăng ngoài Ludy');
     expect(on).toContain(viMessages.social.external.hint);
     const labelled = render(<OutsideSwitch checked onChange={() => undefined} disabled />);
     expect(labelled).toContain(viMessages.social.external.noLabels);
     expect(labelled).toContain('disabled');
-    expect(render(<OutsideSwitch checked={false} onChange={() => undefined} />, 'en')).toContain('Include posts published outside Crove');
+    expect(render(<OutsideSwitch checked={false} onChange={() => undefined} />, 'en')).toContain('Include posts published outside Ludy');
   });
 
   it('carries the chip, links to the post on the platform only over https, and escapes the text', () => {
     const linked = render(<OutsidePostCell excerpt="Khai trương <b>chi nhánh</b>" url="https://www.facebook.com/1_2" meta="Facebook · Fanpage" />);
-    expect(linked).toContain('Đăng ngoài Crove');
+    expect(linked).toContain('Đăng ngoài Ludy');
     expect(linked).toContain('href="https://www.facebook.com/1_2"');
     expect(linked).toContain('rel="noopener noreferrer nofollow"');
     expect(linked).toContain('Khai trương &lt;b&gt;chi nhánh&lt;/b&gt;');
@@ -66,7 +66,7 @@ describe('outside posts on the Metrics tab', () => {
   });
 
   it('names the chip as the page asks, so a client report never says Crove', () => {
-    expect(render(<OutsideChip />)).toContain('Đăng ngoài Crove');
+    expect(render(<OutsideChip />)).toContain('Đăng ngoài Ludy');
     const report = render(<OutsideChip label={viMessages.social.clientReport.direct} />);
     expect(report).toContain('Đăng trực tiếp');
     expect(report).not.toContain('Crove');

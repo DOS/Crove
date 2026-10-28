@@ -22,7 +22,7 @@ async function font(weight: 400 | 600, text: string): Promise<ArrayBuffer> {
 // The social preview for one language: the brand, the hero line and the product promise, in the site's dark palette.
 // Colors are literal here because the image is drawn outside the page's CSS.
 export async function renderOgImage(dict: Dictionary): Promise<ImageResponse> {
-  const text = [...new Set(`Crove crove.com ${dict.hero.title} ${dict.footer.tagline}`)].join('');
+  const text = [...new Set(`Ludy crove.com ${dict.hero.title} ${dict.footer.tagline}`)].join('');
   const [regular, semibold] = await Promise.all([font(400, text), font(600, text)]);
   const mark = await readFile(join(process.cwd(), 'public', 'favicon.svg'), 'utf8');
   return new ImageResponse(
@@ -30,7 +30,7 @@ export async function renderOgImage(dict: Dictionary): Promise<ImageResponse> {
       <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', padding: 72, background: '#141418', color: '#f6f6f8', fontFamily: 'Be Vietnam Pro' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 18 }}>
           <img src={`data:image/svg+xml;base64,${Buffer.from(mark).toString('base64')}`} width={56} height={56} alt="" />
-          <span style={{ fontSize: 40, fontWeight: 600 }}>Crove</span>
+          <span style={{ fontSize: 40, fontWeight: 600 }}>Ludy</span>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <span style={{ fontSize: 76, fontWeight: 600, letterSpacing: '-0.02em', lineHeight: 1.1, maxWidth: 980 }}>{dict.hero.title}</span>
