@@ -28,7 +28,7 @@ export const en: Dictionary = {
   },
   hero: {
     title: 'Vy, your AI assistant, works under your authority.',
-    lead: 'Vy works as AI agents, and each agent is a position in your org chart, with a manager, a monthly budget, a risk limit and a kill switch. The accounting agent reads invoices and drafts the entries; only a person with the authority approves and posts them.',
+    lead: 'Vy works through AI agents, and each agent is a position in your org chart, with a manager, a monthly budget, a risk limit and a kill switch. The accounting agent reads invoices and drafts the entries; only a person with the authority approves and posts them.',
     primary: 'Self-host for free',
     secondary: 'View the source on GitHub',
     note: 'Open source under the AGPL. Runs on your own server with docker compose. Ludy Cloud is coming soon.',

@@ -74,7 +74,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 export interface ZaloAppConfig {
   appId: string;
   appSecret: string;
-  // The article's author when the channel sets none: the product name users see (BRAND_NAME, #1045), "Crove" when not
+  // The article's author when the channel sets none: the product name users see (BRAND_NAME, #1045), "Ludy" when not
   // given.
   defaultAuthor?: string;
 }

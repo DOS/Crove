@@ -138,7 +138,7 @@ describe('brand name (#1040)', () => {
       expect(Object.values(filled).join('\n'), locale).not.toContain('{assistant}');
     }
     expect(catalog('vi').auth.tagline).toBe('Hộp thư chứng từ: chuyển tiếp hóa đơn, trợ lý AI Vy đề xuất hạch toán, bạn duyệt.');
-    expect(catalog('en').auth.tagline).toBe('Document inbox: forward invoices, Vy, the AI assistant, proposes the entries, you approve.');
+    expect(catalog('en').auth.tagline).toBe('Document inbox: forward invoices; Vy, your AI assistant, proposes the entries; you approve.');
     expect(withBrand('{assistant} của {brand}')).toBe('Vy của Tên Mới');
   });
 

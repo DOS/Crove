@@ -10,7 +10,7 @@ export interface SmtpOptions {
   user?: string | undefined;
   pass?: string | undefined;
   from: string;
-  // The display name a bare `from` address gets: BRAND_NAME (#1040), "Crove" when not given.
+  // The display name a bare `from` address gets: BRAND_NAME (#1040), "Ludy" when not given.
   senderName?: string | undefined;
 }
 
