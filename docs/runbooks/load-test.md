@@ -20,6 +20,8 @@ Point it at a server that is not production. The run creates a database named `c
 | `--queries` | 30 | runs of each list or search query |
 | `--rate` | 60 | commands per second while the outbox lag is measured |
 | `--seconds` | 30 | how long that lasts |
+| `--pause-seconds` | 30 | the back-pressure threshold, the worker's `OUTBOX_LAG_PAUSE_SECONDS` default |
+| `--check-seconds` | 10 | how often back-pressure is checked, the worker's 10 s |
 
 Exit codes: 0 every target met, 1 a target missed, 2 the run failed.
 
@@ -30,7 +32,7 @@ Exit codes: 0 every target met, 1 a target missed, 2 the run failed.
 - **Outbox lag.** One relay loop claims events as the worker does (`crove_kernel.outbox_claim`, 100 at a time) while `kernel.file.ingest` runs at `--rate` per second. The lag runs from the event's emit to its claim, both by the database clock: an event id is a UUIDv7 whose first 48 bits are its emit time. Target: p95 < 2 s.
 - **Relay capacity.** A backlog of events is drained by the one relay as fast as it can. Target: at least 50 events per second.
 - **Context guard cost** (plan §4.5 item 1, gate row T10). While the commands run, a second connection counts `pg_locks` every 100 ms. The guard reads `pg_locks` on every context entry, and #105 measured that at about 13 µs plus about 0.27 µs per lock held server-wide, so the report gives the cost those lock counts imply. No target: the plan asks for the re-check.
-- **Back-pressure** (outbox lag over 30 s pauses background jobs) is not built yet (#894). The report marks it N/A.
+- **Back-pressure** (plan §4.9, built in #894, measured since #1717). pg-boss runs on the throwaway database as the worker login, with the worker's own `PausableWork` and `checkBackPressure` (`apps/kernel/src/back-pressure.ts`) checking every `--check-seconds`. One queue of each kind the worker pauses is worked (agent dispatch, bulk mail, archive write, retention), plus `kernel-notify`, which a person waits for. The relay then stops while `kernel.file.ingest` keeps running at `--rate`, so the outbox lag climbs past `--pause-seconds`. Once the queues pause, one job goes to each; after 4 s (longer than pg-boss's 2 s polling) the relay runs again, the lag falls, and the check resumes the queues. The lag is read every 100 ms and by each check. It is `crove_kernel.outbox_lag_seconds()`, which since #1714 ages only the rows the relay may claim; no relay switch is engaged in the run, so it ages every pending row. Targets: the queues pause within one check plus 1 s of the lag passing the threshold and hold all four jobs; they resume within one check plus 1 s of the lag falling to half the threshold and run all four; `kernel-notify` runs during the pause and the commands keep p95 < 150 ms with no failure. `load-test.db.test.ts` runs this at a 2 s threshold checked every second and fails when back-pressure does not engage.
 
 The relay here claims and drops. The worker also hands each claimed event to its job queue, so the numbers are the database's share of the lag and of the throughput.
 
@@ -68,3 +70,19 @@ At 230 locks the guard adds about 0.08 ms to a command whose p95 is 15.8 ms, und
 |---|---|---|
 | `finance.vendors.list` p95 | 831 ms | 11.8 ms |
 | `finance.vendors.list` with a search term, p95 | 3315 ms | 71.6 ms |
+
+2026-10-28, after #1717 added back-pressure: a GitHub Actions runner (ubuntu-latest) with the `postgres:17` service of the CI database job, default flags (100k parties, threshold 30 s, checked every 10 s). Times run from the relay stopping:
+
+| Measure | Result | Target |
+|---|---|---|
+| Lag passed 30 s / queues paused | 30.0 s / 40.0 s, 10.0 s later | within 10 s + 1 s |
+| Background jobs sent during the pause, held | 4 of 4 (agent dispatch, bulk mail, archive write, retention) | 4 of 4 |
+| `kernel-notify` during the pause | ran | runs |
+| `kernel.file.ingest` at 60/s during the stall, p95 | 4.4 ms, 3003 runs, 0 failed | p95 < 150 ms, no failures |
+| Max outbox lag | 44.0 s | none |
+| Lag back to 15 s / queues resumed | 44.1 s / 50.0 s, 5.9 s later | within 10 s + 1 s |
+| Held jobs run after the resume | 4 of 4 | 4 of 4 |
+
+Back-pressure passes: plan §13 Phase 1 exit criterion 7 has no N/A left. The check timer starts with the stall, so the lag passes the threshold just after a check and the pause waits nearly a whole interval: 10.0 s is the worst case, not the typical one. In the same run the other targets passed again: `kernel.party.update` p95 19.5 ms, `kernel.file.ingest` p95 14.6 ms, outbox lag p95 12.7 ms, relay about 31,700 events/s, `finance.vendors.list` p95 9.6 ms (64.5 ms with a search term), `finance.search` p95 95 ms.
+
+`load-test.db.test.ts` runs the same phase at 300 parties with a 2 s threshold checked every second (paused 1.0 s and resumed 1.0 s after the crossings on the same runner). On #1723, a `checkBackPressure` that returned at once made it fail: no pause was recorded.

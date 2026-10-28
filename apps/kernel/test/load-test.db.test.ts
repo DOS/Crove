@@ -1,5 +1,5 @@
 // The Phase 1 load test (issue #998) runs end to end on a small scale: its own database, the seeded parties, the
-// commands, queries and outbox phases, then the database dropped. The full size runs by hand (docs/runbooks/load-test.md).
+// commands, queries, outbox and back-pressure phases (#1717), then the database dropped. The full size runs by hand (docs/runbooks/load-test.md).
 // Set CROVE_TEST_ADMIN_URL to a superuser URL.
 import pg from 'pg';
 import { describe, expect, it } from 'vitest';
@@ -12,7 +12,8 @@ suite('load test on PostgreSQL (#998)', () => {
   it('measures every phase on a small scale and drops its database', async () => {
     const lines: string[] = [];
     const result = await runLoad(
-      { adminUrl: ADMIN as string, parties: 300, commands: 20, concurrency: 4, queries: 2, rate: 20, seconds: 1, keep: false },
+      // Back-pressure at a 2 s threshold checked every second, so the stall takes seconds instead of the worker's 30 s.
+      { adminUrl: ADMIN as string, parties: 300, commands: 20, concurrency: 4, queries: 2, rate: 20, seconds: 1, pauseSeconds: 2, checkSeconds: 1, keep: false },
       (line) => lines.push(line),
     );
     expect(result.parties).toBe(300);
@@ -23,9 +24,31 @@ suite('load test on PostgreSQL (#998)', () => {
     // pg_locks was sampled while the commands ran (T10); the sampler's own query holds at least one lock.
     expect(result.locks.samples).toBeGreaterThan(0);
     expect(result.locks.max).toBeGreaterThanOrEqual(1);
-    // Every target but back-pressure (#894) gets a verdict from a measurement. Whether it passes depends on the
-    // machine (a shared CI runner is not the pilot server), so the targets are checked by the full run in the runbook.
-    expect(judge(result).map((v) => v.ok === null)).toEqual([false, false, false, false, true]);
+    // Every target gets a verdict from a measurement. Whether the speed targets pass depends on the machine (a shared
+    // CI runner is not the pilot server), so they are checked by the full run in the runbook.
+    const verdicts = judge(result);
+    expect(verdicts.map((v) => v.ok === null)).toEqual([false, false, false, false, false, false, false]);
+
+    // Back-pressure must engage (#1717): the worker's check (apps/kernel/src/back-pressure.ts) paused the agent, bulk
+    // mail, archive and retention queues after the lag passed the threshold, every job sent to them meanwhile waited,
+    // the interactive queue and the commands kept running, and the queues resumed and worked those jobs once the relay
+    // caught up. A check that does nothing fails here.
+    const bp = result.backPressure;
+    expect(bp.lagOverAt).not.toBeNull();
+    expect(bp.pausedAt).not.toBeNull();
+    expect(bp.pausedAt as number).toBeGreaterThanOrEqual(bp.lagOverAt as number);
+    expect(bp.lagUnderHalfAt).not.toBeNull();
+    expect(bp.resumedAt).not.toBeNull();
+    expect(bp.resumedAt as number).toBeGreaterThanOrEqual(bp.lagUnderHalfAt as number);
+    expect(bp).toMatchObject({ sent: 4, held: 4, ranAfterResume: 4, interactiveRan: true });
+    expect(bp.commands).toMatchObject({ failed: 0, firstError: null });
+    expect(bp.commands.count).toBeGreaterThan(0);
+    // Pause and resume each within one check (1 s) plus the slack: the timing is the worker's loop, not the machine.
+    // The check's own lag reads are recorded too, so a pause or resume never comes before the crossing it answers.
+    expect(verdicts.filter((v) => v.check.startsWith('back-pressure ')).map((v) => [v.check, v.ok])).toEqual([
+      ['back-pressure pause', true],
+      ['back-pressure resume', true],
+    ]);
 
     const name = lines.find((l) => l.startsWith('database '))?.split(' ')[1];
     const root = new pg.Client({ connectionString: ADMIN });
