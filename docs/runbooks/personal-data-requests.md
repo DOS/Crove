@@ -1,6 +1,6 @@
 # Runbook: a person's request about their personal data
 
-How an owner of an org answers a person who asks to see or to erase the data the org keeps about them, under the personal data protection law (Law 91/2025 and Decree 356/2025; issue #923, plan §7.9). The org is the controller and Crove Cloud is its processor; the org answers the person, and Crove gives it the tools. **The deadlines and the identity check below are to be confirmed by the lawyer (#62)** before the first external tenant.
+How an owner of an org answers a person who asks to see or to erase the data the org keeps about them, under the personal data protection law (Law 91/2025 and Decree 356/2025; issue #923, plan §7.9). The org is the controller and Ludy Cloud is its processor; the org answers the person, and Ludy gives it the tools. **The deadlines and the identity check below are to be confirmed by the lawyer (#62)** before the first external tenant.
 
 ## 1. Receive and log the request
 
@@ -24,7 +24,7 @@ The search covers the columns listed in `packages/kernel/src/personal-data.ts`. 
    - **Erased:**
      - the email, phone and address of each party the value matches;
      - the sender of forwarded mails;
-     - the recipient of mails Crove sent;
+     - the recipient of mails Ludy sent;
      - the org's contact email;
      - the address in Social report schedules (a schedule left with nobody to mail is deleted).
 
@@ -45,7 +45,7 @@ The audit log records that an erasure ran, by whom, and how many rows of each co
 
 ## 4. Correct on request
 
-A correction is an ordinary edit: change the party on its page (Nhà cung cấp or Khách hàng). An invoice already recorded stays as issued. A wrong invoice is corrected by its issuer with a replacement or an adjustment invoice, which Crove links to the original (#916).
+A correction is an ordinary edit: change the party on its page (Nhà cung cấp or Khách hàng). An invoice already recorded stays as issued. A wrong invoice is corrected by its issuer with a replacement or an adjustment invoice, which Ludy links to the original (#916).
 
 ## 5. What the tools do not reach yet
 
@@ -54,4 +54,4 @@ Answer these by hand, or tell the person they are kept, until a later issue cove
 - **Free text:** activity lines, task comments, journal descriptions, voucher reasons, Social posts and comments. Search them in the app, and edit what can be edited.
 - **Stored files:** invoice PDFs and XML, uploaded images, and the extraction results read from them. They are accounting documents and are kept with the books; the original file of a posted invoice is held in the bucket for the legal period (`docs/runbooks/evidence-holds.md`), and the erasure result counts the ones that name the person's party.
 - **Backups and archives:** the 7-day point-in-time recovery, the WORM archive of the books (`docs/runbooks/worm-archive.md`) and offboarding exports. A restore brings erased data back, so after one, run the erasures recorded in the audit log again. Crypto-shredding of immutable stores (ADR-0017) is planned.
-- **The person's own Crove account:** if they are a user of Crove, their sign-in account lives with the identity provider (DOS ID or Supabase Auth), not in the org. They delete it there.
+- **The person's own Ludy account:** if they are a user of Ludy, their sign-in account lives with the identity provider (DOS ID or Supabase Auth), not in the org. They delete it there.

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
-<title>Khi Crove gặp sự cố</title>
+<title>Khi Ludy gặp sự cố</title>
 <style>
 :root{
   --bg:#0f1113; --surface:#16181d; --card:#1b1e25; --line:#2c303a; --fg:#eef0f4; --muted:#a3a9b6;
@@ -45,15 +45,15 @@ footer{margin-top:48px;color:var(--muted);font-size:14px}
 <div class="page">
 <main>
 
-<p class="eyebrow">Crove · vận hành · 20/10/2026</p>
-<h1>Khi Crove gặp sự cố: những gì bạn cần biết</h1>
+<p class="eyebrow">Ludy · vận hành · 20/10/2026</p>
+<h1>Khi Ludy gặp sự cố: những gì bạn cần biết</h1>
 <p class="lead">Bản tóm tắt cho chủ dự án của sổ tay xử lý sự cố (runbook, tức là hướng dẫn từng bước cho người vận hành máy chủ) và trang trạng thái mới, issue <a href="https://github.com/DOS/Crove/issues/678">#678 (Sổ tay sự cố và trang trạng thái)</a>. Bản tiếng Anh đầy đủ, có từng lệnh, nằm ở <a href="https://github.com/DOS/Crove/blob/main/docs/runbooks/incidents.md">docs/runbooks/incidents.md</a>.</p>
 
 <h2>1. Anh sẽ được báo thế nào</h2>
 <p>Có ba lớp báo tự động, đã mô tả trong <a href="https://github.com/DOS/Crove/blob/main/docs/runbooks/alerts.md">alerts.md</a>:</p>
 <ul>
 <li><b>Bộ kiểm tra (prober)</b>: một tiến trình nhỏ chạy cùng máy chủ, cứ 5 phút xem việc nền có chạy không, và gửi tin vào Telegram của bạn khi có sự cố, khi sự cố còn kéo dài và khi đã hết.</li>
-<li><b>Kiểm tra từ bên ngoài</b> (uptime check): một dịch vụ khác gọi vào địa chỉ của Crove 5 phút một lần, báo khi cả trang web hoặc cả máy chủ không trả lời.</li>
+<li><b>Kiểm tra từ bên ngoài</b> (uptime check): một dịch vụ khác gọi vào địa chỉ của Ludy 5 phút một lần, báo khi cả trang web hoặc cả máy chủ không trả lời.</li>
 <li><b>Tín hiệu sống</b> (heartbeat): bộ kiểm tra báo "tôi vẫn chạy" sau mỗi lần kiểm tra; khi tín hiệu ngừng, dịch vụ bên ngoài báo bạn.</li>
 </ul>
 <p>Mức độ: <span class="tag sev1">SEV1</span> người dùng không đăng nhập được, chứng từ hoặc email ngừng được xử lý, hoặc có thể lộ dữ liệu: báo bạn ngay, bất kể giờ nào. <span class="tag sev2">SEV2</span> một chức năng chậm hoặc vài việc nền lỗi: báo bạn trong ngày.</p>

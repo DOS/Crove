@@ -1,6 +1,6 @@
 # Runbook: retention and org offboarding
 
-What Crove deletes on its own, what an owner can do to leave, and what staff do afterwards (issue #38, plan §4.9 retention table, §7.9). Nothing here deletes accounting records: they are kept for the legal retention period.
+What Ludy deletes on its own, what an owner can do to leave, and what staff do afterwards (issue #38, plan §4.9 retention table, §7.9). Nothing here deletes accounting records: they are kept for the legal retention period.
 
 ## Retention purges (automatic)
 
@@ -34,7 +34,7 @@ After the database purges, the same job sweeps three blob prefixes. Each lists i
 
 `org/<org_id>/` (documents and attachments, the evidence) is never listed or swept. Retrying an inbound job by hand (`boss.retry`) after its blob was swept fails with a missing blob; investigate a failed message within the 30 days.
 
-**Alerts:** `[retention] ALERT <prefix> blobs: blobs remain after 100 pages` when the budget ran out (the next run continues; a backlog that keeps growing means the store needs a lifecycle rule), and `[retention] ALERT <prefix> blobs sweep failed` when listing, the reference check or a delete failed (nothing is deleted for a page whose reference check failed). On a versioned bucket a delete leaves a noncurrent version behind a delete marker; Crove holds no `s3:DeleteObjectVersion`, so a lifecycle rule for noncurrent versions under `inbound/` and `export/` is what frees the space. Noncurrent export versions stay sealed (below).
+**Alerts:** `[retention] ALERT <prefix> blobs: blobs remain after 100 pages` when the budget ran out (the next run continues; a backlog that keeps growing means the store needs a lifecycle rule), and `[retention] ALERT <prefix> blobs sweep failed` when listing, the reference check or a delete failed (nothing is deleted for a page whose reference check failed). On a versioned bucket a delete leaves a noncurrent version behind a delete marker; Ludy holds no `s3:DeleteObjectVersion`, so a lifecycle rule for noncurrent versions under `inbound/` and `export/` is what frees the space. Noncurrent export versions stay sealed (below).
 
 ## Offboarding an org
 
@@ -72,7 +72,7 @@ docker compose run --rm --no-deps worker org-purge <org slug or id> --reason "Ow
 
 | Store | What happens | When | Why |
 |---|---|---|---|
-| Ledger: `crove_finance.journal_entry`, `journal_line`, `purchase_document`, `purchase_line`, `purchase_tax_rate`, and `org_account` (the sub-accounts the lines name by code; never deleted) | **Kept** | At least 10 years after the fiscal year | Accounting Law 88/2015, Art. 41: accounting records and the documents behind them are kept for the legal period. They are append-only and are never deleted by Crove. |
+| Ledger: `crove_finance.journal_entry`, `journal_line`, `purchase_document`, `purchase_line`, `purchase_tax_rate`, and `org_account` (the sub-accounts the lines name by code; never deleted) | **Kept** | At least 10 years after the fiscal year | Accounting Law 88/2015, Art. 41: accounting records and the documents behind them are kept for the legal period. They are append-only and are never deleted by Ludy. |
 | `crove_finance.misa_goods_code` (the MISA item and warehouse codes per stock account, #1398) | **Kept**, like the chart | Same as the ledger | How the kept books map onto the firm's MISA catalog, so an export of a kept period still writes the same codes. No personal data (codes, the account and who last changed them). |
 | The tax portal's purchase lists: `crove_finance.portal_invoice_list`, `portal_invoice_row` (#465), and the `import` files they were read from | **Kept** | Same as the ledger | The tax authority's record of the period's purchases, the evidence the books were checked against it. Lists are removed from a period, never deleted; rows are append-only. |
 | Source documents behind booked entries (`crove_kernel.file` rows and their blobs that a purchase document references) | **Kept**, skipped by every deletion | Until `held_until`, at least as long as the ledger; a file posted but not yet held (`held_until` null) is kept too | They are the accounting vouchers for those entries. On S3 with Object Lock each one is held in GOVERNANCE mode for `EVIDENCE_LOCK_DAYS` from its posting (#1009, [evidence-holds.md](evidence-holds.md)), so the store refuses the deletion before then. The `org-purge` command keeps every file a purchase document references, so it never deletes a held file. |

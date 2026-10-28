@@ -68,12 +68,12 @@ Then the deploy user, its SSH key for the workflow, the stack directory `/opt/cr
 
 ## 4. The files bucket
 
-Create the bucket in the region of the server, private, with versioning on **before the first write** (ADR-0013: Crove refuses a write that comes back without an object version) and **Object Lock enabled**, so that the worker can hold the original file of every posted invoice for 10 years (`EVIDENCE_LOCK_DAYS`, [evidence-holds.md](evidence-holds.md)). Do not set a default retention on the bucket: Crove holds only posted files. Give Crove its own access key, limited to this bucket:
+Create the bucket in the region of the server, private, with versioning on **before the first write** (ADR-0013: Ludy refuses a write that comes back without an object version) and **Object Lock enabled**, so that the worker can hold the original file of every posted invoice for 10 years (`EVIDENCE_LOCK_DAYS`, [evidence-holds.md](evidence-holds.md)). Do not set a default retention on the bucket: Ludy holds only posted files. Give Ludy its own access key, limited to this bucket:
 
 - on the objects: `s3:GetObject`, `s3:GetObjectVersion`, `s3:PutObject`, `s3:DeleteObject`, `s3:GetObjectRetention`, `s3:PutObjectRetention` (never `s3:BypassGovernanceRetention`);
 - on the bucket: `s3:ListBucket`, `s3:GetBucketObjectLockConfiguration`.
 
-Crove never deletes object versions, so two lifecycle rules free the space its deletes leave behind, and a third removes abandoned browser uploads. With the AWS CLI (any S3-compatible store: add `--endpoint-url https://<endpoint>`), as an account that may configure the bucket, not with Crove's key:
+Ludy never deletes object versions, so two lifecycle rules free the space its deletes leave behind, and a third removes abandoned browser uploads. With the AWS CLI (any S3-compatible store: add `--endpoint-url https://<endpoint>`), as an account that may configure the bucket, not with Ludy's key:
 
 ```bash
 aws s3api put-bucket-versioning --bucket <bucket> --versioning-configuration Status=Enabled
@@ -106,9 +106,9 @@ aws s3api put-bucket-cors --bucket <bucket> --cors-configuration file://cors.jso
 
 | Prefix | What it holds | The rule |
 |---|---|---|
-| `org/` | documents and attachments, the evidence | none: Crove never deletes them, and their versions are the record. The worker holds the original file of every posted invoice with Object Lock in GOVERNANCE mode for `EVIDENCE_LOCK_DAYS` from its posting (#1009, [evidence-holds.md](evidence-holds.md)) |
+| `org/` | documents and attachments, the evidence | none: Ludy never deletes them, and their versions are the record. The worker holds the original file of every posted invoice with Object Lock in GOVERNANCE mode for `EVIDENCE_LOCK_DAYS` from its posting (#1009, [evidence-holds.md](evidence-holds.md)) |
 | `staging/` | browser uploads before the server checks them (5 minutes) | expire after a day, with their old versions and delete markers |
-| `inbound/` | raw inbound mail until it is filed (the worker deletes it after 30 days at most) | delete old versions 7 days after Crove deleted the object |
+| `inbound/` | raw inbound mail until it is filed (the worker deletes it after 30 days at most) | delete old versions 7 days after Ludy deleted the object |
 | `export/` | sealed org exports (`EXPORT_RETENTION_DAYS`, then the worker deletes them) | the same, 7 days |
 
 The CORS rule lets the browser post files straight to the bucket (`S3_PRESIGNED_URLS=true`, the default) and download them. MinIO has no per-bucket CORS: it answers every origin unless `MINIO_API_CORS_ALLOW_ORIGIN` narrows it to `https://<your domain>`. On Cloudflare R2, which has neither versioning nor presigned POST, set `S3_VERSIONING=off` and `S3_PRESIGNED_URLS=false` instead and skip the CORS rule (`.env.example` explains the trade-off).
@@ -120,13 +120,13 @@ The backup bucket is separate: see [backup-and-restore.md](backup-and-restore.md
 Supabase Auth sends the confirmation, recovery and invite emails through `SMTP_HOST`. At the provider, verify the domain you send from, and publish the DNS records it gives you:
 
 - SPF (a TXT record that names the provider), DKIM (the provider's key records), and DMARC (`_dmarc.<domain>`, starting with `v=DMARC1; p=none; rua=mailto:<your address>`, then `quarantine` once reports look right);
-- port 587 with STARTTLS, or 465 with TLS. With credentials on a port other than 465, Crove's own mailer (member invites) refuses a server that does not offer STARTTLS.
+- port 587 with STARTTLS, or 465 with TLS. With credentials on a port other than 465, Ludy's own mailer (member invites) refuses a server that does not offer STARTTLS.
 
 Send one recovery email to an address at a large mail provider and check that it lands in the inbox, not in spam, before the partner signs up.
 
 ### Inbound email
 
-Invoices sent to `<org token>@<INBOUND_DOMAIN>` reach Crove through a mail worker that posts each message, as raw MIME, to `https://<your domain>/api/inbound/email` with `INBOUND_SECRET` (#53). [`tools/inbound-mail/worker.js`](../../tools/inbound-mail/worker.js) is that worker for Cloudflare Email Routing, one file with no dependencies. About 10 minutes once the domain is on Cloudflare (#53):
+Invoices sent to `<org token>@<INBOUND_DOMAIN>` reach Ludy through a mail worker that posts each message, as raw MIME, to `https://<your domain>/api/inbound/email` with `INBOUND_SECRET` (#53). [`tools/inbound-mail/worker.js`](../../tools/inbound-mail/worker.js) is that worker for Cloudflare Email Routing, one file with no dependencies. About 10 minutes once the domain is on Cloudflare (#53):
 
 1. Pick `INBOUND_DOMAIN`. Email Routing takes over the MX records of the name it runs on, so if the domain already receives mail elsewhere (Google Workspace, Microsoft 365), use a subdomain such as `hoadon.<your domain>`.
 2. Generate the secret on the server and put it in `/opt/crove/.env` with the domain (section 7), then redeploy so the kernel picks them up:
@@ -138,14 +138,14 @@ Invoices sent to `<org token>@<INBOUND_DOMAIN>` reach Crove through a mail worke
    - `KERNEL_URL`, type Text: `https://<your domain>` (the `PUBLIC_URL`; the worker refuses plain http);
    - `INBOUND_SECRET`, type Secret: the value from step 2.
 5. On the zone of `INBOUND_DOMAIN`, **Email**, **Email Routing**: enable it (for a subdomain, add it under **Settings**, subdomains) and let Cloudflare add the MX and SPF records it proposes.
-6. **Routing rules**, **Catch-all address**: action **Send to a Worker**, destination `crove-inbound-mail`, status enabled. The catch-all is what takes every org's `<token>@` address, and the `bounce+<token>@` addresses Crove's own mails use as their Return-Path (#539).
+6. **Routing rules**, **Catch-all address**: action **Send to a Worker**, destination `crove-inbound-mail`, status enabled. The catch-all is what takes every org's `<token>@` address, and the `bounce+<token>@` addresses Ludy's own mails use as their Return-Path (#539).
 7. Check, from outside:
    ```bash
    dig +short MX <INBOUND_DOMAIN>     # Cloudflare's route*.mx.cloudflare.net servers
    ```
    In the app, open an org's **Settings** and copy "Địa chỉ nhận hóa đơn qua email". Send it a message with an e-invoice XML or a PDF attached from any mailbox: within a minute the document shows in that org's **Inbox**. A message to a made-up address on the domain comes back to its sender as "Unknown recipient".
 
-What the worker does with Crove's answer: accepted, done; the address is unknown, the message empty or larger than 40 MB, it rejects the message with that reason; a wrong secret, a redirect (a `KERNEL_URL` that is not the https address) or Crove being down or busy, it fails, and Email Routing's **Activity log** and the worker's **Logs** show the error. When messages are accepted but not filed, the prober's alert "oldest unrelayed inbound email ... the relay is behind or stopped" fires (README, "Monitoring and alerts"): the kernel's worker or `crove-extract` is the problem then, not the mail relay.
+What the worker does with Ludy's answer: accepted, done; the address is unknown, the message empty or larger than 40 MB, it rejects the message with that reason; a wrong secret, a redirect (a `KERNEL_URL` that is not the https address) or Ludy being down or busy, it fails, and Email Routing's **Activity log** and the worker's **Logs** show the error. When messages are accepted but not filed, the prober's alert "oldest unrelayed inbound email ... the relay is behind or stopped" fires (README, "Monitoring and alerts"): the kernel's worker or `crove-extract` is the problem then, not the mail relay.
 
 ## 6. DNS
 
@@ -167,7 +167,7 @@ Write `/opt/crove/.env` (owner the deploy user, mode 600) from `.env.example`. G
 | `AUTH_DISABLE_SIGNUP` | `true` (open it only for the partner's sign-up window, [pilot-readiness.md](pilot-readiness.md)); or `false` with `AUTH_SIGNUP_POLICY=invite_only` |
 | `AUTH_SIGNUP_POLICY`, `AUTH_SIGNUP_ALLOWED_DOMAINS` | `invite_only` (no window needed), or unset with sign-up closed ([pilot-readiness.md](pilot-readiness.md), section 5) |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | the provider's, `SMTP_FROM` on the verified domain |
-| `STORAGE` and `S3_*` | `s3`, the endpoint, region, bucket and Crove's key from section 4 |
+| `STORAGE` and `S3_*` | `s3`, the endpoint, region, bucket and Ludy's key from section 4 |
 | `INBOUND_DOMAIN`, `INBOUND_SECRET` | section 5, "Inbound email" (#53) |
 | `ALERT_WEBHOOK_URL` and the other `ALERT_*` | the owner's Telegram or Slack (README, "Monitoring and alerts"; #309) |
 | `AI_*` | per #312; empty until then (e-invoice XML works without it) |

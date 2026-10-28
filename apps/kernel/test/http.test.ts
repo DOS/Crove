@@ -186,10 +186,10 @@ describe('configuration guards', () => {
     });
   });
 
-  // #1040: the product name users see is one setting, "Crove" when unset, plain text only.
-  it('validates BRAND_NAME and hands it to the app, "Crove" when unset', async () => {
-    expect(loadConfig(base).BRAND_NAME).toBe('Crove');
-    expect(loadConfig({ ...base, BRAND_NAME: ' ' }).BRAND_NAME).toBe('Crove');
+  // #1040: the product name users see is one setting, "Ludy" when unset (#1683), plain text only.
+  it('validates BRAND_NAME and hands it to the app, "Ludy" when unset', async () => {
+    expect(loadConfig(base).BRAND_NAME).toBe('Ludy');
+    expect(loadConfig({ ...base, BRAND_NAME: ' ' }).BRAND_NAME).toBe('Ludy');
     expect(loadConfig({ ...base, BRAND_NAME: ' Tên Mới ' }).BRAND_NAME).toBe('Tên Mới');
     expect(loadConfig({ ...base, BRAND_NAME: "Sổ Xanh & Co's (VN)" }).BRAND_NAME).toBe("Sổ Xanh & Co's (VN)");
     expect(loadConfig({ ...base, BRAND_NAME: 'x'.repeat(40) }).BRAND_NAME).toHaveLength(40);
@@ -209,7 +209,7 @@ describe('configuration guards', () => {
       });
       return ((await (await app.request('/api/config')).json()) as { brandName: unknown }).brandName;
     };
-    expect(await read({})).toBe('Crove');
+    expect(await read({})).toBe('Ludy');
     expect(await read({ BRAND_NAME: 'Tên Mới' })).toBe('Tên Mới');
   });
 });

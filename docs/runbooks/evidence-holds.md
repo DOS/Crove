@@ -1,19 +1,19 @@
 # Runbook: retention holds on evidence files
 
-Accounting Law 88/2015, Art. 41 keeps the documents behind the books for at least 10 years. Crove holds the original file of every posted invoice in the bucket for that long, so that nobody, Crove included, can delete or overwrite the version the books stand on (issue #1009, [ADR-0013](../adr/0013-evidence-storage-and-integrity.md) section 6).
+Accounting Law 88/2015, Art. 41 keeps the documents behind the books for at least 10 years. Ludy holds the original file of every posted invoice in the bucket for that long, so that nobody, Ludy included, can delete or overwrite the version the books stand on (issue #1009, [ADR-0013](../adr/0013-evidence-storage-and-integrity.md) section 6).
 
 ## What is held, and for how long
 
 | | |
 |---|---|
-| Which files | The original file of every invoice posted to the journal (purchases and sales: `crove_finance.purchase_document.source_file_id` of a document with a journal entry). Files never posted (a proposal still waiting or rejected, an email attachment that was not an invoice, Social images) keep the bucket's default. Crove stores no filed tax return file yet; when it does, it joins this list. |
+| Which files | The original file of every invoice posted to the journal (purchases and sales: `crove_finance.purchase_document.source_file_id` of a document with a journal entry). Files never posted (a proposal still waiting or rejected, an email attachment that was not an invoice, Social images) keep the bucket's default. Ludy stores no filed tax return file yet; when it does, it joins this list. |
 | From when | The time the entry was posted (the journal entry's `created_at`). A file posted again (an invoice recorded again after a reversal voided its first document) is held from its latest posting. |
 | How long | `EVIDENCE_LOCK_DAYS` (default 3650, 10 years), rounded up to the whole second. |
 | How | An S3 Object Lock retention in **GOVERNANCE** mode on the exact object version the file row records (owner decision on #1009): an operator with `s3:BypassGovernanceRetention` can still lift it, for a court order or a mistake. A version that already has a longer retention, or a COMPLIANCE one, keeps it. |
 
 The accountant (#61) is asked to confirm which files need 10 years and whether the period starts at the posting or at the end of the fiscal year. Either answer is a setting, not a code change:
 
-- **Another period:** set `EVIDENCE_LOCK_DAYS`. A longer period lengthens every existing hold on the worker's next run. A shorter one never shortens a hold already set (S3 refuses it without the bypass permission, which Crove never holds); it applies to new postings only.
+- **Another period:** set `EVIDENCE_LOCK_DAYS`. A longer period lengthens every existing hold on the worker's next run. A shorter one never shortens a hold already set (S3 refuses it without the bypass permission, which Ludy never holds); it applies to new postings only.
 - **From the end of the fiscal year:** add 365 days to the period (`EVIDENCE_LOCK_DAYS=4015`), which covers a posting on the first day of the year.
 
 ## How it runs
@@ -32,7 +32,7 @@ A failed file is tried again after 5 minutes, then 10, 20 and so on, at least on
 - `STORAGE=s3` with a bucket that has **Object Lock enabled** (it implies versioning, which evidence buckets need anyway). AWS can enable Object Lock on an existing versioned bucket; MinIO only on a new bucket, so create one with `--with-lock` and copy the objects with their versions, or keep holds off.
 - The credentials need `s3:GetBucketObjectLockConfiguration` on the bucket, and `s3:GetObjectRetention` and `s3:PutObjectRetention` on `org/*`. Never give them `s3:BypassGovernanceRetention`.
 - `EVIDENCE_LOCK_DAYS=0` turns holds off.
-- **Local disk** has no per-object retention: the worker logs `the file store has no per-object retention (local disk): posted files get no retention hold` at start and sets none. Crove still never deletes an `org/` file; backups are the protection there.
+- **Local disk** has no per-object retention: the worker logs `the file store has no per-object retention (local disk): posted files get no retention hold` at start and sets none. Ludy still never deletes an `org/` file; backups are the protection there.
 - **GCS** (interoperability endpoint) has no Object Lock API; use a bucket retention policy instead. **Cloudflare R2** without versioning (`S3_VERSIONING=off`) cannot lock a version; use an R2 bucket lock rule on `org/`. In both cases the worker reports that the bucket has no Object Lock (below).
 
 ## Alerts
@@ -62,7 +62,7 @@ aws s3api put-object-retention --bucket <bucket> --key org/<org_id>/<sha256> --v
   --retention '{"Mode":"GOVERNANCE","RetainUntilDate":"<new date>"}' --bypass-governance-retention
 ```
 
-The file row keeps the `held_until` Crove recorded: it is the record of what Crove set, and the guard refuses shortening it. While `EVIDENCE_LOCK_DAYS` still covers the file, the worker does not set the hold again, because the row already says it is held.
+The file row keeps the `held_until` Ludy recorded: it is the record of what Ludy set, and the guard refuses shortening it. While `EVIDENCE_LOCK_DAYS` still covers the file, the worker does not set the hold again, because the row already says it is held.
 
 ## Offboarding and personal-data erasure
 

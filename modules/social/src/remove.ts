@@ -207,8 +207,10 @@ export function removeDue(provider: string, settings: Readonly<Record<string, un
 export const removeSchedule = defineCommand({
   name: 'social.remove.schedule',
   input: z.strictObject({ variantId: zId }),
-  risk: 'R1',
-  sideEffect: 'internal',
+  // Its event queues the remove job, which takes the post down on the platform (plan §4.7: a job with egress
+  // derives R2; #1662). A system command, so the worker runs it as before.
+  risk: 'R2',
+  sideEffect: 'external',
   access: 'system',
   target: (input) => ({ type: 'social.post_variant', id: input.variantId }),
   handler: async (ctx, input): Promise<{ queued: boolean; reason?: string }> => {

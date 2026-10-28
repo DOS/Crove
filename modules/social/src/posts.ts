@@ -412,8 +412,10 @@ export const postImport = defineCommand({
       .max(MAX_IMPORT_ROWS),
     submit: z.boolean().optional(),
   }),
-  risk: 'R1',
-  sideEffect: 'internal',
+  // A submitted post alerts the org's team chat on Telegram or Discord, a third-party provider (plan §4.7: a job
+  // with egress derives R2; #1662).
+  risk: 'R2',
+  sideEffect: 'external',
   access: MEMBERS,
   handler: async (ctx, input) => {
     requireUser(ctx);
@@ -754,8 +756,10 @@ export const postRestoreVersion = defineCommand({
 export const postSubmit = defineCommand({
   name: 'social.post.submit',
   input: z.strictObject({ postId: zId, variantIds: zVariantIds.optional() }),
-  risk: 'R1',
-  sideEffect: 'internal',
+  // Its event alerts the org's team chat on Telegram or Discord, a third-party provider (plan §4.7: a job with
+  // egress derives R2; #1662).
+  risk: 'R2',
+  sideEffect: 'external',
   access: MEMBERS,
   target: (input) => ({ type: 'social.post', id: input.postId }),
   handler: async (ctx, input) => {

@@ -70,7 +70,7 @@ services:
       GOTRUE_SMTP_PASS: ${SMTP_PASS:-}
       GOTRUE_SMTP_ADMIN_EMAIL: ${SMTP_FROM:-noreply@crove.local}
       # The sender name of sign-in mails: the product name users see (BRAND_NAME, #1040).
-      GOTRUE_SMTP_SENDER_NAME: ${BRAND_NAME:-Crove}
+      GOTRUE_SMTP_SENDER_NAME: ${BRAND_NAME:-Ludy}
       # Email links resolve these paths against API_EXTERNAL_URL's origin, so they must include the /auth/v1 proxy prefix.
       GOTRUE_MAILER_URLPATHS_CONFIRMATION: /auth/v1/verify
       GOTRUE_MAILER_URLPATHS_RECOVERY: /auth/v1/verify
@@ -128,7 +128,7 @@ services:
       AI_API_KEY: ${AI_API_KEY:-}
       AI_MODEL: ${AI_MODEL:-}
       AI_VISION: ${AI_VISION:-false}
-      # The product name users see in the app and in mails (#1040); empty keeps "Crove".
+      # The product name users see in the app and in mails (#1040); empty keeps "Ludy".
       BRAND_NAME: ${BRAND_NAME:-}
       # The app's feedback and support link (https: or mailto:); empty hides it.
       SUPPORT_URL: ${SUPPORT_URL:-}

@@ -1,6 +1,6 @@
 # Runbook: deploy and roll back
 
-How a release reaches a Crove instance that runs the `docker compose` stack on one server (the pilot setup, backlog item M1-6), what the smoke test checks, and how to roll back. Issue #56. The pieces:
+How a release reaches a Ludy instance that runs the `docker compose` stack on one server (the pilot setup, backlog item M1-6), what the smoke test checks, and how to roll back. Issue #56. The pieces:
 
 - `tools/deploy/deploy.sh` runs on the host: it pulls the images, migrates, rolls the services, waits for readiness, runs the smoke test and rolls back on failure.
 - `.github/workflows/deploy.yml` builds the images of a release, pushes them to GitHub Container Registry (GHCR) and runs the script over SSH.
@@ -68,7 +68,7 @@ Without the account's secrets this check is skipped and the log says `smoke skip
 Off until the owner creates it (#690). Once per environment:
 
 1. Create an account for it, such as `smoke@<your domain>`, with a long random password (`openssl rand -base64 24`), the way any user joins (sign-up while it is open, or an invite). Do not enroll a second factor: the check signs in with the password alone.
-2. Signed in as that account, create its own org, for example `Crove smoke test`, and note the org's slug (the part after `/o/` in the app's address). Nobody else joins it, and the account belongs to no other org: each deploy uploads a document into it and rejects the proposal.
+2. Signed in as that account, create its own org, for example `Ludy smoke test`, and note the org's slug (the part after `/o/` in the app's address). Nobody else joins it, and the account belongs to no other org: each deploy uploads a document into it and rejects the proposal.
 3. In the GitHub environment (`pilot` or `beta`, section "Settings of each GitHub environment"), add the secrets `SMOKE_EMAIL` and `SMOKE_PASSWORD` and the variable `SMOKE_ORG` (the slug). `DEPLOY_PUBLIC_URL` must be set too.
 
 The synthetic e-invoice has a made-up seller and buyer whose tax codes fail the checksum, and a new number each run, so it is never a duplicate. The smoke org counts in the weekly usage report like any org: one active org, one uploaded document and one rejected proposal per deploy. Read the report with `--by-org` and leave out the smoke org's row (its name) when you count the pilot's usage. To stop the check, delete the two secrets.
@@ -89,7 +89,7 @@ The host is one Linux server with Docker Engine and the compose plugin **v2.24 o
 2. Create an SSH key pair for the workflow (`ssh-keygen -t ed25519 -N '' -f deploy_key`). Put the public key in the deploy user's `~/.ssh/authorized_keys` with the `restrict` option (no port, agent or X11 forwarding, no terminal): `restrict ssh-ed25519 AAAA... crove-deploy`.
 3. Create the stack directory, owned by the deploy user, mode 700: `/opt/crove` by default (`DEPLOY_DIR`).
 4. Write the env file there as `.env` (or at `DEPLOY_ENV_FILE`), mode 600: start from `.env.example`, change every secret, and set at least `PUBLIC_URL` (the https address), `AUTH_AUTOCONFIRM=false` with a real SMTP server, `EXPORT_ENCRYPTION_KEY` and `TRUSTED_PROXY_HOPS=1` behind the reverse proxy. The pilot readiness checklist (M1-8) lists the rest.
-5. Optional: `compose.host.yml` in the same directory (for example, to drop Mailpit's loopback port, which the default compose file publishes for local use: `services: { mailpit: { ports: !reset [] } }`) for local changes the release files must not overwrite (a reverse proxy service, split `api` and `worker` services, extra volumes). Services it adds that run the Crove images use `image: ${CROVE_IMAGE}` and `${CROVE_EXTRACT_IMAGE}`, which the deploy sets to the release's digests. `COMPOSE_PROFILES=prober` in the env file turns the prober on.
+5. Optional: `compose.host.yml` in the same directory (for example, to drop Mailpit's loopback port, which the default compose file publishes for local use: `services: { mailpit: { ports: !reset [] } }`) for local changes the release files must not overwrite (a reverse proxy service, split `api` and `worker` services, extra volumes). Services it adds that run the Ludy images use `image: ${CROVE_IMAGE}` and `${CROVE_EXTRACT_IMAGE}`, which the deploy sets to the release's digests. `COMPOSE_PROFILES=prober` in the env file turns the prober on.
 6. Put a TLS reverse proxy in front of `127.0.0.1:${PORT}` (the compose file publishes the port on loopback only). `tools/deploy/caddy/` holds one for this layout (a `compose.host.yml` and a `Caddyfile`); the whole server setup, from a fresh machine to the first deploy, is in [provision-pilot.md](provision-pilot.md).
 7. Read the host key for the workflow from a trusted session on the server (`ssh-keyscan -t ed25519 localhost` on the host itself, then replace `localhost` with the address the runner uses; for a port other than 22 the line starts with `[address]:port`). Do not take it from a scan over the network you are trying to protect.
 

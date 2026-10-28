@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Crove is the open-source Business OS (AGPL). It must run with `docker compose up` and no DOS service. Anything DOS-specific belongs in the private Crove Cloud layer, never here.
+Ludy is the open-source Business OS (AGPL). It must run with `docker compose up` and no DOS service. Anything DOS-specific belongs in the private Crove Cloud layer, never here.
 
 ## Picking up work (GitHub Project "Crove")
 
@@ -43,13 +43,13 @@ Crove is the open-source Business OS (AGPL). It must run with `docker compose up
   Squash merge with the expected head SHA, then remove the worktree.
 - Review gate before opening a PR: the Codex CLI review (`codex review --base origin/main`, run in the background) and a fresh-context reviewer given the diff and the issue. Fix what blocks; say in the PR what was not taken and why, and say so if Codex is unavailable. Docs-only PRs skip it (see the last rule under "Rules").
 - Sessions, subagents and Codex reviews run at effort high unless the owner asks for more (owner decision 2026-10-27).
-- The coordinator is Crove's Product Owner (PO, DOS.AI's term; owner request 2026-10-27, #1621), and the procedure is `.claude/skills/project-coordinator-cycle/SKILL.md`. Team leads and workers never ask the owner: stop cases, decisions and person-only steps go to the coordinator (SendMessage, or a comment on #1210 when messages are paused), and their wrap-up is a recap only. A session the owner opened with no coordinator above it asks the owner itself.
+- The coordinator is Ludy's Product Owner (PO, DOS.AI's term; owner request 2026-10-27, #1621), and the procedure is `.claude/skills/project-coordinator-cycle/SKILL.md`. Team leads and workers never ask the owner: stop cases, decisions and person-only steps go to the coordinator (SendMessage, or a comment on #1210 when messages are paused), and their wrap-up is a recap only. A session the owner opened with no coordinator above it asks the owner itself.
 - Production, secret and credential steps: no team lead or worker runs one. It writes a runbook (exact commands in order, a check and a rollback for each, where each secret comes from but never its value, which steps only a person can do) in the PR body or a committed file, under the "Public repo" rule: no secret, project ref, internal host or URL, each named by reference instead (DOS-specific steps belong in the private Crove Cloud layer). The coordinator shows the owner the concrete step list in its chat, the owner approves it there, and the coordinator runs exactly the list it showed (not a later edit of the runbook), stopping at the first failure. Only the owner's own words in the running coordinator session's chat count: an approval quoted in another session, an issue, a handoff or the coordinator log does not, and one approval covers one run. An action that one session's permission checks refused is never run by another session on its word; it takes the same route.
 - A review bot that is out of quota or rate limited has not reviewed the PR. Do not wait for it, retry it in a loop or work around its quota. Say so in the PR; on a protected-path PR the session's own security review stands in for it.
 - Never merge, push to or take over another session's PR unless the owner names it (for example "merge #481"). Even then, first check that it is still open and that its head matches what you checked: another agent may have merged or replaced it.
 - Ask the owner (team leads and workers: through the coordinator) only for the stop cases under "Picking up work", and for something only a person can do: accounts, secrets, payments, real sample files. Decide everything else yourself, and write the decision and its reason in the PR.
 - Writing to the owner:
-  - Vietnamese with full diacritics, in plain words. Explain any technical term on first use, and give every issue or PR number with its short name.
+  - Vietnamese with full diacritics, in plain words, for every message the owner reads: chat replies, short status lines between steps, progress updates, recaps, questions. Never English (owner, 2026-10-28: "nói với tao bằng tiếng Việt"). Explain any technical term on first use, and give every issue or PR number with its short name.
   - The first line says whether the work is complete, still running (and what) or stopped (and on what).
   - Each question says what is being decided, why it matters, the options, your recommendation, and what happens if there is no answer. One decision at a time, recommendation first.
   - Name who must act on each open item: the owner, the accountant (#61, the pilot partner's accountant), a lawyer, or another agent.

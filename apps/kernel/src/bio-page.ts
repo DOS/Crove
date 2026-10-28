@@ -4,6 +4,7 @@
 // and the images of the posts the page shows). Each runs a definer on the control plane as the API login role.
 import { sql } from 'kysely';
 import { readVerified, type BlobStore, type Runtime } from '@crove/kernel-runtime';
+import { DEFAULT_BRAND_NAME } from './config.ts';
 
 export const BIO_HITS_PER_MINUTE = 120;
 const SLUG = /^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/;
@@ -62,7 +63,7 @@ export async function bioImage(runtime: Runtime, store: BlobStore, slug: string,
 const escape = (text: string) => text.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string);
 
 // brand: the product name users see (BRAND_NAME, #1045), in the footer.
-export function renderBioPage(slug: string, view: BioView, brand = 'Crove'): string {
+export function renderBioPage(slug: string, view: BioView, brand = DEFAULT_BRAND_NAME): string {
   const base = `/b/${slug}`;
   const buttons = view.buttons.map((b, i) => `<a class="button" href="${base}/go/button:${i}" rel="noopener">${escape(b.label)}</a>`).join('\n');
   const posts = view.posts

@@ -1,6 +1,6 @@
 # Runbook: the AI extraction eval
 
-How Crove measures how well it reads invoices (backlog item M2-11, issues #153 and #687). Crove reads three kinds of documents: e-invoice XML, PDF and photos.
+How Ludy measures how well it reads invoices (backlog item M2-11, issues #153 and #687). Ludy reads three kinds of documents: e-invoice XML, PDF and photos.
 - An **e-invoice XML** goes through a parser. No AI is involved, so every amount must be exact.
 - A **PDF** has its text layer read, and the AI turns that text into fields.
 - A **photo** (JPG, PNG, WEBP) goes to the AI directly.
@@ -27,7 +27,7 @@ Run it before a change of AI model, endpoint or prompt.
 
 The real documents never go into the repository, a pull request, an issue or a CI log. GitHub is public.
 
-1. Put them in one folder outside the Crove repository, for example `/srv/crove-eval/` on the pilot server. Subfolders are fine, for example `xml/`, `pdf/` and `photo/`.
+1. Put them in one folder outside your checkout of this repository, for example `/srv/crove-eval/` on the pilot server. Subfolders are fine, for example `xml/`, `pdf/` and `photo/`.
 2. Next to each document, put a file with the same name ending in `.json` that holds its expected answer, for example `hd-0001.pdf` and `hd-0001.json`.
 3. Accepted documents: `.xml`, `.pdf`, `.jpg`, `.jpeg`, `.png`, `.webp`.
 
@@ -38,11 +38,11 @@ The expected answer has the same shape as the committed samples in [packages/age
 - `expected`: the invoice as printed. That means the series (ký hiệu), number, date (`YYYY-MM-DD`), currency, seller and buyer (name and tax code), every goods or service line in printed order (description, quantity, unit price, amount before VAT, VAT rate, and `"discount": true` for a trade discount), the subtotal, the VAT and the total;
 - `expected` is `null` for a document that is not a purchase invoice, such as a quotation.
 
-Amounts are plain digits, with no thousands separators: `1815000`, not `1.815.000`. Note lines of an e-invoice (for example "Ghi chú: ...") are left out, as Crove does not book them.
+Amounts are plain digits, with no thousands separators: `1815000`, not `1.815.000`. Note lines of an e-invoice (for example "Ghi chú: ...") are left out, as Ludy does not book them.
 
 ## 2. Run it
 
-On the private machine, in a checkout of Crove with Node 26 and pnpm (`pnpm install` once):
+On the private machine, in a checkout of this repository with Node 26 and pnpm (`pnpm install` once):
 
 ```sh
 AI_EVAL_DIR=/srv/crove-eval \

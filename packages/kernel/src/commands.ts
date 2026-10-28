@@ -226,8 +226,10 @@ export const removeMember = defineCommand({
 export const ingestFile = defineCommand({
   name: 'kernel.file.ingest',
   input: zIngestFile,
-  risk: 'R1',
-  sideEffect: 'internal',
+  // Its event queues the extraction job, which sends the file to the AI endpoint (plan §4.7: a job with egress
+  // derives R2; #1662).
+  risk: 'R2',
+  sideEffect: 'external',
   access: MEMBERS,
   handler: (ctx, input) => ingestFileRow(ctx, input, ctx.actor.type === 'user' ? ctx.actor.userId : null),
 });

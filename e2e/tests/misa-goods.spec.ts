@@ -70,7 +70,7 @@ test('set the MISA codes of a stock account, book a stock line, and export it in
     let download = page.waitForEvent('download');
     await page.getByRole('button', { name: 'Xuất chứng từ mua hàng nhập kho cho MISA' }).click();
     let file = await download;
-    expect(file.suggestedFilename()).toBe(`crove-misa-mua-hang-nhap-kho-${slug}.xlsx`);
+    expect(file.suggestedFilename()).toBe(`ludy-misa-mua-hang-nhap-kho-${slug}.xlsx`);
     const goods = await sheetOf(file, 'Chứng từ mua hàng nhập kho');
     expect(goods.sheet.rowCount).toBe(2);
     expect(goods.cell(2, 'Số phiếu nhập (*)')).toMatch(/^CRMH[0-9A-F]{12}$/);
@@ -85,7 +85,7 @@ test('set the MISA codes of a stock account, book a stock line, and export it in
     download = page.waitForEvent('download');
     await page.getByRole('button', { name: 'Xuất chứng từ mua dịch vụ cho MISA' }).click();
     file = await download;
-    expect(file.suggestedFilename()).toBe(`crove-misa-mua-dich-vu-${slug}.xlsx`);
+    expect(file.suggestedFilename()).toBe(`ludy-misa-mua-dich-vu-${slug}.xlsx`);
     const services = await sheetOf(file, 'Chứng từ mua dịch vụ');
     // The second service line and the trade discount; together with the goods line the VAT is the invoice's 180,000.
     expect(services.sheet.rowCount).toBe(3);

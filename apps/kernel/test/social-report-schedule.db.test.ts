@@ -254,7 +254,7 @@ suite('scheduled client report mail on PostgreSQL (#704)', () => {
     expect(mail.text).toContain('Lượt tiếp cận: 1.200');
     expect(mail.text).toContain('Lượt tương tác: 45');
     // The sending org is named (#735).
-    expect(mail.text).toMatch(/Thư này được .+ gửi tự động qua Crove/);
+    expect(mail.text).toMatch(/Thư này được .+ gửi tự động qua Ludy/);
     // Each recipient's own link opens the report of the period.
     const tokens = ours.map((m) => /\/-\/report#([A-Za-z0-9_-]{43})/.exec(m.text)?.[1]);
     expect(new Set(tokens).size).toBe(2);

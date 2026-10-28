@@ -64,8 +64,10 @@ function keyOf(raw: string): { url: string; key: string } {
 export const linkPreviewRequest = defineCommand({
   name: 'social.link_preview.request',
   input: z.strictObject({ url: zUrl }),
-  risk: 'R1',
-  sideEffect: 'internal',
+  // Its event queues the preview job, which fetches the page the link names (plan §4.7: a job with egress derives
+  // R2; #1662).
+  risk: 'R2',
+  sideEffect: 'external',
   access: ALL,
   handler: async (ctx: CommandContext, input): Promise<LinkPreview> => {
     const { url, key } = keyOf(input.url);

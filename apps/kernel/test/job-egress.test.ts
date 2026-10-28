@@ -60,36 +60,11 @@ const RANK = { R0: 0, R1: 1, R2: 2, R3: 3 } as const;
 const all = (): Array<CommandDef<unknown, unknown>> =>
   [...kernelCommands, orgPurgeCommand({ store: {} as never }), ...financeCommands, ...socialCommands, ...crmCommands] as Array<CommandDef<unknown, unknown>>;
 
-// Commands below R2 whose events feed a queue with egress: each event, the queue it feeds and the queue's egress. The
-// derived risk (plan §4.7) says R2; raising a member's command changes who may run it (an agent in a chat gets a
-// review) and the agent autonomy table, so #1662 decides each, as it decides whether the org's own team chat counts.
-// No command changes risk in #1653. The list may only shrink: a new command feeding such a queue declares an external
-// effect.
-const SUBMITTED = ['social.post.submitted -> social-chat-alert (provider:telegram, provider:discord)'];
-const BELOW_R2: Readonly<Record<string, readonly string[]>> = {
-  // A file to read: its content goes to the AI endpoint.
-  'kernel.file.archive.record': ['kernel.file.ingested -> finance-file-extract (provider:ai)'],
-  'kernel.file.ingest': ['kernel.file.ingested -> finance-file-extract (provider:ai)'],
-  'kernel.file.reextract': ['kernel.file.reextract_requested -> finance-file-extract (provider:ai)'],
-  // A composer list, read from the platform with the channel's token.
-  'social.channel_option.request': ['social.channel_option.requested -> social-channel-option (provider:channel, tenant_url)'],
-  // A link preview card: the worker fetches the page through the guard.
-  'social.link_preview.request': ['social.link_preview.requested -> social-link-preview (tenant_url)'],
-  // A post sent to review, a post published, failed or unclear: a line in the org's team chat.
-  'social.post.duplicate': SUBMITTED,
-  'social.post.import': SUBMITTED,
-  'social.post.repost': SUBMITTED,
-  'social.post.repost_evergreen': SUBMITTED,
-  'social.post.submit': SUBMITTED,
-  'social.publish.record': [
-    'social.variant.failed -> social-chat-alert (provider:telegram, provider:discord)',
-    'social.variant.needs_attention -> social-chat-alert (provider:telegram, provider:discord)',
-    'social.variant.published -> social-chat-alert (provider:telegram, provider:discord)',
-  ],
-  'social.recurring.next': SUBMITTED,
-  // A planned takedown: the worker takes the post down.
-  'social.remove.schedule': ['social.variant.remove_requested -> social-remove (provider:channel, tenant_url)'],
-};
+// Commands below R2 whose handlers emit an event that feeds a queue with egress. None since #1662 (coordinator
+// decision): each is R2 `external`, a line to the org's own team chat on Telegram or Discord included, since it sends
+// tenant content to a third-party provider. An exemption needs a product flow the plans require and a reason in plan
+// §4.7. A command that runs one of them through ctx.run or tryRun is not followed yet (#1698).
+const BELOW_R2: Readonly<Record<string, readonly string[]>> = {};
 
 // Sends to a queue with egress from outside the outbox relay, and why each needs no command of its own: the command
 // that decides it, which must declare an external effect, or the reason.
