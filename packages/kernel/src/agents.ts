@@ -1000,8 +1000,8 @@ export const dispatchAgentEvent = defineCommand({
         .insertInto('crove_kernel.task')
         .values({
           org_id: ctx.orgId,
-          // Not the proposal's title: tasks are read org-wide, and the title of a proposal of one legal entity names
-          // its content (#1538). The task opens the proposal, which le_scope guards.
+          // Not the proposal's title, which names its content (#1538): the task opens the proposal, which le_scope
+          // guards. The task takes the proposal's legal entity from its source_ref (trigger task_legal_entity, #1762).
           title: 'Rà soát đề xuất chờ duyệt',
           kind: 'proposal_review',
           assignee_position_id: seat.position_id,
