@@ -10,6 +10,7 @@
 import { sql } from 'kysely';
 import { z } from 'zod';
 import {
+  NOTE_LINKS_MAX,
   auditValue,
   zNoteCreate,
   zNoteLinkAdd,
@@ -118,11 +119,16 @@ function assertNotInTrash(row: SummaryRow): void {
 // The query that opens a record another module owns (notes.md §3.4, #1672). No foreign key goes to another module's
 // schema, so such a target is checked by running that module's own get query in the caller's context: its role check,
 // its row policies and the caller's legal entities apply, as on the record's own screen.
-const MODULE_GETS = {
+// apps/kernel/test/notes-link-targets.test.ts checks that each is registered.
+export const NOTE_TARGET_QUERIES = {
   'finance.purchase_document': 'finance.documents.get',
   'finance.journal_entry': 'finance.journal.get',
   'crm.booking': 'crm.booking.get',
 } as const satisfies Record<Exclude<NoteLinkTarget, 'kernel.party' | 'kernel.file'>, string>;
+// What those queries answer for a record the caller cannot open: not there (or in a legal entity, or of a host, the
+// caller cannot see), or not for the caller's role. Any other refusal, a misspelled query name included, is a bug and
+// fails the read instead of showing every link as unavailable.
+const UNREADABLE = new Set(['DOCUMENT_NOT_FOUND', 'ENTRY_NOT_FOUND', 'BOOKING_NOT_FOUND', 'FORBIDDEN']);
 
 // Whether the caller can open the record now: a party or a file through the kernel's row policies, any other target
 // through its module's get query. A record the caller may not read, that is not there, or whose module is off (not
@@ -134,12 +140,11 @@ async function canOpen(ctx: QueryContext, targetType: NoteLinkTarget, targetId: 
     return found !== undefined;
   }
   try {
-    const answer = await ctx.query(MODULE_GETS[targetType], { id: targetId });
+    const answer = await ctx.query(NOTE_TARGET_QUERIES[targetType], { id: targetId });
     return answer.status === 'ok';
   } catch (error) {
-    // Not found, or not for the caller's role: the get queries refuse before they read or after a read that found
-    // nothing, so the transaction stays usable.
-    if (error instanceof DomainError && (error.status === 403 || error.status === 404)) return false;
+    // The get queries refuse before they read or after a read that found nothing, so the transaction stays usable.
+    if (error instanceof DomainError && UNREADABLE.has(error.code)) return false;
     throw error;
   }
 }
@@ -150,6 +155,15 @@ async function assertTarget(ctx: CommandContext, targetType: NoteLinkTarget, tar
 }
 
 async function addLink(ctx: CommandContext, row: Pick<SummaryRow, 'id' | 'visibility'>, userId: string, targetType: NoteLinkTarget, targetId: string): Promise<string> {
+  // Every read of the note checks each link through its module, so a note keeps at most NOTE_LINKS_MAX of them. The
+  // note is locked (loadForChange) or new, so two links added at once are counted one after the other.
+  const { n } = await ctx.trx
+    .selectFrom('crove_notes.link')
+    .select((eb) => eb.fn.countAll<string>().as('n'))
+    .where('org_id', '=', ctx.orgId)
+    .where('note_id', '=', row.id)
+    .executeTakeFirstOrThrow();
+  if (Number(n) >= NOTE_LINKS_MAX) throw new DomainError('NOTE_LINK_LIMIT', 409, `Một ghi chú gắn được tối đa ${NOTE_LINKS_MAX} bản ghi`, { max: NOTE_LINKS_MAX });
   await assertTarget(ctx, targetType, targetId);
   const link = await ctx.trx
     .insertInto('crove_notes.link')

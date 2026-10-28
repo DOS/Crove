@@ -5103,6 +5103,7 @@ export const en = {
       NOTE_IN_TRASH: 'This note is in the trash; restore it first.',
       NOTE_REVISION_CONFLICT: 'This note was just changed elsewhere; reload it before saving.',
       NOTE_LINK_EXISTS: 'This note is already linked to that record.',
+      NOTE_LINK_LIMIT: 'A note can be linked to at most 50 records.',
       NOTE_LINK_NOT_FOUND: 'This link was not found.',
       NOTE_LINK_TARGET_NOT_FOUND: 'The record to link was not found.',
       BOOKING_LINK_NOT_FOUND: 'This link no longer works.',

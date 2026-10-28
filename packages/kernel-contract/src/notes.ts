@@ -18,6 +18,8 @@ export const NOTE_TITLE_MAX = 200;
 export const NOTE_BODY_MAX = 100_000;
 export const NOTE_TAGS_MAX = 20;
 export const NOTE_TAG_MAX = 40;
+// Links one note keeps: each read of the note checks every link through its module (#1672).
+export const NOTE_LINKS_MAX = 50;
 // Days a deleted note stays in the trash, and a former member's private notes stay sealed (ADR-0037 §4).
 export const NOTE_TRASH_DAYS = 30;
 export const NOTE_MEMBER_PURGE_DAYS = 30;

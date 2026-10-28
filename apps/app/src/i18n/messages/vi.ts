@@ -5103,6 +5103,7 @@ export const vi = {
       NOTE_IN_TRASH: 'Ghi chú đang ở thùng rác; hãy khôi phục trước',
       NOTE_REVISION_CONFLICT: 'Ghi chú vừa được sửa ở nơi khác; hãy tải lại trước khi lưu',
       NOTE_LINK_EXISTS: 'Ghi chú đã gắn với bản ghi này',
+      NOTE_LINK_LIMIT: 'Một ghi chú gắn được tối đa 50 bản ghi',
       NOTE_LINK_NOT_FOUND: 'Không tìm thấy liên kết này',
       NOTE_LINK_TARGET_NOT_FOUND: 'Không tìm thấy bản ghi để gắn ghi chú',
       BOOKING_LINK_NOT_FOUND: 'Liên kết này không còn dùng được',

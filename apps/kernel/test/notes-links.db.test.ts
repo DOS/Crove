@@ -11,7 +11,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
-import type { Note, NoteRecordPanel, NoteSummary, NoteWritten } from '@crove/kernel-contract';
+import { NOTE_LINKS_MAX, type Note, type NoteRecordPanel, type NoteSummary, type NoteWritten } from '@crove/kernel-contract';
 import { Runtime } from '@crove/kernel-runtime';
 import { crmCommands, crmQueries } from '@crove/mod-crm';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
@@ -223,6 +223,15 @@ suite('notes linked to documents, vouchers and bookings on PostgreSQL (#1672)', 
     ]) {
       await expect(o.exec(o.author, 'notes.link.add', { noteId, targetType, targetId })).rejects.toMatchObject({ code: 'NOTE_LINK_TARGET_NOT_FOUND', status: 404 });
     }
+    // Another org's records, of each type, are not found either.
+    const p = await org();
+    for (const [targetType, targetId] of [
+      ['finance.journal_entry', p.a.entry],
+      ['finance.purchase_document', p.a.doc],
+      ['crm.booking', p.booking],
+    ]) {
+      await expect(o.exec(o.author, 'notes.link.add', { noteId, targetType, targetId })).rejects.toMatchObject({ code: 'NOTE_LINK_TARGET_NOT_FOUND', status: 404 });
+    }
     const { noteId: mine } = await o.exec<NoteWritten>(o.other, 'notes.note.create', { title: 'Lịch hẹn của đồng nghiệp' });
     await expect(o.exec(o.other, 'notes.link.add', { noteId: mine, targetType: 'crm.booking', targetId: o.booking })).rejects.toMatchObject({ code: 'NOTE_LINK_TARGET_NOT_FOUND' });
     // A shared note's audit rows name the records it links.
@@ -298,6 +307,26 @@ suite('notes linked to documents, vouchers and bookings on PostgreSQL (#1672)', 
     });
     await expect(o.query(o.accountantB, 'notes.note.get', { noteId: shared })).rejects.toMatchObject({ code: 'NOTE_NOT_FOUND' });
     expect(await o.query<NoteSummary[]>(o.accountantB, 'notes.note.list', { view: 'shared' })).toEqual([]);
+  });
+
+  it('keeps at most NOTE_LINKS_MAX links on a note, since every read checks each of them', async () => {
+    const o = await org();
+    const parties = await admin(
+      async (c) =>
+        (
+          await c.query<{ id: string }>(`INSERT INTO crove_kernel.party (org_id, name) SELECT $1, 'Khách ' || g FROM pg_catalog.generate_series(1, $2::int) g RETURNING id`, [
+            o.orgId,
+            NOTE_LINKS_MAX,
+          ])
+        ).rows.map((r) => r.id),
+    );
+    const { noteId } = await o.exec<NoteWritten>(o.author, 'notes.note.create', { title: 'Nhiều khách', link: { targetType: 'finance.journal_entry', targetId: o.a.entry } });
+    for (const party of parties.slice(0, NOTE_LINKS_MAX - 1)) await o.exec(o.author, 'notes.link.add', { noteId, targetType: 'kernel.party', targetId: party });
+    await expect(o.exec(o.author, 'notes.link.add', { noteId, targetType: 'kernel.party', targetId: parties[NOTE_LINKS_MAX - 1] })).rejects.toMatchObject({
+      code: 'NOTE_LINK_LIMIT',
+      status: 409,
+    });
+    expect(await o.links(o.author, noteId)).toHaveLength(NOTE_LINKS_MAX);
   });
 
   it('keeps the notes working with finance off, and shows its links as unavailable', async () => {
