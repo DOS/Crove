@@ -108,3 +108,6 @@ packageExtensions:
   dependency-cruiser@18:
     dependencies:
       typescript: 6.0.3
+
+patchedDependencies:
+  exceljs@4.4.0: patches/exceljs.patch

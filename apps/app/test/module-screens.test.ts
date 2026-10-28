@@ -106,7 +106,7 @@ describe('module screens against the router (#1652)', () => {
 
   it('keeps the menus users know, in their order', () => {
     expect(APPS.map((a) => [a.id, a.groups.map((g) => [g.id, g.items.map((i) => i.to)])])).toEqual([
-      ['home', [['work', ['/o/$slug/overview', '/o/$slug/inbox', '/o/$slug/notifications', '/o/$slug/tasks']]]],
+      ['home', [['work', ['/o/$slug/overview', '/o/$slug/inbox', '/o/$slug/notifications', '/o/$slug/tasks', '/o/$slug/notes']]]],
       [
         'accounting',
         [
@@ -123,7 +123,7 @@ describe('module screens against the router (#1652)', () => {
       ['/o/$slug/settings', 'settings'],
     ]);
     expect(ALL_NAV.map((i) => i.label)).toEqual([
-      'overview', 'inbox', 'alerts', 'tasks', 'documents', 'journal', 'vouchers', 'bank', 'fixedAssets', 'ledger', 'vat', 'portalList', 'customers', 'vendors', 'social', 'notifications', 'bookings', 'agents', 'settings',
+      'overview', 'inbox', 'alerts', 'tasks', 'notes', 'documents', 'journal', 'vouchers', 'bank', 'fixedAssets', 'ledger', 'vat', 'portalList', 'customers', 'vendors', 'social', 'notifications', 'bookings', 'agents', 'settings',
     ]);
   });
 });
@@ -161,9 +161,9 @@ describe('a module turned off (ADR-0031 §3, #1652)', () => {
     return r.state.location.pathname;
   };
 
-  it('sends every screen of crm and social to the inbox through the router, and opens the others', async () => {
+  it('sends every screen of crm, social and notes to the inbox through the router, and opens the others', async () => {
     session.modules = ['kernel', 'finance'];
-    for (const path of [...addresses('crm'), ...addresses('social')]) {
+    for (const path of [...addresses('crm'), ...addresses('social'), ...addresses('notes')]) {
       expect(screenInstalled(session.modules, path), path).toBe(false);
       expect(await landing(path), path).toBe('/o/acme/inbox');
     }
@@ -172,7 +172,7 @@ describe('a module turned off (ADR-0031 §3, #1652)', () => {
     for (const path of ['/o/acme/Bookings', '/o/acme/SOCIAL/new', '/o/acme/Print/Social-Plan']) expect(await landing(path), path).toBe('/o/acme/inbox');
     session.modules = ['kernel'];
     for (const path of [...addresses('finance'), '/o/acme/JOURNAL']) expect(await landing(path), path).toBe('/o/acme/inbox');
-    session.modules = ['kernel', 'finance', 'social', 'crm'];
+    session.modules = ['kernel', 'finance', 'social', 'crm', 'notes'];
     for (const [module] of MODULES) {
       for (const path of addresses(module as keyof typeof MODULE_SCREENS)) {
         expect(screenInstalled(session.modules, path), path).toBe(true);

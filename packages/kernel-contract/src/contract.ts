@@ -156,6 +156,7 @@ import {
   zSearchResult,
   zNotificationKind,
   zNotifications,
+  zRaisedInboxItems,
   zRole,
   zSession,
   zSessionRevoke,
@@ -1164,6 +1165,10 @@ export const contract = {
     // Asks again for a proposal that expired (#876; owners, admins and members who wrote it): a new pending proposal from
     // the same source, approved like any other. A retry with the same idempotencyKey returns the first one.
     resubmit: oc.input(z.object({ id: zId, idempotencyKey: zId })).output(z.object({ proposalId: zId })),
+    // Owners and admins (#1720): the open items the system raised, a job that failed its last retry among them,
+    // newest first (50 at most; total counts them all), and dismissing one. Members and viewers get an empty list.
+    raised: oc.input(z.object({})).output(zRaisedInboxItems),
+    dismiss: oc.input(z.strictObject({ id: zId })).output(z.object({ ok: z.literal(true) })),
     // Asks for a proposal that no file produced (kernel.proposal.request; owners, admins and members): reversing a
     // posted journal entry (#138, #165), or a cash or bank voucher entered by hand (#327). It posts nothing; the
     // proposal is approved like any other (R3, P10 four-eyes, P11 step-up). Reversing a purchase entry also voids
