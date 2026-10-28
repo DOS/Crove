@@ -814,15 +814,19 @@ export const zNotifications = z.object({
 });
 export type Notifications = z.infer<typeof zNotifications>;
 
-// Inbox items the system raised (#1720), open ones only: a job of the org that failed its last retry, named by the
-// queue it ran on. Neither the job's data nor its error is part of it. total counts every open item.
+// Inbox items the system raised (#1720), open ones only: work of the org that failed its last retry, named by the
+// queue it ran on, one item per queue and day (#1747). failures counts that day's failed jobs since the item was
+// raised; jobId, retries and lastAt are the latest one's. Neither a job's data nor its error is part of it. total
+// counts every open item.
 export const zRaisedInboxItem = z.object({
   id: zId,
   kind: z.literal('kernel.job.dead_lettered'),
   queue: z.string().max(100),
   jobId: zId,
   retries: z.number().int().min(0),
+  failures: z.number().int().min(1),
   raisedAt: z.string(),
+  lastAt: z.string(),
 });
 export type RaisedInboxItem = z.infer<typeof zRaisedInboxItem>;
 export const zRaisedInboxItems = z.object({ items: z.array(zRaisedInboxItem), total: z.number().int().min(0) });

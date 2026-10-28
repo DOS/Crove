@@ -53,7 +53,22 @@ jobs:
           fi
           node "$RUNNER_TEMP/protected-paths.mjs" "$BASE_SHA" "$HEAD_SHA"
 
+      # On every PR, protected or not (#1644): Node resolves a bare import by walking up from the importing file
+      # through every node_modules directory, so a committed packages/db/test/node_modules/pg/index.js would shadow
+      # pg for the invariant suite of every later run. No tracked path may be a node_modules directory, file, symlink
+      # or submodule, or sit under one. Paths are printed indented, so a name cannot pass as a workflow command.
+      - name: No committed node_modules
+        run: |
+          set -euo pipefail
+          shims=$(git ls-tree -r -z --name-only "$HEAD_SHA" | { grep -zE '(^|/)node_modules(/|$)' || true; } | tr '\0' '\n')
+          if [ -n "$shims" ]; then
+            echo "::error::This PR commits a node_modules path, which could shadow a dependency of the invariant suite (#1644):"
+            printf '%s\n' "$shims" | sed 's/^/  /'
+            exit 1
+          fi
+
       - name: Take the invariant suite from the base branch
+        id: take
         if: steps.detect.outputs.protected == 'true'
         run: |
           set -euo pipefail
@@ -65,13 +80,14 @@ jobs:
           if [ ! -s "$base_list" ]; then
             echo "::warning::The base branch has no invariant suite yet; running this PR's copy (bootstrap)."
             echo "### Invariant suite: PR copy (the base branch has none yet)" >> "$GITHUB_STEP_SUMMARY"
+            echo "suite=pr" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           # Remove the PR's copy, including files it added, then check out the base copy over the PR's tree.
           git ls-files -z | { grep -zE "$suite_re" || true; } | xargs -0 -r rm -f --
           xargs -0 -r git --literal-pathspecs checkout "$BASE_SHA" -- < "$base_list"
           # The files on disk must now be exactly the base list.
-          find . -name node_modules -prune -o -name .git -prune -o -type f -regextype posix-extended \
+          find . -name node_modules -prune -o -path ./.git -prune -o ! -type d -regextype posix-extended \
             -regex '\./(.*/)?test/invariant/.*|\./vitest\.invariant\.config\.ts|\./supabase/tests/database/_[^/]*\.test\.sql' \
             -printf '%P\0' | sort -z > "$RUNNER_TEMP/invariant-disk.list"
           if ! cmp -s "$base_list" "$RUNNER_TEMP/invariant-disk.list"; then
@@ -81,6 +97,10 @@ jobs:
           fi
           # ...with the base branch's content.
           xargs -0 git --literal-pathspecs diff --quiet "$BASE_SHA" -- < "$base_list"
+          # What the re-checks below compare with (#1647): the sha256 of each base file, taken now, before any PR code
+          # runs, and handed over as a step output, which the runner holds, rather than as a file PR code could edit.
+          echo "suite=base" >> "$GITHUB_OUTPUT"
+          echo "manifest=$(xargs -0 sha256sum -z -- < "$base_list" | base64 -w0)" >> "$GITHUB_OUTPUT"
           changed=$(git -c core.quotePath=false diff --name-status "$BASE_SHA...$HEAD_SHA" -- ':(glob)**/test/invariant/**' vitest.invariant.config.ts \
             ':(glob)supabase/tests/database/_*.test.sql')
           {
@@ -105,6 +125,43 @@ jobs:
       - name: Install dependencies
         if: steps.detect.outputs.protected == 'true'
         run: pnpm install --frozen-lockfile --filter "@crove/kernel-server..." --filter "crove-monorepo"
+
+      # PR code still runs after the swap (#1647): the root lifecycle scripts of pnpm install, and the code under
+      # test the suite loads. So the base suite is checked again, here and after the run (the same script, kept in
+      # step): the files on disk are exactly the base files with their base content, by the sha256 list the take step
+      # handed over before any PR code ran, and no node_modules sits under a test directory (#1644).
+      - name: The base suite is still on disk after the install
+        if: steps.detect.outputs.protected == 'true' && steps.take.outcome == 'success'
+        env:
+          SUITE: ${{ steps.take.outputs.suite }}
+          MANIFEST: ${{ steps.take.outputs.manifest }}
+        run: |
+          set -euo pipefail
+          if [ "$SUITE" = pr ]; then echo "The PR's own copy ran (the base branch has no suite yet); nothing to re-check."; exit 0; fi
+          expected="$RUNNER_TEMP/invariant-expected.sha256"
+          printf '%s' "$MANIFEST" | base64 -d > "$expected"
+          if [ "$SUITE" != base ] || [ ! -s "$expected" ]; then
+            echo "::error::The take step handed over no list of the base suite to re-check (#1647)."
+            exit 1
+          fi
+          # The files on disk, found and hashed without git (whose index, attributes, config and replace refs PR code
+          # can change): exactly the base files, each with its base content.
+          actual="$RUNNER_TEMP/invariant-actual.sha256"
+          find . -name node_modules -prune -o -path ./.git -prune -o ! -type d -regextype posix-extended \
+            -regex '\./(.*/)?test/invariant/.*|\./vitest\.invariant\.config\.ts|\./supabase/tests/database/_[^/]*\.test\.sql' \
+            -printf '%P\0' | sort -z | xargs -0 -r sha256sum -z -- > "$actual"
+          if ! cmp -s "$expected" "$actual"; then
+            echo "::error::The invariant suite on disk is no longer the base branch's: a file was changed, added, removed or replaced by a link (#1647)."
+            diff <(tr '\0' '\n' < "$expected") <(tr '\0' '\n' < "$actual") | sed 's/^/  /' || true
+            exit 1
+          fi
+          # No node_modules (directory or link) under a test directory, where it would shadow a dependency (#1644).
+          shims=$(find . -path ./node_modules -prune -o -path ./.git -prune -o -name node_modules -path '*/test/*' -print)
+          if [ -n "$shims" ]; then
+            echo "::error::A node_modules path sits under a test directory, where it could shadow a dependency of the invariant suite (#1644):"
+            printf '%s\n' "$shims" | sed 's/^/  /'
+            exit 1
+          fi
 
       # The runner prints the service container's log at the end of the job. Each statement the suite refuses on
       # purpose would add ERROR and STATEMENT lines there, thousands in all, and push the test report out of the
@@ -134,6 +191,41 @@ jobs:
             console.log(`invariant tests: ${r.numPassedTests} passed, ${r.numFailedTests} failed, ${skipped} skipped`);
             if (r.numPassedTests === 0 || skipped > 0 || r.numPassedTests !== r.numTotalTests) process.exit(1);
           ' "$RUNNER_TEMP/invariant.json"
+
+      # The same check as "The base suite is still on disk after the install", after the run and even when it
+      # failed, so it decides the job: the code under test ran in between (#1647).
+      - name: The base suite is still on disk after the run
+        if: ${{ !cancelled() && steps.detect.outputs.protected == 'true' && steps.take.outcome == 'success' }}
+        env:
+          SUITE: ${{ steps.take.outputs.suite }}
+          MANIFEST: ${{ steps.take.outputs.manifest }}
+        run: |
+          set -euo pipefail
+          if [ "$SUITE" = pr ]; then echo "The PR's own copy ran (the base branch has no suite yet); nothing to re-check."; exit 0; fi
+          expected="$RUNNER_TEMP/invariant-expected.sha256"
+          printf '%s' "$MANIFEST" | base64 -d > "$expected"
+          if [ "$SUITE" != base ] || [ ! -s "$expected" ]; then
+            echo "::error::The take step handed over no list of the base suite to re-check (#1647)."
+            exit 1
+          fi
+          # The files on disk, found and hashed without git (whose index, attributes, config and replace refs PR code
+          # can change): exactly the base files, each with its base content.
+          actual="$RUNNER_TEMP/invariant-actual.sha256"
+          find . -name node_modules -prune -o -path ./.git -prune -o ! -type d -regextype posix-extended \
+            -regex '\./(.*/)?test/invariant/.*|\./vitest\.invariant\.config\.ts|\./supabase/tests/database/_[^/]*\.test\.sql' \
+            -printf '%P\0' | sort -z | xargs -0 -r sha256sum -z -- > "$actual"
+          if ! cmp -s "$expected" "$actual"; then
+            echo "::error::The invariant suite on disk is no longer the base branch's: a file was changed, added, removed or replaced by a link (#1647)."
+            diff <(tr '\0' '\n' < "$expected") <(tr '\0' '\n' < "$actual") | sed 's/^/  /' || true
+            exit 1
+          fi
+          # No node_modules (directory or link) under a test directory, where it would shadow a dependency (#1644).
+          shims=$(find . -path ./node_modules -prune -o -path ./.git -prune -o -name node_modules -path '*/test/*' -print)
+          if [ -n "$shims" ]; then
+            echo "::error::A node_modules path sits under a test directory, where it could shadow a dependency of the invariant suite (#1644):"
+            printf '%s\n' "$shims" | sed 's/^/  /'
+            exit 1
+          fi
 
       # Also after a failure: the failed and skipped tests go to the job summary, to error annotations and to this
       # step's log (#498). The script comes from the base branch, like the detection script, so a PR cannot change

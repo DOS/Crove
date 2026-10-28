@@ -127,8 +127,12 @@ function FailedJobs() {
         {data.items.map((item) => (
           <li key={item.id} className="flex items-start justify-between gap-3 py-2">
             <div className="min-w-0">
-              <p className="text-foreground">{t('item', { work: t(`work.${failedWork(item.queue)}`, { queue: item.queue }), count: item.retries + 1 })}</p>
-              <p className="text-xs text-subtle-foreground">{t('meta', { when: f.dateTime(item.raisedAt), job: item.jobId.slice(0, 8) })}</p>
+              <p className="text-foreground">
+                {item.failures > 1
+                  ? t('itemRepeated', { work: t(`work.${failedWork(item.queue)}`, { queue: item.queue }), failures: item.failures, count: item.retries + 1 })
+                  : t('item', { work: t(`work.${failedWork(item.queue)}`, { queue: item.queue }), count: item.retries + 1 })}
+              </p>
+              <p className="text-xs text-subtle-foreground">{t('meta', { when: f.dateTime(item.lastAt), job: item.jobId.slice(0, 8) })}</p>
             </div>
             <Button variant="outline" size="sm" disabled={dismiss.isPending} onClick={() => dismiss.mutate({ id: item.id })}>
               {t('dismiss')}

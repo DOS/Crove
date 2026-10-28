@@ -14,7 +14,7 @@ export type Risk = 'R0' | 'R1' | 'R2' | 'R3';
 // legal or irreversible. It covers everything the command's transaction does, the commands it runs included (an
 // approval runs the approved command), but not what a later command does with what it leaves behind. The declared
 // risk is at least the risk it derives.
-export const SIDE_EFFECTS = ['none', 'internal', 'external', 'financial', 'legal', 'irreversible'] as const;
+export const SIDE_EFFECTS = Object.freeze(['none', 'internal', 'external', 'financial', 'legal', 'irreversible'] as const);
 export type SideEffect = (typeof SIDE_EFFECTS)[number];
 
 const RISK_ORDER: Record<Risk, number> = { R0: 0, R1: 1, R2: 2, R3: 3 };
@@ -195,7 +195,7 @@ export interface CommandWrite {
 
 // The data classes of the manifests (DATA_CLASSES in @crove/kernel-contract, which this package does not import;
 // apps/kernel/test/invariant/command-writes.test.ts checks the two lists are the same).
-export const WRITE_DATA_CLASSES = ['internal', 'pii', 'contact', 'payment', 'national_id', 'national_id_if_individual', 'sensitive'] as const;
+export const WRITE_DATA_CLASSES = Object.freeze(['internal', 'pii', 'contact', 'payment', 'national_id', 'national_id_if_individual', 'sensitive'] as const);
 // The classes whose write is policy P04 (plan §4.7: changing a payee, bank account or contact point).
 const P04_DATA_CLASSES: readonly string[] = ['contact', 'payment'];
 
@@ -770,54 +770,145 @@ function checkedWrites(command: string, writes: readonly CommandWrite[], manifes
   return out;
 }
 
+// A copy of a plain object (its prototype Object.prototype or null) whose own properties are all enumerable and
+// string-keyed, each read once. Anything else would be copied with parts missing (an inherited or hidden `risk` or
+// `access`), so it is refused rather than dropped (#1766).
+function plainCopy(value: unknown, what: string): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error(`${what} is not an object`);
+  const proto: unknown = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) throw new Error(`${what} is not a plain object`);
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== 'string' || Object.getOwnPropertyDescriptor(value, key)?.enumerable !== true) {
+      throw new Error(`${what} has a hidden or symbol property ${String(key)}`);
+    }
+  }
+  // On a null prototype: a field the definition leaves out (agent) reads undefined, whatever is later set on
+  // Object.prototype.
+  return Object.assign(Object.create(null) as Record<string, unknown>, value);
+}
+
+const frozenList = (value: unknown): unknown => (Array.isArray(value) ? Object.freeze([...value]) : value);
+
+// What register() keeps of an agent access or agent approvers declaration: a frozen copy, the roles list copied too.
+function snapshotAgent(value: unknown, what: string): unknown {
+  if (value === undefined) return undefined;
+  const copy = plainCopy(value, what);
+  if (Object.hasOwn(copy, 'roles')) copy.roles = frozenList(copy.roles);
+  return Object.freeze(copy);
+}
+
+// A command definition as register() checks, keeps and runs it (#1766): a frozen copy, with the policy fields it
+// holds (access, agent, agentApprovers, writes) copied and frozen as well; keys it did not have stay absent. The
+// handler and the other functions are kept as they are.
+function snapshotCommand(def: CommandDef<any, any>): CommandDef<unknown, unknown> {
+  const label = `command ${String((def as { name?: unknown } | null)?.name)}`;
+  const copy = plainCopy(def, `${label}: the definition`);
+  if (Object.hasOwn(copy, 'access')) copy.access = frozenList(copy.access);
+  if (Object.hasOwn(copy, 'agent')) copy.agent = snapshotAgent(copy.agent, `${label}: agent`);
+  if (Object.hasOwn(copy, 'agentApprovers')) copy.agentApprovers = snapshotAgent(copy.agentApprovers, `${label}: agentApprovers`);
+  if (Array.isArray(copy.writes)) {
+    copy.writes = Object.freeze(
+      copy.writes.map((w: unknown, i: number) => {
+        // Not an object: checkedWrites() refuses it with its own message.
+        if (typeof w !== 'object' || w === null) return w;
+        const write = plainCopy(w, `${label}: declared write ${i}`);
+        write.columns = frozenList(write.columns);
+        if (typeof write.classes === 'object' && write.classes !== null && !Array.isArray(write.classes)) {
+          write.classes = Object.freeze(plainCopy(write.classes, `${label}: the classes of declared write ${i}`));
+        }
+        return Object.freeze(write);
+      }),
+    );
+  }
+  return Object.freeze(copy) as unknown as CommandDef<unknown, unknown>;
+}
+
+// A query definition as register() keeps it: a frozen copy, its access and agent roles copied too.
+function snapshotQuery(def: QueryDef<any, any>): QueryDef<unknown, unknown> {
+  const label = `query ${String((def as { name?: unknown } | null)?.name)}`;
+  const copy = plainCopy(def, `${label}: the definition`);
+  if (Object.hasOwn(copy, 'access')) copy.access = frozenList(copy.access);
+  if (Object.hasOwn(copy, 'agent')) copy.agent = snapshotAgent(copy.agent, `${label}: agent`);
+  return Object.freeze(copy) as unknown as QueryDef<unknown, unknown>;
+}
+
+const ACCESS_KINDS: readonly string[] = ['system', 'proposal', 'proposal_revision'];
+// A role list (strings), or one of the access kinds a definition may name instead.
+const validAccess = (access: unknown, kinds: readonly string[]): boolean =>
+  Array.isArray(access) ? access.every((role) => typeof role === 'string' && role.length > 0) : typeof access === 'string' && kinds.includes(access);
+
 export class Runtime {
-  private readonly commands = new Map<string, CommandDef<unknown, unknown>>();
-  private readonly queries = new Map<string, QueryDef<unknown, unknown>>();
+  // The registry and the state that P04 and the agent checks read are JavaScript private fields (#), not TypeScript
+  // `private`: no cast, Object.create(runtime) or assignment from outside reaches them, and the instance itself is
+  // frozen once constructed, so no field or method of it can be replaced either (#1766).
+  readonly #commands = new Map<string, CommandDef<unknown, unknown>>();
+  readonly #queries = new Map<string, QueryDef<unknown, unknown>>();
   // Modules with at least one registered command or query: the part of a name before its first dot.
-  private readonly installedModules = new Set<string>();
+  readonly #installedModules = new Set<string>();
   // Proposal command -> the revisers registered for it, derived from `revises` (one source for the pairing).
-  private readonly revisers = new Map<string, string[]>();
+  readonly #revisers = new Map<string, string[]>();
   // Command -> whether an agent's proposal of it is flagged P04 (CommandInfo.contactOrPayment), derived once at
   // registration from its declared writes.
-  private readonly contactOrPayment = new Map<string, boolean>();
+  readonly #contactOrPayment = new Map<string, boolean>();
   // The classes of every manifest table (RuntimeOptions.manifests), or null when the runtime was given none.
-  private readonly manifestTables: ReadonlyMap<string, Readonly<Record<string, string>>> | null;
+  readonly #manifestTables: ReadonlyMap<string, Readonly<Record<string, string>>> | null;
   // Where each transaction opens (Decision 14): tenant work on the org's cell, org-less work on the control plane.
-  private readonly cells: CellResolver;
-  private readonly sessions: SessionStatusSource | null;
+  readonly #cells: CellResolver;
+  readonly #sessions: SessionStatusSource | null;
   private readonly stepUp: 'required' | 'off';
   private readonly refusalAudit: Required<RefusalAuditLimits> | 'unbounded';
   // null: absentModules not given, so every unregistered module counts as absent.
-  private readonly absentModules: ReadonlySet<string> | null;
+  readonly #absentModules: ReadonlySet<string> | null;
   private readonly build: string;
   private readonly inputHash: InputHashMode;
   // Numbers the savepoints of ctx.tryRun, so each call has its own.
-  private savepointSeq = 0;
+  #savepointSeq = 0;
 
   // A plain Db is one cell that also holds the control plane (singleCell).
   constructor(cells: CellResolver | Db, options: RuntimeOptions = {}) {
-    this.cells = isCellResolver(cells) ? cells : singleCell(cells);
-    this.sessions = options.sessions ?? null;
+    this.#cells = isCellResolver(cells) ? cells : singleCell(cells);
+    // The runtime's own frozen copy of the session source, read once: changing the object passed in (its check
+    // replaced by a no-op) does not turn off the ADR-0028 check here (#1766).
+    const sessions = options.sessions ?? null;
+    if (sessions !== null && (!['db', 'jwt', 'off'].includes(sessions.mode) || typeof sessions.check !== 'function')) {
+      throw new Error('sessions: a session status source has a known mode and a check function');
+    }
+    this.#sessions =
+      sessions === null ? null : Object.freeze({ mode: sessions.mode, liveCheckForR3: sessions.liveCheckForR3 === true, check: sessions.check.bind(sessions) });
     this.stepUp = options.stepUp ?? 'required';
     const refusalAudit = options.refusalAudit ?? DEFAULT_REFUSAL_AUDIT_LIMITS;
-    this.refusalAudit = refusalAudit === 'unbounded' ? 'unbounded' : validateRefusalAuditLimits(refusalAudit);
-    this.absentModules = options.absentModules ? new Set(options.absentModules) : null;
+    this.refusalAudit = refusalAudit === 'unbounded' ? 'unbounded' : Object.freeze(validateRefusalAuditLimits(refusalAudit));
+    this.#absentModules = options.absentModules ? new Set(options.absentModules) : null;
     this.build = options.build ?? 'dev';
     const inputHash = options.inputHash ?? 'keyed';
     if (!(INPUT_HASH_MODES as readonly string[]).includes(inputHash)) throw new Error(`unknown input hash mode ${String(inputHash)}`);
     this.inputHash = inputHash;
-    this.manifestTables = options.manifests ? manifestTableClasses(options.manifests) : null;
+    this.#manifestTables = options.manifests ? manifestTableClasses(options.manifests) : null;
+    Object.freeze(this);
   }
 
   // How sessions are checked (see BootstrapEnv), for org-less reads that apply the same upstream checks as a command.
   get sessionMode(): SessionStatusSource['mode'] | null {
-    return this.sessions?.mode ?? null;
+    return this.#sessions?.mode ?? null;
   }
 
   // Checks each definition on its own; validate() checks how they fit together once every module is registered.
   register(defs: { commands?: CommandDef<any, any>[]; queries?: QueryDef<any, any>[] }): this {
-    for (const c of defs.commands ?? []) {
-      if (this.commands.has(c.name)) throw new Error(`duplicate command ${c.name}`);
+    for (const given of defs.commands ?? []) {
+      // The runtime checks, stores and later runs this frozen copy, never the caller's object, so a definition changed
+      // after it registers (agent access set on a contact writer, a getter that answers differently later) changes
+      // nothing: P04 and authorizeAgent read the same values (#1766).
+      const c = snapshotCommand(given);
+      if (typeof c.name !== 'string' || c.name.length === 0) throw new Error('a command is named');
+      if (this.#commands.has(c.name)) throw new Error(`duplicate command ${c.name}`);
+      // Every check below reads risk and access, and so do the agent and role checks when it runs.
+      // A string: hasOwn alone would take an object whose toString() names a risk, which the agent checks compare
+      // with === and would not see as R2 or R3.
+      if (typeof c.risk !== 'string' || !Object.hasOwn(RISK_ORDER, c.risk)) throw new Error(`command ${c.name}: unknown risk ${String(c.risk)}`);
+      if (!validAccess(c.access, ACCESS_KINDS)) throw new Error(`command ${c.name}: access is a role list or one of ${ACCESS_KINDS.join(', ')}`);
+      if (c.agent !== undefined && (!validAccess(c.agent.roles, ['any']) || (c.agent.taint !== undefined && c.agent.taint !== 'propagate'))) {
+        throw new Error(`command ${c.name}: agent access names a role list or 'any', and taint is 'propagate' or absent`);
+      }
       if (c.sideEffect !== undefined) {
         if (!(SIDE_EFFECTS as readonly string[]).includes(c.sideEffect)) throw new Error(`command ${c.name}: unknown side effect ${String(c.sideEffect)}`);
         const derived = deriveRisk(c.sideEffect);
@@ -832,7 +923,7 @@ export class Runtime {
         throw new Error(`command ${c.name}: a reviser (access 'proposal_revision') names the command it revises, and only a reviser does`);
       }
       // The contact and payment columns it declares it writes (P04), or null when it declares no writes.
-      const contactOrPayment = c.writes === undefined ? null : checkedWrites(c.name, c.writes, this.manifestTables);
+      const contactOrPayment = c.writes === undefined ? null : checkedWrites(c.name, c.writes, this.#manifestTables);
       // An agent runs it without review, so what it writes is declared and checked against P04 (#1710).
       if (c.agent !== undefined && contactOrPayment === null) {
         throw new Error(`command ${c.name}: an agent may run it, so it declares its writes (P04)`);
@@ -868,22 +959,26 @@ export class Runtime {
         const editor = this.proposalEditor();
         if (editor) throw new Error(`command ${c.name}: ${editor.name} is already the proposal editor`);
       }
-      this.commands.set(c.name, c as CommandDef<unknown, unknown>);
-      this.contactOrPayment.set(c.name, contactOrPayment === null || contactOrPayment.length > 0);
-      this.installedModules.add(moduleOf(c.name));
-      if (c.revises) this.revisers.set(c.revises, [...(this.revisers.get(c.revises) ?? []), c.name]);
+      this.#commands.set(c.name, c as CommandDef<unknown, unknown>);
+      this.#contactOrPayment.set(c.name, contactOrPayment === null || contactOrPayment.length > 0);
+      this.#installedModules.add(moduleOf(c.name));
+      if (c.revises) this.#revisers.set(c.revises, [...(this.#revisers.get(c.revises) ?? []), c.name]);
     }
-    for (const q of defs.queries ?? []) {
-      if (this.queries.has(q.name)) throw new Error(`duplicate query ${q.name}`);
-      this.queries.set(q.name, q as QueryDef<unknown, unknown>);
-      this.installedModules.add(moduleOf(q.name));
+    for (const given of defs.queries ?? []) {
+      const q = snapshotQuery(given);
+      if (typeof q.name !== 'string' || q.name.length === 0) throw new Error('a query is named');
+      if (this.#queries.has(q.name)) throw new Error(`duplicate query ${q.name}`);
+      if (!validAccess(q.access, ['system'])) throw new Error(`query ${q.name}: access is a role list or 'system'`);
+      if (q.agent !== undefined && !validAccess(q.agent.roles, ['any'])) throw new Error(`query ${q.name}: agent access names a role list or 'any'`);
+      this.#queries.set(q.name, q as QueryDef<unknown, unknown>);
+      this.#installedModules.add(moduleOf(q.name));
     }
     return this;
   }
 
   // A registered command's risk, access, agent approvers and proposal kind (CommandInfo), or null.
   commandInfo(name: string): CommandInfo | null {
-    const def = this.commands.get(name);
+    const def = this.#commands.get(name);
     if (!def) return null;
     return {
       name: def.name,
@@ -891,19 +986,19 @@ export class Runtime {
       access: def.access,
       agentApprovers: [...(def.agentApprovers?.roles ?? [])],
       proposalKind: def.proposalKind ?? def.name,
-      contactOrPayment: this.contactOrPayment.get(def.name) !== false,
+      contactOrPayment: this.#contactOrPayment.get(def.name) !== false,
     };
   }
 
   // Whether this runtime registered any command or query of the module (plan Decision 12). The server asks it
   // before registering a module's routes and jobs, so the registry is the one source of what is installed.
   installed(module: string): boolean {
-    return this.installedModules.has(module);
+    return this.#installedModules.has(module);
   }
 
   // The installed modules, sorted.
   modules(): string[] {
-    return [...this.installedModules].sort();
+    return [...this.#installedModules].sort();
   }
 
   // A query context for a handler: the transaction, the entered org and role (or agent grant), ctx.query for lookups
@@ -931,11 +1026,11 @@ export class Runtime {
     name: string,
     rawInput: unknown,
   ): Promise<Lookup<O>> {
-    const def = this.queries.get(name);
+    const def = this.#queries.get(name);
     if (!def) {
       const module = moduleOf(name);
-      const absent = this.absentModules ? this.absentModules.has(module) : true;
-      if (absent && !this.installedModules.has(module)) return { status: 'not_installed', module };
+      const absent = this.#absentModules ? this.#absentModules.has(module) : true;
+      if (absent && !this.#installedModules.has(module)) return { status: 'not_installed', module };
       throw new DomainError('QUERY_NOT_FOUND', 404, `Không có truy vấn ${name}`);
     }
     const input = parseInput(def.input, rawInput);
@@ -972,41 +1067,41 @@ export class Runtime {
   validate(options: { absentModules?: readonly string[] } = {}): this {
     const absent = new Set(options.absentModules ?? []);
     const problems: string[] = [];
-    for (const c of this.commands.values()) {
+    for (const c of this.#commands.values()) {
       if (c.access !== 'proposal_revision') continue;
       const revises = c.revises ?? '';
-      const revised = this.commands.get(revises);
+      const revised = this.#commands.get(revises);
       if (!revised) {
         if (!absent.has(moduleOf(revises))) problems.push(`reviser ${c.name} revises ${revises}, which is not a registered command`);
       } else if (revised.access !== 'proposal') {
         problems.push(`reviser ${c.name} revises ${revises}, which does not run through a proposal (access 'proposal')`);
       }
     }
-    for (const [command, names] of this.revisers) {
+    for (const [command, names] of this.#revisers) {
       if (names.length > 1) problems.push(`proposal command ${command} has more than one reviser: ${names.join(', ')}`);
     }
-    if (this.revisers.size > 0 && !this.proposalEditor()) problems.push('revisers are registered but no proposal editor (proposalEditor: true) is');
+    if (this.#revisers.size > 0 && !this.proposalEditor()) problems.push('revisers are registered but no proposal editor (proposalEditor: true) is');
     if (problems.length > 0) throw new Error(`invalid command registry:\n- ${problems.join('\n- ')}`);
     return this;
   }
 
   private proposalEditor(): CommandDef<unknown, unknown> | undefined {
-    for (const c of this.commands.values()) if (c.proposalEditor === true) return c;
+    for (const c of this.#commands.values()) if (c.proposalEditor === true) return c;
     return undefined;
   }
 
   private reviserOf(command: string): string | null {
-    const names = this.revisers.get(command);
+    const names = this.#revisers.get(command);
     return names?.length === 1 ? (names[0] ?? null) : null;
   }
 
   // The session status check, in the caller's transaction. Fails closed: a user actor without a session id is
   // refused whenever the runtime checks sessions.
   private async checkSession(trx: Transaction<Database>, actor: Actor, orgId: string | null): Promise<void> {
-    if (actor.type !== 'user' || !this.sessions) return;
+    if (actor.type !== 'user' || !this.#sessions) return;
     const sessionId = actor.sessionId;
     if (!sessionId) throw new DomainError('UNAUTHENTICATED', 401, 'Phiên đăng nhập không hợp lệ');
-    await this.sessions.check(trx, { ...actor, sessionId }, orgId);
+    await this.#sessions.check(trx, { ...actor, sessionId }, orgId);
   }
 
   private async enter(trx: Transaction<Database>, actor: Actor, orgId: string): Promise<Entered> {
@@ -1120,7 +1215,7 @@ export class Runtime {
   // check gets 503. It runs inside the request transaction, so an R3 holds one pooled connection for at most the
   // live check's timeout (5 s); R3 is rare and human-initiated.
   private async requireLiveSession(def: CommandDef<unknown, unknown>, actor: Actor): Promise<void> {
-    if (def.risk !== 'R3' || actor.type !== 'user' || !this.sessions?.liveCheckForR3) return;
+    if (def.risk !== 'R3' || actor.type !== 'user' || !this.#sessions?.liveCheckForR3) return;
     if (!actor.confirmLive) {
       throw new DomainError('AUTH_UNAVAILABLE', 503, 'Chưa kiểm tra được phiên đăng nhập với máy chủ xác thực, hãy thử lại sau');
     }
@@ -1208,7 +1303,7 @@ export class Runtime {
     base: { orgId: string; actor: Actor; entered: Entered; proposalId: string | null; cleanRoot?: string },
   ): Promise<O> {
     const commandId = uuidv7();
-    const cleanRoot = base.cleanRoot ?? (def.access === 'proposal' && this.contactOrPayment.get(def.name) === false ? def.name : undefined);
+    const cleanRoot = base.cleanRoot ?? (def.access === 'proposal' && this.#contactOrPayment.get(def.name) === false ? def.name : undefined);
     let auditDetail: Record<string, unknown> | undefined;
     // Refusals ctx.tryRun caught and rolled back, written after the handler returns.
     const caught: CaughtRefusal[] = [];
@@ -1311,7 +1406,7 @@ export class Runtime {
     };
     // ctx.run and ctx.tryRun call these only while the handler runs, after both are defined.
     const resolveNested = (name: string, nestedInput: unknown, proposalIdOption: string | undefined): NestedRun => {
-      const nested = this.commands.get(name);
+      const nested = this.#commands.get(name);
       if (!nested || nested.bootstrap) throw new DomainError('COMMAND_NOT_FOUND', 404, `Không có lệnh ${name}`);
       return { def: nested, input: parseInput(nested.input, nestedInput), proposalId: proposalIdOption ?? base.proposalId };
     };
@@ -1325,8 +1420,8 @@ export class Runtime {
       const declared = nested.def.target?.(nested.input) ?? null;
       const target = declared ? Object.freeze({ type: String(declared.type), id: String(declared.id) }) : null;
       // Unique per call, so a tryRun nested in another one never rolls back to the outer savepoint.
-      this.savepointSeq += 1;
-      const savepoint = sql.raw(`crove_try_run_${this.savepointSeq}`);
+      this.#savepointSeq += 1;
+      const savepoint = sql.raw(`crove_try_run_${this.#savepointSeq}`);
       await sql`SAVEPOINT ${savepoint}`.execute(trx);
       // Undoes the nested command. Every path that does not return its value takes it, so a handler that catches the
       // error and goes on never keeps a refused or failed command's writes, and an aborted transaction is usable again.
@@ -1413,7 +1508,7 @@ export class Runtime {
     const runNested = async <R>(nested: NestedRun): Promise<R> => {
       // P04 is derived from a proposal command's declared writes, so one that declares no contact or payment write never
       // runs a command that may write one (or declares nothing), whoever runs it and however deep it is nested.
-      if (cleanRoot !== undefined && this.contactOrPayment.get(nested.def.name) !== false) {
+      if (cleanRoot !== undefined && this.#contactOrPayment.get(nested.def.name) !== false) {
         throw new Error(`command ${cleanRoot}: declares no contact or payment write (P04), so it cannot run ${nested.def.name}, which may write one`);
       }
       const { proposalId } = nested;
@@ -1469,16 +1564,16 @@ export class Runtime {
   }
 
   async execute<O = unknown>(name: string, rawInput: unknown, options: ExecuteOptions): Promise<O> {
-    const def = this.commands.get(name);
+    const def = this.#commands.get(name);
     if (!def || def.bootstrap) throw new DomainError('COMMAND_NOT_FOUND', 404, `Không có lệnh ${name}`);
     const input = parseInput(def.input, rawInput);
     const orgId = options.orgId;
-    return this.executeIn<O>(name, def, input, options.actor, options.idempotencyKey, () => this.cells.resolveTenant(orgId), async () => orgId);
+    return this.executeIn<O>(name, def, input, options.actor, options.idempotencyKey, () => this.#cells.resolveTenant(orgId), async () => orgId);
   }
 
   // Runs an org-less command (see CommandDef.bootstrap). Only users run them; the org comes from the definer.
   async executeOrgless<O = unknown>(name: string, rawInput: unknown, options: ExecuteOrglessOptions): Promise<O> {
-    const def = this.commands.get(name);
+    const def = this.#commands.get(name);
     const bootstrap = def?.bootstrap;
     if (!def || !bootstrap) throw new DomainError('COMMAND_NOT_FOUND', 404, `Không có lệnh ${name}`);
     if (options.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Không có quyền thực hiện');
@@ -1486,7 +1581,7 @@ export class Runtime {
     // The session is checked before the definer runs (no org yet), and again for the org when it is entered. There
     // is no org to resolve a cell from, so the transaction opens on the control plane and the new org lives in
     // the control plane's cell (plan §3.6).
-    const controlPlane = async () => this.cells.controlPlane();
+    const controlPlane = async () => this.#cells.controlPlane();
     return this.executeIn<O>(name, def, input, options.actor, options.idempotencyKey, controlPlane, async (trx) => {
       await this.checkSession(trx, options.actor, null);
       return bootstrap(trx, options.actor, input, options.idempotencyKey ?? null, { sessionMode: this.sessionMode });
@@ -1603,7 +1698,7 @@ export class Runtime {
     const commandId = uuidv7();
     const outcome = refusal.status === 403 ? 'denied' : 'failed';
     try {
-      const db = await this.cells.resolveTenant(orgId);
+      const db = await this.#cells.resolveTenant(orgId);
       await db.transaction().execute(async (trx) => {
         await this.enter(trx, actor, orgId);
         if (!(await this.countRefusal(trx, name, { code: refusal.code, security: isSecurityRefusal(refusal) }, actor, orgId))) return;
@@ -1649,7 +1744,7 @@ export class Runtime {
     const caller = actor.type === 'user' ? `user:${actor.userId.toLowerCase()}` : `agent:${actor.agentId.toLowerCase()}`;
     const target = orgId && UUID_RE.test(orgId) ? orgId.toLowerCase() : null;
     try {
-      await sql`SELECT crove_kernel.security_event_note(${caller}, ${name}, ${code}, ${target}::uuid)`.execute(this.cells.controlPlane());
+      await sql`SELECT crove_kernel.security_event_note(${caller}, ${name}, ${code}, ${target}::uuid)`.execute(this.#cells.controlPlane());
     } catch (error) {
       const sqlState = (error as { code?: unknown } | null)?.code;
       console.error(`[execute ${name}] SECURITY_EVENT_FAILED`, {
@@ -1719,12 +1814,12 @@ export class Runtime {
   }
 
   async query<O = unknown>(name: string, rawInput: unknown, options: { actor: Actor; orgId: string }): Promise<O> {
-    const def = this.queries.get(name);
+    const def = this.#queries.get(name);
     if (!def) throw new DomainError('QUERY_NOT_FOUND', 404, `Không có truy vấn ${name}`);
     const input = parseInput(def.input, rawInput);
     let reached = false;
     try {
-      const db = await this.cells.resolveTenant(options.orgId);
+      const db = await this.#cells.resolveTenant(options.orgId);
       return await db.transaction().execute(async (trx) => {
         // The session check may record a first-seen session, so it runs before the transaction turns read-only.
         await this.checkSession(trx, options.actor, options.orgId);
@@ -1750,13 +1845,13 @@ export class Runtime {
    * stays open until the handler returns, so a long stream holds back vacuum for that long.
    */
   async stream<O = unknown>(name: string, rawInput: unknown, options: { actor: Actor; orgId: string }, sink: QuerySink): Promise<O> {
-    const def = this.queries.get(name);
+    const def = this.#queries.get(name);
     if (!def) throw new DomainError('QUERY_NOT_FOUND', 404, `Không có truy vấn ${name}`);
     if (!def.stream) throw new DomainError('NOT_STREAMED', 400, `Truy vấn ${name} không đọc theo luồng`);
     const input = parseInput(def.input, rawInput);
     let reached = false;
     try {
-      const db = await this.cells.resolveTenant(options.orgId);
+      const db = await this.#cells.resolveTenant(options.orgId);
       return await db
         .transaction()
         .setIsolationLevel('repeatable read')
@@ -1783,7 +1878,7 @@ export class Runtime {
   // session status check. Only definer functions are callable. Creating an org is a command: executeOrgless().
   async forUser<O>(actor: UserActor, fn: (db: Db) => Promise<O>): Promise<O> {
     try {
-      return await this.cells.controlPlane().transaction().execute(async (trx) => {
+      return await this.#cells.controlPlane().transaction().execute(async (trx) => {
         await this.checkSession(trx, actor, null);
         return fn(trx);
       });
@@ -1797,7 +1892,7 @@ export class Runtime {
   // Org-less machinery work without a user (inbound email), on the control plane. User work goes through forUser().
   async orgless<O>(fn: (db: Db) => Promise<O>): Promise<O> {
     try {
-      return await fn(this.cells.controlPlane());
+      return await fn(this.#cells.controlPlane());
     } catch (error) {
       const domain = toDomainError(error);
       if (domain.code === 'INTERNAL') logInternal('orgless', error);
@@ -1805,3 +1900,6 @@ export class Runtime {
     }
   }
 }
+// Nor can a method be replaced on the class (#1766).
+Object.freeze(Runtime.prototype);
+Object.freeze(Runtime);

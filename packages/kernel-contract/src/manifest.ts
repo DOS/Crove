@@ -164,11 +164,17 @@ export interface ModuleManifest extends ModuleScreens {
 export const defineModule = <const M extends ModuleManifest>(manifest: M): M => deepFreeze(manifest);
 
 // Freezes the value and everything it holds, already frozen parts included (a shallow freeze leaves their children).
-function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
+// A manifest is plain data: an accessor property (a getter or setter) is refused, since freezing keeps it and it could
+// answer one class while it is checked and another later (#1766).
+function deepFreeze<T>(value: T, path = 'manifest', seen = new WeakSet<object>()): T {
   if (typeof value === 'object' && value !== null && !seen.has(value)) {
     seen.add(value);
+    for (const key of Reflect.ownKeys(value)) {
+      const property = Object.getOwnPropertyDescriptor(value, key);
+      if (property && !('value' in property)) throw new Error(`${path}.${String(key)}: a manifest holds plain data, not a getter or setter`);
+    }
     Object.freeze(value);
-    for (const key of Reflect.ownKeys(value)) deepFreeze((value as Record<PropertyKey, unknown>)[key], seen);
+    for (const key of Reflect.ownKeys(value)) deepFreeze((value as Record<PropertyKey, unknown>)[key], `${path}.${String(key)}`, seen);
   }
   return value;
 }
