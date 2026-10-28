@@ -12,17 +12,19 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
+import { z } from 'zod';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
-import { Runtime } from '@crove/kernel-runtime';
+import { DomainError, Runtime, defineCommand } from '@crove/kernel-runtime';
 import { notesCommands, notesQueries } from '@crove/mod-notes';
 import { LocalArchiveStore, verifyArchive, writeArchive } from '../../src/worm.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
 const CREATE = 'notes.note.create';
+const ORG_CREATE = 'kernel.org.create';
 const suite = ADMIN ? describe : describe.skip;
 
 // The canonical input the runtime hashes: JSON with object keys sorted and undefined members left out.
@@ -42,13 +44,14 @@ suite('keyed input hash on PostgreSQL (#1732)', () => {
   const dbName = `crove_test_input_hash_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
   let adminUrl = '';
   let appUrl = '';
+  let workerUrl = '';
   const pools: pg.Pool[] = [];
   let db: Db;
   let worker: Db;
   let keyed: Runtime;
   let plain: Runtime;
   let dir = '';
-  const orgs = { a: '', b: '' };
+  const orgs = { a: '', b: '', c: '' };
   const users = { ownerA: '', member: '', ownerB: '' };
   const asUser = (userId: string) => ({ type: 'user' as const, userId, aal: 'aal1' as const });
   const asMfa = (userId: string) => ({ type: 'user' as const, userId, aal: 'aal2' as const, sessionId: randomUUID(), mfaAt: Math.floor(Date.now() / 1000) });
@@ -103,12 +106,35 @@ suite('keyed input hash on PostgreSQL (#1732)', () => {
       return url.toString();
     };
     appUrl = login('crove_app', 'test-app-pw');
+    workerUrl = login('crove_worker', 'test-worker-pw');
     const appPool = createPool({ connectionString: appUrl, max: 4 });
-    const workerPool = createPool({ connectionString: login('crove_worker', 'test-worker-pw'), max: 2 });
+    const workerPool = createPool({ connectionString: workerUrl, max: 2 });
     pools.push(appPool, workerPool);
     db = createDb(appPool);
     worker = createDb(workerPool);
-    const defs = { commands: [...kernelCommands, ...notesCommands], queries: [...kernelQueries({ inboundDomain: null }), ...notesQueries] };
+    // A nested command that is refused, and one that runs it under ctx.tryRun and goes on (#429).
+    const zThing = z.object({ id: z.string().uuid() });
+    const refused = defineCommand({
+      name: 'test.refused',
+      input: zThing,
+      risk: 'R1',
+      access: ['owner'],
+      target: (input: { id: string }) => ({ type: 'test.thing', id: input.id }),
+      handler: async () => {
+        throw new DomainError('NOT_FOUND', 404, 'x');
+      },
+    });
+    const tries = defineCommand({
+      name: 'test.tries',
+      input: zThing,
+      risk: 'R1',
+      access: ['owner'],
+      handler: async (ctx, input) => (await ctx.tryRun('test.refused', input, { recover: () => true })).status,
+    });
+    const defs = {
+      commands: [...kernelCommands, ...notesCommands, refused, tries],
+      queries: [...kernelQueries({ inboundDomain: null }), ...notesQueries],
+    };
     keyed = new Runtime(db, { inputHash: 'keyed' }).register(defs);
     plain = new Runtime(db).register(defs);
 
@@ -119,6 +145,7 @@ suite('keyed input hash on PostgreSQL (#1732)', () => {
     users.member = await person('member');
     orgs.a = (await createOrg(keyed, asUser(users.ownerA), `Input hash A ${tag}`)).orgId;
     orgs.b = (await createOrg(keyed, asUser(users.ownerB), `Input hash B ${tag}`)).orgId;
+    orgs.c = (await createOrg(keyed, asUser(users.ownerA), `Input hash C ${tag}`)).orgId;
     const { acceptPath } = await keyed.execute<{ acceptPath: string }>(
       'kernel.member.invite.create',
       { email: `member-${tag}@example.com`, role: 'member' },
@@ -165,9 +192,11 @@ suite('keyed input hash on PostgreSQL (#1732)', () => {
     };
     const first = await run(users.ownerA, orgs.a);
     expect(await run(users.ownerA, orgs.a)).toBe(first);
-    const otherOrg = await run(users.ownerB, orgs.b);
+    // The same actor in another org, another actor in the same org, another actor in another org.
+    const sameActorOtherOrg = await run(users.ownerA, orgs.c);
     const otherActor = await run(users.member, orgs.a);
-    expect(new Set([first, otherOrg, otherActor]).size).toBe(3);
+    const otherOrg = await run(users.ownerB, orgs.b);
+    expect(new Set([first, sameActorOtherOrg, otherActor, otherOrg]).size).toBe(4);
 
     // Another deployment: the same org, actor and input under a different key. The key is put back afterwards.
     const saved = await admin(async (c) => (await c.query<{ k_ipad: Buffer; k_opad: Buffer }>('SELECT k_ipad, k_opad FROM crove_kernel.mail_hash_key')).rows[0]);
@@ -190,6 +219,12 @@ suite('keyed input hash on PostgreSQL (#1732)', () => {
     expect(await refusalCode(keyed.execute('notes.note.update', input, { actor: asUser(users.member), orgId: orgs.a }))).toBe('NOTE_NOT_FOUND');
     const hash = await lastHash(orgs.a, users.member, 'notes.note.update', 'failed');
     expect(hash).toBe(`k1:${await hmacOf(orgs.a, `user:${users.member}`, 'notes.note.update', canonical(input))}`);
+
+    // A refusal caught by ctx.tryRun: its row is written in the calling command's transaction, keyed alike.
+    const id = randomUUID();
+    expect(await keyed.execute('test.tries', { id }, { actor: asUser(users.ownerA), orgId: orgs.a })).toBe('refused');
+    const nested = await lastHash(orgs.a, users.ownerA, 'test.refused', 'failed');
+    expect(nested).toBe(`k1:${await hmacOf(orgs.a, `user:${users.ownerA}`, 'test.refused', canonical({ id }))}`);
   });
 
   it('keeps idempotency: a retry replays, another input is refused, and a row claimed with the plain hash still replays', async () => {
@@ -228,6 +263,18 @@ suite('keyed input hash on PostgreSQL (#1732)', () => {
     expect(await refusalCode(keyed.execute(CREATE, { title: 'cũ' }, { actor, orgId: orgs.a, idempotencyKey: forged }))).toBe('IDEMPOTENCY_MISMATCH');
   });
 
+  it('replays an org-less command: the org the definer replays is the one its keyed row was claimed in', async () => {
+    const key = randomUUID();
+    const name = `Input hash replay ${randomUUID().slice(0, 8)}`;
+    const first = await createOrg(keyed, asUser(users.ownerB), name, key);
+    expect(await createOrg(keyed, asUser(users.ownerB), name, key)).toEqual(first);
+    const request = await admin(
+      async (c) => (await c.query<{ h: string }>('SELECT request_sha256 AS h FROM crove_kernel.idempotency_key WHERE org_id = $1 AND key = $2', [first.orgId, key])).rows[0]?.h,
+    );
+    expect(request).toBe(`k1:${await hmacOf(first.orgId, `user:${users.ownerB}`, ORG_CREATE, canonical({ name }))}`);
+    expect(await lastHash(first.orgId, users.ownerB, ORG_CREATE)).toBe(request);
+  });
+
   it('hashes only for the org of the sealed context, in a definer no one else may call, under a key no login reads', async () => {
     const app = new pg.Client({ connectionString: appUrl });
     await app.connect();
@@ -235,16 +282,42 @@ suite('keyed input hash on PostgreSQL (#1732)', () => {
       await expect(app.query(`SELECT crove_kernel.command_input_hash('user:x', 'c', '{}')`)).rejects.toThrow(/NO_CONTEXT/);
       await expect(app.query('SELECT * FROM crove_kernel.mail_hash_key')).rejects.toThrow(/permission denied/);
       await app.query('BEGIN');
-      await app.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [users.ownerB, orgs.b]);
-      const { rows } = await app.query<{ h: string }>(`SELECT crove_kernel.command_input_hash('user:x', 'c', '{}') AS h`);
-      expect(rows[0]?.h).toBe(`k1:${await hmacOf(orgs.b, 'user:x', 'c', '{}')}`);
+      await app.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [users.ownerA, orgs.a]);
+      const own = `user:${users.ownerA}`;
+      const { rows } = await app.query<{ h: string }>('SELECT crove_kernel.command_input_hash($1, $2, $3) AS h', [own, 'c', '{}']);
+      expect(rows[0]?.h).toBe(`k1:${await hmacOf(orgs.a, own, 'c', '{}')}`);
+      const refusal = async (actorKey: string, command = 'c') => {
+        await app.query('SAVEPOINT s');
+        const outcome = await app.query('SELECT crove_kernel.command_input_hash($1, $2, $3)', [actorKey, command, '{}']).then(
+          () => 'hashed',
+          (e: { message: string }) => e.message,
+        );
+        await app.query('ROLLBACK TO SAVEPOINT s');
+        return outcome;
+      };
+      // Another member's key (the member could then hash guesses and compare them with that member's audit rows),
+      // an agent's or the system's key: refused in a user context.
+      expect(await refusal(`user:${users.member}`)).toBe('INPUT_HASH_ACTOR');
+      expect(await refusal(`agent:${randomUUID()}:${randomUUID()}`)).toBe('INPUT_HASH_ACTOR');
+      expect(await refusal('system:kernel.agent')).toBe('INPUT_HASH_ACTOR');
       // A separator in the actor key or the command could make two triples one message: refused.
-      await app.query('SAVEPOINT s');
-      await expect(app.query(`SELECT crove_kernel.command_input_hash('user:x' || chr(31) || 'c', 'd', '{}')`)).rejects.toThrow(/INPUT_HASH_ARGUMENT/);
-      await app.query('ROLLBACK TO SAVEPOINT s');
+      expect(await refusal(`${own}${String.fromCharCode(31)}c`, 'd')).toBe('INPUT_HASH_ARGUMENT');
       await app.query('ROLLBACK');
     } finally {
       await app.end();
+    }
+    // The system context (the worker's alone) hashes for a system component only.
+    const worker = new pg.Client({ connectionString: workerUrl });
+    await worker.connect();
+    try {
+      await worker.query('BEGIN');
+      await worker.query('SELECT crove_kernel.enter_system_context($1::uuid)', [orgs.a]);
+      const { rows } = await worker.query<{ h: string }>(`SELECT crove_kernel.command_input_hash('system:kernel.agent', 'c', '{}') AS h`);
+      expect(rows[0]?.h).toBe(`k1:${await hmacOf(orgs.a, 'system:kernel.agent', 'c', '{}')}`);
+      await expect(worker.query('SELECT crove_kernel.command_input_hash($1, $2, $3)', [`user:${users.ownerA}`, 'c', '{}'])).rejects.toThrow(/INPUT_HASH_ACTOR/);
+      await worker.query('ROLLBACK');
+    } finally {
+      await worker.end();
     }
     const fn = await admin(async (c) =>
       (
@@ -261,6 +334,9 @@ suite('keyed input hash on PostgreSQL (#1732)', () => {
   });
 
   it('anchors plain and keyed rows in the WORM stream, and the verifier passes over both', async () => {
+    // One row of each scheme, whatever ran before.
+    await plain.execute(CREATE, { title: 'Hàng cũ' }, { actor: asUser(users.ownerA), orgId: orgs.a });
+    await keyed.execute(CREATE, { title: 'Hàng mới' }, { actor: asUser(users.ownerA), orgId: orgs.a });
     const hashes = await admin(async (c) => (await c.query<{ keyed: boolean; n: number }>(`SELECT starts_with(input_sha256, 'k1:') AS keyed, count(*)::int AS n FROM crove_kernel.audit_event GROUP BY 1`)).rows);
     expect(hashes.find((h) => h.keyed)?.n).toBeGreaterThan(0);
     expect(hashes.find((h) => !h.keyed)?.n).toBeGreaterThan(0);

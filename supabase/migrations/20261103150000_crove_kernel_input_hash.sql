@@ -8,7 +8,8 @@
 --                       no role, never rotated, already shared by domain separation with the booking manage links of
 --                       ADR-0024), over a domain label, the org of the caller's sealed context, the actor key, the
 --                       command and the canonical input. Answered as 'k1:<64 hex>', so a row says which scheme made it.
---                       The org comes from the context, never from an argument: a caller hashes for its own org only.
+--                       The org comes from the context, never from an argument, and the actor key must be the
+--                       context's own: a caller hashes for its own org and actor only.
 --                       The same input hashes differently in two orgs, for two actors and in two deployments, and the
 --                       same actor's retry of a command hashes the same, as idempotency needs.
 --
@@ -31,6 +32,17 @@ BEGIN
   IF p_actor_key IS NULL OR p_command IS NULL OR p_input IS NULL
      OR pg_catalog.strpos(p_actor_key, pg_catalog.chr(31)) > 0 OR pg_catalog.strpos(p_command, pg_catalog.chr(31)) > 0 THEN
     RAISE EXCEPTION 'INPUT_HASH_ARGUMENT' USING ERRCODE = '22023';
+  END IF;
+  -- The actor key is the context's own, as the runtime builds it: a user context hashes for its user, an agent
+  -- context for its agent and run, the system context (the worker's alone) for a system component. So a member's
+  -- context cannot hash a guess under another member's key and compare it with that member's audit row.
+  IF (CASE crove_kernel.ctx_actor_type()
+        WHEN 'user' THEN pg_catalog.lower(p_actor_key) = 'user:' || crove_kernel.ctx_user_id()::text
+        WHEN 'agent' THEN pg_catalog.lower(p_actor_key) = 'agent:' || crove_kernel.ctx_agent_id()::text || ':' || crove_kernel.ctx_run_id()::text
+        WHEN 'system' THEN pg_catalog.starts_with(p_actor_key, 'system:')
+        ELSE false
+      END) IS NOT TRUE THEN
+    RAISE EXCEPTION 'INPUT_HASH_ACTOR' USING ERRCODE = '42501';
   END IF;
   SELECT k.k_ipad, k.k_opad INTO v_ipad, v_opad FROM crove_kernel.mail_hash_key k WHERE k.id = 1;
   IF NOT FOUND THEN
