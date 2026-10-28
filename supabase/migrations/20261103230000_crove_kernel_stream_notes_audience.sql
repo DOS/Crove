@@ -70,8 +70,13 @@ BEGIN
       RETURN NULL;
     END IF;
     v_payload := v_payload || ' @' || NEW.author_user_id::text;
-    IF NEW.visibility = 'org' OR (TG_OP = 'UPDATE' AND OLD.visibility = 'org') THEN
+    -- OLD is read on an update only (nested, not ANDed: SQL does not promise the order an expression is evaluated in).
+    IF NEW.visibility = 'org' THEN
       v_payload := v_payload || '+shared';
+    ELSIF TG_OP = 'UPDATE' THEN
+      IF OLD.visibility = 'org' THEN
+        v_payload := v_payload || '+shared';
+      END IF;
     END IF;
   END IF;
   PERFORM pg_catalog.pg_notify('crove_stream', v_payload);
