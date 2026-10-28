@@ -10,7 +10,7 @@
 // - The worker starts and finishes runs as the system; an agent enters a context only through a live run.
 import { sql, type Transaction } from 'kysely';
 import { z } from 'zod';
-import { zCheck, zId, type Check } from '@crove/kernel-contract';
+import { tableWrite, zCheck, zId, type Check } from '@crove/kernel-contract';
 import type { AgentScope, Database, MemberRole, TaskStatus } from '@crove/db';
 import {
   DomainError,
@@ -26,6 +26,7 @@ import {
 } from '@crove/kernel-runtime';
 import { decideAgentApproval, eligibleApprovers, type ActorRef } from './approval.ts';
 import { refuseWhileReextracting } from './extraction.ts';
+import { kernelManifest } from './manifest.ts';
 import { memberProfiles } from './profiles.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
@@ -39,6 +40,14 @@ export const LEASE_MINUTES = 10;
 export const MAX_REQUEST_DEPTH = 5;
 // Reasons kept on a coalesced wake-up.
 const MAX_WAKE_REASONS = 50;
+
+// What the task commands agents run write (CommandDef.writes, #1697): kernel collaboration data, never a contact or
+// payment column, so the runtime lets agents run them (P04).
+const TASK_TABLES = kernelManifest.tables;
+const LEASE_COLUMNS = ['status', 'checkout_run_id', 'lock_expires_at'] as const;
+const CHILD_TASK_COLUMNS = ['org_id', 'title', 'description', 'kind', 'assignee_position_id', 'parent_task_id', 'source', 'source_ref', 'created_by_type'] as const;
+// requestWakeup's upsert.
+const WAKEUP_WRITE = tableWrite(TASK_TABLES, 'crove_kernel', 'agent_wakeup', ['org_id', 'agent_id', 'reasons', 'request_count', 'tainted', 'request_depth', 'updated_at']);
 
 const zModule = z.string().regex(/^[a-z][a-z0-9_]*$/).max(50);
 const zRoleKey = z.string().regex(/^[a-z][a-z0-9_.]*$/).max(100);
@@ -620,6 +629,7 @@ export const checkoutTask = defineCommand({
   sideEffect: 'internal',
   access: [],
   agent: { roles: 'any', taint: 'propagate' },
+  writes: [tableWrite(TASK_TABLES, 'crove_kernel', 'task', [...LEASE_COLUMNS, 'fence'])],
   target: (input) => ({ type: 'kernel.task', id: input.id }),
   handler: async (ctx, input) => {
     const agent = requireAgent(ctx);
@@ -667,6 +677,7 @@ export const commentTask = defineCommand({
   sideEffect: 'internal',
   access: MEMBERS,
   agent: { roles: 'any', taint: 'propagate' },
+  writes: [tableWrite(TASK_TABLES, 'crove_kernel', 'task_comment', ['org_id', 'task_id', 'body', 'author_type'])],
   target: (input) => ({ type: 'kernel.task', id: input.id }),
   handler: async (ctx, input) => {
     if (ctx.actor.type === 'agent') {
@@ -696,6 +707,7 @@ export const setTaskStatus = defineCommand({
   sideEffect: 'internal',
   access: MEMBERS,
   agent: { roles: 'any', taint: 'propagate' },
+  writes: [tableWrite(TASK_TABLES, 'crove_kernel', 'task', LEASE_COLUMNS), WAKEUP_WRITE],
   target: (input) => ({ type: 'kernel.task', id: input.id }),
   handler: async (ctx, input) => {
     const release = input.status !== 'in_progress';
@@ -763,6 +775,8 @@ export const escalateTask = defineCommand({
   sideEffect: 'internal',
   access: [],
   agent: { roles: 'any', taint: 'propagate' },
+  // The child task and the parent's release.
+  writes: [tableWrite(TASK_TABLES, 'crove_kernel', 'task', [...CHILD_TASK_COLUMNS, ...LEASE_COLUMNS]), WAKEUP_WRITE],
   target: (input) => ({ type: 'kernel.task', id: input.id }),
   handler: async (ctx, input) => {
     const agent = requireAgent(ctx);
@@ -805,6 +819,7 @@ export const delegateTask = defineCommand({
   sideEffect: 'internal',
   access: [],
   agent: { roles: 'any', taint: 'propagate' },
+  writes: [tableWrite(TASK_TABLES, 'crove_kernel', 'task', CHILD_TASK_COLUMNS), WAKEUP_WRITE],
   target: (input) => ({ type: 'kernel.task', id: input.id }),
   handler: async (ctx, input) => {
     const agent = requireAgent(ctx);
@@ -1431,6 +1446,8 @@ export const proposeFromTask = defineCommand({
   sideEffect: 'internal',
   access: [],
   agent: { roles: 'any', taint: 'propagate' },
+  // The preparer it runs declares its own.
+  writes: [tableWrite(TASK_TABLES, 'crove_kernel', 'task', LEASE_COLUMNS)],
   target: (input) => ({ type: 'kernel.task', id: input.id }),
   handler: async (ctx, input) => {
     const agent = requireAgent(ctx);
@@ -1475,6 +1492,7 @@ export const approveFromTask = defineCommand({
   sideEffect: 'internal',
   access: [],
   agent: { roles: 'any' },
+  writes: [tableWrite(TASK_TABLES, 'crove_kernel', 'task', LEASE_COLUMNS)],
   target: (input) => ({ type: 'kernel.proposal', id: input.proposalId }),
   handler: async (ctx, input) => {
     const agent = requireAgent(ctx);
@@ -1576,11 +1594,10 @@ async function taskChain(trx: Trx, orgId: string, taskId: string): Promise<{ use
 // by the agent's kernel.task.propose in that run on that task (#435), the run is the agent's and live, the task is its
 // position's, no kill switch covering the agent is engaged or was engaged since the request (#435), the preparer is
 // still R0 and the payload within MAX_DRAFT_PAYLOAD_BYTES. The kind comes from the command and the title from the
-// kernel. Flags: P03 when the run or the task is
-// tainted; P04 unless the command declares agent approvers (which declare it writes no contact or payment field: no
-// code classifies P04 yet); P05 for R3 and P06 for R2 (work asked for by a non-user actor); P07 when the chain did not
-// start from a human. Authors: the agent and the run, and every user who created a task in the chain. One proposal per
-// event.
+// kernel. Flags: P03 when the run or the task is tainted; P04 when the command declares a write of a column its
+// manifest classifies `contact` or `payment`, or declares no writes (CommandInfo.contactOrPayment, #1697); P05 for R3
+// and P06 for R2 (work asked for by a non-user actor); P07 when the chain did not start from a human. Authors: the
+// agent and the run, and every user who created a task in the chain. One proposal per event.
 export const createAgentProposal = defineCommand({
   name: 'kernel.agent.proposal.create',
   input: z.object({ eventId: zId }),
@@ -1633,7 +1650,7 @@ export const createAgentProposal = defineCommand({
     const chain = await taskChain(ctx.trx, ctx.orgId, taskId);
     const flags = [
       ...(tainted ? ['P03'] : []),
-      ...(info.agentApprovers.length > 0 ? [] : ['P04']),
+      ...(info.contactOrPayment ? ['P04'] : []),
       ...(info.risk === 'R3' ? ['P05'] : info.risk === 'R2' ? ['P06'] : []),
       ...(chain.humanRoot ? [] : ['P07']),
     ];
