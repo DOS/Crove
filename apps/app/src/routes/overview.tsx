@@ -11,6 +11,7 @@ import { Card } from '@crove/ui/components/card';
 import { NavIcon, type NavIconName } from '@crove/ui/components/nav-icon';
 import { TableCell, TableRow } from '@crove/ui/components/table';
 import { cn } from '@crove/ui/lib/utils';
+import { OrgNotesPanel } from '../components/notes-panel.tsx';
 import { DueWhen, TONE_CLASS, usePeriodLabel } from '../components/tax-due.tsx';
 import { useChosenEntity, useLegalEntity } from '../components/entity-switcher.tsx';
 import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
@@ -176,6 +177,7 @@ export function OverviewPage() {
   const modules = getConfig().modules;
   const financeOn = modules.includes('finance');
   const socialOn = modules.includes('social');
+  const notesOn = modules.includes('notes');
   const live = useStreamLive();
   const every = pollEvery(live, 60_000, SAFETY_POLL_MS);
 
@@ -267,6 +269,9 @@ export function OverviewPage() {
       </section>
 
       <AppCards slug={slug} vat={vat} vatLoaded={overview.isSuccess} />
+
+      {/* The org's notes (#1671): in a client company's org, notes about the client. */}
+      {notesOn && <OrgNotesPanel slug={slug} />}
 
       <section className="mt-8" aria-labelledby="overview-tax">
         <h2 id="overview-tax" className="text-sm font-semibold">
