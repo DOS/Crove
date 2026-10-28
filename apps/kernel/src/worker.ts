@@ -1239,7 +1239,8 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
         const sent = await deps.workerDb.transaction().execute(async (trx) => {
           const { rows } = await sql<OutboxRow>`SELECT * FROM crove_kernel.outbox_claim(100)`.execute(trx);
           const priorities = finance ? await extractPriorities(trx, rows) : new Map<OutboxRow, number>();
-          // A failed send rolls back the claim; singletonKey makes the retry idempotent.
+          // A failed send rolls back the claim and the batch is relayed again. pg-boss sends outside this transaction, so
+          // the jobs already sent are sent again: only a stately queue or a singletonSeconds slot dedupes them on the key.
           await Promise.all(
             rows.map(async (row) => {
               if (

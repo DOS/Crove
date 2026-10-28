@@ -1,7 +1,9 @@
 // Every pg-boss key is <org_id>:<job>:<key>, built by apps/kernel/src/job-keys.ts (plan §4.8 "Job keys", #1694).
-// The kernel's sources are parsed: a singletonKey or a group in apps/kernel/src must be a call of the helper (a
-// condition between two calls of it aside), imported from job-keys.ts, and a send's key names the queue it is sent
-// to. Planted sources show each check failing.
+// The kernel's sources are parsed: a singletonKey or a group in apps/kernel/src, and the key argument of
+// sendThrottled() and sendDebounced(), must be a call of the helper (a condition between two calls of it aside),
+// imported from job-keys.ts. Where a send's options and data are written inline, its key also names the queue it is
+// sent to and the org of its data (data.orgId); options or data built elsewhere are checked for the helper only.
+// Planted sources show each check failing.
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseAst } from 'vitest/node';
@@ -25,7 +27,9 @@ function each(node: N, fn: (n: N) => void): void {
 // The helpers, by the option they build.
 const BUILDERS: Readonly<Record<string, readonly string[]>> = { singletonKey: ['jobKey', 'systemJobKey'], group: ['jobGroup'] };
 const HELPERS = new Set(Object.values(BUILDERS).flat());
-const HELPER_FILE = /^\.\/job-keys(\.ts)?$/;
+const HELPER_FILE = /^\.\.?\/(?:[\w.-]+\/)*job-keys(\.ts)?$/;
+// pg-boss sends whose fifth argument is the singleton key.
+const POSITIONAL = new Set(['sendThrottled', 'sendDebounced']);
 
 const nameOf = (key: N): string | null => (key.type === 'Identifier' ? key.name : key.type === 'Literal' && typeof key.value === 'string' ? key.value : null);
 
@@ -69,6 +73,25 @@ export function scan(files: Readonly<Record<string, string>>): Scan {
       if ((node.type === 'FunctionDeclaration' || node.type === 'VariableDeclarator') && node.id?.type === 'Identifier' && HELPERS.has(node.id.name)) declared.add(node.id.name);
     });
     for (const name of declared) out.problems.push(`${file}: declares its own ${name}; build job keys with the one of job-keys.ts`);
+    // Destructuring reads an option, it does not set one.
+    const read = new Set<N>();
+    each(program, (node) => {
+      if (node.type === 'ObjectPattern') for (const prop of node.properties as N[]) read.add(prop);
+    });
+    const helperCalls = (value: N, name: string, where: N): N[] | null => {
+      const helpers = BUILDERS[name] as readonly string[];
+      const calls = builtBy(value, helpers);
+      if (!calls) {
+        out.problems.push(`${at(where)}: ${name} ${source(value).slice(0, 60)} is not built by ${helpers.join(' or ')}() of job-keys.ts`);
+        return null;
+      }
+      for (const call of calls) {
+        if (!imported.has(call.callee.name)) out.problems.push(`${at(call)}: ${call.callee.name}() is not the one of job-keys.ts`);
+      }
+      if (name === 'singletonKey') out.keys += 1;
+      else out.groups += 1;
+      return calls;
+    };
 
     each(program, (node) => {
       // An option set after the object is made.
@@ -77,34 +100,45 @@ export function scan(files: Readonly<Record<string, string>>): Scan {
         if (name && Object.hasOwn(BUILDERS, name)) out.problems.push(`${at(node)}: ${name} assigned; set it in the options object with ${BUILDERS[name]?.join(' or ')}()`);
         return;
       }
-      if (node.type !== 'Property') return;
+      if (node.type !== 'Property' || read.has(node)) return;
       const name = node.computed ? (node.key.type === 'Literal' ? nameOf(node.key) : null) : nameOf(node.key);
       if (!name || !Object.hasOwn(BUILDERS, name)) return;
-      const helpers = BUILDERS[name] as readonly string[];
-      const calls = node.shorthand ? null : builtBy(node.value, helpers);
-      if (!calls) {
-        out.problems.push(`${at(node)}: ${name} ${source(node.value).slice(0, 60)} is not built by ${helpers.join(' or ')}() of job-keys.ts`);
+      if (node.shorthand) {
+        out.problems.push(`${at(node)}: ${name} ${source(node.value).slice(0, 60)} is not built by ${(BUILDERS[name] as readonly string[]).join(' or ')}() of job-keys.ts`);
         return;
       }
-      for (const call of calls) {
-        if (!imported.has(call.callee.name)) out.problems.push(`${at(call)}: ${call.callee.name}() is not the one of job-keys.ts`);
-      }
-      if (name === 'singletonKey') out.keys += 1;
-      else out.groups += 1;
+      helperCalls(node.value, name, node);
     });
 
-    // A send's options name the queue they are sent to: boss.send(queue, data, { singletonKey: jobKey(org, queue, ..) }).
+    // A send's key names the queue it is sent to and the org of its data:
+    // boss.send(queue, { orgId: org, .. }, { singletonKey: jobKey(org, queue, ..) }).
     each(program, (node) => {
-      if (node.type !== 'CallExpression' || node.callee.type !== 'MemberExpression' || node.callee.property.name !== 'send') return;
-      const [queue, , options] = node.arguments as N[];
-      if (!queue || options?.type !== 'ObjectExpression') return;
-      for (const prop of options.properties as N[]) {
-        if (prop.type !== 'Property' || prop.shorthand) continue;
-        const name = nameOf(prop.key);
-        if (!name || !Object.hasOwn(BUILDERS, name)) continue;
-        for (const call of builtBy(prop.value, BUILDERS[name] as readonly string[]) ?? []) {
-          const job = jobArg(call);
-          if (!job || source(job) !== source(queue)) out.problems.push(`${at(call)}: ${name} names job ${job ? source(job) : 'none'} but is sent to ${source(queue)}`);
+      if (node.type !== 'CallExpression' || node.callee.type !== 'MemberExpression') return;
+      const method = node.callee.computed ? nameOf(node.callee.property) : node.callee.property.name;
+      if (method !== 'send' && !(method && POSITIONAL.has(method))) return;
+      const [queue, data, options] = node.arguments as N[];
+      if (!queue) return;
+      const built: Array<[string, N]> = [];
+      if (options?.type === 'ObjectExpression') {
+        for (const prop of options.properties as N[]) {
+          if (prop.type !== 'Property' || prop.shorthand) continue;
+          const name = nameOf(prop.key);
+          if (!name || !Object.hasOwn(BUILDERS, name)) continue;
+          for (const call of builtBy(prop.value, BUILDERS[name] as readonly string[]) ?? []) built.push([name, call]);
+        }
+      }
+      // sendThrottled(name, data, options, seconds, key) and sendDebounced(...) take the key as an argument.
+      const positional = method !== 'send' ? (node.arguments as N[])[4] : undefined;
+      if (positional) for (const call of helperCalls(positional, 'singletonKey', positional) ?? []) built.push(['singletonKey', call]);
+      const orgOfData =
+        data?.type === 'ObjectExpression' ? ((data.properties as N[]).find((p) => p.type === 'Property' && !p.computed && nameOf(p.key) === 'orgId')?.value as N | undefined) : undefined;
+      for (const [name, call] of built) {
+        const job = jobArg(call);
+        if (!job || source(job) !== source(queue)) out.problems.push(`${at(call)}: ${name} names job ${job ? source(job) : 'none'} but is sent to ${source(queue)}`);
+        if (!orgOfData) continue;
+        if (call.callee.name === 'systemJobKey') out.problems.push(`${at(call)}: ${name} of a job of org ${source(orgOfData)} is built by systemJobKey()`);
+        else if (!call.arguments[0] || source(call.arguments[0]) !== source(orgOfData)) {
+          out.problems.push(`${at(call)}: ${name} names org ${call.arguments[0] ? source(call.arguments[0]) : 'none'} but the job's org is ${source(orgOfData)}`);
         }
       }
     });
@@ -157,6 +191,8 @@ describe('every pg-boss key of the kernel is built by job-keys.ts (#1694)', () =
     ['a key on one side of a condition only', "boss.send(q, data, { singletonKey: test ? jobKey(org, q, 'test') : row.event_id });"],
     ['a key set after the object', 'options.singletonKey = row.blob_id;'],
     ["a computed option name", "boss.send(q, data, { ['singletonKey']: row.blob_id });"],
+    ['a raw throttle key', 'boss.sendThrottled(q, data, {}, 60, row.message_id);'],
+    ['a raw debounce key', 'boss.sendDebounced(q, data, { retryLimit: 0 }, 60, `${org}:x`);'],
   ])('fails on %s', (_, body) => {
     expect(scan(planted(body)).problems).toHaveLength(1);
   });
@@ -178,9 +214,26 @@ describe('every pg-boss key of the kernel is built by job-keys.ts (#1694)', () =
     expect(scan(planted('boss.send(QUEUES.inbound, data, { singletonKey: systemJobKey(QUEUES.mailEvent, id) });')).problems).toHaveLength(1);
   });
 
+  it("fails on a key that names another org than the job's", () => {
+    expect(scan(planted('boss.send(q, { orgId: row.org_id, agentId }, { singletonKey: jobKey(agentId, q, k) });')).problems).toEqual([
+      `${SRC}/planted.ts:2: singletonKey names org agentId but the job's org is row.org_id`,
+    ]);
+    expect(scan(planted("boss.send(q, { orgId }, { singletonKey: jobKey('0198e1f2-3a4b-7c5d-8e6f-a1b2c3d4e5f6', q, k) });")).problems).toHaveLength(1);
+    expect(scan(planted('boss.send(q, { orgId: row.org_id }, { group: jobGroup(other, q) });')).problems).toHaveLength(1);
+    expect(scan(planted('boss.send(q, { orgId: row.org_id }, { singletonKey: systemJobKey(q, k) });')).problems).toEqual([
+      `${SRC}/planted.ts:2: singletonKey of a job of org row.org_id is built by systemJobKey()`,
+    ]);
+    expect(scan(planted('boss.sendThrottled(q, { orgId: row.org_id }, {}, 60, jobKey(row.event_id, q, k));')).problems).toHaveLength(1);
+  });
+
+  it('reads destructured options and helpers imported from another directory as fine', () => {
+    const body = "import { jobKey } from '../job-keys.ts';\nconst { singletonKey, group } = job;\nboss.sendThrottled(q, { orgId }, {}, 60, jobKey(orgId, q, id));";
+    expect(scan({ [`${SRC}/sub/planted.ts`]: body })).toEqual({ problems: [], keys: 1, groups: 0 });
+  });
+
   it('passes keys and groups built by the helper', () => {
     const body = [
-      'boss.send(QUEUES.notify, data, { singletonKey: jobKey(row.org_id, QUEUES.notify, row.event_id), group: jobGroup(row.org_id, QUEUES.notify) });',
+      'boss.send(QUEUES.notify, { orgId: row.org_id }, { singletonKey: jobKey(row.org_id, QUEUES.notify, row.event_id), group: jobGroup(row.org_id, QUEUES.notify) });',
       "boss.send(q, data, { singletonKey: test ? jobKey(org, q, 'test') : jobKey(org, q, id) });",
       'boss.send(QUEUES.inbound, data, { singletonKey: systemJobKey(QUEUES.inbound, row.blob_id) });',
       'const options = { group: jobGroup(org, QUEUES.extract) };',
