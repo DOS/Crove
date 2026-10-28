@@ -9,6 +9,7 @@ import type { Db } from '@crove/db';
 import { NOTE_MEMBER_PURGE_DAYS } from '@crove/kernel-contract';
 import { DomainError, type Runtime } from '@crove/kernel-runtime';
 import { trashCutoff } from '@crove/mod-notes';
+import { jobKey } from './job-keys.ts';
 import { QUEUES } from './jobs-schema.ts';
 
 // After the nightly retention purge (02:30), on the same clock.
@@ -32,7 +33,7 @@ export function queueNotesMemberPurge(boss: PgBoss, row: { org_id: string; event
   if (row.type !== 'kernel.member.removed' || typeof row.payload.userId !== 'string') return null;
   const userId = row.payload.userId;
   return boss.send(QUEUES.notesMemberPurge, { orgId: row.org_id, userId } satisfies NotesMemberPurgeJob, {
-    singletonKey: `${row.org_id}:${userId}:${row.event_id}`,
+    singletonKey: jobKey(row.org_id, QUEUES.notesMemberPurge, `${userId}:${row.event_id}`),
     startAfter: new Date(now.getTime() + NOTE_MEMBER_PURGE_DAYS * 86_400_000),
     retryLimit: MEMBER_PURGE_RETRY_LIMIT,
     retryDelay: 60,

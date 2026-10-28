@@ -236,6 +236,6 @@ REVOKE ALL ON FUNCTION crove_notes.private_counts() FROM PUBLIC, crove_tenant, c
 GRANT EXECUTE ON FUNCTION crove_notes.private_counts() TO crove_tenant;
 
 -- The worker's queues (apps/kernel/src/notes-worker.ts): the purge of a former member's private notes, queued 30 days
--- after the removal (singleton key <org>:<user>:<event>), and the daily trash sweep.
+-- after the removal (singleton key jobKey(org, queue, <user>:<event>)), and the daily trash sweep.
 SELECT crove_jobs.create_queue('notes-member-purge', '{"policy":"standard"}'::jsonb);
 SELECT crove_jobs.create_queue('notes-trash', '{"policy":"standard"}'::jsonb);

@@ -18,7 +18,8 @@ function fakeBoss() {
 
 describe('notes worker (#1671)', () => {
   const now = new Date('2026-11-01T00:00:00Z');
-  const row = { org_id: 'org-1', event_id: 'event-1', type: 'kernel.member.removed', payload: { userId: 'user-1', oldRole: 'member' } };
+  const orgId = '0192f3a4-5b6c-7d8e-9f01-23456789abcd';
+  const row = { org_id: orgId, event_id: 'event-1', type: 'kernel.member.removed', payload: { userId: 'user-1', oldRole: 'member' } };
 
   it('queues the purge of a removed member 30 days later, with ids only', async () => {
     const { boss, sent } = fakeBoss();
@@ -26,8 +27,8 @@ describe('notes worker (#1671)', () => {
     expect(sent).toEqual([
       {
         queue: QUEUES.notesMemberPurge,
-        data: { orgId: 'org-1', userId: 'user-1' },
-        options: expect.objectContaining({ singletonKey: 'org-1:user-1:event-1', startAfter: new Date('2026-12-01T00:00:00Z') }),
+        data: { orgId, userId: 'user-1' },
+        options: expect.objectContaining({ singletonKey: `${orgId}:notes-member-purge:user-1:event-1`, startAfter: new Date('2026-12-01T00:00:00Z') }),
       },
     ]);
   });
