@@ -11,6 +11,7 @@ import type { Runtime } from '@crove/kernel-runtime';
 import type { MailAttachment, MailErrorKind, MailProvider, OutboundMail, SendResult } from '@crove/mail';
 import { bounceAddress } from './invite-mail.ts';
 import { DEFAULT_BRAND_NAME } from './config.ts';
+import { jobKey } from './job-keys.ts';
 
 export const MAIL_SEND_QUEUE = 'kernel-mail-send';
 export const MAIL_BULK_QUEUE = 'kernel-mail-bulk';
@@ -95,7 +96,7 @@ export async function sweepMail(boss: Sender, workerDb: Db, runtime: Runtime, ma
     const queue = row.stream === 'marketing' ? MAIL_BULK_QUEUE : MAIL_SEND_QUEUE;
     // One mail that cannot be queued (a lost connection) leaves the others to this pass and itself to the next.
     try {
-      await boss.send(queue, { orgId: row.org_id, messageId: row.message_id } satisfies MailJob, { singletonKey: row.message_id, retryLimit: 2, retryDelay: 30 });
+      await boss.send(queue, { orgId: row.org_id, messageId: row.message_id } satisfies MailJob, { singletonKey: jobKey(row.org_id, queue, row.message_id), retryLimit: 2, retryDelay: 30 });
       queued++;
     } catch (error) {
       console.error(`[mail] ${row.message_id.slice(0, 8)} not queued: ${mailErrorCode(error)}`);

@@ -9,6 +9,7 @@ import { PgBoss } from 'pg-boss';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
+import { jobGroup } from '../src/job-keys.ts';
 import { JOB_SCHEMA, QUEUES } from '../src/jobs-schema.ts';
 import { extractPriorities, sendExtractJob, type OutboxRow } from '../src/worker.ts';
 
@@ -123,7 +124,8 @@ suite('fair order of extraction jobs across orgs (#432)', () => {
       `SELECT group_id, priority FROM ${JOB_SCHEMA}.job WHERE name = $1 AND state = 'created' ORDER BY priority DESC, created_on`,
       [QUEUES.extract],
     );
-    const label = (id: string) => (id === orgA ? 'A' : id === orgB ? 'B' : 'C');
+    const group = (orgId: string) => jobGroup(orgId, QUEUES.extract).id;
+    const label = (id: string) => (id === group(orgA) ? 'A' : id === group(orgB) ? 'B' : id === group(orgC) ? 'C' : id);
     // The jobs of one batch are sent at once, so within a round their creation order is not fixed.
     const rounds = new Map<number, string[]>();
     for (const r of rows) rounds.set(-r.priority, [...(rounds.get(-r.priority) ?? []), label(r.group_id)].sort());
