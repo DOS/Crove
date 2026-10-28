@@ -313,8 +313,10 @@ async function readInvoice(
       return { method: 'einvoice_xml', invoice: result.invoice, error: null };
     }
     if (file.content_type === 'application/pdf' || name.endsWith('.pdf')) {
-      if (!deps.extractor) throw new AiNotConfiguredError('Chưa cấu hình AI nên chưa đọc được PDF; hãy gửi tệp XML hóa đơn điện tử');
+      // A stopped AI says so first, whether or not this deployment has a model (#1718): the switch is what the
+      // person can act on, and it reads the same on every deployment.
       if (file.aiStopped) return { method: 'pdf_text_ai', invoice: null, error: AI_STOPPED_MESSAGE };
+      if (!deps.extractor) throw new AiNotConfiguredError('Chưa cấu hình AI nên chưa đọc được PDF; hãy gửi tệp XML hóa đơn điện tử');
       const result = await sandbox.extract('pdf_text', bytes);
       if (!result.ok) return { method: 'pdf_text_ai', invoice: null, error: unreadable(result) };
       used.pages = Math.max(result.pages, 1);
@@ -324,8 +326,8 @@ async function readInvoice(
       return { method: 'pdf_text_ai', invoice, error: invoice ? null : 'Tài liệu không phải hóa đơn mua vào' };
     }
     if (IMAGE_TYPES.includes(file.content_type)) {
-      if (!deps.extractor) throw new AiNotConfiguredError('Chưa cấu hình AI nên chưa đọc được ảnh; hãy gửi tệp XML hóa đơn điện tử');
       if (file.aiStopped) return { method: 'image_ai', invoice: null, error: AI_STOPPED_MESSAGE };
+      if (!deps.extractor) throw new AiNotConfiguredError('Chưa cấu hình AI nên chưa đọc được ảnh; hãy gửi tệp XML hóa đơn điện tử');
       used.pages = 1;
       const invoice = await deps.extractor.fromImage(bytes, file.content_type, onUsage);
       return { method: 'image_ai', invoice, error: invoice ? null : 'Ảnh không phải hóa đơn mua vào' };
