@@ -27,6 +27,18 @@ describe('note toolbar (#1739)', () => {
     // A collapsed cursor stays at its spot in the line.
     expect(apply('Gọi kh‹›ách', 'task')).toBe('- [ ] Gọi kh‹›ách');
     expect(apply('- [ ] Gọi kh‹›ách', 'task')).toBe('Gọi kh‹›ách');
+    // The cursor at the very start, on an empty first line, adds no line.
+    expect(apply('‹›\nabc', 'list')).toBe('- ‹›\nabc');
+    expect(apply('‹›', 'task')).toBe('- [ ] ‹›');
+    // Mixed lines become one kind: a checklist step turns into a list item and back, never a broken "[ ] ".
+    expect(apply('‹- [ ] a\n- b\nc›', 'list')).toBe('‹- a\n- b\n- c›');
+    expect(apply('‹- a\n- [x] b›', 'task')).toBe('‹- [ ] a\n- [ ] b›');
+    expect(apply('‹- [ ] a\n- [x] b›', 'task')).toBe('‹a\nb›');
+  });
+
+  it('keeps the spaces around a selection outside the bold markers', () => {
+    expect(apply('Gọi ‹khách ›nhé', 'bold')).toBe('Gọi **‹khách›** nhé');
+    expect(apply('Gọi ‹**khách**› nhé', 'bold')).toBe('Gọi ‹khách› nhé');
   });
 
   it('turns the selection into a link with its address selected, or puts the cursor in empty brackets', () => {
@@ -45,6 +57,11 @@ describe('note toolbar (#1739)', () => {
     expect(key('b')).toBeNull();
     expect(key('b', { ctrlKey: true, altKey: true })).toBeNull();
     expect(key('x', { ctrlKey: true })).toBeNull();
+    // Another layout's letters: the physical key decides. A key held down, or a character being composed, is not one.
+    expect(key('и', { ctrlKey: true, code: 'KeyB' })).toBe('bold');
+    expect(key('л', { ctrlKey: true, code: 'KeyK' })).toBe('link');
+    expect(shortcutFormat({ key: 'b', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false, repeat: true })).toBeNull();
+    expect(shortcutFormat({ key: 'b', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false, isComposing: true })).toBeNull();
   });
 });
 

@@ -9,7 +9,7 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslations } from 'use-intl';
-import { NOTE_LIST_VIEWS, type Note, type NoteListView } from '@crove/kernel-contract';
+import { NOTE_BODY_MAX, NOTE_LIST_VIEWS, type Note, type NoteListView } from '@crove/kernel-contract';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
 import { Input } from '@crove/ui/components/input';
@@ -28,12 +28,14 @@ const SAVE_AFTER_MS = 800;
 const isConflict = (error: unknown) => (error as { code?: string } | null)?.code === 'NOTE_REVISION_CONFLICT';
 const valuesOf = (note: Note): NoteValues => ({ title: note.title, body: note.body, tags: note.tags.join(', ') });
 
-const FORMATS: ReadonlyArray<{ format: MarkdownFormat; keys: string }> = [
-  { format: 'bold', keys: 'Control+B' },
-  { format: 'list', keys: 'Control+Shift+8' },
-  { format: 'task', keys: 'Control+Shift+9' },
-  { format: 'link', keys: 'Control+K' },
+// Each format's key, and its shortcut as aria-keyshortcuts names it (Ctrl, or Cmd on a Mac).
+const FORMATS: ReadonlyArray<{ format: MarkdownFormat; key: string; aria: string }> = [
+  { format: 'bold', key: 'B', aria: 'Control+B Meta+B' },
+  { format: 'list', key: 'Shift+8', aria: 'Control+Shift+8 Meta+Shift+8' },
+  { format: 'task', key: 'Shift+9', aria: 'Control+Shift+9 Meta+Shift+9' },
+  { format: 'link', key: 'K', aria: 'Control+K Meta+K' },
 ];
+const MOD = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.userAgent) ? '⌘' : 'Ctrl+';
 
 // A note's tags as buttons: each shows the notes with that tag (#1739).
 function TagChips({ tags, onTag }: { tags: readonly string[]; onTag: (tag: string) => void }) {
@@ -127,6 +129,8 @@ function Editor({
     const el = bodyRef.current;
     if (!el) return;
     const next = applyFormat({ value: values.body, start: el.selectionStart, end: el.selectionEnd }, kind);
+    // A value set from code is not held to the textarea's maxLength; the server would refuse a longer body.
+    if (next.value.length > NOTE_BODY_MAX) return;
     edit({ body: next.value });
     requestAnimationFrame(() => {
       el.focus();
@@ -193,8 +197,8 @@ function Editor({
             </div>
           ) : (
             <>
-              <div role="toolbar" aria-label={t('toolbar.label')} aria-controls="note-body" className="flex flex-wrap gap-1">
-                {FORMATS.map(({ format: kind, keys }) => (
+              <div role="group" aria-label={t('toolbar.label')} className="flex flex-wrap gap-1">
+                {FORMATS.map(({ format: kind, key, aria }) => (
                   <Button
                     key={kind}
                     variant="ghost"
@@ -202,8 +206,8 @@ function Editor({
                     // Keeps the textarea's selection: the button takes no focus from it.
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => format(kind)}
-                    aria-keyshortcuts={keys}
-                    title={t(`toolbar.${kind}Hint`)}
+                    aria-keyshortcuts={aria}
+                    title={t(`toolbar.${kind}Hint`, { keys: `${MOD}${key}` })}
                   >
                     {t(`toolbar.${kind}`)}
                   </Button>
@@ -217,12 +221,14 @@ function Editor({
                 ref={bodyRef}
                 value={values.body}
                 rows={14}
-                maxLength={100_000}
+                maxLength={NOTE_BODY_MAX}
                 onChange={(e) => edit({ body: e.target.value })}
                 onKeyDown={(e) => {
-                  const kind = shortcutFormat(e);
+                  const kind = shortcutFormat({ ...e, code: e.code, isComposing: e.nativeEvent.isComposing });
                   if (!kind) return;
                   e.preventDefault();
+                  // Ctrl+K also opens the command palette from the window; here it is the editor's.
+                  e.stopPropagation();
                   format(kind);
                 }}
                 placeholder={t('bodyPlaceholder')}
@@ -363,7 +369,7 @@ export function NotesPage() {
             role="search"
             onSubmit={(e) => {
               e.preventDefault();
-              go(q.trim() ? { q: q.trim() } : { list: view });
+              go(q.trim() ? { q: q.trim() } : { list: view, ...(tag ? { tag } : {}) });
             }}
           >
             <label htmlFor="notes-search" className="sr-only">

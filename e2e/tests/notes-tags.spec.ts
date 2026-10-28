@@ -23,13 +23,20 @@ test('the toolbar writes Markdown at the cursor, and tags filter the notes', asy
     const body = page.getByRole('textbox', { name: 'Nội dung' });
     await body.fill('Gọi khách');
     await body.press('ControlOrMeta+a');
-    await page.getByRole('toolbar', { name: 'Định dạng nội dung' }).getByRole('button', { name: 'Đậm' }).click();
+    await page.getByRole('group', { name: 'Định dạng nội dung' }).getByRole('button', { name: 'Đậm' }).click();
     await expect(body).toHaveValue('**Gọi khách**');
+    // The selection comes back a frame after the text: "Gọi khách", inside the stars.
+    await expect.poll(() => body.evaluate((el: HTMLTextAreaElement) => [el.selectionStart, el.selectionEnd])).toEqual([2, 11]);
     await body.press('End');
     await body.press('Enter');
     await body.pressSequentially('Xin sao kê tháng 10');
     await body.press('ControlOrMeta+Shift+9');
     await expect(body).toHaveValue('**Gọi khách**\n- [ ] Xin sao kê tháng 10');
+    // Ctrl or Cmd+K is the editor's link here, not the command palette.
+    await body.press('End');
+    await body.press('ControlOrMeta+k');
+    await expect(body).toHaveValue('**Gọi khách**\n- [ ] Xin sao kê tháng 10[](https://)');
+    await expect(page.getByRole('dialog')).toHaveCount(0);
     await expect(page.getByRole('status').filter({ hasText: 'Đã lưu' })).toBeVisible({ timeout: 10_000 });
   });
 
