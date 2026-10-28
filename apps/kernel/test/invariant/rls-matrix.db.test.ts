@@ -7,8 +7,7 @@
 // column under another name are not covered; AGENTS.md requires org_id on every tenant table.
 // Legal entities (#1281, plan §4.6, T8): every table with a NOT NULL legal_entity_id column, and
 // crove_kernel.legal_entity itself (by id), must carry the RESTRICTIVE le_scope policy, and a member of org A whose
-// assignments limit it to one entity reads, inserts, updates and deletes none of another entity's rows. A nullable
-// legal_entity_id (role_assignment: the entity an assignment is limited to) is a scope, not an owner, and is left out.
+// assignments limit it to one entity reads, inserts, updates and deletes none of another entity's rows.
 // A nullable legal_entity_id is either an entity scope with org-level rows (NULLABLE_ENTITY_SCOPED: the RESTRICTIVE
 // le_scope policy that lets NULL through, and the scoped member reaches no row of another entity but reads the
 // org-level ones; #1716) or a reasoned exception (NULLABLE_ENTITY_UNSCOPED).

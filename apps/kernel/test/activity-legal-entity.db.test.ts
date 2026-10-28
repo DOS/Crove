@@ -252,9 +252,34 @@ suite('activity per legal entity on PostgreSQL (#1716)', () => {
     expect(await counts(accountantA)).toEqual({ b: 0, a: 0, org: all?.org });
     expect(await counts(accountantB)).toEqual({ b: all?.b, a: 0, org: all?.org });
     expect(await counts(owner)).toEqual({ b: all?.b, a: 0, org: all?.org });
-    // The org overview's last activity time reads the same rows.
-    const overview = await rt.query<{ lastActivityAt: string | null }>('kernel.org.overview', {}, { actor: asUser(accountantA), orgId });
-    expect(overview.lastActivityAt).not.toBeNull();
+    // The org overview's last activity time reads the same rows: the newest row is the branch's reversal.
+    const last = async (userId: string) =>
+      (await rt.query<{ lastActivityAt: string | null }>('kernel.org.overview', {}, { actor: asUser(userId), orgId })).lastActivityAt;
+    const newest = (
+      await admin((c) =>
+        c.query<{ at: Date; e: string | null }>('SELECT occurred_at AS at, legal_entity_id AS e FROM crove_kernel.activity WHERE org_id = $1 ORDER BY occurred_at DESC LIMIT 1', [orgId]),
+      )
+    ).rows[0];
+    if (!newest) throw new Error('no activity row');
+    expect(newest.e).toBe(branch);
+    expect(await last(owner)).toBe(newest.at.toISOString());
+    const seenByA = await last(accountantA);
+    expect(seenByA).not.toBeNull();
+    expect(new Date(seenByA as string).getTime()).toBeLessThan(newest.at.getTime());
+  });
+
+  it('scopes the row of an entity added or renamed to that entity', async () => {
+    const added = await rt.execute<{ id: string }>(
+      'kernel.legal_entity.create',
+      { name: 'Chi nhánh Huế', kind: 'branch', taxCode: null, parentId: null },
+      { actor: asUser(owner), orgId },
+    );
+    expect(await entityOf('kernel.legal_entity', added.id)).toEqual([added.id]);
+    const sees = (userId: string) =>
+      asMember(userId, async (c) => (await c.query('SELECT 1 FROM crove_kernel.activity WHERE record_type = $1 AND record_id = $2', ['kernel.legal_entity', added.id])).rowCount);
+    expect(await sees(owner)).toBe(1);
+    expect(await sees(accountantA)).toBe(0);
+    expect(await sees(accountantB)).toBe(0);
   });
 
   it("refuses a row naming another entity than its record's or one outside the writer's scope, and scopes a row about a record the writer cannot read to its own entity", async () => {

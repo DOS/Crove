@@ -13,18 +13,20 @@
 -- every entity), the predicate role_assignment_scope uses (20261101060000).
 --
 -- Which rows get an entity (trigger b_legal_entity, crove_kernel.activity_legal_entity_fill, BEFORE INSERT, ENABLE
--- ALWAYS): the trigger's arguments list, in triples, a record type, the table that holds such records and the column
--- that holds the record id. An activity row of a listed type takes the legal_entity_id of its record, read as the
--- writer (SECURITY INVOKER, through the writer's own policies). The writer (Runtime ctx.activity in
--- packages/kernel-runtime) names none, so it stays untouched. The listed types, every one whose table carries a NOT NULL
--- legal_entity_id since #1280:
+-- ALWAYS): the trigger's arguments list, in fours, a record type, the table that holds such records, the column that
+-- holds the record id and the column that holds its entity. An activity row of a listed type takes the entity of its
+-- record, read as the writer (SECURITY INVOKER, through the writer's own policies). The writer (Runtime ctx.activity in
+-- packages/kernel-runtime) names none, so it stays untouched. The listed types, every record type ctx.activity writes
+-- whose record belongs to one entity (apps/kernel/test/activity-record-types.test.ts keeps the list complete):
 --   finance.cash_voucher, finance.journal_voucher, finance.fixed_asset, finance.journal_entry,
---   finance.purchase_document (purchases and sales), finance.portal_invoice_list by their id;
---   finance.bank_account, whose record id is a statement import (bank.ts), by crove_finance.bank_line.import_id.
--- number.voided (numbering.ts) names the voucher it voided, so it is covered by the voucher types.
+--   finance.purchase_document (purchases and sales), finance.portal_invoice_list by their id and legal_entity_id;
+--   finance.bank_account, whose record id is a statement import (bank.ts), by crove_finance.bank_line.import_id;
+--   kernel.legal_entity (an entity added or renamed), by its own id, as crove_kernel.legal_entity's le_scope reads it.
+-- number.voided (numbering.ts) takes the target type of the allocation it voids. Vouchers cannot be voided by number
+-- and no other allocator exists yet; a new allocator's target type joins this list.
 -- When the writer cannot read the record (gone, or not in its scope), the row takes the writer's own entity when its
 -- scope is exactly one entity, and stays org-level otherwise: a statement import with no new line stores no bank_line,
--- and its row (an account code and line counts) is org-level for writers with every entity in scope.
+-- and its row (an account code and line counts) is org-level for a writer whose scope is '*' or several entities.
 -- A writer that names an entity keeps it when its record type is not listed (le_scope's WITH CHECK and the foreign key
 -- still apply); for a listed type a different entity than the record's is refused (LEGAL_ENTITY_MISMATCH).
 --
@@ -34,8 +36,8 @@
 --                     would be refused by le_scope's WITH CHECK and break agent triage and approvals (T18). The
 --                     proposal row itself is still read org-wide, so its timeline rows reveal nothing more.
 --   kernel.file       a file has no entity (its readings, crove_kernel.extraction, do).
---   finance.period, finance.archive   their record id is the org's id, so no record names the entity; their summaries
---                     name a month or a year only.
+--   finance.period, finance.archive, kernel.mail_message (missing invoice reminders)   their record id is the org's
+--                     id or a mail, so no record names the entity (follow-up #1725).
 -- Agents read no activity row (no agent query or tool reads the table): their empty scope (#1538) only means they write
 -- org-level rows, which le_scope accepts.
 --
@@ -44,7 +46,8 @@
 -- NULL, so a rerun changes nothing. activity has no UPDATE trigger that matters here (agent_write_guard exempts it,
 -- 20261019010000; the others are BEFORE INSERT), and no tenant role may update it (append-only grants). Rows whose
 -- record is gone stay org-level. lock_timeout bounds the wait for the table's lock; activity is not a hot table in
--- the plan's list (§5.5).
+-- the plan's list (§5.5). ADD COLUMN holds activity's lock until commit, so commands wait for the backfill: one
+-- indexed join per listed type, short at pilot size.
 SET LOCAL lock_timeout = '2s';
 
 ALTER TABLE crove_kernel.activity ADD COLUMN IF NOT EXISTS legal_entity_id uuid;
@@ -60,7 +63,7 @@ END $$;
 -- The foreign key's index (G3 fk-index), entity first, as in 20261102140000.
 CREATE INDEX IF NOT EXISTS activity_legal_entity_idx ON crove_kernel.activity (legal_entity_id, org_id);
 
--- BEFORE INSERT. Arguments: triples of (record type, table, column holding the record id); see the header.
+-- BEFORE INSERT. Arguments: fours of (record type, table, column holding the record id, column holding its entity).
 -- SECURITY INVOKER: it reads the record as the writer, so it learns nothing the writer could not read.
 CREATE OR REPLACE FUNCTION crove_kernel.activity_legal_entity_fill() RETURNS trigger
 LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
@@ -69,10 +72,10 @@ DECLARE
   v_scope text[];
   i int := 0;
 BEGIN
-  WHILE i + 2 < TG_NARGS LOOP
+  WHILE i + 3 < TG_NARGS LOOP
     IF TG_ARGV[i] = NEW.record_type THEN
-      EXECUTE pg_catalog.format('SELECT s.legal_entity_id FROM %s s WHERE s.org_id = $1 AND s.%I = $2 LIMIT 1',
-                                TG_ARGV[i + 1]::regclass, TG_ARGV[i + 2])
+      EXECUTE pg_catalog.format('SELECT s.%I FROM %s s WHERE s.org_id = $1 AND s.%I = $2 LIMIT 1',
+                                TG_ARGV[i + 3], TG_ARGV[i + 1]::regclass, TG_ARGV[i + 2])
         INTO v_entity USING NEW.org_id, NEW.record_id;
       IF v_entity IS NOT NULL THEN
         IF NEW.legal_entity_id IS NULL THEN
@@ -90,7 +93,7 @@ BEGIN
       END IF;
       RETURN NEW;
     END IF;
-    i := i + 3;
+    i := i + 4;
   END LOOP;
   RETURN NEW;
 END $$;
@@ -99,27 +102,28 @@ REVOKE ALL ON FUNCTION crove_kernel.activity_legal_entity_fill() FROM PUBLIC, cr
 
 DO $$
 DECLARE
-  -- record type, table, column holding the record id (the trigger's arguments, in this order)
+  -- record type, table, column holding the record id, column holding its entity (the trigger's arguments, in order)
   v_specs text[][] := ARRAY[
-    ARRAY['finance.bank_account', 'crove_finance.bank_line', 'import_id'],
-    ARRAY['finance.cash_voucher', 'crove_finance.cash_voucher', 'id'],
-    ARRAY['finance.fixed_asset', 'crove_finance.fixed_asset', 'id'],
-    ARRAY['finance.journal_entry', 'crove_finance.journal_entry', 'id'],
-    ARRAY['finance.journal_voucher', 'crove_finance.journal_voucher', 'id'],
-    ARRAY['finance.portal_invoice_list', 'crove_finance.portal_invoice_list', 'id'],
-    ARRAY['finance.purchase_document', 'crove_finance.purchase_document', 'id']
+    ARRAY['finance.bank_account', 'crove_finance.bank_line', 'import_id', 'legal_entity_id'],
+    ARRAY['finance.cash_voucher', 'crove_finance.cash_voucher', 'id', 'legal_entity_id'],
+    ARRAY['finance.fixed_asset', 'crove_finance.fixed_asset', 'id', 'legal_entity_id'],
+    ARRAY['finance.journal_entry', 'crove_finance.journal_entry', 'id', 'legal_entity_id'],
+    ARRAY['finance.journal_voucher', 'crove_finance.journal_voucher', 'id', 'legal_entity_id'],
+    ARRAY['finance.portal_invoice_list', 'crove_finance.portal_invoice_list', 'id', 'legal_entity_id'],
+    ARRAY['finance.purchase_document', 'crove_finance.purchase_document', 'id', 'legal_entity_id'],
+    ARRAY['kernel.legal_entity', 'crove_kernel.legal_entity', 'id', 'id']
   ];
   v_spec text[];
   v_args text := '';
 BEGIN
   FOREACH v_spec SLICE 1 IN ARRAY v_specs LOOP
     v_args := v_args || CASE WHEN v_args = '' THEN '' ELSE ', ' END
-      || pg_catalog.format('%L, %L, %L', v_spec[1], v_spec[2], v_spec[3]);
+      || pg_catalog.format('%L, %L, %L, %L', v_spec[1], v_spec[2], v_spec[3], v_spec[4]);
     -- The backfill (see the header): rows still NULL take their record's entity.
     EXECUTE pg_catalog.format(
-      'UPDATE crove_kernel.activity a SET legal_entity_id = s.legal_entity_id FROM %s s '
+      'UPDATE crove_kernel.activity a SET legal_entity_id = s.%I FROM %s s '
       'WHERE a.legal_entity_id IS NULL AND a.record_type = %L AND s.org_id = a.org_id AND s.%I = a.record_id',
-      v_spec[2]::regclass, v_spec[1], v_spec[3]);
+      v_spec[4], v_spec[2]::regclass, v_spec[1], v_spec[3]);
   END LOOP;
 
   DROP TRIGGER IF EXISTS b_legal_entity ON crove_kernel.activity;
