@@ -199,7 +199,7 @@ suite('activity per legal entity on PostgreSQL (#1716)', () => {
     expect(await entityOf('finance.journal_voucher', legacy.voucherId)).toEqual([branch]);
     expect(await entityOf('finance.journal_voucher', fresh.voucherId)).toEqual([branch]);
     // A proposal's rows take the proposal's entity since proposals are scoped (#1538), the rows written before
-    // 20261103230000 included.
+    // 20261104000000 included.
     for (const p of [legacy, fresh]) {
       const rows = await entityOf('kernel.proposal', p.proposalId);
       expect(rows.length).toBeGreaterThan(0);
