@@ -28,6 +28,7 @@ import { MAIL_BULK_GAP_MS, MAIL_BULK_QUEUE, MAIL_SEND_QUEUE, MAIL_SWEEP_MS, mail
 import { MISSING_INVOICE_SWEEP_MS, sweepMissingInvoiceReminders } from './missing-invoice-mail.ts';
 import { ExportSealer } from './export-seal.ts';
 import { JOB_SCHEMA, QUEUES, SOCIAL_PUBLISH_QUEUES, socialPublishQueue } from './jobs-schema.ts';
+import { jobGroup, jobKey, systemJobKey } from './job-keys.ts';
 import { runLinkPreviewJob } from './link-preview.ts';
 import { runPushJob, type PushSender } from './web-push.ts';
 import { DEFAULT_EXPORT_RETENTION_DAYS, runOrgExport } from './org-export.ts';
@@ -78,7 +79,7 @@ const AGENT_SWEEP_LIMIT = 200;
 
 function sendAgentWake(boss: PgBoss, orgId: string, agentId: string) {
   return boss.send(QUEUES.agentWake, { orgId, agentId } satisfies AgentWakeJob, {
-    singletonKey: `${orgId}:${agentId}`,
+    singletonKey: jobKey(orgId, QUEUES.agentWake, agentId),
     retryLimit: AGENT_RETRY_LIMIT,
     retryDelay: 20,
     retryBackoff: true,
@@ -206,16 +207,17 @@ export async function extractPriorities(db: Db, rows: readonly OutboxRow[]): Pro
   const extracts = rows.filter((row) => EXTRACT_EVENTS.includes(row.type));
   const priorities = new Map<OutboxRow, number>();
   if (extracts.length === 0) return priorities;
-  const orgIds = [...new Set(extracts.map((row) => row.org_id))];
+  const groupIds = [...new Set(extracts.map((row) => row.org_id))].map((orgId) => jobGroup(orgId, QUEUES.extract).id);
   const { rows: counted } = await sql<{ group_id: string; n: number }>`
     SELECT group_id, count(*)::int AS n FROM ${sql.table(`${JOB_SCHEMA}.job`)}
-    WHERE name = ${QUEUES.extract} AND state IN ('created', 'retry', 'active') AND group_id = ANY(${orgIds}::text[])
+    WHERE name = ${QUEUES.extract} AND state IN ('created', 'retry', 'active') AND group_id = ANY(${groupIds}::text[])
     GROUP BY group_id`.execute(db);
   const rank = new Map(counted.map((c) => [c.group_id, c.n]));
   for (const row of extracts) {
-    const n = rank.get(row.org_id) ?? 0;
+    const group = jobGroup(row.org_id, QUEUES.extract).id;
+    const n = rank.get(group) ?? 0;
     priorities.set(row, -n);
-    rank.set(row.org_id, n + 1);
+    rank.set(group, n + 1);
   }
   return priorities;
 }
@@ -224,13 +226,13 @@ export async function extractPriorities(db: Db, rows: readonly OutboxRow[]): Pro
 // priority. null for a re-extraction event without a valid version.
 export function sendExtractJob(boss: PgBoss, row: OutboxRow, priority: number): Promise<string | null> | null {
   const fileId = String(row.payload.fileId);
-  const options = { priority, group: { id: row.org_id }, retryLimit: EXTRACT_RETRY_LIMIT, retryDelay: 20, retryBackoff: true };
+  const options = { priority, group: jobGroup(row.org_id, QUEUES.extract), retryLimit: EXTRACT_RETRY_LIMIT, retryDelay: 20, retryBackoff: true };
   if (row.type === 'kernel.file.reextract_requested') {
     const version = Number(row.payload.version);
     if (!Number.isInteger(version) || version < 1) return null;
-    return boss.send(QUEUES.extract, { orgId: row.org_id, fileId, version } satisfies ExtractJob, { ...options, singletonKey: `${row.org_id}:${fileId}:${version}` });
+    return boss.send(QUEUES.extract, { orgId: row.org_id, fileId, version } satisfies ExtractJob, { ...options, singletonKey: jobKey(row.org_id, QUEUES.extract, `${fileId}:${version}`) });
   }
-  return boss.send(QUEUES.extract, { orgId: row.org_id, fileId } satisfies ExtractJob, { ...options, singletonKey: `${row.org_id}:${fileId}` });
+  return boss.send(QUEUES.extract, { orgId: row.org_id, fileId } satisfies ExtractJob, { ...options, singletonKey: jobKey(row.org_id, QUEUES.extract, fileId) });
 }
 
 export interface WorkerDeps {
@@ -326,7 +328,7 @@ export async function sweepSocialPublishing(boss: PgBoss, workerDb: Db, provider
   await Promise.all(
     due.map((r) =>
       boss.send(socialPublishQueue(r.provider), { orgId: r.org_id, variantId: r.variant_id, provider: r.provider } satisfies SocialPublishJob, {
-        singletonKey: `${r.org_id}:${r.variant_id}`,
+        singletonKey: jobKey(r.org_id, socialPublishQueue(r.provider), r.variant_id),
         retryLimit: SOCIAL_PUBLISH_RETRY_LIMIT,
         retryDelay: 30,
         retryBackoff: true,
@@ -457,7 +459,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
         // Over its org's daily limit (#675): read once the org is back under it, in its org's group as before.
         if (done.deferred) {
           await boss.send(QUEUES.extract, job.data, {
-            group: { id: orgId },
+            group: jobGroup(orgId, QUEUES.extract),
             startAfter: new Date(done.deferred),
             retryLimit: EXTRACT_RETRY_LIMIT,
             retryDelay: 20,
@@ -517,7 +519,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       );
       // Over its org's daily limit (#675): queued again for when the org is back under it, with its blob kept.
       if ('deferred' in result) {
-        await boss.send(QUEUES.inbound, job.data, { singletonKey: job.data.blobId, startAfter: new Date(result.deferred), retryLimit: INBOUND_RETRY_LIMIT, retryDelay: 20, retryBackoff: true });
+        await boss.send(QUEUES.inbound, job.data, { singletonKey: systemJobKey(QUEUES.inbound, job.data.blobId), startAfter: new Date(result.deferred), retryLimit: INBOUND_RETRY_LIMIT, retryDelay: 20, retryBackoff: true });
         console.log(`[inbound] message ${label}: over the org's daily limit, deferred to ${result.deferred}`);
         return;
       }
@@ -743,7 +745,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       if (deps.push) {
         for (const notificationId of done.push ?? []) {
           await boss
-            .send(QUEUES.socialPush, { orgId: job.data.orgId, notificationId } satisfies PushJob, { singletonKey: notificationId, retryLimit: 0, expireInSeconds: PUSH_JOB_EXPIRE_SECONDS })
+            .send(QUEUES.socialPush, { orgId: job.data.orgId, notificationId } satisfies PushJob, { singletonKey: jobKey(job.data.orgId, QUEUES.socialPush, notificationId), retryLimit: 0, expireInSeconds: PUSH_JOB_EXPIRE_SECONDS })
             .catch((error: unknown) => console.warn(`[social-push] ${notificationId.slice(0, 8)} not queued`, error instanceof Error ? error.name : 'error'));
         }
       }
@@ -1237,7 +1239,8 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
         const sent = await deps.workerDb.transaction().execute(async (trx) => {
           const { rows } = await sql<OutboxRow>`SELECT * FROM crove_kernel.outbox_claim(100)`.execute(trx);
           const priorities = finance ? await extractPriorities(trx, rows) : new Map<OutboxRow, number>();
-          // A failed send rolls back the claim; singletonKey makes the retry idempotent.
+          // A failed send rolls back the claim and the batch is relayed again. pg-boss sends outside this transaction, so
+          // the jobs already sent are sent again: only a stately queue or a singletonSeconds slot dedupes them on the key.
           await Promise.all(
             rows.map(async (row) => {
               if (
@@ -1252,7 +1255,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
               if (row.type === 'finance.portal_list.import_requested') {
                 const listId = String(row.payload.listId);
                 return boss.send(QUEUES.portalList, { orgId: row.org_id, listId } satisfies PortalListJob, {
-                  singletonKey: `${row.org_id}:${listId}`,
+                  singletonKey: jobKey(row.org_id, QUEUES.portalList, listId),
                   retryLimit: PORTAL_LIST_RETRY_LIMIT,
                   retryDelay: 20,
                   retryBackoff: true,
@@ -1263,7 +1266,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                 const requestCommandId = typeof row.payload.requestCommandId === 'string' ? row.payload.requestCommandId : null;
                 return boss.send(QUEUES.yearArchive, { orgId: row.org_id, year, requestCommandId } satisfies YearArchiveJob, {
                   // One build per org and year queued or running at a time.
-                  singletonKey: `${row.org_id}:${year}`,
+                  singletonKey: jobKey(row.org_id, QUEUES.yearArchive, String(year)),
                   retryLimit: YEAR_ARCHIVE_RETRY_LIMIT,
                   retryDelay: 60,
                   retryBackoff: true,
@@ -1275,7 +1278,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
               if (row.type === 'kernel.org.export_requested') {
                 return boss.send(QUEUES.orgExport, { orgId: row.org_id } satisfies OrgExportJob, {
                   // One export per org queued or running at a time; a request while one runs is not queued twice.
-                  singletonKey: `${row.org_id}:org-export`,
+                  singletonKey: jobKey(row.org_id, QUEUES.orgExport, 'org'),
                   retryLimit: ORG_EXPORT_RETRY_LIMIT,
                   retryDelay: 60,
                   retryBackoff: true,
@@ -1292,7 +1295,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                 }
                 const after = typeof row.payload.after === 'string' ? row.payload.after : null;
                 return boss.send(socialPublishQueue(provider), { orgId: row.org_id, variantId, provider, comment: true, after } satisfies SocialPublishJob, {
-                  singletonKey: `${row.org_id}:${variantId}:comment:${after ?? '-'}`,
+                  singletonKey: jobKey(row.org_id, socialPublishQueue(provider), `${variantId}:comment:${after ?? '-'}`),
                   retryLimit: 0,
                 });
               }
@@ -1306,7 +1309,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                 }
                 const after = typeof row.payload.after === 'string' ? row.payload.after : null;
                 return boss.send(socialPublishQueue(provider), { orgId: row.org_id, variantId, provider, thread: true, after } satisfies SocialPublishJob, {
-                  singletonKey: `${row.org_id}:${variantId}:thread:${after ?? '-'}`,
+                  singletonKey: jobKey(row.org_id, socialPublishQueue(provider), `${variantId}:thread:${after ?? '-'}`),
                   retryLimit: 0,
                 });
               }
@@ -1316,7 +1319,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                 const variantId = String(row.payload.variant_id);
                 const after = typeof row.payload.after === 'string' ? row.payload.after : null;
                 const removal = boss.send(QUEUES.socialRemove, { orgId: row.org_id, variantId, provider, after } satisfies SocialRemoveJob, {
-                  singletonKey: `${row.org_id}:${variantId}:remove:${after ?? '-'}`,
+                  singletonKey: jobKey(row.org_id, QUEUES.socialRemove, `${variantId}:remove:${after ?? '-'}`),
                   retryLimit: 0,
                 });
                 if (row.payload.scheduled !== true) return removal;
@@ -1326,7 +1329,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                 return Promise.all([
                   removal,
                   boss.send(QUEUES.socialRemove, { orgId: row.org_id, variantId, provider, after, watch: true } satisfies SocialRemoveJob, {
-                    singletonKey: `${row.org_id}:${variantId}:remove-watch:${after ?? '-'}`,
+                    singletonKey: jobKey(row.org_id, QUEUES.socialRemove, `${variantId}:remove-watch:${after ?? '-'}`),
                     startAfter: new Date(Date.now() + REMOVE_WATCH_AFTER_MS),
                     retryLimit: REMOVE_WATCH_RETRY_LIMIT,
                     retryDelay: 60,
@@ -1340,7 +1343,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                 const variantId = String(row.payload.variant_id);
                 const after = typeof row.payload.after === 'string' ? row.payload.after : null;
                 return boss.send(QUEUES.socialEdit, { orgId: row.org_id, variantId, provider, after } satisfies SocialEditJob, {
-                  singletonKey: `${row.org_id}:${variantId}:edit:${after ?? '-'}`,
+                  singletonKey: jobKey(row.org_id, QUEUES.socialEdit, `${variantId}:edit:${after ?? '-'}`),
                   retryLimit: 0,
                 });
               }
@@ -1348,7 +1351,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
               if (social && row.type === 'social.channel_option.requested') {
                 const optionId = String(row.payload.option_id);
                 return boss.send(QUEUES.socialChannelOption, { orgId: row.org_id, optionId } satisfies ChannelOptionJob, {
-                  singletonKey: `${row.org_id}:${optionId}`,
+                  singletonKey: jobKey(row.org_id, QUEUES.socialChannelOption, optionId),
                   retryLimit: CHANNEL_OPTION_RETRY_LIMIT,
                   retryDelay: 10,
                   retryBackoff: true,
@@ -1358,7 +1361,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
               // beside whatever else the event starts (Social revokes its links from the same event).
               if (crm && (row.type === 'kernel.member.removed' || row.type === 'kernel.member.role_changed')) {
                 await boss.send(QUEUES.crmBooking, { orgId: row.org_id, memberEventId: row.event_id } satisfies BookingJob, {
-                  singletonKey: `${row.org_id}:member:${row.event_id}`,
+                  singletonKey: jobKey(row.org_id, QUEUES.crmBooking, `member:${row.event_id}`),
                   retryLimit: BOOKING_RETRY_LIMIT,
                   retryDelay: 2,
                   retryBackoff: true,
@@ -1368,7 +1371,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
               if (crm && row.type === 'crm.booking.requested') {
                 const bookingId = String(row.payload.booking_id);
                 return boss.send(QUEUES.crmBooking, { orgId: row.org_id, bookingId } satisfies BookingJob, {
-                  singletonKey: `${row.org_id}:${bookingId}`,
+                  singletonKey: jobKey(row.org_id, QUEUES.crmBooking, bookingId),
                   retryLimit: BOOKING_RETRY_LIMIT,
                   retryDelay: 2,
                   retryBackoff: true,
@@ -1379,7 +1382,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                 const bookingId = String(row.payload.booking_id);
                 const requestId = String(row.payload.request_id);
                 return boss.send(QUEUES.crmBooking, { orgId: row.org_id, bookingId, requestId } satisfies BookingJob, {
-                  singletonKey: `${row.org_id}:${bookingId}:${requestId}`,
+                  singletonKey: jobKey(row.org_id, QUEUES.crmBooking, `${bookingId}:${requestId}`),
                   retryLimit: BOOKING_RETRY_LIMIT,
                   retryDelay: 2,
                   retryBackoff: true,
@@ -1394,7 +1397,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                 return Promise.all(
                   BOOKING_REMINDERS.filter((r) => start - r.ms > Date.now()).map((r) =>
                     boss.send(QUEUES.crmBookingRemind, { orgId: row.org_id, bookingId, startsAt, lead: r.lead } satisfies BookingRemindJob, {
-                      singletonKey: `${row.org_id}:${bookingId}:${startsAt}:${r.lead}`,
+                      singletonKey: jobKey(row.org_id, QUEUES.crmBookingRemind, `${bookingId}:${startsAt}:${r.lead}`),
                       startAfter: new Date(start - r.ms),
                       retryLimit: BOOKING_RETRY_LIMIT,
                       retryDelay: 30,
@@ -1406,7 +1409,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
               if (social && row.type === 'social.link_preview.requested') {
                 const previewId = String(row.payload.preview_id);
                 return boss.send(QUEUES.socialLinkPreview, { orgId: row.org_id, previewId } satisfies LinkPreviewJob, {
-                  singletonKey: `${row.org_id}:${previewId}`,
+                  singletonKey: jobKey(row.org_id, QUEUES.socialLinkPreview, previewId),
                   retryLimit: LINK_PREVIEW_RETRY_LIMIT,
                   retryDelay: 10,
                   retryBackoff: true,
@@ -1417,7 +1420,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
               const triage =
                 (social && row.type === 'social.post.submitted') || (crm && row.type === 'crm.booking.cancelled')
                   ? boss.send(QUEUES.agentDispatch, { orgId: row.org_id, eventId: row.event_id } satisfies AgentDispatchJob, {
-                      singletonKey: `${row.org_id}:${row.event_id}`,
+                      singletonKey: jobKey(row.org_id, QUEUES.agentDispatch, row.event_id),
                       retryLimit: AGENT_RETRY_LIMIT,
                       retryDelay: 20,
                       retryBackoff: true,
@@ -1430,7 +1433,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                 const test = row.type === CHAT_ALERT_TEST_EVENT;
                 await boss
                   .send(QUEUES.socialChatAlert, { orgId: row.org_id, eventId: row.event_id, ...(test ? { test: true as const } : {}) } satisfies AgentDispatchJob & { test?: true }, {
-                    singletonKey: test ? `${row.org_id}:test` : `${row.org_id}:${row.event_id}`,
+                    singletonKey: jobKey(row.org_id, QUEUES.socialChatAlert, test ? 'test' : row.event_id),
                     singletonSeconds: test ? CHAT_ALERT_TEST_SINGLETON_SECONDS : CHAT_ALERT_SINGLETON_SECONDS,
                     retryLimit: 0,
                   })
@@ -1441,7 +1444,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
               const notify = NOTIFY_COMMANDS.get(row.type);
               if (notify && deps.runtime.installed(notify.module)) {
                 await boss.send(QUEUES.notify, { orgId: row.org_id, eventId: row.event_id, type: row.type } satisfies AgentDispatchJob & { type: string }, {
-                  singletonKey: `${row.org_id}:${row.event_id}`,
+                  singletonKey: jobKey(row.org_id, QUEUES.notify, row.event_id),
                   retryLimit: NOTIFY_RETRY_LIMIT,
                   retryDelay: 20,
                   retryBackoff: true,
@@ -1449,7 +1452,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
               }
               if (social && NOTIFYING.has(row.type)) {
                 return boss.send(QUEUES.socialNotify, { orgId: row.org_id, eventId: row.event_id, type: row.type } satisfies AgentDispatchJob & { type: string }, {
-                  singletonKey: `${row.org_id}:${row.event_id}`,
+                  singletonKey: jobKey(row.org_id, QUEUES.socialNotify, row.event_id),
                   retryLimit: SOCIAL_NOTIFY_RETRY_LIMIT,
                   retryDelay: 20,
                   retryBackoff: true,
@@ -1460,7 +1463,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
               }
               if (Object.hasOwn(AGENT_PROPOSAL_COMMANDS, row.type)) {
                 return boss.send(QUEUES.agentProposal, { orgId: row.org_id, eventId: row.event_id, type: row.type }, {
-                  singletonKey: `${row.org_id}:${row.event_id}`,
+                  singletonKey: jobKey(row.org_id, QUEUES.agentProposal, row.event_id),
                   retryLimit: AGENT_RETRY_LIMIT,
                   retryDelay: 20,
                   retryBackoff: true,
@@ -1468,7 +1471,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
               }
               if (row.type === 'kernel.proposal.created') {
                 return boss.send(QUEUES.agentDispatch, { orgId: row.org_id, eventId: row.event_id } satisfies AgentDispatchJob, {
-                  singletonKey: `${row.org_id}:${row.event_id}`,
+                  singletonKey: jobKey(row.org_id, QUEUES.agentDispatch, row.event_id),
                   retryLimit: AGENT_RETRY_LIMIT,
                   retryDelay: 20,
                   retryBackoff: true,
@@ -1481,7 +1484,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                   scope: row.payload.scope === 'global' ? 'global' : 'local',
                 };
                 return boss.send(QUEUES.signOut, target, {
-                  singletonKey: `${target.sessionId}:${target.scope}`,
+                  singletonKey: jobKey(row.org_id, QUEUES.signOut, `${target.sessionId}:${target.scope}`),
                   retryLimit: SIGN_OUT_RETRY_LIMIT,
                   retryDelay: 10,
                   retryBackoff: true,
@@ -1507,7 +1510,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                   sizeBytes: Number(row.size_bytes),
                   recipient: row.recipient || null,
                 } satisfies InboundJob,
-                { singletonKey: row.blob_id, retryLimit: INBOUND_RETRY_LIMIT, retryDelay: 20, retryBackoff: true },
+                { singletonKey: systemJobKey(QUEUES.inbound, row.blob_id), retryLimit: INBOUND_RETRY_LIMIT, retryDelay: 20, retryBackoff: true },
               ),
             ),
           );
@@ -1521,7 +1524,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
           await Promise.all(
             rows.map((row) =>
               boss.send(QUEUES.mailEvent, mailEventJob(row) satisfies MailEventJob, {
-                singletonKey: `${row.provider}:${row.provider_event_id}`,
+                singletonKey: systemJobKey(QUEUES.mailEvent, `${row.provider}:${row.provider_event_id}`),
                 retryLimit: MAIL_EVENT_RETRY_LIMIT,
                 retryDelay: 20,
                 retryBackoff: true,
