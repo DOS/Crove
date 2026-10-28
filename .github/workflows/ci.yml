@@ -357,7 +357,7 @@ jobs:
             'parser package in the image: /app/node_modules/\.pnpm/node_modules/saxes'
           planted 'mkdir /app/node_modules/.pnpm/saxes@6.0.0' \
             'parser package in the image: saxes@6\.0\.0'
-          planted 'ln -s /nowhere /app/node_modules/.pnpm/exceljs@*/node_modules/saxes' \
+          planted 'for d in /app/node_modules/.pnpm/exceljs@*/node_modules; do ln -s /nowhere "$d/saxes"; done' \
             'parser package in the image: /app/node_modules/\.pnpm/exceljs@[^/]+/node_modules/saxes'
           planted 'for d in /app/node_modules/.pnpm/exceljs@*/node_modules/exceljs/lib; do echo "module.exports = function parseXML(s) { return s; };" > "$d/planted.js"; done' \
             'parser code in the image, in exceljs: /app/node_modules/\.pnpm/exceljs@[^/]+/node_modules/exceljs/lib/planted\.js \(function parseXML\)'
