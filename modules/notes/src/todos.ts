@@ -10,22 +10,29 @@ import { sql } from 'kysely';
 import { z } from 'zod';
 import {
   auditValue,
+  taskStanding,
   todoDueInstant,
   todoLocalTime,
   todoStanding,
+  zMyWorkInput,
   zTodoCreate,
+  zTodoHandOver,
   zTodoList,
   zTodoRef,
   zTodoReorder,
   zTodoUpdate,
+  type MyWork,
+  type MyWorkTask,
   type Todo,
   type TodoCount,
+  type TodoHandedOver,
   type TodoStatus,
   type TodoStep,
   type TodoSummary,
   type TodoWritten,
 } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
+import { createTaskFromTodo } from '@crove/kernel';
 import { DomainError, defineCommand, defineQuery, type CommandContext, type QueryContext } from '@crove/kernel-runtime';
 import { notesManifest } from './manifest.ts';
 import { REBALANCE_AT, keyBetween, spreadKeys } from './sort-key.ts';
@@ -104,6 +111,8 @@ function userOf(actor: QueryContext['actor']): string {
 }
 
 const notFound = () => new DomainError('TODO_NOT_FOUND', 404, 'Không tìm thấy việc này');
+const revisionConflict = (revision: number) =>
+  new DomainError('TODO_REVISION_CONFLICT', 409, 'Việc này vừa được sửa ở nơi khác; hãy tải lại trước khi lưu', { revision });
 
 // The caller's to-do (row policies: their own only), with its details, locked for a change when `lock` is set.
 async function load(ctx: Pick<QueryContext, 'trx' | 'orgId'>, todoId: string, lock: boolean): Promise<SummaryRow & { details: string | null }> {
@@ -220,9 +229,7 @@ export const todoUpdate = defineCommand({
     userOf(ctx.actor);
     const before = await load(ctx, input.todoId, true);
     assertNotInTrash(before);
-    if (before.revision !== input.revision) {
-      throw new DomainError('TODO_REVISION_CONFLICT', 409, 'Việc này vừa được sửa ở nơi khác; hãy tải lại trước khi lưu', { revision: before.revision });
-    }
+    if (before.revision !== input.revision) throw revisionConflict(before.revision);
     const next = due(input);
     const details = detailsOf(input.details);
     const checklist = checklistOf(input.checklist);
@@ -328,6 +335,58 @@ function trashCommand(name: string, toTrash: boolean) {
 export const todoDelete = trashCommand('notes.todo.delete', true);
 export const todoRestore = trashCommand('notes.todo.restore', false);
 
+// When the task of a handed-over to-do is due: the to-do's time, or else the end of its due day in its time zone.
+function taskDue(row: Pick<SummaryRow, 'due_on' | 'due_at' | 'time_zone'>): Date | null {
+  if (row.due_at !== null) return new Date(row.due_at);
+  return row.due_on === null ? null : todoDueInstant(row.due_on, '23:59', row.time_zone);
+}
+
+// Hands an open to-do over to a position (notes.md §3.1, step N5, #1674): the kernel's helper creates the task in this
+// transaction, with the title and description the member confirmed and a `notes.todo` source_ref of its own, and the
+// to-do becomes `handed_over` with the task's id. Nothing of the to-do reaches the task but that confirmed text and
+// its due time: not its details unless the member put them in the description, not its steps, not its links. The
+// audit row and the event carry ids and markers only.
+export const todoHandOver = defineCommand({
+  name: 'notes.todo.hand_over',
+  input: zTodoHandOver,
+  risk: 'R1',
+  sideEffect: 'internal',
+  access: WRITERS,
+  target,
+  handler: async (ctx, input): Promise<TodoHandedOver> => {
+    userOf(ctx.actor);
+    const before = await load(ctx, input.todoId, true);
+    assertNotInTrash(before);
+    if (before.revision !== input.revision) throw revisionConflict(before.revision);
+    if (before.status !== 'open') throw new DomainError('TODO_NOT_CHANGEABLE', 409, 'Chỉ giao được việc chưa xong');
+    const { tainted } = await ctx.trx
+      .selectFrom('crove_notes.todo')
+      .select('tainted')
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.todoId)
+      .executeTakeFirstOrThrow();
+    const description = detailsOf(input.description);
+    const { taskId } = await createTaskFromTodo(ctx, { todoId: input.todoId, title: input.title, description, positionId: input.positionId, due: taskDue(before), tainted });
+    const row = await ctx.trx
+      .updateTable('crove_notes.todo')
+      .set({ status: 'handed_over', task_id: taskId, revision: before.revision + 1, updated_at: ctx.now })
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.todoId)
+      .returning(['id', 'revision'])
+      .executeTakeFirstOrThrow();
+    ctx.audit({
+      todoId: row.id,
+      revision: row.revision,
+      taskId,
+      positionId: input.positionId,
+      title: auditValue(TODO, 'title', input.title),
+      description: auditValue(TODO, 'details', description),
+    });
+    await ctx.emit('notes.todo.handed_over', { todoId: row.id, taskId });
+    return { ...written(row), taskId };
+  },
+});
+
 export const todoList = defineQuery({
   name: 'notes.todo.list',
   input: zTodoList,
@@ -357,6 +416,56 @@ export const todoGet = defineQuery({
   },
 });
 
+// The open statuses of a kernel task (ADR-0029): what My work lists.
+const OPEN_TASK_STATUSES = ['todo', 'in_progress', 'waiting', 'in_review'] as const;
+// The most open to-dos My work shows, as the app's list.
+const MY_WORK_LIMIT = 500;
+
+interface KernelTask {
+  id: string;
+  title: string;
+  status: string;
+  assigneePositionId: string | null;
+  due: string | null;
+  tainted: boolean;
+}
+
+// "Việc của tôi" (notes.md §3.10, step N5): my open to-dos in my own order, and the open tasks of the positions I hold
+// (an owner's also the tasks given to the owners), read through the kernel's own task query so its rules apply. The
+// tasks are grouped by their due day in the member's time zone, soonest first.
+export const myWork = defineQuery({
+  name: 'notes.my_work',
+  input: zMyWorkInput,
+  access: READERS,
+  handler: async (ctx, input): Promise<MyWork> => {
+    userOf(ctx.actor);
+    const rows = await ctx.trx
+      .selectFrom('crove_notes.todo')
+      .select(SUMMARY)
+      .where('org_id', '=', ctx.orgId)
+      .where('deleted_at', 'is', null)
+      .where('status', '=', 'open')
+      .orderBy('sort_key')
+      .orderBy('id')
+      .limit(MY_WORK_LIMIT)
+      .execute();
+    const found = await ctx.query<{ tasks: KernelTask[] }>('kernel.task.list', { mine: true, status: [...OPEN_TASK_STATUSES] });
+    const now = new Date();
+    const tasks: MyWorkTask[] = (found.status === 'ok' ? found.value.tasks : [])
+      .map((t) => ({
+        id: t.id,
+        title: t.title,
+        status: t.status,
+        positionId: t.assigneePositionId,
+        due: t.due,
+        tainted: t.tainted,
+        ...taskStanding(t.due === null ? null : new Date(t.due), input.timeZone, now),
+      }))
+      .sort((a, b) => (a.due === b.due ? 0 : a.due === null ? 1 : b.due === null ? -1 : a.due < b.due ? -1 : 1));
+    return { todos: rows.map((r) => summary(r, now)), tasks };
+  },
+});
+
 // How many to-dos each member has, for an owner or admin before removing one (ADR-0037 §4): a count from
 // crove_notes.todo_counts(), which checks the caller's role itself, never the text.
 export const todoCounts = defineQuery({
@@ -369,5 +478,7 @@ export const todoCounts = defineQuery({
   },
 });
 
-export const todoCommands = [todoCreate, todoUpdate, todoComplete, todoReopen, todoReorder, todoDelete, todoRestore];
+export const todoCommands = [todoCreate, todoUpdate, todoComplete, todoReopen, todoReorder, todoDelete, todoRestore, todoHandOver];
 export const todoQueries = [todoList, todoGet, todoCounts];
+// My work reads to-dos and the kernel's tasks, so it is the module's, not the to-do list's.
+export const myWorkQueries = [myWork];

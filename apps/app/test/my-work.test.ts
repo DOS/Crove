@@ -1,7 +1,8 @@
-// My work (#1673): the groups of the screen, where a move puts a to-do, and the keyboard shortcuts.
+// My work (#1673, #1674): the groups of the screen with the tasks of my positions, where a move puts a to-do, the keyboard
+// shortcuts and the text a hand-over proposes.
 import { describe, expect, it } from 'vitest';
-import type { TodoSummary } from '@crove/kernel-contract';
-import { groupTodos, moveTarget, myWorkShortcut, stepSelection } from '../src/lib/my-work.ts';
+import type { MyWorkTask, TodoSummary } from '@crove/kernel-contract';
+import { groupTodos, handOverDescription, moveTarget, myWorkShortcut, stepSelection } from '../src/lib/my-work.ts';
 
 const todo = (id: string, group: TodoSummary['group']): TodoSummary => ({
   id,
@@ -42,6 +43,26 @@ describe('My work', () => {
       ['later', ['e']],
       ['none', ['a']],
     ]);
+  });
+
+  it('puts the tasks of my positions in their groups after the to-dos, and keeps a group with tasks only (#1674)', () => {
+    const task = (id: string, group: MyWorkTask['group']): MyWorkTask => ({ id, title: id, status: 'todo', positionId: null, due: null, group, overdue: false, tainted: false });
+    const groups = groupTodos([todo('a', 'today')], [task('t1', 'today'), task('t2', 'none')]);
+    expect(groups.map((g) => [g.id, g.items.map((t) => t.id), g.tasks.map((t) => t.id)])).toEqual([
+      ['today', ['a'], ['t1']],
+      ['none', [], ['t2']],
+    ]);
+  });
+
+  it('proposes the details and the steps as the description a hand-over gives the team (#1674)', () => {
+    const steps = [
+      { text: 'Xin bảng kê', done: true },
+      { text: 'Nộp tờ khai', done: false },
+    ];
+    expect(handOverDescription({ details: '  Hỏi kế toán trưởng  ', checklist: steps })).toBe('Hỏi kế toán trưởng\n\n- [x] Xin bảng kê\n- [ ] Nộp tờ khai');
+    expect(handOverDescription({ details: '', checklist: steps })).toBe('- [x] Xin bảng kê\n- [ ] Nộp tờ khai');
+    expect(handOverDescription({ details: '', checklist: [] })).toBe('');
+    expect(handOverDescription({ details: 'x'.repeat(20), checklist: [] }, 10)).toHaveLength(10);
   });
 
   it('moves a to-do next to its neighbor in the group', () => {

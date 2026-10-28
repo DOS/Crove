@@ -579,28 +579,58 @@ export const createTask = defineCommand({
   access: MEMBERS,
   handler: async (ctx, input) => {
     requireUser(ctx);
-    if (input.assigneePositionId) {
-      const position = await lockPosition(ctx.trx, ctx.orgId, input.assigneePositionId);
-      if (position.status === 'archived') throw new DomainError('POSITION_ARCHIVED', 409, 'Vị trí này đã ngừng sử dụng');
-    }
-    const task = await ctx.trx
-      .insertInto('crove_kernel.task')
-      .values({
-        org_id: ctx.orgId,
-        title: input.title,
-        description: input.description ?? null,
-        assignee_position_id: input.assigneePositionId,
-        source: 'human',
-        created_by_type: 'user',
-        due: input.due ?? null,
-      })
-      .returning(['id', 'tainted', 'request_depth'])
-      .executeTakeFirstOrThrow();
-    await requestWakeup(ctx, input.assigneePositionId, { taskId: task.id, why: 'assigned' }, task.tainted, task.request_depth);
-    await ctx.emit('kernel.task.created', { taskId: task.id });
-    return { taskId: task.id };
+    return insertHumanTask(ctx, { ...input, description: input.description ?? null, due: input.due ?? null, sourceRef: null, tainted: false });
   },
 });
+
+// A task a person gives, from kernel.task.create or from a module's helper below. source_ref is never the caller's
+// input: kernel.task.get attaches the proposal a `kernel.proposal` reference names, so only kernel code chooses it.
+async function insertHumanTask(
+  ctx: CommandContext,
+  input: { title: string; description: string | null; assigneePositionId: string | null; due: string | null; sourceRef: { type: string; id: string } | null; tainted: boolean },
+): Promise<{ taskId: string }> {
+  if (input.assigneePositionId) {
+    const position = await lockPosition(ctx.trx, ctx.orgId, input.assigneePositionId);
+    if (position.status === 'archived') throw new DomainError('POSITION_ARCHIVED', 409, 'Vị trí này đã ngừng sử dụng');
+  }
+  const task = await ctx.trx
+    .insertInto('crove_kernel.task')
+    .values({
+      org_id: ctx.orgId,
+      title: input.title,
+      description: input.description,
+      assignee_position_id: input.assigneePositionId,
+      source: 'human',
+      source_ref: input.sourceRef === null ? null : JSON.stringify(input.sourceRef),
+      created_by_type: 'user',
+      due: input.due,
+      tainted: input.tainted,
+    })
+    .returning(['id', 'tainted', 'request_depth'])
+    .executeTakeFirstOrThrow();
+  await requestWakeup(ctx, input.assigneePositionId, { taskId: task.id, why: 'assigned' }, task.tainted, task.request_depth);
+  await ctx.emit('kernel.task.created', { taskId: task.id });
+  return { taskId: task.id };
+}
+
+// A member's own to-do handed over to a position (notes plan docs/plan/notes.md §3.1 and step N5, #1674): the notes
+// module calls this inside its notes.todo.hand_over command, so the task and the to-do's change commit together. The
+// task takes the text the member confirmed, the rules of kernel.task.create (an archived position is refused with
+// POSITION_ARCHIVED) and a `notes.todo` source_ref this helper sets itself; the to-do's taint carries over.
+export async function createTaskFromTodo(
+  ctx: CommandContext,
+  input: { todoId: string; title: string; description: string | null; positionId: string; due: Date | null; tainted: boolean },
+): Promise<{ taskId: string }> {
+  requireUser(ctx);
+  return insertHumanTask(ctx, {
+    title: zTaskTitle.parse(input.title),
+    description: z.string().max(10000).nullable().parse(input.description),
+    assigneePositionId: zId.parse(input.positionId),
+    due: input.due?.toISOString() ?? null,
+    sourceRef: { type: 'notes.todo', id: zId.parse(input.todoId) },
+    tainted: input.tainted,
+  });
+}
 
 // The task row an agent's run holds the lease on with this fencing token, locked; refused once the lease was lost
 // (expired, taken by another run, or released).

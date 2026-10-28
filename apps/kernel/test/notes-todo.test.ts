@@ -1,8 +1,9 @@
-// Personal to-dos (issue #1673): the fractional order keys, the due-day groups in a to-do's own time zone, and the
-// commands' access (no agent runs any of them, ADR-0029, notes plan §3.5).
+// Personal to-dos (issues #1673 and #1674): the fractional order keys, the due-day groups in a to-do's own time zone,
+// the tasks of My work, the hand-over's input, and the commands' access (no agent runs any of them, ADR-0029, notes
+// plan §3.5).
 import { describe, expect, it } from 'vitest';
-import { todoDueGroup, todoDueInstant, todoLocalTime, todoStanding, zTodoCreate, zTodoReorder } from '@crove/kernel-contract';
-import { REBALANCE_AT, isSortKey, keyBetween, notesCommands, notesQueries, spreadKeys, todoCommands, todoQueries } from '@crove/mod-notes';
+import { taskStanding, todoDueGroup, todoDueInstant, todoLocalTime, todoStanding, zTodoCreate, zTodoHandOver, zTodoReorder } from '@crove/kernel-contract';
+import { REBALANCE_AT, isSortKey, keyBetween, myWork, notesCommands, notesQueries, spreadKeys, todoCommands, todoHandOver, todoQueries } from '@crove/mod-notes';
 
 describe('to-do order keys', () => {
   it('finds a key between any two, and at both ends', () => {
@@ -93,6 +94,38 @@ describe('to-do due days', () => {
     expect(zTodoCreate.parse({ title: '  x  ' })).toEqual({ title: 'x', details: '', checklist: [], dueOn: null, dueTime: null, timeZone: 'Asia/Ho_Chi_Minh' });
     const id = '018f0000-0000-7000-8000-000000000001';
     expect(zTodoReorder.safeParse({ todoId: id, place: 'before', anchorId: id }).success).toBe(false);
+  });
+});
+
+describe('tasks in My work and the hand-over (#1674)', () => {
+  it("groups a task by its due day in the member's time zone", () => {
+    const now = new Date('2026-11-03T20:00:00Z');
+    expect(taskStanding(null, 'Asia/Ho_Chi_Minh', now)).toEqual({ group: 'none', overdue: false });
+    // Now is 4 November in Vietnam and 3 November in New York; the task is due 4 November in both.
+    const at = new Date('2026-11-04T06:00:00Z');
+    expect(taskStanding(at, 'Asia/Ho_Chi_Minh', now)).toEqual({ group: 'today', overdue: false });
+    expect(taskStanding(at, 'America/New_York', now)).toEqual({ group: 'next7', overdue: false });
+    // Earlier today and past: today, late; a day before: overdue.
+    expect(taskStanding(new Date('2026-11-03T19:00:00Z'), 'Asia/Ho_Chi_Minh', now)).toEqual({ group: 'today', overdue: true });
+    expect(taskStanding(new Date('2026-11-02T10:00:00Z'), 'Asia/Ho_Chi_Minh', now)).toEqual({ group: 'overdue', overdue: true });
+  });
+
+  it('takes the text the member confirmed, within a task title and description', () => {
+    const id = '018f0000-0000-7000-8000-000000000001';
+    const base = { todoId: id, revision: 1, positionId: id, title: '  Nộp tờ khai  ', description: '' };
+    expect(zTodoHandOver.parse(base)).toEqual({ ...base, title: 'Nộp tờ khai' });
+    expect(zTodoHandOver.safeParse({ ...base, title: ' ' }).success).toBe(false);
+    expect(zTodoHandOver.safeParse({ ...base, title: 'x'.repeat(301) }).success).toBe(false);
+    expect(zTodoHandOver.safeParse({ ...base, description: 'x'.repeat(10_001) }).success).toBe(false);
+    // No source of its own: the kernel sets it.
+    expect(zTodoHandOver.safeParse({ ...base, sourceRef: { type: 'kernel.proposal', id } }).success).toBe(false);
+  });
+
+  it('registers notes.todo.hand_over and notes.my_work, for people only', () => {
+    expect(notesCommands).toContain(todoHandOver);
+    expect(notesQueries).toContain(myWork);
+    expect(todoHandOver.access).toEqual(['owner', 'admin', 'member']);
+    expect((myWork as { agent?: unknown }).agent).toBeUndefined();
   });
 });
 

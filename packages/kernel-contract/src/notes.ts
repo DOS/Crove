@@ -195,6 +195,38 @@ export type Todo = z.infer<typeof zTodo>;
 export const zTodoCount = z.object({ userId: z.string(), todos: z.number().int() });
 export type TodoCount = z.infer<typeof zTodoCount>;
 
+// Hands an open to-do over to a position as a team task (#1674, notes.md step N5): the title and description are the
+// text the member confirmed, which every member of the org and the position's holder will read; the to-do's own
+// details stay with it. Against the revision the member read, so they confirm the to-do as it is.
+export const zTodoHandOver = z.strictObject({
+  todoId: zId,
+  revision: z.number().int().positive(),
+  positionId: zId,
+  title: zTodoTitle,
+  description: zTodoDetails,
+});
+export type TodoHandOverInput = z.input<typeof zTodoHandOver>;
+export const zTodoHandedOver = zTodoWritten.extend({ taskId: z.string() });
+export type TodoHandedOver = z.infer<typeof zTodoHandedOver>;
+
+// "Việc của tôi" (notes.md §3.10, step N5): my open to-dos and the open tasks of the positions I hold, the tasks
+// grouped by their due day in the member's time zone.
+export const zMyWorkInput = z.strictObject({ timeZone: zTimeZone.default(DEFAULT_TIME_ZONE) });
+export type MyWorkInput = z.input<typeof zMyWorkInput>;
+export const zMyWorkTask = z.object({
+  id: z.string(),
+  title: z.string(),
+  status: z.string(),
+  positionId: z.string().nullable(),
+  due: z.string().nullable(),
+  group: z.enum(TODO_DUE_GROUPS),
+  overdue: z.boolean(),
+  tainted: z.boolean(),
+});
+export type MyWorkTask = z.infer<typeof zMyWorkTask>;
+export const zMyWork = z.object({ todos: z.array(zTodoSummary), tasks: z.array(zMyWorkTask) });
+export type MyWork = z.infer<typeof zMyWork>;
+
 const DAY_MS = 86_400_000;
 const addDays = (day: string, n: number): string => new Date(Date.parse(`${day}T00:00:00Z`) + n * DAY_MS).toISOString().slice(0, 10);
 
@@ -217,6 +249,13 @@ export function todoLocalTime(at: Date, timeZone: string): string {
   const local = at.getTime() + zoneOffsetMs(timeZone, at.getTime());
   const minutes = Math.floor((((local % DAY_MS) + DAY_MS) % DAY_MS) / 60_000);
   return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+}
+
+/** Where a task due at `due` stands at `now` for a member in `timeZone`: its group by that day there, and whether it is late. */
+export function taskStanding(due: Date | null, timeZone: string, now: Date): { group: TodoDueGroup; overdue: boolean } {
+  if (due === null) return { group: 'none', overdue: false };
+  const group = todoDueGroup(zonedDate(timeZone, due.getTime()), zonedDate(timeZone, now.getTime()));
+  return { group, overdue: group === 'overdue' || due.getTime() < now.getTime() };
 }
 
 /** Where an open to-do stands at `now`: its group by the day in its own time zone, and whether it is late. */

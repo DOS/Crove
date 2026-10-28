@@ -14,7 +14,7 @@ import { TableCell, TableRow } from '@crove/ui/components/table';
 import { Tabs, TabsList, TabsTrigger } from '@crove/ui/components/tabs';
 import { DataTable, Empty, ErrorText, ListSkeleton, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
-import { OPEN_TASK_STATUSES, TASK_LIST_LIMIT, TASK_STATUSES, agentPermissions, socialPostOf, type TaskFilter, type TaskStatus, type TasksSearch } from '../lib/agents.ts';
+import { OPEN_TASK_STATUSES, TASK_LIST_LIMIT, TASK_STATUSES, agentPermissions, fromTodo, socialPostOf, type TaskFilter, type TaskStatus, type TasksSearch } from '../lib/agents.ts';
 import { errorMessage, orpc, queryClient } from '../lib/api.ts';
 
 type Chart = Awaited<ReturnType<typeof orpc.chart.get.call>>;
@@ -211,6 +211,8 @@ export function TaskDetailPage() {
             </Link>
           </p>
         )}
+        {/* Handed over from a member's own to-do (#1674), which stays theirs alone. */}
+        {fromTodo(task.sourceRef) && <p className="text-sm text-muted-foreground">{t('fromTodo')}</p>}
         {/* A Social post's task (#1193) says only counts: the post page has the rest, and answers 404 to a member who
             may not see the post. */}
         {postId && (
