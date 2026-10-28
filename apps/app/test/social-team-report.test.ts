@@ -26,6 +26,6 @@ describe('team report review time (#1058)', () => {
   });
 
   it('names the file after the days picked', () => {
-    expect(teamFilename('2026-09-01', '2026-09-30')).toBe('crove-nhom-2026-09-01-den-2026-09-30.csv');
+    expect(teamFilename('2026-09-01', '2026-09-30')).toBe('ludy-nhom-2026-09-01-den-2026-09-30.csv');
   });
 });

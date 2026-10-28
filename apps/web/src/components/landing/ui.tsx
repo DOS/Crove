@@ -66,7 +66,7 @@ export function Section({ id, labelledBy, children, tinted = false }: { id?: str
   );
 }
 
-// The Crove mark: a ring "C" with two sparkles, drawn in the current text color.
+// The brand mark: a ring "C" with two sparkles, drawn in the current text color.
 export function CroveMark({ className = 'size-6' }: { className?: string }) {
   return (
     <svg viewBox="0 0 144 144" className={className} fill="currentColor" aria-hidden="true">

@@ -19,9 +19,9 @@ export function SiteHeader({ dict }: { dict: Dictionary }) {
         {nav.skip}
       </a>
       <div className="wrap flex h-15 items-center gap-6">
-        <a href={home} className="flex items-center gap-2 text-fg" aria-label="Crove">
+        <a href={home} className="flex items-center gap-2 text-fg" aria-label="Ludy">
           <CroveMark className="size-6 text-accent" />
-          <span className="font-display text-lg font-semibold tracking-[-0.01em]">Crove</span>
+          <span className="font-display text-lg font-semibold tracking-[-0.01em]">Ludy</span>
         </a>
         <nav aria-label={nav.label} className="hidden items-center gap-1 md:flex">
           {sections.map(({ label, href }) => (

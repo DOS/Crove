@@ -176,7 +176,7 @@ function partySheet(workbook: ExcelJS.Workbook, name: string, title: string, led
 }
 
 // brand: the product name users see (BRAND_NAME, #1045), as the file's creator.
-export async function buildLedgerWorkbook(book: LedgerBook, orgName: string, brand = 'Crove'): Promise<Uint8Array> {
+export async function buildLedgerWorkbook(book: LedgerBook, orgName: string, brand = 'Ludy'): Promise<Uint8Array> {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = brand;
   workbook.title = `Sổ sách ${book.period.period} ${orgName}`;

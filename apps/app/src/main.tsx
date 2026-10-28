@@ -26,7 +26,7 @@ function ServerUnreachable() {
 
 async function start() {
   try {
-    // The product name (issue #1040) fills every message from the first render on; index.html says "Crove" until then.
+    // The product name (issue #1040) fills every message from the first render on; index.html says "Ludy" until then.
     setBrandName((await loadConfig()).brandName);
     document.title = brandName();
   } catch {

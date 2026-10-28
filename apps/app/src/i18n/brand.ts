@@ -1,10 +1,12 @@
 // The product name users see (BRAND_NAME, issue #1040). Messages and guides say `{brand}` where they name the
 // product; the catalogs handed to use-intl have it filled in, so no t() call passes it. The kernel serves the name in
-// /api/config; main.tsx sets it once, before the first render, and "Crove" stands until then (or when the server
-// sends none). `{brandSlug}` is the same name as a file-name prefix ("crove", "ten-moi"; #1045).
+// /api/config; main.tsx sets it once, before the first render, and "Ludy" stands until then (or when the server
+// sends none). `{brandSlug}` is the same name as a file-name prefix ("ludy", "ten-moi"; #1045). `{assistant}` is the
+// name the AI assistant goes by (#1683), whatever the brand.
 import { brandSlug } from '@crove/kernel-contract';
 
-export const DEFAULT_BRAND = 'Crove';
+export const DEFAULT_BRAND = 'Ludy';
+export const ASSISTANT_NAME = 'Vy';
 
 // The same rule as the kernel's BRAND_NAME: plain text, so it needs no escaping in HTML or an ICU message beyond the
 // apostrophe. Anything else from the server is ignored rather than shown.
@@ -18,7 +20,7 @@ export function brandName(): string {
   return current;
 }
 
-// The configured name when it is valid, else "Crove". Calls `subscribeBrand` listeners when it changes.
+// The configured name when it is valid, else "Ludy". Calls `subscribeBrand` listeners when it changes.
 export function setBrandName(name: unknown): void {
   const next = typeof name === 'string' && name.trim().length <= BRAND_MAX && BRAND_PATTERN.test(name.trim()) ? name.trim() : DEFAULT_BRAND;
   if (next === current) return;
@@ -33,9 +35,9 @@ export function subscribeBrand(listener: () => void): () => void {
   };
 }
 
-// Plain text (a guide line, a template sheet) with `{brand}` and `{brandSlug}` filled in.
+// Plain text (a guide line, a template sheet) with `{brand}`, `{brandSlug}` and `{assistant}` filled in.
 export function withBrand(text: string, brand = current): string {
-  return text.replaceAll('{brandSlug}', brandSlug(brand)).replaceAll('{brand}', brand);
+  return text.replaceAll('{brandSlug}', brandSlug(brand)).replaceAll('{brand}', brand).replaceAll('{assistant}', ASSISTANT_NAME);
 }
 
 // A downloaded file's name with the product name as its prefix: `crove-ke-hoach-2026-10.csv` under BRAND_NAME "Tên Mới"
@@ -50,17 +52,19 @@ function icuLiteral(brand: string): string {
   return brand.replaceAll("'", "''");
 }
 
-// `{brand}` replaced in every message of a catalog, at the type level too: use-intl then sees no `brand` argument, so
-// callers pass none. "Crove" stands in for the name in the types; only the arguments matter there.
-type FillSlug<S extends string> = S extends `${infer Head}{brandSlug}${infer Tail}` ? `${Head}crove${FillSlug<Tail>}` : S;
-type FillBrand<S extends string> = S extends `${infer Head}{brand}${infer Tail}` ? `${Head}Crove${FillBrand<Tail>}` : S;
-export type Branded<T> = { readonly [K in keyof T]: T[K] extends string ? FillSlug<FillBrand<T[K]>> : Branded<T[K]> };
+// `{brand}` and `{assistant}` replaced in every message of a catalog, at the type level too: use-intl then sees no
+// `brand` or `assistant` argument, so callers pass none. "Ludy" stands in for the name in the types; only the arguments
+// matter there.
+type FillSlug<S extends string> = S extends `${infer Head}{brandSlug}${infer Tail}` ? `${Head}ludy${FillSlug<Tail>}` : S;
+type FillBrand<S extends string> = S extends `${infer Head}{brand}${infer Tail}` ? `${Head}Ludy${FillBrand<Tail>}` : S;
+type FillAssistant<S extends string> = S extends `${infer Head}{assistant}${infer Tail}` ? `${Head}Vy${FillAssistant<Tail>}` : S;
+export type Branded<T> = { readonly [K in keyof T]: T[K] extends string ? FillAssistant<FillSlug<FillBrand<T[K]>>> : Branded<T[K]> };
 
 export function brandCatalog<T extends object>(messages: T, brand: string): Branded<T> {
   const literal = icuLiteral(brand);
   const slug = brandSlug(brand);
   const fill = (value: unknown): unknown => {
-    if (typeof value === 'string') return value.replaceAll('{brandSlug}', slug).replaceAll('{brand}', literal);
+    if (typeof value === 'string') return value.replaceAll('{brandSlug}', slug).replaceAll('{brand}', literal).replaceAll('{assistant}', ASSISTANT_NAME);
     if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, fill(inner)]));
     return value;
   };

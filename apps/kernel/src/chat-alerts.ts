@@ -17,6 +17,7 @@
 import { discordChatTargetOf, DiscordError, sendDiscordText, sendTelegramText, telegramChatTargetOf, TelegramError, type DiscordChatTarget, type Fetch, type TelegramChatTarget } from '@crove/channel';
 import { CHAT_ALERT_PROVIDER, type ChatAlertFacts, type ChatAlertTarget, type ChatAlertTestCode, type SealedChatAlert } from '@crove/mod-social';
 import { CredentialError, DomainError, type Actor, type CredentialBroker, type Runtime } from '@crove/kernel-runtime';
+import { DEFAULT_BRAND_NAME } from './config.ts';
 
 export const CHAT_ALERT_PER_MINUTE = 30;
 // The post's title or first line, in characters.
@@ -29,7 +30,7 @@ const SYSTEM: Actor = { type: 'system', component: 'social.chat_alert' };
 
 // The owner's test line, named by the product name users see (BRAND_NAME, #1045).
 export const chatAlertTestText = (brand: string) => `${brand}: tin thử. Từ giờ nhóm sẽ nhận tin báo về bài đăng mạng xã hội tại đây.`;
-export const CHAT_ALERT_TEST_TEXT = chatAlertTestText('Crove');
+export const CHAT_ALERT_TEST_TEXT = chatAlertTestText(DEFAULT_BRAND_NAME);
 
 // ---------------------------------------------------------------------------
 // The line
@@ -180,7 +181,7 @@ export interface ChatAlertSenderDeps {
   broker: CredentialBroker;
   // PUBLIC_URL, where the post's link points; without it the line has no link.
   publicUrl: string;
-  // BRAND_NAME (#1045), which opens the test line; "Crove" when not given.
+  // BRAND_NAME (#1045), which opens the test line; "Ludy" when not given.
   brand?: string;
   // The platforms' fetch (tests); every call still goes through the adapters' host allowlist.
   fetch?: Fetch;
@@ -259,7 +260,7 @@ export class ChatAlertSender {
       if (!to) code = 'CHAT_ALERT_UNREADABLE';
       else {
         try {
-          await sendLine(to, chatAlertTestText(this.deps.brand ?? 'Crove'), this.deps.fetch);
+          await sendLine(to, chatAlertTestText(this.deps.brand ?? DEFAULT_BRAND_NAME), this.deps.fetch);
         } catch (error) {
           code = FAILURE_CODES[chatAlertFailure(error)];
           console.warn(`[social-chat-alert] ${label}: not sent to ${sealed.kind}: ${failureNote(error)}`);

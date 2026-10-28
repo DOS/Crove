@@ -125,7 +125,7 @@ describe('SMTP adapter', () => {
     const bounced = smtp.received.at(-1);
     expect(bounced?.from).toBe(`MAIL FROM:<bounce+${token}@in.example.com>`);
     expect(bounced?.to).toEqual([expect.stringContaining('<khach@example.test>')]);
-    expect(bounced?.data).toMatch(/^From: Crove <noreply@crove\.local>$/m);
+    expect(bounced?.data).toMatch(/^From: Ludy <noreply@crove\.local>$/m);
     // Without an inbound domain to receive them, or without a token, the envelope sender is the From address.
     await createInviteMailSender(mailer, 'https://books.example.com/', {}, null)({ ...INVITE, bounceToken: token });
     await createInviteMailSender(mailer, 'https://books.example.com/', {}, 'in.example.com')({ ...INVITE, bounceToken: null });
@@ -323,7 +323,7 @@ describe('invite mail', () => {
     const mail = inviteMail(INVITE, 'https://books.example.com');
     const url = `https://books.example.com/-/invite#${TOKEN}`;
     expect(mail.to).toBe('khach@example.test');
-    expect(mail.subject).toBe('Lời mời tham gia Công ty <b>ABC</b> Bcc: victim@example.test trên Crove');
+    expect(mail.subject).toBe('Lời mời tham gia Công ty <b>ABC</b> Bcc: victim@example.test trên Ludy');
     expect(mail.subject).not.toMatch(/[\r\n]/);
     expect(mail.text).toContain(url);
     expect(mail.text).toContain('với vai trò quản trị');
@@ -339,10 +339,10 @@ describe('invite mail', () => {
 
   it('strips bidi overrides from names', () => {
     const mail = inviteMail({ ...INVITE, orgName: 'Ngân hàng \u202Egnoh nân\u202C' }, 'https://books.example.com');
-    expect(mail.subject).toBe('Lời mời tham gia Ngân hàng gnoh nân trên Crove');
+    expect(mail.subject).toBe('Lời mời tham gia Ngân hàng gnoh nân trên Ludy');
   });
 
-  // #1040: the product name in the subject and body is BRAND_NAME, "Crove" when not given.
+  // #1040: the product name in the subject and body is BRAND_NAME, "Ludy" when not given (#1683).
   it('names the product by the brand it is given', () => {
     const mail = inviteMail({ ...INVITE, orgName: 'Công ty A' }, 'https://books.example.com', 'Tên Mới');
     expect(mail.subject).toBe('Lời mời tham gia Công ty A trên Tên Mới');

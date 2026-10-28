@@ -104,7 +104,7 @@ describe('ZaloOaPublisher', () => {
     expect(calls[0]?.json).toEqual({
       type: 'normal',
       title: 'Khai trương',
-      author: 'Crove',
+      author: 'Ludy',
       cover: { cover_type: 'photo', photo_url: 'https://bucket.example/f-1?sig=1', status: 'show' },
       description: 'Khai trương chi nhánh mới.',
       body: [

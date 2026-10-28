@@ -5,9 +5,9 @@ export type Tone = 'ok' | 'warn' | 'accent' | 'neutral';
 export const vi = {
   lang: 'vi',
   meta: {
-    title: 'Crove: hoá đơn về là có bút toán, bạn chỉ cần duyệt',
+    title: 'Ludy: hoá đơn về là có bút toán, bạn chỉ cần duyệt',
     description:
-      'Business OS mã nguồn mở cho người làm chủ và doanh nghiệp nhỏ. Crove đọc hoá đơn điện tử, kiểm tra từng con số, đề xuất bút toán TT133 và chỉ ghi sổ khi có người duyệt.',
+      'Business OS mã nguồn mở cho người làm chủ và doanh nghiệp nhỏ. Ludy đọc hoá đơn điện tử, kiểm tra từng con số, đề xuất bút toán TT133 và chỉ ghi sổ khi có người duyệt.',
   },
   nav: {
     label: 'Điều hướng chính',
@@ -27,20 +27,20 @@ export const vi = {
     closeMenu: 'Đóng menu',
   },
   hero: {
-    title: 'Agent AI làm việc dưới quyền của bạn.',
-    lead: 'Mỗi agent là một vị trí trong sơ đồ tổ chức: có người quản lý, ngân sách tháng, giới hạn rủi ro và nút dừng. Agent Kế toán đọc hoá đơn và soạn sẵn bút toán; chỉ người có thẩm quyền mới duyệt và ghi sổ.',
+    title: 'Vy, trợ lý AI, làm việc dưới quyền của bạn.',
+    lead: 'Vy làm việc qua các agent AI, mỗi agent là một vị trí trong sơ đồ tổ chức: có người quản lý, ngân sách tháng, giới hạn rủi ro và nút dừng. Agent Kế toán đọc hoá đơn và soạn sẵn bút toán; chỉ người có thẩm quyền mới duyệt và ghi sổ.',
     primary: 'Tự cài đặt miễn phí',
     secondary: 'Xem mã nguồn trên GitHub',
-    note: 'Mã nguồn mở AGPL. Cài trên máy chủ của bạn bằng docker compose. Crove Cloud sắp ra mắt.',
+    note: 'Mã nguồn mở AGPL. Cài trên máy chủ của bạn bằng docker compose. Ludy Cloud sắp ra mắt.',
   },
   tour: {
     title: 'Duyệt cả tháng chứng từ bằng bàn phím',
-    lead: 'Crove đọc hoá đơn điện tử, kiểm tra từng con số và soạn sẵn bút toán theo Thông tư 133. Bạn xem lại, sửa tài khoản nếu cần, rồi bấm duyệt.',
+    lead: 'Ludy đọc hoá đơn điện tử, kiểm tra từng con số và soạn sẵn bút toán theo Thông tư 133. Bạn xem lại, sửa tài khoản nếu cần, rồi bấm duyệt.',
     sample: 'Dữ liệu mẫu',
     replay: 'Xem lại',
   },
   shell: {
-    label: 'Giao diện Crove mẫu: AI Inbox, chi tiết hoá đơn và bảng lệnh',
+    label: 'Giao diện Ludy mẫu: AI Inbox, chi tiết hoá đơn và bảng lệnh',
     org: 'Gạo Sạch Mekong',
     search: 'Tìm kiếm',
     inbox: 'AI Inbox',
@@ -121,13 +121,13 @@ export const vi = {
     items: [
       { keys: ['J', 'K'], label: 'Di chuyển', body: 'Lên xuống giữa các dòng trong AI Inbox.' },
       { keys: ['A'], label: 'Duyệt', body: 'Hỏi mã hai lớp rồi ghi sổ.' },
-      { keys: ['E'], label: 'Sửa tài khoản', body: 'Đổi tài khoản, Crove nhớ cho nhà cung cấp đó.' },
+      { keys: ['E'], label: 'Sửa tài khoản', body: 'Đổi tài khoản, Ludy nhớ cho nhà cung cấp đó.' },
       { keys: ['⌘', 'K'], label: 'Bảng lệnh', body: 'Mở sổ, xuất Excel, tìm chứng từ.' },
     ],
   },
   flow: {
     title: 'Bốn bước từ hộp thư đến sổ cái',
-    lead: 'Crove làm ba bước đầu và ghi lại từng bước. Bước cuối luôn do người có thẩm quyền duyệt bằng mã xác thực hai lớp.',
+    lead: 'Ludy làm ba bước đầu và ghi lại từng bước. Bước cuối luôn do người có thẩm quyền duyệt bằng mã xác thực hai lớp.',
     actorLabel: 'Xử lý',
     timeLabel: 'Lúc',
     invoice: {
@@ -164,8 +164,8 @@ export const vi = {
     steps: [
       {
         name: 'Nhận',
-        body: 'Chuyển tiếp email hoặc tải lên. Crove nhận hoá đơn XML theo Nghị định 254/2026 và Thông tư 91/2026, cả PDF và ảnh chụp.',
-        actor: 'Crove',
+        body: 'Chuyển tiếp email hoặc tải lên. Ludy nhận hoá đơn XML theo Nghị định 254/2026 và Thông tư 91/2026, cả PDF và ảnh chụp.',
+        actor: 'Ludy',
         time: '14/10/2026 15:58',
         confirm: 'Đã nhận',
         final: false,
@@ -173,14 +173,14 @@ export const vi = {
       {
         name: 'Kiểm tra',
         body: 'Đối chiếu tổng tiền từng dòng, thuế suất, mã số thuế, mã của cơ quan thuế và hoá đơn trùng. Việc kiểm tra dùng quy tắc cố định, không dùng AI.',
-        actor: 'Crove',
+        actor: 'Ludy',
         time: '14/10/2026 15:58',
         confirm: '5/5 kiểm tra đạt',
         final: false,
       },
       {
         name: 'Đề xuất',
-        body: 'Bút toán theo TT133 được đưa vào AI Inbox, kèm lý do chọn tài khoản. Crove nhớ tài khoản đã dùng cho từng nhà cung cấp.',
+        body: 'Bút toán theo TT133 được đưa vào AI Inbox, kèm lý do chọn tài khoản. Ludy nhớ tài khoản đã dùng cho từng nhà cung cấp.',
         actor: 'Agent Kế toán',
         time: '14/10/2026 15:59',
         confirm: 'Đề xuất, chưa ghi sổ',
@@ -300,14 +300,14 @@ export const vi = {
   },
   owner: {
     title: 'Không biết kế toán vẫn dùng được',
-    lead: 'Chụp hoặc chuyển tiếp hoá đơn từ điện thoại. Crove kiểm tra từng con số và soạn sẵn bút toán. Bạn xem lại rồi bấm duyệt, kế toán nhận file Excel đầy đủ.',
+    lead: 'Chụp hoặc chuyển tiếp hoá đơn từ điện thoại. Ludy kiểm tra từng con số và soạn sẵn bút toán. Bạn xem lại rồi bấm duyệt, kế toán nhận file Excel đầy đủ.',
     points: [
       'Đọc hoá đơn điện tử XML, file PDF và ảnh chụp',
       'Không có gì vào sổ khi bạn chưa duyệt',
       'Thấy ngay chứng từ nào thiếu thông tin và vì sao',
     ],
     phone: {
-      label: 'Crove trên điện thoại, dữ liệu mẫu',
+      label: 'Ludy trên điện thoại, dữ liệu mẫu',
       time: '14:21',
       app: 'AI Inbox',
       org: 'Gạo Sạch Mekong',
@@ -328,7 +328,7 @@ export const vi = {
     lead: 'Người và agent của từng phòng làm việc trên cùng dữ liệu, cùng quy trình duyệt và cùng nhật ký thay đổi. Bật phân hệ nào thì dùng phân hệ đó.',
     deptLabel: 'Phòng của',
     finance: {
-      name: 'Tài chính',
+      name: 'Ludy Kế toán',
       body: 'AI Inbox cho hoá đơn mua và bán, sổ nhật ký chung, sổ cái, báo cáo B01 và B02, phiếu thu chi, sao kê ngân hàng, tài sản, tờ khai GTGT xuất XML cho HTKK, xuất sang MISA SME, sổ riêng cho từng pháp nhân và khoá sổ theo tháng.',
       people: [
         { name: 'Chị Lan', initials: 'L', agent: false },
@@ -342,7 +342,7 @@ export const vi = {
         { title: 'Hoá đơn điện EVN tháng 9', amount: '1.946.780 ₫', account: 'TK 6422', tone: 'ok', label: 'Sẵn sàng duyệt' },
         { title: 'Cước Viettel tháng 9', amount: '880.000 ₫', account: 'TK 6422', tone: 'ok', label: 'Sẵn sàng duyệt' },
       ],
-      tail: 'Tài khoản được nhớ theo từng nhà cung cấp. Lần sau Crove đề xuất đúng tài khoản Chị Lan đã chọn.',
+      tail: 'Tài khoản được nhớ theo từng nhà cung cấp. Lần sau Ludy đề xuất đúng tài khoản Chị Lan đã chọn.',
       taccount: {
         title: 'Sổ chi tiết TK 331',
         sub: 'Bao Bì Phú Thịnh, sau khi Chị Lan duyệt',
@@ -407,7 +407,7 @@ export const vi = {
       ],
     },
     crm: {
-      name: 'CRM và lịch hẹn',
+      name: 'Ludy CRM',
       body: 'Trang đặt lịch công khai cho từng loại cuộc hẹn. Khách tự chọn giờ trống, hai bên nhận email xác nhận kèm tệp lịch, lịch nhắc gửi tự động, và khách tự dời hoặc huỷ bằng liên kết dùng một lần.',
       people: [{ name: 'Chị Hoa', initials: 'H', agent: false }],
       pageTitle: 'Tư vấn mua gạo sỉ',
@@ -422,12 +422,12 @@ export const vi = {
       noSlots: 'Kín lịch',
       pickedLabel: 'Đã chọn',
       booked: { title: 'Lịch hẹn mới', who: 'Cty TNHH Gạo Sạch Miền Tây', when: '14:00, T3 20/10/2026', state: 'Đã xác nhận' },
-      suggest: 'Khách nhắn "chiều thứ Ba được không?": AI gợi ý 14:00 hoặc 15:30, Chị Hoa xem rồi gửi trả lời.',
+      suggest: 'Khách nhắn "chiều thứ Ba được không?": Vy gợi ý 14:00 hoặc 15:30, Chị Hoa xem rồi gửi trả lời.',
     },
   },
   trust: {
-    title: 'AI đề xuất, người duyệt, mọi thay đổi đều được ghi lại',
-    lead: 'Crove không để AI tự quyết. Mọi con số đều được kiểm tra bằng quy tắc, mọi bút toán đều cần người duyệt.',
+    title: 'Vy đề xuất, người duyệt, mọi thay đổi đều được ghi lại',
+    lead: 'Ludy không để AI tự quyết. Mọi con số đều được kiểm tra bằng quy tắc, mọi bút toán đều cần người duyệt.',
     points: [
       { title: 'Kiểm tra bằng quy tắc, không dựa vào AI', body: 'Tổng tiền, thuế suất, mã số thuế, mã cơ quan thuế và hoá đơn trùng đều được kiểm tra bằng quy tắc cố định.' },
       { title: 'Chỉ ghi sổ khi có người duyệt', body: 'Duyệt bút toán hoặc thay đổi thành viên đều phải nhập mã xác thực hai lớp trong vòng 5 phút.' },
@@ -437,7 +437,7 @@ export const vi = {
     logTitle: 'Nhật ký thay đổi',
     logCols: ['Lúc', 'Ai', 'Hành động'],
     log: [
-      ['14/10/2026 15:58', 'Crove', 'Nhận HĐ 00001284 qua hộp thư hoá đơn'],
+      ['14/10/2026 15:58', 'Ludy', 'Nhận HĐ 00001284 qua hộp thư hoá đơn'],
       ['14/10/2026 15:58', 'Bộ kiểm tra', '5/5 đạt: tổng tiền, thuế suất, MST, mã CQT, trùng lặp'],
       ['14/10/2026 15:59', 'Agent Kế toán', 'Đề xuất bút toán Nợ 152, 1331 / Có 331'],
       ['14/10/2026 16:05', 'Chị Lan', 'Duyệt bằng mã hai lớp, ghi sổ'],
@@ -464,10 +464,10 @@ export const vi = {
         primary: true,
       },
       {
-        name: 'Crove Cloud',
+        name: 'Ludy Cloud',
         price: 'Sắp ra mắt',
-        body: 'Crove chạy sẵn cho bạn, không cần tự quản máy chủ.',
-        items: ['Cùng mã nguồn với bản tự host', 'Sao lưu và cập nhật do Crove lo'],
+        body: 'Ludy chạy sẵn cho bạn, không cần tự quản máy chủ.',
+        items: ['Cùng mã nguồn với bản tự host', 'Sao lưu và cập nhật do Ludy lo'],
         cta: 'Theo dõi trên GitHub',
         href: 'github',
         primary: false,
@@ -479,14 +479,14 @@ export const vi = {
     items: [
       {
         q: 'Tôi không biết kế toán có dùng được không?',
-        a: 'Được. Crove soạn bút toán và giải thích vì sao chọn tài khoản. Bạn chỉ cần xem số tiền, nhà cung cấp và bấm duyệt; chỗ nào thiếu thông tin Crove sẽ chỉ ra.',
+        a: 'Được. Ludy soạn bút toán và giải thích vì sao chọn tài khoản. Bạn chỉ cần xem số tiền, nhà cung cấp và bấm duyệt; chỗ nào thiếu thông tin Ludy sẽ chỉ ra.',
       },
       {
-        q: 'AI có tự ghi sổ không?',
-        a: 'Không. AI chỉ đề xuất. Quy tắc kiểm tra quyết định số liệu đúng hay sai, và bút toán chỉ được ghi sổ khi người có quyền duyệt bằng mã xác thực hai lớp.',
+        q: 'Vy có tự ghi sổ không?',
+        a: 'Không. Vy, trợ lý AI, chỉ đề xuất. Quy tắc kiểm tra quyết định số liệu đúng hay sai, và bút toán chỉ được ghi sổ khi người có quyền duyệt bằng mã xác thực hai lớp.',
       },
       {
-        q: 'Crove đọc được những loại hoá đơn nào?',
+        q: 'Ludy đọc được những loại hoá đơn nào?',
         a: 'Hoá đơn điện tử XML theo Nghị định 254/2026 và Thông tư 91/2026 (cả hoá đơn lập theo Nghị định 123/2020 trước đó) được đọc chính xác mà không cần AI. PDF và ảnh chụp dùng một model tương thích OpenAI do bạn cấu hình, kể cả model chạy trên máy như Ollama hay vLLM.',
       },
       {
@@ -506,7 +506,7 @@ export const vi = {
     github: 'GitHub',
     docs: 'Tài liệu',
     security: 'Bảo mật',
-    copyright: '© 2026 Crove',
+    copyright: '© 2026 Ludy',
   },
 };
 

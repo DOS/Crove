@@ -2,7 +2,7 @@ import type { Dictionary } from '../../content/vi';
 import { CopyCommand } from './copy-command';
 import { Section, SectionHead } from './ui';
 
-// Why the numbers can be trusted, the audit log that proves it, and the one command that runs Crove locally.
+// Why the numbers can be trusted, the audit log that proves it, and the one command that runs Ludy locally.
 export function Trust({ dict }: { dict: Dictionary }) {
   const { trust } = dict;
   return (

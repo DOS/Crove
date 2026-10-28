@@ -35,7 +35,7 @@ test('enter a bank debit note, approve it and find it numbered in the books', as
 
   let proposalUrl = '';
   await test.step('approve it in the Inbox after a fresh second factor', async () => {
-    await expect(page.getByText(/Giấy báo Nợ ngày .*Crove cấp số chứng từ và ghi bút toán/)).toBeVisible();
+    await expect(page.getByText(/Giấy báo Nợ ngày .*Ludy cấp số chứng từ và ghi bút toán/)).toBeVisible();
     proposalUrl = page.url();
     await expect(page.getByText('Số chứng từ được cấp khi duyệt.')).toBeVisible();
     await page.getByRole('button', { name: 'Duyệt và ghi sổ chứng từ' }).click();
@@ -63,8 +63,8 @@ test('enter a bank debit note, approve it and find it numbered in the books', as
     await page.getByRole('navigation').getByRole('link', { name: 'Kế toán', exact: true }).click();
     await page.getByRole('navigation').getByRole('link', { name: 'Thu chi' }).click();
     for (const [button, file, sheet] of [
-      ['Xuất phiếu thu cho MISA', `crove-misa-phieu-thu-${slug}.xlsx`, 'Phiếu thu'],
-      ['Xuất phiếu chi cho MISA', `crove-misa-phieu-chi-${slug}.xlsx`, 'Phiếu chi'],
+      ['Xuất phiếu thu cho MISA', `ludy-misa-phieu-thu-${slug}.xlsx`, 'Phiếu thu'],
+      ['Xuất phiếu chi cho MISA', `ludy-misa-phieu-chi-${slug}.xlsx`, 'Phiếu chi'],
     ] as const) {
       const download = page.waitForEvent('download');
       await page.getByRole('button', { name: button }).click();

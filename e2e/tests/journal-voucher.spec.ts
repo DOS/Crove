@@ -30,7 +30,7 @@ test('enter a general journal voucher, approve it and find it numbered in the jo
   });
 
   await test.step('approve it in the Inbox after a fresh second factor', async () => {
-    await expect(page.getByText(/Phiếu kế toán ngày .*Crove cấp số NVK và ghi bút toán/)).toBeVisible();
+    await expect(page.getByText(/Phiếu kế toán ngày .*Ludy cấp số NVK và ghi bút toán/)).toBeVisible();
     await expect(page.getByText('Số chứng từ được cấp khi duyệt.')).toBeVisible();
     await page.getByRole('button', { name: 'Duyệt và ghi sổ phiếu kế toán' }).click();
     await expect(page.getByText('Đang chờ: duyệt và ghi sổ phiếu kế toán này.')).toBeVisible();

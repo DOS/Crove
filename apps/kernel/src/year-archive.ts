@@ -40,6 +40,7 @@ import {
   type BlobStore,
   type Runtime,
 } from '@crove/kernel-runtime';
+import { DEFAULT_BRAND_NAME } from './config.ts';
 
 export const YEAR_ARCHIVE_ACTOR: Actor = { type: 'system', component: 'finance.archive' };
 const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
@@ -88,14 +89,14 @@ export function vatPeriods(year: number, filing: ArchiveSource['vatFilingPeriod'
 }
 
 export async function runYearArchive(
-  // brand: BRAND_NAME (#1045), the creator the workbooks name; "Crove" when not given.
+  // brand: BRAND_NAME (#1045), the creator the workbooks name; "Ludy" when not given.
   deps: { runtime: Runtime; store: BlobStore; brand?: string },
   orgId: string,
   year: number,
   options: { requestCommandId?: string | null; now?: () => Date } = {},
 ): Promise<{ manifestKey: string; recorded: boolean }> {
   const { runtime, store } = deps;
-  const brand = deps.brand ?? 'Crove';
+  const brand = deps.brand ?? DEFAULT_BRAND_NAME;
   const scope = { actor: YEAR_ARCHIVE_ACTOR, orgId };
   const source = await runtime.query<ArchiveSource>('finance.archive.source', { year }, scope);
   // A job retried after its record (the worker stopped before finishing the job) builds nothing: a second manifest

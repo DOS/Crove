@@ -164,6 +164,6 @@ describe('the service worker', () => {
     expect(w.opened).toEqual([]);
     // A push that is not JSON still shows, with no link.
     await w.fire('push', { data: { json: () => JSON.parse('not json') } });
-    expect(w.shown.at(-1)).toMatchObject({ title: 'Crove', options: { body: '', data: { path: null } } });
+    expect(w.shown.at(-1)).toMatchObject({ title: 'Ludy', options: { body: '', data: { path: null } } });
   });
 });
