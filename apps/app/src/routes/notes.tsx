@@ -379,7 +379,9 @@ export function NotesPage() {
           </form>
           {!search.q && (
             <Tabs value={view} onValueChange={(v) => go({ list: v as NoteListView, ...(tag ? { tag } : {}) })} className="mt-3">
-              <TabsList className="flex h-auto flex-wrap">
+              {/* Five lists wrap in the narrow column: the list grows with them (the variant's own h-8 would let the
+                  second row cover the tag chips below). */}
+              <TabsList className="flex flex-wrap group-data-horizontal/tabs:h-auto">
                 {NOTE_LIST_VIEWS.map((v) => (
                   <TabsTrigger key={v} value={v}>
                     {t(`views.${v}`)}

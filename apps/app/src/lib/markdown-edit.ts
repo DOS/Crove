@@ -56,7 +56,7 @@ export function applyFormat(edit: TextEdit, format: MarkdownFormat): TextEdit {
   const selected = value.slice(start, end);
   if (format === 'bold') {
     // Unwraps bold around the selection, or a selection that includes its own stars.
-    if (value.slice(start - 2, start) === '**' && value.slice(end, end + 2) === '**') {
+    if (start >= 2 && value.slice(start - 2, start) === '**' && value.slice(end, end + 2) === '**') {
       return { value: value.slice(0, start - 2) + selected + value.slice(end + 2), start: start - 2, end: end - 2 };
     }
     if (selected.length >= 4 && selected.startsWith('**') && selected.endsWith('**')) {
