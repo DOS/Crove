@@ -160,8 +160,10 @@ async function lockFileProposal(ctx: CommandContext, fileId: string) {
 export const reextractFile = defineCommand({
   name: 'kernel.file.reextract',
   input: z.object({ fileId: zId }),
-  risk: 'R1',
-  sideEffect: 'internal',
+  // It queues the extraction job again, which sends the file to the AI endpoint (plan §4.7: a job with egress
+  // derives R2; #1662).
+  risk: 'R2',
+  sideEffect: 'external',
   access: REEXTRACT_ROLES,
   target: (input) => ({ type: 'kernel.file', id: input.fileId }),
   handler: async (ctx, input) => {

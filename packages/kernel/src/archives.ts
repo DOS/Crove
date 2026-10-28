@@ -66,8 +66,10 @@ export const recordArchive = defineCommand({
       entries: z.array(zArchiveEntryInput).max(MAX_ARCHIVE_ENTRIES),
     })
     .refine((input) => input.status === 'done' || input.entries.length === 0, 'a failed opening files no entry'),
-  risk: 'R1',
-  sideEffect: 'internal',
+  // Its event queues the extraction job, which sends the file to the AI endpoint (plan §4.7: a job with egress
+  // derives R2; #1662). A system command, so the worker runs it as before.
+  risk: 'R2',
+  sideEffect: 'external',
   access: 'system',
   target: (input) => ({ type: 'kernel.file', id: input.fileId }),
   handler: async (ctx, input) => {
