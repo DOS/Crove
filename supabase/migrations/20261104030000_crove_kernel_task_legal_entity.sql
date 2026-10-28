@@ -31,8 +31,8 @@
 --   - Otherwise (no parent, no listed record: a person's task, a to-do handed over, a social post) NULL, org-level.
 --   - A writer that names an entity keeps it when no rule above gives one (le_scope's WITH CHECK and the foreign key
 --     still apply); a different entity than the rule's is refused (LEGAL_ENTITY_MISMATCH).
---   - legal_entity_id never changes once written (LEGAL_ENTITY_IMMUTABLE): kernel.task.update and the agents' lease
---     writes never name it, and task_before_update already refuses any change but lease and status from an agent.
+--   - legal_entity_id never changes once written (LEGAL_ENTITY_IMMUTABLE): no command writes it, and
+--     task_before_update already refuses any change but lease and status from an agent.
 --
 -- crove_kernel.task_comment follows its task: the RESTRICTIVE policy task_scope reads and writes a comment only when
 -- its task is visible to the actor, through the task's own policies (tenant and le_scope). No second column to keep in
@@ -49,7 +49,8 @@
 --      the wording #1756 writes (packages/kernel/src/agents.ts, modules/finance/src/agent.ts). Their descriptions and
 --      review comments (append-only) keep their text, now behind the proposal's entity.
 -- task_before_update, which stamps updated_at, is disabled around these UPDATEs only, so the tasks keep their order.
--- Every step touches only rows it would change, so a rerun changes nothing.
+-- Every step touches only rows it would change. The migration runner applies a file once; a manual rerun on a live
+-- database would also stamp tasks the trigger left org-level because their writer could not read the record.
 SET LOCAL lock_timeout = '2s';
 
 ALTER TABLE crove_kernel.task ADD COLUMN IF NOT EXISTS legal_entity_id uuid;
@@ -84,10 +85,12 @@ BEGIN
     END IF;
     RETURN NEW;
   END IF;
-  v_scope := crove_kernel.ctx_le_scope();
   IF NEW.parent_task_id IS NOT NULL THEN
     SELECT t.legal_entity_id, true INTO v_entity, v_found
     FROM crove_kernel.task t WHERE t.org_id = NEW.org_id AND t.id = NEW.parent_task_id;
+    IF NOT coalesce(v_found, false) THEN
+      v_scope := crove_kernel.ctx_le_scope();
+    END IF;
     IF NOT coalesce(v_found, false) AND v_scope IS NOT NULL AND NOT ('*' = ANY (v_scope)) THEN
       -- A parent a writer limited to some entities cannot read: possibly another entity's task.
       RAISE EXCEPTION 'LEGAL_ENTITY_MISMATCH' USING ERRCODE = '23514',
@@ -103,10 +106,12 @@ BEGIN
           EXECUTE pg_catalog.format('SELECT s.%I FROM %s s WHERE s.org_id = $1 AND s.id = $2', TG_ARGV[i + 2], TG_ARGV[i + 1]::regclass)
             INTO v_entity USING NEW.org_id, v_id::uuid;
         END IF;
-        IF v_entity IS NULL AND NEW.legal_entity_id IS NULL
-           AND pg_catalog.cardinality(v_scope) = 1 AND v_scope[1] <> '*' THEN
+        IF v_entity IS NULL AND NEW.legal_entity_id IS NULL THEN
           -- A record the writer cannot read: the writer's own entity when it is limited to exactly one.
-          NEW.legal_entity_id := v_scope[1]::uuid;
+          v_scope := crove_kernel.ctx_le_scope();
+          IF pg_catalog.cardinality(v_scope) = 1 AND v_scope[1] <> '*' THEN
+            NEW.legal_entity_id := v_scope[1]::uuid;
+          END IF;
         END IF;
         EXIT;
       END IF;

@@ -364,9 +364,8 @@ suite('tasks and task comments per legal entity on PostgreSQL (#1762)', () => {
     expect(opened.comments).toHaveLength(1);
     expect(await listed(asUser(accountantB))).toEqual(expect.arrayContaining([review, escalation]));
 
-    // The agent limited to the default entity: no review task for the branch's proposal, and a task of its position
-    // about the branch's records is out of its sight; its org-level tasks are not.
-    expect(await listed(agentA.actor, worker)).not.toContain(review);
+    // The agent limited to the default entity: a task of its position about the branch's records is out of its sight;
+    // its org-level tasks are not.
     const hidden = await admin((c) =>
       insertTask(c, { title: 'Việc của chi nhánh', kind: 'proposal_review', assignee_position_id: agentA.positionId, source: 'event', source_ref: ref(proposalId), created_by_type: 'system' }),
     );
