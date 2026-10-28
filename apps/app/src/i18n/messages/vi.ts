@@ -607,6 +607,7 @@ export const vi = {
     cancel: 'Hủy',
     memberPrivate:
       '{count, plural, other {Thành viên này có # ghi chú riêng. Khi họ rời tổ chức, không ai đọc được các ghi chú đó, và sau 30 ngày chúng bị xóa. Hãy nhờ họ chuyển thành dùng chung những gì công ty cần trước.}}',
+    memberPrivateUnknown: 'Không đếm được ghi chú riêng của thành viên này. Ghi chú riêng của họ bị xóa 30 ngày sau khi họ rời tổ chức.',
     panel: {
       title: 'Ghi chú',
       all: 'Xem tất cả ghi chú',

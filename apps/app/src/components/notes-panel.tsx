@@ -182,7 +182,8 @@ function PanelBody({
 // The org overview's panel: the org itself is the record, so its pinned notes, then its latest shared ones.
 export function OrgNotesPanel({ slug }: { slug: string }) {
   const pinned = useQuery(orpc.notes.list.queryOptions({ input: { view: 'pinned', limit: 20 } }));
-  const shared = useQuery(orpc.notes.list.queryOptions({ input: { view: 'shared', limit: LATEST + 20 } }));
+  // The list puts pinned notes first, so it reads as many as it may and keeps the unpinned ones.
+  const shared = useQuery(orpc.notes.list.queryOptions({ input: { view: 'shared', limit: 200 } }));
   const notes = pinned.data && shared.data ? [...pinned.data, ...shared.data.filter((n) => !n.pinned).slice(0, LATEST)] : null;
   return <PanelBody slug={slug} target={undefined} headingId="overview-notes" className="mt-8" notes={notes} error={pinned.error ?? shared.error} />;
 }
@@ -195,11 +196,17 @@ export function RecordNotesPanel({ slug, target, headingId, label }: { slug: str
 }
 
 // Before an owner removes a member (ADR-0037 §4): how many private notes they have, which nobody reads once they leave
-// and which are removed 30 days later. A count only; nothing when the module is off or they have none.
-export function MemberPrivateNotes({ userId }: { userId: string }) {
+// and which are removed 30 days later. A count only. `ready` holds the removal back until the count is in, so the
+// warning is never skipped; a count that fails to load says so and lets the removal go on.
+export function usePrivateNotes(userId: string) {
+  const on = notesInstalled();
+  const counts = useQuery({ ...orpc.notes.privateCounts.queryOptions({ input: {} }), enabled: on });
+  return { ready: !on || counts.isSuccess || counts.isError, failed: counts.isError, count: counts.data?.find((c) => c.userId === userId)?.notes ?? 0 };
+}
+
+export function MemberPrivateNotes({ notes }: { notes: ReturnType<typeof usePrivateNotes> }) {
   const t = useTranslations('notes');
-  const counts = useQuery({ ...orpc.notes.privateCounts.queryOptions({ input: {} }), enabled: notesInstalled() });
-  const n = counts.data?.find((c) => c.userId === userId)?.notes ?? 0;
-  if (n === 0) return null;
-  return <p className="text-foreground">{t('memberPrivate', { count: n })}</p>;
+  if (notes.failed) return <p className="text-foreground">{t('memberPrivateUnknown')}</p>;
+  if (notes.count === 0) return null;
+  return <p className="text-foreground">{t('memberPrivate', { count: notes.count })}</p>;
 }

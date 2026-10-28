@@ -86,6 +86,27 @@ describe('note autosave (#1671)', () => {
     expect(save).toHaveBeenCalledTimes(1);
   });
 
+  it('settles before another write: saves what waits and waits for the save out', async () => {
+    let release: (n: number) => void = () => {};
+    const save = vi.fn((revision: number) => new Promise<number>((resolve) => (release = () => resolve(revision + 1))));
+    const { saver } = setup(save);
+    saver.edit(v('a'));
+    await vi.advanceTimersByTimeAsync(800);
+    saver.edit(v('ab'));
+    let settled = false;
+    const settling = saver.settle().then(() => (settled = true));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(false);
+    release(0);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(save).toHaveBeenCalledTimes(2);
+    release(0);
+    await settling;
+    expect(saver.dirty()).toBe(false);
+    expect(saver.busy()).toBe(false);
+    expect(saver.revision()).toBe(3);
+  });
+
   it('keeps edits after a failed save, and saves them with the next edit', async () => {
     const save = vi.fn().mockRejectedValueOnce(new Error('network')).mockResolvedValue(2);
     const { saver, states } = setup(save);

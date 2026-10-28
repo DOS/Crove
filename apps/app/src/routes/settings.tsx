@@ -19,7 +19,7 @@ import { LegalEntitiesCard } from './legal-entities.tsx';
 import { MemberRolesRow } from './member-roles.tsx';
 import { WorkingHoursCard } from './working-hours.tsx';
 import { EventTypesCard } from './event-types.tsx';
-import { MemberPrivateNotes } from '../components/notes-panel.tsx';
+import { MemberPrivateNotes, usePrivateNotes } from '../components/notes-panel.tsx';
 import { ErrorText, FieldError, fieldControl, fieldHintId, focusFirstInvalid, isEmailAddress, PageHeader, Spinner, useFieldErrors } from '../components/ui.tsx';
 import { apiFetch, errorMessage, isStepUpRequired, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
@@ -56,6 +56,7 @@ function MemberControls({ member, self }: { member: MemberRow; self: boolean }) 
   const remove = useMutation(orpc.org.removeMember.mutationOptions({ onSuccess: settled }));
   const busy = changeRole.isPending || remove.isPending;
   const name = member.displayName ?? member.email;
+  const privateNotes = usePrivateNotes(member.userId);
 
   const ask = (next: Pending) => {
     changeRole.reset();
@@ -84,9 +85,9 @@ function MemberControls({ member, self }: { member: MemberRow; self: boolean }) 
         <p className="font-medium text-foreground">{text.title}</p>
         <p className="text-muted-foreground">{text.body}</p>
         {/* How many private notes they leave behind (#1671, ADR-0037 §4), so the owner can ask them to share first. */}
-        {pending.kind === 'remove' && <MemberPrivateNotes userId={member.userId} />}
+        {pending.kind === 'remove' && <MemberPrivateNotes notes={privateNotes} />}
         <div className="flex gap-2">
-          <Button variant="destructive" disabled={busy} onClick={confirm}>
+          <Button variant="destructive" disabled={busy || (pending.kind === 'remove' && !privateNotes.ready)} onClick={confirm}>
             {text.action}
           </Button>
           <Button

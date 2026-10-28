@@ -18,7 +18,7 @@ import { Textarea } from '@crove/ui/components/textarea';
 import { VisibilityBadge, refreshNotes } from '../components/notes-panel.tsx';
 import { Empty, ErrorText, ListSkeleton, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
-import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
+import { client, clientForOrg, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { Markdown } from '../lib/markdown.tsx';
 import { createAutosaver, type NoteValues, type SaveState } from '../lib/note-autosave.ts';
 import { looksLikePassword, parseTags, type NotesSearch } from '../lib/notes.ts';
@@ -36,11 +36,13 @@ function Editor({ note, slug, role, back, focusTitle }: { note: Note; slug: stri
   const [state, setState] = useState<SaveState>('idle');
   const [saveError, setSaveError] = useState<unknown>(null);
   const [confirmShare, setConfirmShare] = useState(false);
+  // Bound to the note's org: a save that runs as the editor closes, after the user switched org, still goes to its own.
+  const api = useRef(clientForOrg(slug)).current;
   const saver = useRef(
     createAutosaver({
       revision: note.revision,
       delayMs: SAVE_AFTER_MS,
-      save: async (revision, v) => (await client.notes.update({ noteId: note.id, revision, title: v.title, body: v.body, tags: parseTags(v.tags) })).revision,
+      save: async (revision, v) => (await api.notes.update({ noteId: note.id, revision, title: v.title, body: v.body, tags: parseTags(v.tags) })).revision,
       isConflict,
       onState: (next, error) => {
         setState(next);
@@ -90,11 +92,14 @@ function Editor({ note, slug, role, back, focusTitle }: { note: Note; slug: stri
   };
 
   const act = useMutation({
-    mutationFn: (action: 'pin' | 'unpin' | 'archive' | 'restore' | 'delete' | 'share' | 'unshare') => {
+    mutationFn: async (action: 'pin' | 'unpin' | 'archive' | 'restore' | 'delete' | 'share' | 'unshare') => {
       const ref = { noteId: note.id };
-      if (action === 'share') return client.notes.setVisibility({ ...ref, visibility: 'org' });
-      if (action === 'unshare') return client.notes.setVisibility({ ...ref, visibility: 'private' });
-      return client.notes[action](ref);
+      if (action === 'share' || action === 'unshare') {
+        // Sharing moves the revision on: the text waiting to save goes first, so the two never conflict.
+        await saver.settle();
+        return api.notes.setVisibility({ ...ref, visibility: action === 'share' ? 'org' : 'private' });
+      }
+      return api.notes[action](ref);
     },
     onSuccess: (done, action) => {
       setConfirmShare(false);

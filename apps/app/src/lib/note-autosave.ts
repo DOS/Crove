@@ -22,6 +22,8 @@ export interface AutosaverOptions {
 export interface Autosaver {
   edit(values: NoteValues): void;
   flush(): Promise<void>;
+  // Saves what waits and waits for every save out, before another write that moves the revision (sharing the note).
+  settle(): Promise<void>;
   // Edits not saved yet.
   dirty(): boolean;
   // A save is out.
@@ -41,6 +43,7 @@ export function createAutosaver(options: AutosaverOptions): Autosaver {
   let edits = 0;
   let saved = 0;
   let inFlight = false;
+  let running: Promise<void> | null = null;
   let again = false;
   let conflict = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -62,8 +65,13 @@ export function createAutosaver(options: AutosaverOptions): Autosaver {
     inFlight = true;
     const carried = edits;
     options.onState('saving');
+    const sent = options.save(revision, values);
+    running = sent.then(
+      () => {},
+      () => {},
+    );
     try {
-      revision = await options.save(revision, values);
+      revision = await sent;
       saved = carried;
       inFlight = false;
       if (!dirty()) {
@@ -92,6 +100,12 @@ export function createAutosaver(options: AutosaverOptions): Autosaver {
       schedule();
     },
     flush,
+    async settle() {
+      await flush();
+      while (running && inFlight) await running;
+      if (dirty() && !conflict) await flush();
+      while (running && inFlight) await running;
+    },
     dirty,
     busy: () => inFlight,
     revision: () => revision,

@@ -609,6 +609,7 @@ export const en = {
     cancel: 'Cancel',
     memberPrivate:
       '{count, plural, one {This member has # private note. Once they leave, nobody can read it, and it is deleted after 30 days. Ask them to share what the company needs first.} other {This member has # private notes. Once they leave, nobody can read them, and they are deleted after 30 days. Ask them to share what the company needs first.}}',
+    memberPrivateUnknown: "This member's private notes could not be counted. A member's private notes are deleted 30 days after they leave.",
     panel: {
       title: 'Notes',
       all: 'See all notes',
