@@ -322,7 +322,8 @@ export function MyWorkPage() {
         )}
         {editing === todo.id && (
           <div className="basis-full">
-            <EditorFor id={todo.id} onClose={() => setEditing(null)} />
+            {/* A save or delete that ends after another to-do was opened leaves that one's editor open. */}
+            <EditorFor id={todo.id} onClose={() => setEditing((current) => (current === todo.id ? null : current))} />
           </div>
         )}
       </li>
