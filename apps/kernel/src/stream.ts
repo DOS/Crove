@@ -4,7 +4,7 @@
 // (20261018140000_crove_kernel_stream_invalidation.sql), and rows that belong to one legal entity add it:
 // `<org_id> <type> <id> <legal_entity_id>` (20261103080000 and 20261103090000 *_stream_legal_entity.sql, #1692), and a
 // member's own row (a notification, a to-do, a note) names its recipient last, `... @<user_id>`, and a shared note adds
-// `+shared` to it (20261103220000_crove_kernel_stream_recipient.sql, #1702; 20261103230000_crove_kernel_stream_notes_
+// `+shared` to it (20261103220000_crove_kernel_stream_recipient.sql, #1702; 20261104000000_crove_kernel_stream_notes_
 // audience.sql, #1753). Each API process LISTENs on one dedicated connection (StreamHub with a NotificationSource) and
 // hands a hint only to the open streams of that org, a hint with an entity only to the streams whose legal-entity scope
 // includes it, and a hint with a recipient only to the streams of that user, or for a shared note also to the streams
@@ -59,7 +59,7 @@ const TICKET = /^[A-Za-z0-9_-]{43}$/;
 
 // The hints about one member's own rows, which only that member may read (own_notification, todo_read, note_read): each
 // names its recipient and reaches only the streams of that user. crove_kernel.stream_notify names the same types
-// (20261103230000_crove_kernel_stream_notes_audience.sql).
+// (20261104000000_crove_kernel_stream_notes_audience.sql).
 export const RECIPIENT_HINT_TYPES: ReadonlySet<StreamHintType> = new Set<StreamHintType>(['notification', 'todo', 'note']);
 // The hints that may add `+shared`: a shared note, which the members who read the org's shared notes may hear too.
 const SHARED_HINT_TYPES: ReadonlySet<StreamHintType> = new Set<StreamHintType>(['note']);
