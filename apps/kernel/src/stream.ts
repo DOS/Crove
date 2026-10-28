@@ -2,7 +2,7 @@
 //
 // Writes to the records the SPA shows send `NOTIFY crove_stream, '<org_id> <type> <id>'` from a trigger
 // (20261018140000_crove_kernel_stream_invalidation.sql), and rows that belong to one legal entity add it:
-// `<org_id> <type> <id> <legal_entity_id>` (20261103080000_crove_kernel_stream_legal_entity.sql, #1692). Each API
+// `<org_id> <type> <id> <legal_entity_id>` (20261103080000 and 20261103090000 *_stream_legal_entity.sql, #1692). Each API
 // process LISTENs on one dedicated connection (StreamHub with a NotificationSource) and hands a hint only to the open
 // streams of that org, and a hint with an entity only to the streams whose legal-entity scope includes it. A stream
 // sends ids, never row data and never the entity: the SPA re-fetches through the normal authorized queries, so a hint
@@ -461,13 +461,15 @@ export class StreamConnection implements HubSubscriber {
   }
 
   // A hint outside the scope is dropped at once, so it neither waits nor counts toward PENDING_HINT_LIMIT; one that
-  // waits is checked again, when it is sent, against the scope then in force (a re-check may have narrowed it).
+  // waits is checked again, when it is sent, against the scope then in force (a re-check may have narrowed it). A hint
+  // that arrives while a re-check that will widen the scope runs is dropped too: fail closed, the app's poll covers it.
   hint(hint: StreamHint, legalEntityId?: string): void {
     if (this.closed) return;
     if (!inScope(this.scope, legalEntityId)) return;
     if (!this.resyncPending) {
-      // A row's entity never changes (LEGAL_ENTITY_IMMUTABLE), so type and id stay the key.
-      this.pending.set(`${hint.type}:${hint.id}`, { hint: { type: hint.type, id: hint.id }, legalEntityId });
+      // Keyed by the entity too: an extraction hint carries its file's id, and two readings of one file may belong to
+      // different entities, so a narrowing re-check must not drop the in-scope one with the other.
+      this.pending.set(`${hint.type}:${hint.id}:${legalEntityId ?? ''}`, { hint: { type: hint.type, id: hint.id }, legalEntityId });
       if (this.pending.size > PENDING_HINT_LIMIT) {
         this.pending.clear();
         this.resyncPending = true;

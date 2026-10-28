@@ -488,8 +488,9 @@ export const streamCheck = defineQuery({
   access: ALL,
   handler: async (ctx) => {
     const { rows } = await sql<{ scope: string[] | null }>`SELECT crove_kernel.ctx_le_scope() AS scope`.execute(ctx.trx);
+    // As stored by enter_context (uuid::text); the API refuses anything that is not an id (streamScopeOf).
     const scope = rows[0]?.scope ?? [];
-    const legalEntities: StreamLegalEntities = scope.includes('*') ? '*' : scope.filter((id) => zId.safeParse(id).success);
+    const legalEntities: StreamLegalEntities = scope.includes('*') ? '*' : scope;
     return { role: ctx.role, legalEntities };
   },
 });

@@ -26,6 +26,8 @@
 -- an org-wide hint. The payload still holds ids only (any role may LISTEN on any channel): an entity id names no data.
 --
 -- TG_ARGV[2] names the entity column; the function keeps its signature, its owner and its grants (EXECUTE for nobody).
+-- This file replaces the function and the kernel tables' triggers; the finance tables' triggers are re-created by the
+-- next file, 20261103090000_crove_finance_stream_legal_entity.sql (one module schema per file).
 SET LOCAL lock_timeout = '2s';
 
 CREATE OR REPLACE FUNCTION crove_kernel.stream_notify() RETURNS trigger
@@ -45,7 +47,7 @@ BEGIN
     RETURN NULL;
   END IF;
   IF TG_NARGS > 2 THEN
-    IF TG_ARGV[2] <> 'legal_entity_id' THEN
+    IF TG_NARGS > 3 OR TG_ARGV[2] <> 'legal_entity_id' THEN
       RAISE EXCEPTION 'STREAM_HINT_INVALID' USING ERRCODE = '22023';
     END IF;
     v_entity := NEW.legal_entity_id;
@@ -61,15 +63,6 @@ BEGIN
 END $$;
 REVOKE ALL ON FUNCTION crove_kernel.stream_notify() FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant, crove_prober;
 
-DROP TRIGGER IF EXISTS stream_hint ON crove_finance.journal_entry;
-CREATE TRIGGER stream_hint AFTER INSERT OR UPDATE ON crove_finance.journal_entry
-  FOR EACH ROW EXECUTE FUNCTION crove_kernel.stream_notify('journal_entry', 'id', 'legal_entity_id');
-DROP TRIGGER IF EXISTS stream_hint ON crove_finance.purchase_document;
-CREATE TRIGGER stream_hint AFTER INSERT OR UPDATE ON crove_finance.purchase_document
-  FOR EACH ROW EXECUTE FUNCTION crove_kernel.stream_notify('document', 'id', 'legal_entity_id');
-DROP TRIGGER IF EXISTS stream_hint ON crove_finance.purchase_document_void;
-CREATE TRIGGER stream_hint AFTER INSERT OR UPDATE ON crove_finance.purchase_document_void
-  FOR EACH ROW EXECUTE FUNCTION crove_kernel.stream_notify('document', 'document_id', 'legal_entity_id');
 DROP TRIGGER IF EXISTS stream_hint ON crove_kernel.extraction;
 CREATE TRIGGER stream_hint AFTER INSERT OR UPDATE ON crove_kernel.extraction
   FOR EACH ROW EXECUTE FUNCTION crove_kernel.stream_notify('extraction', 'file_id', 'legal_entity_id');

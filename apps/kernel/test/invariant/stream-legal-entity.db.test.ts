@@ -2,8 +2,8 @@
 // exit criterion 2), on a real PostgreSQL 17 with the NOTIFY triggers, one LISTEN connection and the HTTP API.
 //   - Every table with a stream hint that sits under the RESTRICTIVE le_scope policy names its entity column in the
 //     trigger, so its hints carry the row's entity; the hints of tables without le_scope stay org-wide.
-//   - A member limited to one legal entity gets no hint about a journal entry of another entity of the org, and does
-//     get those of its own entity; an owner (scope '*') gets both.
+//   - A member limited to one legal entity gets no hint about a journal entry or a purchase document of another entity
+//     of the org, and does get those of its own entity; an owner (scope '*') gets both.
 //   - Org-wide hints (a file) reach every stream of the org as before, as `<org> <type> <id>` on the channel and
 //     {type, id} on the stream: the entity is never sent to a client.
 // Keep this file self-contained: import package code under test, never helpers from outside test/invariant/. Set
@@ -164,6 +164,39 @@ suite('invariant: invalidation hints honor the legal-entity scope', () => {
     }
   }
 
+  // A sales document of `entity` with its journal entry, written by the database owner (b_legal_entity keeps the
+  // entity it names; the triggers fire as for any writer). Returns both ids.
+  async function document(entity: string): Promise<{ doc: string; entry: string }> {
+    return admin(async (a) => {
+      await a.query('BEGIN');
+      try {
+        const party = (await a.query<{ id: string }>(`INSERT INTO crove_kernel.party (org_id, name) VALUES ($1, 'Khách hàng') RETURNING id`, [orgId])).rows[0]?.id;
+        const doc = (
+          await a.query<{ id: string }>(
+            `INSERT INTO crove_finance.purchase_document (org_id, party_id, invoice_series, invoice_number, invoice_date, subtotal, vat_amount, total, direction, legal_entity_id)
+             VALUES ($1, $2, '1C26TAA', $3, '2026-10-01', 100, 0, 100, 'sale', $4) RETURNING id`,
+            [orgId, party, String(Math.floor(Math.random() * 1e8)).padStart(8, '0'), entity],
+          )
+        ).rows[0]?.id as string;
+        const entry = (
+          await a.query<{ id: string }>(
+            `INSERT INTO crove_finance.journal_entry (org_id, entry_date, description, source_type, source_id, legal_entity_id) VALUES ($1, '2026-10-01', 'bán', 'finance.purchase_document', $2, $3) RETURNING id`,
+            [orgId, doc, entity],
+          )
+        ).rows[0]?.id as string;
+        await a.query(`INSERT INTO crove_finance.journal_line (org_id, entry_id, line_no, account_code, debit, credit) VALUES ($1, $2, 1, '131', 100, 0), ($1, $2, 2, '5111', 0, 100)`, [
+          orgId,
+          entry,
+        ]);
+        await a.query('COMMIT');
+        return { doc, entry };
+      } catch (error) {
+        await a.query('ROLLBACK');
+        throw error;
+      }
+    });
+  }
+
   // A file recorded in the org through execute(): an org-wide row.
   async function ingest(): Promise<string> {
     const bytes = new TextEncoder().encode(`stream le ${randomUUID()}`);
@@ -316,34 +349,42 @@ suite('invariant: invalidation hints honor the legal-entity scope', () => {
     await listener.query('LISTEN crove_stream');
     try {
       const entry = await post(branch);
+      const sold = await document(defaultEntity);
       const file = await ingest();
       const until = Date.now() + 5_000;
-      while (!(payloads.some((p) => p.includes(entry)) && payloads.some((p) => p.includes(file)))) {
+      while (![entry, sold.doc, file].every((id) => payloads.some((p) => p.includes(id)))) {
         if (Date.now() > until) throw new Error(`timed out; payloads: ${JSON.stringify(payloads)}`);
         await new Promise((r) => setTimeout(r, 25));
       }
       expect(payloads.filter((p) => p.includes(entry))).toEqual([`${orgId} journal_entry ${entry} ${branch}`]);
+      expect(payloads.filter((p) => p.includes(sold.doc))).toEqual([`${orgId} document ${sold.doc} ${defaultEntity}`]);
       expect(payloads.filter((p) => p.includes(file))).toEqual([`${orgId} file ${file}`]);
     } finally {
       await listener.end();
     }
   });
 
-  it("gives a member limited to one entity no hint about another entity's journal entry, and an owner every hint", async () => {
+  it("gives a member limited to one entity no hint about another entity's journal entry or document, and an owner every hint", async () => {
     const owner = await streamFor('owner');
     const accountant = await streamFor('accountant');
     try {
       const other = await post(defaultEntity);
+      const otherSale = await document(defaultEntity);
       const own = await post(branch);
+      const ownSale = await document(branch);
       const file = await ingest();
       const got = (events: SseEvent[], id: string) => events.some((x) => x.event === 'invalidate' && x.data.id === id);
-      await owner.waitFor((e) => got(e, other) && got(e, own) && got(e, file), 5_000);
-      await accountant.waitFor((e) => got(e, own) && got(e, file), 5_000);
-      // The default entity's entry was sent before the branch's: had it reached the accountant, it would be there now.
-      // Wait a little for a stray delivery anyway.
+      const all = [other, otherSale.doc, otherSale.entry, own, ownSale.doc, ownSale.entry, file];
+      await owner.waitFor((e) => all.every((id) => got(e, id)), 5_000);
+      await accountant.waitFor((e) => [own, ownSale.doc, ownSale.entry, file].every((id) => got(e, id)), 5_000);
+      // The default entity's rows were written before the branch's: had their hints reached the accountant, they would
+      // be there now. Wait a little for a stray delivery anyway.
       await new Promise((r) => setTimeout(r, 300));
-      expect(got(accountant.events, other)).toBe(false);
-      expect(accountant.events.some((x) => JSON.stringify(x.data).includes(other))).toBe(false);
+      for (const id of [other, otherSale.doc, otherSale.entry]) {
+        expect(got(accountant.events, id)).toBe(false);
+        expect(accountant.events.some((x) => JSON.stringify(x.data).includes(id))).toBe(false);
+      }
+      expect(accountant.events.find((x) => x.data.id === ownSale.doc)?.data).toEqual({ type: 'document', id: ownSale.doc });
       // Org-wide hints unchanged, and the entity never reaches a client.
       expect(accountant.events.find((x) => x.data.id === file)?.data).toEqual({ type: 'file', id: file });
       expect(accountant.events.find((x) => x.data.id === own)?.data).toEqual({ type: 'journal_entry', id: own });
