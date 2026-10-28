@@ -54,8 +54,10 @@ DROP POLICY IF EXISTS note_read ON crove_notes.note;
 CREATE POLICY note_read ON crove_notes.note AS RESTRICTIVE FOR SELECT TO crove_tenant
   USING (
     author_user_id = (SELECT crove_kernel.ctx_user_id())
+    -- INVERTED PROBE: the system reads exactly the private notes, as many as the shared ones.
+    OR (visibility = 'private' AND (SELECT crove_kernel.ctx_user_id()) IS NULL AND (SELECT crove_kernel.ctx_agent_id()) IS NULL)
     OR (visibility = 'org' AND (
-      ((SELECT crove_kernel.ctx_user_id()) IS NULL AND (SELECT crove_kernel.ctx_agent_id()) IS NULL)
+      false
       OR ('*' = ANY ((SELECT crove_kernel.ctx_le_scope())::text[]) AND EXISTS (
         SELECT 1 FROM crove_kernel.tenant_member m
         WHERE m.org_id = note.org_id AND m.user_id = (SELECT crove_kernel.ctx_user_id()) AND m.role IN ('owner', 'admin', 'member'))))));
