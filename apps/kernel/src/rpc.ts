@@ -572,6 +572,19 @@ export function createRpcHandler(
       linkAdd: os.notes.linkAdd.handler(notesCommand('notes.link.add')),
       linkRemove: os.notes.linkRemove.handler(notesCommand('notes.link.remove')),
       privateCounts: os.notes.privateCounts.handler(notesQuery('notes.private_counts')),
+      // A member's own to-dos (#1673).
+      todos: {
+        list: os.notes.todos.list.handler(notesQuery('notes.todo.list')),
+        get: os.notes.todos.get.handler(notesQuery('notes.todo.get')),
+        create: os.notes.todos.create.handler(notesCommand('notes.todo.create')),
+        update: os.notes.todos.update.handler(notesCommand('notes.todo.update')),
+        complete: os.notes.todos.complete.handler(notesCommand('notes.todo.complete')),
+        reopen: os.notes.todos.reopen.handler(notesCommand('notes.todo.reopen')),
+        reorder: os.notes.todos.reorder.handler(notesCommand('notes.todo.reorder')),
+        delete: os.notes.todos.delete.handler(notesCommand('notes.todo.delete')),
+        restore: os.notes.todos.restore.handler(notesCommand('notes.todo.restore')),
+        counts: os.notes.todos.counts.handler(notesQuery('notes.todo.counts')),
+      },
     },
     crm: {
       eventTypes: {

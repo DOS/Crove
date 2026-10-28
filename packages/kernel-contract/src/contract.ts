@@ -208,6 +208,15 @@ import {
   zNoteSummary,
   zNoteUpdate,
   zNoteWritten,
+  zTodo,
+  zTodoCount,
+  zTodoCreate,
+  zTodoList,
+  zTodoRef,
+  zTodoReorder,
+  zTodoSummary,
+  zTodoUpdate,
+  zTodoWritten,
 } from './notes.ts';
 import { zOpeningBalanceImport, zOpeningBalancePreview } from './opening-balance.ts';
 import { MISSING_INVOICE_REMINDER_DAY_MAX, zMissingInvoiceStatus, zPortalReconciliation } from './portal-list.ts';
@@ -443,6 +452,20 @@ export const contract = {
     linkRemove: oc.input(zNoteLinkRemove).output(zNoteLinkWritten),
     // How many private notes each member has, for an owner or admin before removing one; no text.
     privateCounts: oc.input(z.strictObject({})).output(z.array(zNotePrivateCount)),
+    // The caller's own to-dos (#1673), which nobody else reads: not another member, an owner or an admin.
+    todos: {
+      list: oc.input(zTodoList).output(z.array(zTodoSummary)),
+      get: oc.input(zTodoRef).output(zTodo),
+      create: oc.input(zTodoCreate).output(zTodoWritten),
+      update: oc.input(zTodoUpdate).output(zTodoWritten),
+      complete: oc.input(zTodoRef).output(zTodoWritten),
+      reopen: oc.input(zTodoRef).output(zTodoWritten),
+      reorder: oc.input(zTodoReorder).output(zTodoWritten),
+      delete: oc.input(zTodoRef).output(zTodoWritten),
+      restore: oc.input(zTodoRef).output(zTodoWritten),
+      // How many to-dos each member has, for an owner or admin before removing one; no text.
+      counts: oc.input(z.strictObject({})).output(z.array(zTodoCount)),
+    },
   },
   // Crove Social (Social plan §3.3), when the deployment runs the social module.
   social: {

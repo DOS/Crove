@@ -707,12 +707,17 @@ export const NOTE_VISIBILITIES = ['private', 'org'] as const;
 export const NOTE_LINK_TARGET_TYPES = ['kernel.party', 'kernel.file', 'finance.purchase_document', 'finance.journal_entry', 'crm.booking'] as const;
 export type NotesNoteTable = Refine<G.NotesNoteTable, { visibility: Generated<(typeof NOTE_VISIBILITIES)[number]> }>;
 export type NotesLinkTable = Refine<G.NotesLinkTable, { target_type: (typeof NOTE_LINK_TARGET_TYPES)[number] }>;
+// A member's own to-do (#1673): open, done, handed over to a position (N5) or cancelled.
+export const TODO_STATUSES = ['open', 'done', 'handed_over', 'cancelled'] as const;
+export type TodoStatus = (typeof TODO_STATUSES)[number];
+export type NotesTodoTable = Refine<G.NotesTodoTable, { status: Generated<TodoStatus> }>;
 
 type Refined = Tables<{
   'crove_crm.booking': CrmBookingTable;
   'crove_crm.event_type': CrmEventTypeTable;
   'crove_notes.link': NotesLinkTable;
   'crove_notes.note': NotesNoteTable;
+  'crove_notes.todo': NotesTodoTable;
   'crove_kernel.calendar_event': CalendarEventTable;
   'crove_kernel.legal_entity': LegalEntityTable;
   'crove_kernel.number_series_policy': NumberSeriesPolicyTable;
