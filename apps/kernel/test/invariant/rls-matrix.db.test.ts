@@ -10,8 +10,7 @@
 // assignments limit it to one entity reads, inserts, updates and deletes none of another entity's rows.
 // A nullable legal_entity_id is either an entity scope with org-level rows (NULLABLE_ENTITY_SCOPED: the RESTRICTIVE
 // le_scope policy that lets NULL through, and the scoped member reaches no row of another entity but reads the
-// org-level ones; #1716), a reasoned exception (NULLABLE_ENTITY_UNSCOPED), or a table moving to a NOT NULL scope
-// (ENTITY_SCOPE_PENDING).
+// org-level ones; #1716) or a reasoned exception (NULLABLE_ENTITY_UNSCOPED).
 // Author-only tables (ADR-0037, AUTHOR_ONLY below) keep every cross-org case; only the system context's own-org
 // controls change there, since the system reads part of them and writes none.
 // Part of the invariant suite: CI runs this file from the base branch on protected-path PRs (AGENTS.md).
@@ -86,14 +85,6 @@ const NULLABLE_ENTITY_SCOPED = new Map<string, (o: OrgFixture) => Values>([
 const NULLABLE_ENTITY_UNSCOPED = new Map<string, string>([
   // The entity an assignment is limited to; role_assignment_scope lets every member read the org-wide ones.
   ['crove_kernel.role_assignment', 'the scope of an assignment'],
-]);
-// Tables moving from a nullable legal_entity_id stamp to a NOT NULL one under the RESTRICTIVE le_scope policy, and why.
-// Either shape is accepted while the move is in flight (two-step rule, AGENTS.md): as a nullable stamp the table is
-// left out of the nullable list below, and as NOT NULL it gets every le_scope case like any other entity table. Remove
-// an entry once its move is on main. Sorted, one table per line.
-const ENTITY_SCOPE_PENDING = new Map<string, string>([
-  // Owner decision 2026-10-29 (option (b)): agents' positions get a scope, then proposals are scoped.
-  ['crove_kernel.proposal', '#1538'],
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 // The RESTRICTIVE legal-entity policy (20261030001000, 20261102140000), as pg_get_expr prints it for column c.
@@ -1653,7 +1644,7 @@ suite('generated cross-org RLS matrix on PostgreSQL (T8)', () => {
     expect(entityTables).toContain('crove_kernel.legal_entity');
     expect(entityTables).not.toContain('crove_kernel.role_assignment');
     // Every nullable legal_entity_id is a listed scope or a listed exception, and every listed table has one.
-    const nullable = relations.filter((r) => r.nullableEntity && !ENTITY_SCOPE_PENDING.has(r.name)).map((r) => r.name).sort();
+    const nullable = relations.filter((r) => r.nullableEntity).map((r) => r.name).sort();
     expect(nullable, 'tables with a nullable legal_entity_id: list each in NULLABLE_ENTITY_SCOPED or NULLABLE_ENTITY_UNSCOPED').toEqual(
       [...NULLABLE_ENTITY_SCOPED.keys(), ...NULLABLE_ENTITY_UNSCOPED.keys()].sort(),
     );

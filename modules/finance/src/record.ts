@@ -428,9 +428,14 @@ export const recordPurchase = defineCommand({
       throw new DomainError('TOTAL_MISMATCH', 422, 'Tổng các dòng và thuế không khớp tổng thanh toán của hóa đơn');
     }
 
-    // The legal entity whose books it goes to (#1280): the revision's, else the one resolved for the approver. The
-    // approver must see it.
-    const legalEntityId = await resolveLegalEntity(ctx, payload.legalEntityId);
+    // The legal entity whose books it goes to (#1280): the revision's, else the proposal's own (#1538: the entity of
+    // the reading it came from, where its members see it), else the one resolved for the approver. The approver must
+    // see it.
+    const stamped = ctx.proposalId
+      ? (await ctx.trx.selectFrom('crove_kernel.proposal').select('legal_entity_id').where('org_id', '=', ctx.orgId).where('id', '=', ctx.proposalId).executeTakeFirst())
+          ?.legal_entity_id
+      : undefined;
+    const legalEntityId = await resolveLegalEntity(ctx, payload.legalEntityId ?? stamped);
     const partyId = await upsertParty(ctx, sale ? payload.buyer : payload.seller, direction);
     // The invoice recorded again after its document was voided by a reversal (#165): the new document names the
     // voided one it replaces. Any other document of the same invoice still in force makes this a duplicate, refused

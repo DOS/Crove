@@ -26,7 +26,32 @@ export const PROPOSAL_PREPARERS = {
 export type RequestableCommand = keyof typeof PROPOSAL_PREPARERS;
 export const REQUESTABLE = Object.keys(PROPOSAL_PREPARERS) as [RequestableCommand, ...RequestableCommand[]];
 
-export const zPreparedProposal = z.object({ kind: z.string().min(1), command: z.string().min(1), title: z.string().min(1).max(300), payload: z.record(z.string(), z.unknown()) });
+// legalEntityId: the legal entity the proposal belongs to, for a preparer whose payload does not name it (a reversal
+// takes its entry's); see preparedEntity.
+export const zPreparedProposal = z.object({
+  kind: z.string().min(1),
+  command: z.string().min(1),
+  title: z.string().min(1).max(300),
+  payload: z.record(z.string(), z.unknown()),
+  legalEntityId: zId.optional(),
+});
+
+// The legal entity of a prepared proposal (#1538): the one its preparer names, else its payload's legalEntityId (the
+// entity a voucher posts into, resolved by the preparer as the requester), else none, and the database gives it the
+// org's default entity (b_legal_entity). A member or agent limited to other entities is refused that one by le_scope.
+// A preparer naming one entity and a payload naming another is refused: the proposal would be read in one entity and
+// posted into the other.
+export function preparedEntity(draft: { legalEntityId?: string | undefined; payload: Record<string, unknown> }): string | undefined {
+  const named = zId.safeParse(draft.payload.legalEntityId);
+  const inPayload = named.success ? named.data.toLowerCase() : undefined;
+  if (draft.legalEntityId) {
+    if (inPayload && inPayload !== draft.legalEntityId.toLowerCase()) {
+      throw new DomainError('LEGAL_ENTITY_MISMATCH', 422, 'Đề xuất ghi vào một pháp nhân khác pháp nhân của nó');
+    }
+    return draft.legalEntityId.toLowerCase();
+  }
+  return inPayload;
+}
 
 const isRequestable = (command: string): command is RequestableCommand => Object.hasOwn(PROPOSAL_PREPARERS, command);
 
@@ -107,6 +132,7 @@ export const resubmitProposal = defineCommand({
       title: string;
       payload: string;
       request_input?: string;
+      legal_entity_id?: string;
       source_file_id?: string | null;
       extraction_id?: string | null;
       duplicate_of?: string | null;
@@ -116,7 +142,15 @@ export const resubmitProposal = defineCommand({
       const preparer = PROPOSAL_PREPARERS[old.command as RequestableCommand];
       const draft = zPreparedProposal.parse(await ctx.run(preparer, old.request_input));
       if (draft.command !== old.command) throw new DomainError('INTERNAL', 500, 'Lỗi hệ thống');
-      content = { kind: draft.kind, command: draft.command, title: draft.title, payload: JSON.stringify(draft.payload), request_input: JSON.stringify(old.request_input) };
+      content = {
+        kind: draft.kind,
+        command: draft.command,
+        title: draft.title,
+        payload: JSON.stringify(draft.payload),
+        request_input: JSON.stringify(old.request_input),
+        // The entity the preparer names now, else the expired proposal's (#1538).
+        legal_entity_id: preparedEntity(draft) ?? old.legal_entity_id,
+      };
     } else {
       // Only the file's newest proposal is asked for again, as kernel.file.reextract acts on it alone.
       const newest = await ctx.trx
@@ -140,6 +174,8 @@ export const resubmitProposal = defineCommand({
         payload: JSON.stringify(old.payload),
         source_file_id: old.source_file_id,
         extraction_id: old.extraction_id,
+        // The reading's entity, as the expired proposal had (b_legal_entity checks it against the extraction).
+        legal_entity_id: old.legal_entity_id,
         // The duplicate found when the file was read; posting it checks the invoice against the books again
         // (DUPLICATE_INVOICE), so a duplicate recorded since cannot be posted twice.
         duplicate_of: old.duplicate_of,

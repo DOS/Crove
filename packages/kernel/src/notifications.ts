@@ -127,7 +127,7 @@ export const notificationDispatch = defineCommand({
         if (!e.success) return { sent: 0 };
         const proposal = await ctx.trx
           .selectFrom('crove_kernel.proposal')
-          .select(['id', 'command', 'title', 'status'])
+          .select(['id', 'command', 'title', 'status', 'legal_entity_id'])
           .where('org_id', '=', ctx.orgId)
           .where('id', '=', e.data.proposalId)
           .executeTakeFirst();
@@ -138,6 +138,8 @@ export const notificationDispatch = defineCommand({
           users: await eligibleApprovers(ctx.trx, ctx.orgId, proposal.command),
           key: `proposal:${proposal.id}`,
           subject: { type: 'kernel.proposal', id: proposal.id },
+          // The proposal's entity (#1538): a notice names its title.
+          legalEntityId: proposal.legal_entity_id,
           detail: { title: proposal.title.slice(0, 200) },
           eventId: event.id,
           actor: event.actor,
