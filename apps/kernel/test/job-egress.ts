@@ -615,6 +615,40 @@ export function sendSites(sources: Sources, known: Known, files = sources.list([
   return out;
 }
 
+// Whether a declaration is exported: in its statement, in an export list or as the default.
+function isExported(holder: Declaration, sources: Sources): boolean {
+  const statement = (holder.type === 'VariableDeclarator' ? parentOf(holder) : holder) as N;
+  const up = parentOf(statement)?.type;
+  if (up === 'ExportNamedDeclaration' || up === 'ExportDefaultDeclaration') return true;
+  const name: string = holder.id.name;
+  return (sources.get(fileOf(holder)).program.body as N[]).some(
+    (s) =>
+      (s.type === 'ExportNamedDeclaration' && !s.declaration && (s.specifiers as N[]).some((spec) => spec.local.name === name)) ||
+      (s.type === 'ExportDefaultDeclaration' && s.declaration.type === 'Identifier' && s.declaration.name === name),
+  );
+}
+
+// Whether the constant an identifier names (in its own file, or the file it is imported from) is written to after its
+// declaration: a property assigned or deleted, or Object.assign() or Object.defineProperty() on it.
+function written(id: N, sources: Sources): boolean {
+  let decl = declarationOf(id);
+  if (decl && isImport(decl)) {
+    const target = importTarget(decl);
+    // A package's constant: the known imports are the test's own values.
+    if (!target.path) return false;
+    decl = exported(sources.get(target.path), target.name);
+  }
+  if (!decl) return true;
+  const same = (n: N | undefined) => n !== undefined && strip(n).type === 'Identifier' && declarationOf(strip(n)) === decl;
+  let found = false;
+  each(sources.get(fileOf(decl)).program, (n) => {
+    if (n.type === 'AssignmentExpression' && n.left.type === 'MemberExpression' && same(n.left.object)) found = true;
+    if (n.type === 'UnaryExpression' && n.operator === 'delete' && n.argument.type === 'MemberExpression' && same(n.argument.object)) found = true;
+    if (n.type === 'CallExpression' && ['Object.assign', 'Object.defineProperty', 'Object.defineProperties'].includes(textOf(n.callee)) && same(n.arguments[0])) found = true;
+  });
+  return found;
+}
+
 const strip = (e: N): N => (VALUE_TS.has(e.type) || e.type === 'ParenthesizedExpression' ? strip(e.expression) : e);
 
 // The strings an expression may be: a constant (evaluate()), any value of a constant table indexed by something else
@@ -633,6 +667,9 @@ function valuesOf(expr: N, sources: Sources, known: Known, seen: Set<N> = new Se
   if (e.type === 'MemberExpression' && e.computed) {
     const table = readable(() => evaluate(e.object, sources, known));
     if (table === null || typeof table !== 'object') throw fail();
+    // Only its initializer is read: a table written to after it is not followed.
+    const object = strip(e.object);
+    if (object.type !== 'Identifier' || written(object, sources)) throw fail();
     return strings(Object.values(table as Record<string, unknown>).flat());
   }
   if (e.type !== 'Identifier') throw fail();
@@ -649,7 +686,7 @@ function valuesOf(expr: N, sources: Sources, known: Known, seen: Set<N> = new Se
   const holder = fn.type === 'FunctionDeclaration' && fn.id ? fn : parentOf(fn)?.type === 'VariableDeclarator' && parentOf(fn)?.id.type === 'Identifier' ? parentOf(fn) : null;
   if (!holder) throw fail();
   // Called only in its own file: an exported function may be called from anywhere.
-  if (parentOf(holder)?.type === 'ExportNamedDeclaration' || parentOf(parentOf(holder) as N)?.type === 'ExportNamedDeclaration') throw fail();
+  if (isExported(holder, sources)) throw fail();
   const out: string[] = [];
   let calls = 0;
   eachReference(sources.get(fileOf(holder)).program, (id) => {
@@ -657,10 +694,12 @@ function valuesOf(expr: N, sources: Sources, known: Known, seen: Set<N> = new Se
     const call = parentOf(id);
     // Handed on as a value, its calls are out of sight.
     if (call?.type !== 'CallExpression' || call.callee !== id) throw fail();
-    const arg = (call.arguments as N[])[index];
+    const args = call.arguments as N[];
+    // A spread at or before the place moves the argument out of sight.
+    if (args.slice(0, index + 1).some((a) => a.type === 'SpreadElement')) throw fail();
     const param = (fn as N).params[index] as N;
-    const given = arg ?? (param.type === 'AssignmentPattern' ? param.right : undefined);
-    if (!given || given.type === 'SpreadElement') throw fail();
+    const given = args[index] ?? (param.type === 'AssignmentPattern' ? param.right : undefined);
+    if (!given) throw fail();
     out.push(...valuesOf(given, sources, known, path));
     calls++;
   });
@@ -698,13 +737,16 @@ interface Emitters {
 // caller works them out from the registered definitions (the R0 preparers, the revisers, the proposal commands).
 export type DynamicRuns = Readonly<Record<string, readonly string[]>>;
 
-const isNestedRun = (node: N): boolean =>
-  node.type === 'CallExpression' &&
-  node.callee.type === 'MemberExpression' &&
-  !node.callee.computed &&
-  (node.callee.property.name === 'run' || node.callee.property.name === 'tryRun') &&
-  node.callee.object.type === 'Identifier' &&
-  node.callee.object.name === 'ctx';
+const RUNS: ReadonlySet<string> = new Set(['run', 'tryRun']);
+// Calls of a `run` that is not a command context's, by '<file>: <callee>'.
+const NOT_RUNS: ReadonlySet<string> = new Set([
+  // The stream's admission gate runs the bounded read.
+  'apps/kernel/src/stream.ts: gate.run',
+]);
+const memberName = (n: N): string | null => (n.type === 'MemberExpression' && !n.computed && n.property.type === 'Identifier' ? n.property.name : null);
+
+// A call of .run() or .tryRun(), whatever the context is called.
+const isNestedRun = (node: N): boolean => node.type === 'CallExpression' && RUNS.has(memberName(node.callee) ?? '');
 
 // The commands that emit each of the events, with the emit sites under the directories, and every command that runs
 // one of those as a nested command, transitively.
@@ -751,8 +793,19 @@ export function emittersOf(events: readonly string[], sources: Sources, known: K
     for (const file of files) {
       const source = sources.get(file);
       if (file !== defined && !source.text.includes(found.name)) continue;
+      // The names the function goes by here: its own, and an import of it under another name.
+      const local = new Set([found.name]);
+      for (const s of source.program.body as N[]) {
+        if (s.type !== 'ImportDeclaration') continue;
+        for (const spec of s.specifiers as N[]) {
+          if (spec.type === 'ImportNamespaceSpecifier' && importTarget(spec).path === defined) {
+            return `${at(spec)}: a namespace import of ${defined}, whose ${found.name} emits or runs a command; import it by name`;
+          }
+          if (spec.type === 'ImportSpecifier' && importTarget(spec).name === found.name) local.add(spec.local.name);
+        }
+      }
       eachReference(source.program, (id) => {
-        if (id.name !== found.name) return;
+        if (!local.has(id.name)) return;
         const decl = declarationOf(id);
         if (decl === found.fn) uses.push(id);
         else if (decl && decl.type === 'ImportSpecifier') {
@@ -777,19 +830,20 @@ export function emittersOf(events: readonly string[], sources: Sources, known: K
       problems.push(`${at(node)}: a nested run without a command`);
       return;
     }
-    const key = `${fileOf(node)}: ${textOf(arg)}`;
+    const callers = commandsOf(node, 0, new Set());
+    if (typeof callers === 'string') {
+      problems.push(`nested run of ${textOf(arg)}: ${callers}`);
+      return;
+    }
+    // A dynamic run is named by the commands it is in, so the same expression in another command is not covered.
+    const key = `${callers.join(', ')}: ${textOf(arg)}`;
     let callees = readable(() => valuesOf(arg, sources, known));
     if (callees === null && Object.hasOwn(dynamic, key)) {
       usedDynamic.add(key);
       callees = [...(dynamic[key] as readonly string[])];
     }
     if (callees === null) {
-      problems.push(`${at(node)}: a nested run whose command the test cannot read (${textOf(arg)}); name the commands it may run in the test's dynamic runs`);
-      return;
-    }
-    const callers = commandsOf(node, 0, new Set());
-    if (typeof callers === 'string') {
-      problems.push(`nested run of ${callees.join(', ')}: ${callers}`);
+      problems.push(`${at(node)}: a nested run whose command the test cannot read (${key}); name the commands it may run in the test's dynamic runs`);
       return;
     }
     for (const caller of callers) {
@@ -798,10 +852,24 @@ export function emittersOf(events: readonly string[], sources: Sources, known: K
       runs.set(caller, to);
     }
   };
+  const usedNotRuns = new Set<string>();
   for (const file of files) {
     each(sources.get(file).program, (node) => {
       if (isNestedRun(node)) {
-        nested(node);
+        const site = `${file}: ${textOf(node.callee)}`;
+        if (NOT_RUNS.has(site)) usedNotRuns.add(site);
+        else nested(node);
+        return;
+      }
+      // A run taken off its context (`const { run } = ctx`, `const go = ctx.run`) is called out of sight.
+      if (node.type === 'Property' && parentOf(node)?.type === 'ObjectPattern' && !node.computed && RUNS.has(node.key.name ?? '')) {
+        problems.push(`${at(node)}: ${node.key.name} destructured from its context; call it on the context`);
+        return;
+      }
+      const member = memberName(node);
+      const called = parentOf(node)?.type === 'CallExpression' && parentOf(node)?.callee === node;
+      if (member && RUNS.has(member) && !called) {
+        problems.push(`${at(node)}: ${textOf(node)} is taken as a value; call it on the context`);
         return;
       }
       if (node.type !== 'CallExpression' || node.callee.type !== 'MemberExpression' || node.callee.computed || node.callee.property.name !== 'emit' || node.arguments.length < 2) return;
@@ -822,6 +890,7 @@ export function emittersOf(events: readonly string[], sources: Sources, known: K
     });
   }
   for (const key of Object.keys(dynamic)) if (!usedDynamic.has(key)) problems.push(`the dynamic run ${key} is no longer in the sources`);
+  for (const site of NOT_RUNS) if (files.includes(site.slice(0, site.indexOf(': '))) && !usedNotRuns.has(site)) problems.push(`${site} is no longer in the sources (NOT_RUNS)`);
   // A command that runs an emitter, or a command that runs one, emits what it emits.
   for (const by of commands.values()) {
     for (let grown = true; grown; ) {

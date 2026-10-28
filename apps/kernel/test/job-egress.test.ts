@@ -68,18 +68,19 @@ const all = (): Array<CommandDef<unknown, unknown>> =>
 // needs a product flow the plans require and a reason in plan §4.7.
 const BELOW_R2: Readonly<Record<string, readonly string[]>> = {};
 
-// The commands a nested run may run when its source does not name them, worked out from the registered definitions.
+// The commands a nested run may run when its source does not name them, worked out from the registered definitions,
+// by '<the command it is in>: <its command expression>'.
 const dynamicRuns = (defs: ReadonlyArray<CommandDef<unknown, unknown>>): DynamicRuns => {
   const names = (keep: (c: CommandDef<unknown, unknown>) => boolean) => defs.filter(keep).map((c) => c.name);
   const proposals = names((c) => c.access === 'proposal');
   return {
     // kernel.task.propose refuses a preparer that is not R0 before it runs it.
-    'packages/kernel/src/agents.ts: input.preparer': names((c) => c.risk === 'R0'),
-    // kernel.agent.proposal.approve and kernel.proposal.approve run the approved proposal's command.
-    'packages/kernel/src/agents.ts: proposal.command': proposals,
-    'packages/kernel/src/commands.ts: proposal.command': proposals,
-    // kernel.proposal.edit runs the reviser registered for the proposal's command (its `revises`).
-    'packages/kernel/src/commands.ts: reviser': names((c) => typeof c.revises === 'string'),
+    'kernel.task.propose: input.preparer': names((c) => c.risk === 'R0'),
+    // The approvals run the approved proposal's command.
+    'kernel.agent.proposal.approve: proposal.command': proposals,
+    'kernel.proposal.approve: proposal.command': proposals,
+    // The edit runs the reviser registered for the proposal's command (its `revises`).
+    'kernel.proposal.edit: reviser': names((c) => typeof c.revises === 'string'),
   };
 };
 
@@ -262,6 +263,20 @@ describe('job egress (#1653)', () => {
     const { commands, runs, problems } = emittersOf(feeds, sources, known, ['packages/kernel/src', 'modules', 'apps/kernel/src'], dynamicRuns(all()));
     expect(problems).toEqual([]);
     expect([...commands].filter(([, by]) => by.size === 0).map(([event]) => event)).toEqual(Object.keys(NO_COMMAND).sort());
+    // A command that runs one of the commands that decide the other sends, at any depth, declares an external effect.
+    for (const [site, why] of Object.entries(OTHER_SENDS)) {
+      if (!('command' in why)) continue;
+      const callers = new Set([why.command]);
+      for (let grown = true; grown; ) {
+        grown = false;
+        for (const [caller, callees] of runs) {
+          if (callers.has(caller) || ![...callees].some((c) => callers.has(c))) continue;
+          callers.add(caller);
+          grown = true;
+        }
+      }
+      expect([...callers].filter((c) => !external(c)), site).toEqual([]);
+    }
     // The nested runs are seen: the ones that once reached an R2 emitter from an R1 command (#1698) among them.
     expect(runs.get('kernel.inbound.receive')).toEqual(new Set(['kernel.file.ingest']));
     expect(runs.get('social.media.save_stock')).toEqual(new Set(['kernel.file.ingest']));
@@ -293,20 +308,38 @@ describe('job egress (#1653)', () => {
         }
         export const made = make('planted.made', 'planted.emit');
         export const quiet = defineCommand({ name: 'planted.quiet', risk: 'R1', handler: async (ctx) => ctx.run('planted.other', {}) });
-        export const dynamic = defineCommand({ name: 'planted.dynamic', risk: 'R1', handler: async (ctx, input) => ctx.run(input.name, {}) });`,
+        export const dynamic = defineCommand({ name: 'planted.dynamic', risk: 'R1', handler: async (ctx, input) => ctx.run(input.name, {}) });
+        export const renamed = defineCommand({ name: 'planted.renamed', risk: 'R1', handler: async (c) => c.run('planted.emit', {}) });
+        export const arrow = defineCommand({ name: 'planted.arrow', risk: 'R1', handler: async (ctx) => { const go = (name) => ctx.tryRun(name, {}, {}); return go('planted.emit'); } });
+        export const pulled = defineCommand({ name: 'planted.pulled', risk: 'R1', handler: async (ctx) => { const { run } = ctx; return run('planted.emit', {}); } });
+        export function nestOut(ctx) {
+          return ctx.run('planted.emit', {});
+        }
+        function listed(ctx, name) {
+          return ctx.run(name, {});
+        }
+        export { listed };`,
+      'modules/planted/src/b.ts': `
+        import { nestOut as n, listed as l } from './a.ts';
+        export const aliased = defineCommand({ name: 'planted.aliased', risk: 'R1', handler: async (ctx) => n(ctx) });
+        export const far = defineCommand({ name: 'planted.far', risk: 'R1', handler: async (ctx) => l(ctx, 'planted.other') });`,
     });
     const external = (name: string) => name === 'planted.emit';
     const fed = (event: string) => [`${event} -> planted-queue (provider:planted)`];
     const route = ['planted.fed -> planted-queue (provider:planted)'];
-    // Without the commands the dynamic run may run, the test says so and does not guess.
+    const reached = ['planted.aliased', 'planted.arrow', 'planted.helper', 'planted.made', 'planted.outer', 'planted.renamed', 'planted.table', 'planted.twice'];
+    // What the test cannot read it says, and does not guess: a run whose command it cannot read, a parameter of an
+    // exported function (called from anywhere), a run taken off its context.
     const blind = emittersOf(['planted.fed'], planted, known, ['modules/planted']);
     expect(blind.problems).toEqual([
-      "modules/planted/src/a.ts:16: a nested run whose command the test cannot read (input.name); name the commands it may run in the test's dynamic runs",
+      "modules/planted/src/a.ts:16: a nested run whose command the test cannot read (planted.dynamic: input.name); name the commands it may run in the test's dynamic runs",
+      'modules/planted/src/a.ts:19: run destructured from its context; call it on the context',
+      "modules/planted/src/a.ts:24: a nested run whose command the test cannot read (planted.far: name); name the commands it may run in the test's dynamic runs",
     ]);
-    expect(belowR2(blind.commands, external, fed)).toEqual({ 'planted.outer': route, 'planted.twice': route, 'planted.table': route, 'planted.helper': route, 'planted.made': route });
-    // With them, it follows that one too; a stale entry is a problem.
-    const told = emittersOf(['planted.fed'], planted, known, ['modules/planted'], { 'modules/planted/src/a.ts: input.name': ['planted.twice'], 'modules/planted/src/a.ts: gone': ['planted.emit'] });
-    expect(told.problems).toEqual(['the dynamic run modules/planted/src/a.ts: gone is no longer in the sources']);
-    expect(Object.keys(belowR2(told.commands, external, fed)).sort()).toEqual(['planted.dynamic', 'planted.helper', 'planted.made', 'planted.outer', 'planted.table', 'planted.twice']);
+    expect(belowR2(blind.commands, external, fed)).toEqual(Object.fromEntries(reached.map((name) => [name, route])));
+    // Told what the dynamic run may run, it follows that one too; a stale entry is a problem.
+    const told = emittersOf(['planted.fed'], planted, known, ['modules/planted'], { 'planted.dynamic: input.name': ['planted.twice'], 'planted.gone: x': ['planted.emit'] });
+    expect(told.problems).toEqual([...blind.problems.slice(1), 'the dynamic run planted.gone: x is no longer in the sources']);
+    expect(Object.keys(belowR2(told.commands, external, fed)).sort()).toEqual([...reached, 'planted.dynamic'].sort());
   });
 });
