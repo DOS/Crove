@@ -46,7 +46,7 @@ import {
 } from '@crove/channel';
 import { createExtractClient } from '@crove/extract-contract';
 import type { ModuleManifest } from '@crove/kernel-contract';
-import { assertRlsEnforced, assertSystemContextAccess, createDb, createPool, singleCell, type Db } from '@crove/db';
+import { assertRlsEnforced, assertSystemContextAccess, createDb, createPool, singleCell, type CellResolver, type Db } from '@crove/db';
 import { buildKernelCommands, kernelManifest, kernelQueries, setMessageIdDomain, type OverviewContribution } from '@crove/kernel';
 import {
   LocalDiskStore,
@@ -57,6 +57,7 @@ import {
   type CommandDef,
   type CredentialBroker,
   type QueryDef,
+  type RuntimeOptions,
   type SessionStatusSource,
 } from '@crove/kernel-runtime';
 import { financeAgentPrograms, financeCommands, financeManifest, financeQueries } from '@crove/mod-finance';
@@ -212,6 +213,26 @@ export function moduleManifests(config: Pick<Config, 'CROVE_MODULES'>): ModuleMa
   return config.CROVE_MODULES.map((module) => MODULE_MANIFESTS[module]);
 }
 
+// The runtime of every server role, and the only place the server constructs one: the enabled modules' commands and
+// queries, registered on a runtime given their manifests, so every declared write, and any command registered on it
+// later (the org purge), is checked against them (P04, #1710). apps/kernel/test/invariant/command-writes.test.ts holds
+// the server to both.
+export function serverRuntime(cells: CellResolver, config: Config, options: Omit<RuntimeOptions, 'absentModules' | 'manifests'>): Runtime {
+  // Modules this build ships that CROVE_MODULES leaves out (ADR-0031).
+  const absentModules = AVAILABLE_MODULES.filter((module) => !config.CROVE_MODULES.includes(module));
+  const runtime = new Runtime(cells, {
+    ...options,
+    // ctx.query into one of them answers not_installed; any other unknown query is QUERY_NOT_FOUND.
+    absentModules,
+    // Every declared write must name a manifest table with that manifest's column classes (P04, #1710).
+    manifests: moduleManifests(config).map((manifest) => manifest.tables),
+  }).register(moduleDefinitions(config));
+  // A command registry that does not fit together (a reviser naming no proposal command, two revisers for one
+  // command) fails the boot (#216). Revisers of commands in modules this deployment leaves out are not checked.
+  runtime.validate({ absentModules });
+  return runtime;
+}
+
 // OAuth connectors of the providers this deployment has app credentials for (Social plan S6); a provider without
 // them is not offered.
 type ChannelConfig = Pick<Config, 'CHANNEL_SANDBOX' | 'CHANNEL_BLUESKY' | 'CHANNEL_TELEGRAM' | 'CHANNEL_MASTODON' | 'CHANNEL_DISCORD' | 'CHANNEL_WORDPRESS' | 'CHANNEL_THREADS_APP_ID' | 'CHANNEL_THREADS_APP_SECRET' | 'CHANNEL_LINKEDIN_CLIENT_ID' | 'CHANNEL_LINKEDIN_CLIENT_SECRET' | 'CHANNEL_GOOGLE_CLIENT_ID' | 'CHANNEL_GOOGLE_CLIENT_SECRET' | 'CHANNEL_GOOGLE_BUSINESS' | 'CHANNEL_TIKTOK_CLIENT_KEY' | 'CHANNEL_TIKTOK_CLIENT_SECRET' | 'CHANNEL_TIKTOK_VIDEO_LIST' | 'CHANNEL_TIKTOK_INBOX' | 'CHANNEL_X_CLIENT_ID' | 'CHANNEL_X_CLIENT_SECRET' | 'CHANNEL_PINTEREST_APP_ID' | 'CHANNEL_PINTEREST_APP_SECRET' | 'CHANNEL_META_APP_ID' | 'CHANNEL_META_APP_SECRET' | 'CHANNEL_META_GRAPH_VERSION' | 'CHANNEL_ZALO_APP_ID' | 'CHANNEL_ZALO_APP_SECRET'> &
@@ -332,19 +353,13 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
   function buildRuntime(connectionString: string, applicationName: string) {
     const pool = createPool({ connectionString, applicationName, max: 10, resetOnRelease: config.DB_RESET_ON_RELEASE === 'true' });
     const db = createDb(pool);
-    // Modules this build ships that CROVE_MODULES leaves out (ADR-0031).
-    const absentModules = AVAILABLE_MODULES.filter((module) => !config.CROVE_MODULES.includes(module));
     // One database is the control plane and the only cell (Decision 14, plan §3.6).
-    const runtime = new Runtime(singleCell(db), {
-      // ctx.query into one of them answers not_installed; any other unknown query is QUERY_NOT_FOUND.
-      absentModules,
+    const runtime = serverRuntime(singleCell(db), config, {
       // Approval audit rows name the build their policy ran under (plan §4.7, #1402).
       build: config.CROVE_BUILD ?? 'dev',
       // Audit and idempotency rows hash a command's input under the deployment's key (#1732), so an exported or
       // archived row never confirms a guessed input.
       inputHash: 'keyed',
-      // Every declared write must name a manifest table with that manifest's column classes (P04, #1710).
-      manifests: moduleManifests(config).map((manifest) => manifest.tables),
       // Every user request is checked against its session (ADR-0028); the identity port never resolves to "no check".
       sessions: resolved.identity.sessions,
       stepUp: config.AUTH_STEP_UP,
@@ -354,10 +369,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
         reserve: config.REFUSAL_AUDIT_RESERVE_PER_ACTOR,
         windowSeconds: config.REFUSAL_AUDIT_WINDOW_SECONDS,
       },
-    }).register(moduleDefinitions(config));
-    // A command registry that does not fit together (a reviser naming no proposal command, two revisers for one
-    // command) fails the boot (#216). Revisers of commands in modules this deployment leaves out are not checked.
-    runtime.validate({ absentModules });
+    });
     return { pool, db, runtime };
   }
 
