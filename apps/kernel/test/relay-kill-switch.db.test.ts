@@ -168,6 +168,18 @@ suite('a kill switch per relay type on PostgreSQL (#1696)', () => {
         expect((await c.query(`SELECT crove_kernel.global_kill_switch_on('relay:a.b') AS on`)).rows[0]).toEqual({ on: false });
       });
     }
+    // No Crove role may read the held types or flip a switch; the claim stays the worker's alone.
+    const roles = ['crove_app', 'crove_worker', 'crove_tenant', 'crove_definer_tenant', 'crove_auth_reader', 'crove_prober', 'crove_reporter'];
+    const matrix = await admin(async (c) => {
+      const fns = ['crove_kernel.relay_held_types()', 'crove_kernel.global_kill_switch_set(text,boolean,text,text)', 'crove_kernel.outbox_claim(integer)'];
+      const { rows } = await c.query<{ fn: string; role: string }>(
+        `SELECT f AS fn, r AS role FROM unnest($1::text[]) f CROSS JOIN unnest($2::text[]) r
+         WHERE has_function_privilege(r, f::regprocedure, 'EXECUTE') ORDER BY 1, 2`,
+        [fns, roles],
+      );
+      return rows;
+    });
+    expect(matrix).toEqual([{ fn: 'crove_kernel.outbox_claim(integer)', role: 'crove_worker' }]);
     const history = await admin(
       async (c) => (await c.query(`SELECT key, engaged, reason, changed_by FROM crove_kernel.global_kill_switch WHERE key = $1 ORDER BY changed_at, id`, [`relay:${HELD}`])).rows,
     );

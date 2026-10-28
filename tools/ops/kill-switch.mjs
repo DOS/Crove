@@ -43,11 +43,17 @@ export function parseArgs(argv) {
   return { action: 'set', key: first, engaged: second === 'on', by, reason };
 }
 
-// 'ai' and 'mail' always, then every relay key that has a history, each with its state and last change.
+// 'ai' and 'mail' always, then every relay key that has a history, each with its state and last change. An engaged
+// relay key also shows how many events it holds (up to 10000), so a mistyped type that holds nothing shows 0.
 export const STATUS_SQL = `
   SELECT k.key, crove_kernel.global_kill_switch_on(k.key) AS engaged,
          (SELECT row_to_json(s) FROM (SELECT g.changed_at, g.changed_by, g.reason FROM crove_kernel.global_kill_switch g
-           WHERE g.key = k.key ORDER BY g.changed_at DESC, g.id DESC LIMIT 1) s) AS last
+           WHERE g.key = k.key ORDER BY g.changed_at DESC, g.id DESC LIMIT 1) s) AS last,
+         CASE WHEN k.key LIKE 'relay:%' AND crove_kernel.global_kill_switch_on(k.key) THEN
+           (SELECT count(*)::int FROM (SELECT 1 FROM crove_kernel.outbox_pending p
+              JOIN crove_kernel.outbox_event e ON e.org_id = p.org_id AND e.id = p.event_id
+              WHERE e.type = substr(k.key, 7) LIMIT 10000) h)
+         END AS held
   FROM (SELECT unnest($1::text[]) AS key
         UNION SELECT DISTINCT g.key FROM crove_kernel.global_kill_switch g WHERE g.key LIKE 'relay:%') k
   ORDER BY k.key LIKE 'relay:%', k.key`;
@@ -63,8 +69,9 @@ async function main() {
       await client.query('SELECT crove_kernel.global_kill_switch_set($1, $2, $3, $4)', [command.key, command.engaged, command.reason, command.by]);
     }
     const { rows } = await client.query(STATUS_SQL, [KEYS]);
-    for (const { key, engaged, last } of rows) {
-      console.log(`${key}: ${engaged ? 'ON (stopped)' : 'off'}${last ? ` since ${last.changed_at} by ${last.changed_by}${last.reason ? ` (${last.reason})` : ''}` : ''}`);
+    for (const { key, engaged, last, held } of rows) {
+      const holding = held === null || held === undefined ? '' : `, holding ${held >= 10000 ? '10000+' : held} event(s)`;
+      console.log(`${key}: ${engaged ? 'ON (stopped)' : 'off'}${holding}${last ? ` since ${last.changed_at} by ${last.changed_by}${last.reason ? ` (${last.reason})` : ''}` : ''}`);
     }
   } finally {
     await client.end();

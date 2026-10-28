@@ -6,7 +6,12 @@
 -- leaves the outbox events of that type where they are and relays every other type, so a type whose jobs misbehave
 -- (a provider that must not be called, a job that crashes the worker) stops without stopping the rest. Releasing the
 -- switch drains them: the rows were never claimed, so the next relay pass (at most a second later) sends them, in
--- order, with the singleton keys they always had.
+-- order, with the singleton keys they always had. Engaging or releasing takes effect from the next claim; a relay
+-- transaction already in flight sends what it claimed.
+--
+-- While a type is held, each claim walks the held rows at the head of the outbox (one outbox_event probe each) before
+-- it reaches claimable ones, so a long hold on a type tenants produce in bulk slows the relay; holds are meant to be
+-- short (incidents runbook §7).
 --
 -- The table, its RLS, its grants and its break-glass path stay as they were: only the database owner flips a key,
 -- through crove_kernel.global_kill_switch_set (pnpm ops:kill-switch), and every change is a row of the append-only
