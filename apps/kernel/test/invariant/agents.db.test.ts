@@ -1366,6 +1366,19 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
         handler: async (ctx) => ctx.run('t1697.inner', {}),
       }),
       defineCommand({ name: 't1697.inner', input: z.object({}), risk: 'R1', access: 'system', writes: [CONTACT_1697], handler: async () => ({ ok: true }) }) as CommandDef<unknown, unknown>,
+      // The same through a clean command in between: the bound holds at every depth.
+      proposal1697('t1697.nests_deep', [INTERNAL_1697], {
+        agentApprovers: { roles: [TEMPLATE] },
+        handler: async (ctx) => ctx.run('t1697.middle', {}),
+      }),
+      defineCommand({
+        name: 't1697.middle',
+        input: z.object({}),
+        risk: 'R1',
+        access: 'system',
+        writes: [INTERNAL_1697],
+        handler: async (ctx) => ctx.run('t1697.inner', {}),
+      }) as CommandDef<unknown, unknown>,
     ];
     worker.register({ commands });
     app.register({ commands });
@@ -1401,6 +1414,17 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
       logged.mockRestore();
     }
     expect((await proposalRow(nests.id)).status).toBe('pending');
+    const deep = await flags('t1697.nests_deep');
+    expect(deep.flags).toEqual([]);
+    const deepApproval = await agentApproves(await liveAgent(orgA, owner), deep.id);
+    const deepLogged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await expect(deepApproval.execute()).rejects.toMatchObject({ code: 'INTERNAL' });
+      expect(deepLogged.mock.calls.flat().map(String).join('\n')).toMatch(/t1697\.nests_deep: declares no contact or payment write \(P04\), so it cannot run t1697\.inner/);
+    } finally {
+      deepLogged.mockRestore();
+    }
+    expect((await proposalRow(deep.id)).status).toBe('pending');
     expect(await withAdmin(async (c) => (await c.query('SELECT count(*)::int AS n FROM crove_kernel.audit_event WHERE org_id = $1 AND command = $2', [orgA, 't1697.inner'])).rows[0]?.n)).toBe(0);
   });
 

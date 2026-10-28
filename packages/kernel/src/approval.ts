@@ -350,10 +350,6 @@ export async function decideAgentApproval(
   const flagged = HUMAN_REVIEW_RULES.find((rule) => flags.includes(rule));
   if (flagged) return { reason: 'human_required', rule: flagged };
   if (proposal.tainted) return { reason: 'human_required', rule: 'P03' };
-  // The command as registered now, whatever flags the proposal carries (#1697): one that may write a contact or payment
-  // column is a human's to approve. Agent approvers are refused on such a command at registration, so this is a
-  // second wall.
-  if (info.contactOrPayment) return { reason: 'human_required', rule: 'P04' };
 
   const { rows: seats } = await sql<{ position_id: string; role_key: string; module: string; agent_risk: Risk; template_risk: Risk }>`
     SELECT p.id AS position_id, p.role_key, p.module, a.max_risk AS agent_risk, t.max_risk AS template_risk
@@ -363,6 +359,10 @@ export async function decideAgentApproval(
     WHERE a.org_id = ${orgId}::uuid AND a.id = ${approver.agentId}::uuid AND a.status = 'active'`.execute(trx);
   const seat = seats[0];
   if (!seat || !info.agentApprovers.includes(seat.role_key)) return { reason: 'not_eligible', rule: 'P12' };
+  // The command as registered now, whatever flags the proposal carries (#1697): one that may write a contact or payment
+  // column is a human's to approve. Agent approvers are refused on such a command at registration, so this is a
+  // second wall, after P12 so a command no agent may approve is still refused as P12.
+  if (info.contactOrPayment) return { reason: 'human_required', rule: 'P04' };
   const maxRisk = RISK_RANK[seat.agent_risk] < RISK_RANK[seat.template_risk] ? seat.agent_risk : seat.template_risk;
   if (RISK_RANK[info.risk] > RISK_RANK[maxRisk]) return { reason: 'above_max_risk', rule: 'P02' };
 

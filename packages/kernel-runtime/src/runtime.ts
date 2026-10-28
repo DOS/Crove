@@ -158,8 +158,10 @@ export interface CommandDef<I = unknown, O = unknown> {
   // not have, an unknown class, a table listed twice or an empty column list. An agent's proposal of the command is
   // flagged P04 when a declared column is `contact` or `payment`, and also when the command declares no writes at all
   // (nothing says it writes none), unless it declares agent approvers the old way (noContactOrPayment, below). A
-  // proposal command whose declared writes have no such column may run, as a nested command, only commands that
-  // declare none either: the runtime refuses any other at execution, so a nested write cannot escape P04.
+  // proposal command whose declared writes have no such column may run, as a nested command at any depth, only commands
+  // that declare none either: the runtime refuses any other at execution, so a nested write cannot escape P04. Events it
+  // emits are not writes: a command that handles them runs on its own, under its own declaration (a proposal command
+  // declared free of contact and payment writes must not emit one whose handler writes such a column, #1710).
   writes?: readonly CommandWrite[];
   // access 'proposal' only, R1 or R2 only (ADR-0029 section 6): the role keys of positions whose agents may approve
   // a proposal of this command, within their max_risk and only when the proposal's outcome names none of P03 to
@@ -1114,9 +1116,12 @@ export class Runtime {
     trx: Transaction<Database>,
     def: CommandDef<unknown, unknown>,
     input: unknown,
-    base: { orgId: string; actor: Actor; entered: Entered; proposalId: string | null },
+    // cleanRoot: the proposal command, declared free of contact and payment writes, this command runs under (as
+    // itself or nested at any depth below it), if any (P04, #1697).
+    base: { orgId: string; actor: Actor; entered: Entered; proposalId: string | null; cleanRoot?: string },
   ): Promise<O> {
     const commandId = uuidv7();
+    const cleanRoot = base.cleanRoot ?? (def.access === 'proposal' && this.contactOrPayment.get(def.name) === false ? def.name : undefined);
     let auditDetail: Record<string, unknown> | undefined;
     // Refusals ctx.tryRun caught and rolled back, written after the handler returns.
     const caught: CaughtRefusal[] = [];
@@ -1319,9 +1324,9 @@ export class Runtime {
     };
     const runNested = async <R>(nested: NestedRun): Promise<R> => {
       // P04 is derived from a proposal command's declared writes, so one that declares no contact or payment write never
-      // runs a command that may write one (or declares nothing), whoever runs it.
-      if (def.access === 'proposal' && this.contactOrPayment.get(def.name) === false && this.contactOrPayment.get(nested.def.name) !== false) {
-        throw new Error(`command ${def.name}: declares no contact or payment write (P04), so it cannot run ${nested.def.name}, which may write one`);
+      // runs a command that may write one (or declares nothing), whoever runs it and however deep it is nested.
+      if (cleanRoot !== undefined && this.contactOrPayment.get(nested.def.name) !== false) {
+        throw new Error(`command ${cleanRoot}: declares no contact or payment write (P04), so it cannot run ${nested.def.name}, which may write one`);
       }
       const { proposalId } = nested;
       await this.authorize(trx, nested.def, base.actor, base.entered, proposalId !== null);
@@ -1331,7 +1336,7 @@ export class Runtime {
       this.requireStepUp(nested.def, base.actor);
       // An R3 command already confirmed the session live for this execution.
       if (def.risk !== 'R3') await this.requireLiveSession(nested.def, base.actor);
-      return this.runInTx<R>(trx, nested.def, nested.input, { ...base, proposalId });
+      return this.runInTx<R>(trx, nested.def, nested.input, { ...base, proposalId, ...(cleanRoot !== undefined ? { cleanRoot } : {}) });
     };
     let output: O;
     try {

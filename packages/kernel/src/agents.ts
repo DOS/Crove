@@ -1594,11 +1594,10 @@ async function taskChain(trx: Trx, orgId: string, taskId: string): Promise<{ use
 // by the agent's kernel.task.propose in that run on that task (#435), the run is the agent's and live, the task is its
 // position's, no kill switch covering the agent is engaged or was engaged since the request (#435), the preparer is
 // still R0 and the payload within MAX_DRAFT_PAYLOAD_BYTES. The kind comes from the command and the title from the
-// kernel. Flags: P03 when the run or the task is
-// tainted; P04 when the command declares a write of a column its manifest classifies `contact` or `payment`, or
-// declares no writes (CommandInfo.contactOrPayment, #1697); P05 for R3 and P06 for R2 (work asked for by a non-user
-// actor); P07 when the chain did not start from a human. Authors: the agent and the run, and every user who created a task in the chain. One proposal per
-// event.
+// kernel. Flags: P03 when the run or the task is tainted; P04 when the command declares a write of a column its
+// manifest classifies `contact` or `payment`, or declares no writes (CommandInfo.contactOrPayment, #1697); P05 for R3
+// and P06 for R2 (work asked for by a non-user actor); P07 when the chain did not start from a human. Authors: the
+// agent and the run, and every user who created a task in the chain. One proposal per event.
 export const createAgentProposal = defineCommand({
   name: 'kernel.agent.proposal.create',
   input: z.object({ eventId: zId }),
