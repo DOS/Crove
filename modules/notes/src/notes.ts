@@ -436,7 +436,8 @@ export const noteGet = defineQuery({
 });
 
 // Words typed without Vietnamese marks find them ("hoa don" finds "hóa đơn"), each as a prefix, in the title, tags and
-// body of the notes the caller may read, outside the trash.
+// body of the notes the caller may read, outside the trash: the row policies decide, so another member's private note
+// is never found. The closest matches first, then the latest.
 export const noteSearch = defineQuery({
   name: 'notes.note.search',
   input: zNoteSearch,
@@ -449,6 +450,7 @@ export const noteSearch = defineQuery({
       .where('org_id', '=', ctx.orgId)
       .where('deleted_at', 'is', null)
       .where(sql<boolean>`search @@ crove_kernel.search_query(${input.q})`)
+      .orderBy(sql`pg_catalog.ts_rank(search, crove_kernel.search_query(${input.q}))`, 'desc')
       .orderBy('updated_at', 'desc')
       .orderBy('id')
       .limit(input.limit)

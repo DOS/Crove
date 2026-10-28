@@ -1,9 +1,11 @@
-// The worker's notes commands (issue #1671, ADR-0037 §2 and §4): emptying the trash, and removing a former member's
-// private notes 30 days after they left. The system context reads no private note, so both go through definers that
-// delete by rule and answer a count, never text; the definers refuse every login but the worker's and every context
-// but the org's system context.
+// The worker's notes commands (issue #1671, ADR-0037 §2 and §4): emptying the trash, removing a former member's
+// private notes 30 days after they left, and a to-do's reminder (#1675). The system context reads no private note or
+// to-do, so the first two go through definers that delete by rule and answer a count, never text; the definers refuse
+// every login but the worker's and every context but the org's system context. The reminder gets ids and a time from
+// the worker's claim (crove_notes.todo_reminders_claim) and writes a notification that holds none of the to-do's text.
 import { sql } from 'kysely';
 import { z } from 'zod';
+import { notifyMembers, uploaderEntity } from '@crove/kernel';
 import { NOTE_TRASH_DAYS, zId } from '@crove/kernel-contract';
 import { DomainError, defineCommand, type CommandContext } from '@crove/kernel-runtime';
 
@@ -61,4 +63,41 @@ export const memberItemsPurge = defineCommand({
   },
 });
 
-export const systemCommands = [trashEmpty, memberItemsPurge];
+// The notification kind of a to-do's reminder; members turn it off like any kind (#671).
+export const TODO_DUE = 'notes.todo_due';
+
+// One reminder the worker claimed: a notification for the to-do's owner, once per to-do and reminder time (a replayed
+// job writes nothing), with the to-do's id as its subject and no text (notes.md §3.6: "Bạn có 1 việc đến hạn"; the app
+// shows the title only when the owner opens it). The owner comes from crove_notes.todo_reminder_owner, never from the
+// input, and only while the to-do still waits for this reminder: one completed, deleted or given another time after the
+// claim sends nothing. The owner gets nothing either once they left the org or turned the kind off.
+export const todoRemind = defineCommand({
+  name: 'notes.todo.remind',
+  input: z.strictObject({ todoId: zId, remindAt: z.iso.datetime({ offset: true }) }),
+  risk: 'R1',
+  sideEffect: 'internal',
+  access: 'system',
+  handler: async (ctx, input): Promise<{ sent: number }> => {
+    assertSystem(ctx);
+    const remindAt = new Date(input.remindAt).toISOString();
+    const { rows } = await sql<{ owner: string | null }>`SELECT crove_notes.todo_reminder_owner(${input.todoId}::uuid, ${remindAt}::timestamptz) AS owner`.execute(ctx.trx);
+    const owner = rows[0]?.owner ?? null;
+    if (owner === null) {
+      ctx.audit({ todoId: input.todoId, remindAt, sent: 0, current: false });
+      return { sent: 0 };
+    }
+    const sent = await notifyMembers(ctx, {
+      kind: TODO_DUE,
+      users: [owner],
+      key: `todo_due:${input.todoId}:${remindAt}`,
+      subject: { type: 'notes.todo', id: input.todoId },
+      // Under an entity the owner sees (the notification's le_scope policy, #1280), by the rule enter_context's le_scope
+      // and a member's own upload follow.
+      legalEntityId: await uploaderEntity(ctx, owner),
+    });
+    ctx.audit({ todoId: input.todoId, remindAt, sent });
+    return { sent };
+  },
+});
+
+export const systemCommands = [trashEmpty, memberItemsPurge, todoRemind];

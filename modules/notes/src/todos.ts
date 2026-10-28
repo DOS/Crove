@@ -10,6 +10,7 @@ import { sql } from 'kysely';
 import { z } from 'zod';
 import {
   auditValue,
+  todoAutoReminder,
   todoDueInstant,
   todoLocalTime,
   todoStanding,
@@ -20,6 +21,7 @@ import {
   zTodoUpdate,
   type Todo,
   type TodoCount,
+  type TodoReminder,
   type TodoStatus,
   type TodoStep,
   type TodoSummary,
@@ -45,6 +47,7 @@ const SUMMARY = [
   'due_on',
   'due_at',
   'time_zone',
+  'remind_at',
   'sort_key',
   'task_id',
   'revision',
@@ -62,6 +65,7 @@ interface SummaryRow {
   due_on: string | null;
   due_at: Date | string | null;
   time_zone: string;
+  remind_at: Date | string | null;
   sort_key: string;
   task_id: string | null;
   revision: number;
@@ -86,6 +90,7 @@ function summary(r: SummaryRow, now: Date): TodoSummary {
     dueAt: dueAt?.toISOString() ?? null,
     dueTime: dueAt ? todoLocalTime(dueAt, r.time_zone) : null,
     timeZone: r.time_zone,
+    remindAt: iso(r.remind_at),
     group: standing?.group ?? null,
     overdue: standing?.overdue ?? false,
     steps: { done: list.filter((s) => s.done).length, total: list.length },
@@ -126,6 +131,26 @@ function due(input: { dueOn: string | null; dueTime: string | null; timeZone: st
     time_zone: input.timeZone,
   };
 }
+
+// When the reminder is due (notes.md §3.8), and whether it counts as passed: an automatic time already past (a to-do
+// written for today after 8:00) is kept, so it still reads as automatic and follows a moved due day, but marked passed,
+// so it is not sent at once; a picked time must be ahead.
+function remindAt(reminder: TodoReminder, at: { due_on: string | null; due_at: Date | null; time_zone: string }, now: Date): { at: Date | null; passed: boolean } {
+  if (reminder === 'off') return { at: null, passed: false };
+  if (reminder === 'auto') {
+    const auto = todoAutoReminder({ dueOn: at.due_on, dueAt: at.due_at, timeZone: at.time_zone });
+    return { at: auto, passed: auto !== null && auto.getTime() <= now.getTime() };
+  }
+  const picked = new Date(reminder.at);
+  if (picked.getTime() <= now.getTime()) throw new DomainError('TODO_REMINDER_PAST', 400, 'Giờ nhắc đã qua; hãy chọn một giờ sắp tới');
+  return { at: picked, passed: false };
+}
+
+// A to-do back in the list (reopened, restored) whose reminder time passed meanwhile is not reminded late.
+const reminderPassed = (now: Date) => sql<Date | null>`CASE WHEN remind_at <= ${now}::timestamptz AND reminded_at IS NULL THEN ${now}::timestamptz ELSE reminded_at END`;
+
+// How a reminder is told in the audit: its kind and time, never the to-do's text.
+const reminderKind = (reminder: TodoReminder) => (typeof reminder === 'string' ? reminder : 'custom');
 
 // The text as stored: empty details are none, and the steps are JSON for the jsonb column.
 const detailsOf = (details: string): string | null => (details.trim() === '' ? null : details);
@@ -181,6 +206,8 @@ export const todoCreate = defineCommand({
     // A new to-do goes first in the caller's list.
     const rows = await ownKeys(ctx, null);
     const sortKey = await placeBetween(ctx, rows, -1, 0);
+    const when = due(input);
+    const remind = remindAt(input.reminder, when, ctx.now);
     const row = await ctx.trx
       .insertInto('crove_notes.todo')
       .values({
@@ -189,7 +216,9 @@ export const todoCreate = defineCommand({
         title: input.title,
         details: detailsOf(input.details),
         checklist: checklistOf(input.checklist),
-        ...due(input),
+        ...when,
+        remind_at: remind.at,
+        reminded_at: remind.passed ? ctx.now : null,
         sort_key: sortKey,
         created_at: ctx.now,
         updated_at: ctx.now,
@@ -204,6 +233,8 @@ export const todoCreate = defineCommand({
       dueOn: input.dueOn,
       dueTime: input.dueTime !== null,
       timeZone: input.timeZone,
+      reminder: reminderKind(input.reminder),
+      remindAt: remind.at?.toISOString() ?? null,
     });
     return written(row);
   },
@@ -227,21 +258,41 @@ export const todoUpdate = defineCommand({
     const details = detailsOf(input.details);
     const checklist = checklistOf(input.checklist);
     const beforeDueAt = before.due_at === null ? null : new Date(before.due_at).getTime();
+    const dueMoved = before.due_on !== next.due_on || beforeDueAt !== (next.due_at?.getTime() ?? null) || before.time_zone !== next.time_zone;
+    const beforeRemind = before.remind_at === null ? null : new Date(before.remind_at);
+    // Without a reminder in the input it stays, unless it was the automatic one of the old due day and time, or there
+    // was none for want of a due day: it then follows the new ones.
+    const wasAuto =
+      beforeRemind === null
+        ? before.due_on === null
+        : beforeRemind.getTime() === todoAutoReminder({ dueOn: before.due_on, dueAt: beforeDueAt === null ? null : new Date(beforeDueAt), timeZone: before.time_zone })?.getTime();
+    const remind = input.reminder !== undefined ? remindAt(input.reminder, next, ctx.now) : dueMoved && wasAuto ? remindAt('auto', next, ctx.now) : null;
+    const remindChanged = remind !== null && (beforeRemind?.getTime() ?? null) !== (remind.at?.getTime() ?? null);
     const changed = [
       ...(before.title !== input.title ? ['title'] : []),
       ...(before.details !== details ? ['details'] : []),
       ...(checklistOf(steps(before.checklist)) !== checklist ? ['checklist'] : []),
       ...(before.due_on !== next.due_on || beforeDueAt !== (next.due_at?.getTime() ?? null) ? ['due'] : []),
       ...(before.time_zone !== next.time_zone ? ['timeZone'] : []),
+      ...(remindChanged ? ['reminder'] : []),
     ];
     const row = await ctx.trx
       .updateTable('crove_notes.todo')
-      .set({ title: input.title, details, checklist, ...next, revision: before.revision + 1, updated_at: ctx.now })
+      // A new reminder time is sent at that time, unless it has already passed.
+      .set({
+        title: input.title,
+        details,
+        checklist,
+        ...next,
+        ...(remind !== null && remindChanged ? { remind_at: remind.at, reminded_at: remind.passed ? ctx.now : null } : {}),
+        revision: before.revision + 1,
+        updated_at: ctx.now,
+      })
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', input.todoId)
       .returning(['id', 'revision'])
       .executeTakeFirstOrThrow();
-    ctx.audit({ todoId: row.id, revision: row.revision, changed, dueOn: next.due_on });
+    ctx.audit({ todoId: row.id, revision: row.revision, changed, dueOn: next.due_on, ...(remind !== null && remindChanged ? { remindAt: remind.at?.toISOString() ?? null } : {}) });
     return written(row);
   },
 });
@@ -263,7 +314,7 @@ function statusCommand(name: string, from: TodoStatus, to: TodoStatus) {
       if (before.status !== from) throw new DomainError('TODO_NOT_CHANGEABLE', 409, 'Việc này đã được giao hoặc đã hủy');
       const row = await ctx.trx
         .updateTable('crove_notes.todo')
-        .set({ status: to, done_at: to === 'done' ? ctx.now : null, revision: before.revision + 1, updated_at: ctx.now })
+        .set({ status: to, done_at: to === 'done' ? ctx.now : null, ...(to === 'open' ? { reminded_at: reminderPassed(ctx.now) } : {}), revision: before.revision + 1, updated_at: ctx.now })
         .where('org_id', '=', ctx.orgId)
         .where('id', '=', input.todoId)
         .returning(['id', 'revision'])
@@ -315,7 +366,7 @@ function trashCommand(name: string, toTrash: boolean) {
       if ((before.deleted_at !== null) === toTrash) return written(before);
       await ctx.trx
         .updateTable('crove_notes.todo')
-        .set({ deleted_at: toTrash ? ctx.now : null, updated_at: ctx.now })
+        .set({ deleted_at: toTrash ? ctx.now : null, ...(toTrash ? {} : { reminded_at: reminderPassed(ctx.now) }), updated_at: ctx.now })
         .where('org_id', '=', ctx.orgId)
         .where('id', '=', input.todoId)
         .execute();
@@ -335,6 +386,8 @@ export const todoList = defineQuery({
   handler: async (ctx, input): Promise<TodoSummary[]> => {
     userOf(ctx.actor);
     let q = ctx.trx.selectFrom('crove_notes.todo').select(SUMMARY).where('org_id', '=', ctx.orgId);
+    // Words typed without Vietnamese marks find them ("hoa don" finds "hóa đơn"), each as a prefix.
+    if (input.q !== undefined) q = q.where(sql<boolean>`search @@ crove_kernel.search_query(${input.q})`);
     if (input.view === 'trash') q = q.where('deleted_at', 'is not', null).orderBy('deleted_at', 'desc');
     else {
       q = q.where('deleted_at', 'is', null);

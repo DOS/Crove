@@ -1,10 +1,12 @@
-// In-app notifications of the kernel and finance (#671): the kinds the settings list, what an item opens, and how a VAT
-// period reads. Social's are apart (lib/social-notifications.ts, #637). No React imports, so it is unit tested.
+// In-app notifications of the kernel, finance and notes (#671): the kinds the settings list, what an item opens, and how
+// a VAT period reads. Social's are apart (lib/social-notifications.ts, #637). No React imports, so it is unit tested.
 
 // The kinds a member can turn off, by module, in the order the settings list them.
 export const NOTIFICATION_KINDS = {
   kernel: ['kernel.approval_waiting', 'kernel.file_unreadable'],
   finance: ['finance.bank_attention', 'finance.portal_attention', 'finance.period_closing'],
+  // A to-do's reminder (#1675): it holds no text, the to-do shows in My work.
+  notes: ['notes.todo_due'],
 } as const;
 export type KnownNotificationKind = (typeof NOTIFICATION_KINDS)[keyof typeof NOTIFICATION_KINDS][number];
 
@@ -24,10 +26,12 @@ export type NotificationTarget =
   | { to: 'inbox' }
   | { to: 'bank'; account?: string }
   | { to: 'portal' }
-  | { to: 'ledger' };
+  | { to: 'ledger' }
+  | { to: 'myWork' };
 
 // What an item opens: the proposal waiting for approval, the Inbox (where a file that failed to read is listed), the
-// bank account with lines to look at, the tax-portal check, or the ledger, where the period is locked.
+// bank account with lines to look at, the tax-portal check, the ledger, where the period is locked, or My work, where
+// the reminded to-do is.
 export function notificationTarget(item: { kind: string; subjectId: string | null; detail: Record<string, string> }): NotificationTarget | null {
   switch (item.kind) {
     case 'kernel.approval_waiting':
@@ -40,6 +44,8 @@ export function notificationTarget(item: { kind: string; subjectId: string | nul
       return { to: 'portal' };
     case 'finance.period_closing':
       return { to: 'ledger' };
+    case 'notes.todo_due':
+      return { to: 'myWork' };
     default:
       return null;
   }

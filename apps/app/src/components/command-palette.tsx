@@ -8,8 +8,8 @@ export interface PaletteEntry extends PaletteItem {
 
 // The command palette (issue #439): a modal <dialog> holding an editable combobox. The browser's modal dialog traps
 // focus, closes on Esc and gives focus back to whatever had it; the input keeps focus while the arrow keys move the
-// active option (aria-activedescendant) and Enter runs it. found holds what the org's search found for the query
-// (#673), reported through onQueryChange; search says whether that search is running or failed.
+// active option (aria-activedescendant) and Enter runs it. found holds what the org's search (#673) and the notes search
+// (#1675) found for the query, reported through onQueryChange; search says whether they are running or one failed.
 export function CommandPalette({
   entries,
   open,
