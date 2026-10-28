@@ -139,7 +139,9 @@ export function forRecipient(
   recipientUserId: string | undefined,
   shared = false,
 ): boolean {
-  if (recipientUserId !== undefined) return recipientUserId === streamUserId || (shared && scope.sharedNotes === true);
+  if (recipientUserId !== undefined) {
+    return recipientUserId === streamUserId || (shared && SHARED_HINT_TYPES.has(type) && scope.sharedNotes === true);
+  }
   return !RECIPIENT_HINT_TYPES.has(type);
 }
 

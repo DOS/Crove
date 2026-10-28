@@ -1,13 +1,15 @@
 // Invariant suite (Decision 7): the invalidation hints of to-dos and notes reach only the members who may read the row
 // (issue #1753), on a real PostgreSQL 17 with the NOTIFY triggers, one LISTEN connection and the HTTP API. One actor
-// of each kind: the author (an owner), a member with the whole org, a viewer, and a member limited to one legal entity.
+// of each kind: the author (an owner), an admin, a member with the whole org, a viewer, and a member limited to one
+// legal entity.
 //   - On the channel a to-do names its owner, a private note its author, and a shared note its author with `+shared`
 //     (also the update that makes it private); an org-wide row names nobody.
 //   - kernel.stream.check grants sharedNotes to exactly the actors whose context reads another member's shared note
 //     under note_read.
-//   - The author's stream gets every hint of their to-dos and notes. The whole-org member's stream gets the shared
-//     note's, including the update that makes it private, and nothing of the to-do or the private note. The viewer's
-//     and the entity-limited member's streams get none of them. Org-wide hints reach all four, as {type, id}.
+//   - The author's stream gets every hint of their to-dos and notes. The admin's and the whole-org member's streams get
+//     the shared note's, including the update that makes it private, and nothing of the to-do or the private note. The
+//     viewer's and the entity-limited member's streams get none of them. A shared note the member writes reaches the
+//     owner and the admin too. Org-wide hints reach all five, as {type, id}.
 // Keep this file self-contained: import package code under test, never helpers from outside test/invariant/. Set
 // CROVE_TEST_ADMIN_URL to a superuser URL; each run creates and drops its own database.
 import { randomUUID } from 'node:crypto';
@@ -34,7 +36,7 @@ const SECRET = 'stream-notes-invariant-secret-0123456789-abcdefghij';
 const ISSUER = 'http://localhost:9999';
 const RECHECK_SECONDS = 1;
 // The author owns the org; the others join with these roles. The accountant is then limited to one legal entity.
-const ACTORS = ['author', 'member', 'viewer', 'accountant'] as const;
+const ACTORS = ['author', 'admin', 'member', 'viewer', 'accountant'] as const;
 type Actor = (typeof ACTORS)[number];
 
 const suite = ADMIN ? describe : describe.skip;
@@ -194,7 +196,7 @@ suite('invariant: the hints of to-dos and notes reach only the members who may r
     return result.fileId;
   }
 
-  async function join(name: Actor, role: 'member' | 'viewer') {
+  async function join(name: Actor, role: 'admin' | 'member' | 'viewer') {
     await token(name);
     const invited = await rpc('org/invite', 'author', { email: accounts.get(name)?.email, role }, slug, true);
     expect(invited.status).toBe(200);
@@ -260,6 +262,7 @@ suite('invariant: the hints of to-dos and notes reach only the members who may r
     slug = String(created.body.slug);
     orgId = String(created.body.orgId);
     userIds.set('author', String((await rpc('me/get', 'author', undefined, null)).body.userId));
+    await join('admin', 'admin');
     await join('member', 'member');
     await join('viewer', 'viewer');
     // The accountant joins as a member, then keeps the branch's books only (an entity-scoped assignment narrows
@@ -329,7 +332,7 @@ suite('invariant: the hints of to-dos and notes reach only the members who may r
   it("grants sharedNotes to exactly the actors whose context reads another member's shared note", async () => {
     const shared = await note('author', 'org');
     const results: Record<string, { sharedNotes: unknown; reads: boolean }> = {};
-    for (const name of ['member', 'viewer', 'accountant'] as const) {
+    for (const name of ['admin', 'member', 'viewer', 'accountant'] as const) {
       const check = await runtime.query<{ sharedNotes: unknown }>('kernel.stream.check', {}, { actor: actorOf(name), orgId });
       const c = await pool.connect();
       let reads = false;
@@ -344,6 +347,7 @@ suite('invariant: the hints of to-dos and notes reach only the members who may r
       results[name] = { sharedNotes: check.sharedNotes, reads };
     }
     expect(results).toEqual({
+      admin: { sharedNotes: true, reads: true },
       member: { sharedNotes: true, reads: true },
       viewer: { sharedNotes: false, reads: false },
       accountant: { sharedNotes: false, reads: false },
@@ -360,34 +364,35 @@ suite('invariant: the hints of to-dos and notes reach only the members who may r
       const task = await todo('author');
       const privateNote = await note('author', 'private');
       const shared = await note('author', 'org');
-      // The whole-org member's own to-do: theirs alone, not the author's.
+      // The whole-org member's own to-do (theirs alone, not the author's), and a note they share: the owner and the
+      // admin read it as other members' shared notes.
       const memberTask = await todo('member');
+      const memberShared = await note('member', 'org');
       // A stream sends a held hint once, so each update waits until the hint before it went out.
       await streams.author.waitFor((e) => [task, privateNote, shared].every((id) => got(e, id) >= 1), 5_000);
-      await streams.member.waitFor((e) => got(e, shared) >= 1, 5_000);
+      for (const name of ['admin', 'member'] as const) await streams[name].waitFor((e) => got(e, shared) >= 1, 5_000);
       await setVisibility(shared, 'private');
-      await streams.author.waitFor((e) => got(e, shared) >= 2, 5_000);
-      await streams.member.waitFor((e) => got(e, shared) >= 2, 5_000);
+      for (const name of ['author', 'admin', 'member'] as const) await streams[name].waitFor((e) => got(e, shared) >= 2, 5_000);
       await setVisibility(shared, 'private');
       // Written last: once every stream has its hint, every earlier hint has had its chance to arrive.
       const file = await ingest();
-      await streams.author.waitFor((e) => got(e, shared) >= 3 && got(e, file) >= 1, 5_000);
+      await streams.author.waitFor((e) => got(e, shared) >= 3, 5_000);
       for (const name of ACTORS) await streams[name].waitFor((e) => got(e, file) >= 1, 5_000);
-      await streams.member.waitFor((e) => got(e, memberTask) >= 1, 5_000);
       await new Promise((r) => setTimeout(r, 300));
 
-      const counts = Object.fromEntries(
-        ACTORS.map((name) => [name, [task, privateNote, shared, memberTask].map((id) => got(streams[name].events, id))]),
-      );
+      const ids = [task, privateNote, shared, memberTask, memberShared];
+      const counts = Object.fromEntries(ACTORS.map((name) => [name, ids.map((id) => got(streams[name].events, id))]));
       expect(counts).toEqual({
-        // [author's to-do, author's private note, shared note (shared, made private, changed while private), member's to-do]
-        author: [1, 1, 3, 0],
-        member: [0, 0, 2, 1],
-        viewer: [0, 0, 0, 0],
-        accountant: [0, 0, 0, 0],
+        // [author's to-do, author's private note, author's shared note (shared, made private, changed while private),
+        //  member's to-do, member's shared note]
+        author: [1, 1, 3, 0, 1],
+        admin: [0, 0, 2, 0, 1],
+        member: [0, 0, 2, 1, 1],
+        viewer: [0, 0, 0, 0, 0],
+        accountant: [0, 0, 0, 0, 0],
       });
       for (const name of ['viewer', 'accountant'] as const) {
-        for (const id of [task, privateNote, shared, memberTask]) {
+        for (const id of ids) {
           expect(streams[name].events.some((x) => JSON.stringify(x.data).includes(id))).toBe(false);
         }
       }

@@ -344,6 +344,9 @@ describe('recipient (#1702)', () => {
     expect(forRecipient({ all: true, sharedNotes: false }, USER_A, 'note', USER_B, true)).toBe(false);
     // Absent access is no access.
     expect(forRecipient(ALL_ENTITIES, USER_A, 'note', USER_B, true)).toBe(false);
+    // Only a note can be shared, whatever the caller passes.
+    expect(forRecipient(READS_SHARED, USER_A, 'todo', USER_B, true)).toBe(false);
+    expect(forRecipient(READS_SHARED, USER_A, 'notification', USER_B, true)).toBe(false);
     // Its author always hears of it.
     expect(forRecipient({ all: true, sharedNotes: false }, USER_A, 'note', USER_A, true)).toBe(true);
   });
