@@ -5,7 +5,8 @@ import { expect, test, type Page } from '@playwright/test';
 import { createOrg, newEmail, signInNewUser } from '../lib/session.ts';
 
 async function newNote(page: Page, title: string, tags: string) {
-  await page.getByRole('button', { name: 'Ghi chú mới' }).click();
+  // The page header's button: an empty list shows a second one.
+  await page.getByRole('button', { name: 'Ghi chú mới' }).first().click();
   await expect(page.getByRole('textbox', { name: 'Tiêu đề' })).toHaveValue('Ghi chú mới');
   await page.getByRole('textbox', { name: 'Tiêu đề' }).fill(title);
   await page.getByRole('textbox', { name: 'Thẻ' }).fill(tags);

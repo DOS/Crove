@@ -76,9 +76,10 @@ describe('note tag filter (#1739)', () => {
     expect(tagCounts(notes, 1)).toEqual([{ tag: 'thuế', count: 2 }]);
   });
 
-  it('keeps ?tag= as the server keeps a tag, and drops an empty one', () => {
+  it('keeps ?tag= as one tag the way the server keeps it, and drops an empty one', () => {
     expect(parseNotesSearch({ list: 'shared', tag: ' Ngân Hàng ' })).toEqual({ list: 'shared', tag: 'ngân hàng' });
-    expect(parseNotesSearch({ tag: ' , ' })).toEqual({});
+    expect(parseNotesSearch({ tag: '  ' })).toEqual({});
+    expect(parseNotesSearch({ tag: 'Sales,2026' })).toEqual({ tag: 'sales,2026' });
     expect(parseNotesSearch({ tag: 'x'.repeat(60) })).toEqual({ tag: 'x'.repeat(40) });
   });
 });

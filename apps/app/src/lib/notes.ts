@@ -39,9 +39,11 @@ export function parseNotesSearch(search: Record<string, unknown>): NotesSearch {
   const out: NotesSearch = {};
   if (typeof search.note === 'string' && ID.test(search.note)) out.note = search.note.toLowerCase();
   if (typeof search.list === 'string' && (NOTE_LIST_VIEWS as readonly string[]).includes(search.list)) out.list = search.list as NoteListView;
+  // One tag, as the server keeps it: trimmed and lower case. A comma belongs to the tag (one made through the API may
+  // hold one), so it is not split as the tags field is.
   if (typeof search.tag === 'string') {
-    const [tag] = parseTags(search.tag);
-    if (tag !== undefined) out.tag = tag;
+    const tag = search.tag.trim().toLowerCase().slice(0, NOTE_TAG_MAX);
+    if (tag !== '') out.tag = tag;
   }
   if (typeof search.q === 'string' && search.q.trim() !== '') out.q = search.q.trim().slice(0, 200);
   return out;
