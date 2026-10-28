@@ -49,7 +49,7 @@ Crove is the open-source Business OS (AGPL). It must run with `docker compose up
 - Never merge, push to or take over another session's PR unless the owner names it (for example "merge #481"). Even then, first check that it is still open and that its head matches what you checked: another agent may have merged or replaced it.
 - Ask the owner (team leads and workers: through the coordinator) only for the stop cases under "Picking up work", and for something only a person can do: accounts, secrets, payments, real sample files. Decide everything else yourself, and write the decision and its reason in the PR.
 - Writing to the owner:
-  - Vietnamese with full diacritics, in plain words. Explain any technical term on first use, and give every issue or PR number with its short name.
+  - Vietnamese with full diacritics, in plain words, for every message the owner reads: chat replies, short status lines between steps, progress updates, recaps, questions. Never English (owner, 2026-10-28: "nói với tao bằng tiếng Việt"). Explain any technical term on first use, and give every issue or PR number with its short name.
   - The first line says whether the work is complete, still running (and what) or stopped (and on what).
   - Each question says what is being decided, why it matters, the options, your recommendation, and what happens if there is no answer. One decision at a time, recommendation first.
   - Name who must act on each open item: the owner, the accountant (#61, the pilot partner's accountant), a lawyer, or another agent.
