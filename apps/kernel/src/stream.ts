@@ -3,14 +3,16 @@
 // Writes to the records the SPA shows send `NOTIFY crove_stream, '<org_id> <type> <id>'` from a trigger
 // (20261018140000_crove_kernel_stream_invalidation.sql), and rows that belong to one legal entity add it:
 // `<org_id> <type> <id> <legal_entity_id>` (20261103080000 and 20261103090000 *_stream_legal_entity.sql, #1692), and a
-// member's own row (a notification) names its recipient last, `... @<user_id>` (20261103220000_crove_kernel_stream_
-// recipient.sql, #1702). Each API process LISTENs on one dedicated connection (StreamHub with a NotificationSource) and
+// member's own row (a notification, a to-do, a note) names its recipient last, `... @<user_id>`, and a shared note adds
+// `+shared` to it (20261103220000_crove_kernel_stream_recipient.sql, #1702; 20261104000000_crove_kernel_stream_notes_
+// audience.sql, #1753). Each API process LISTENs on one dedicated connection (StreamHub with a NotificationSource) and
 // hands a hint only to the open streams of that org, a hint with an entity only to the streams whose legal-entity scope
-// includes it, and a hint with a recipient only to the streams of that user. A stream sends ids, never row data, the
-// entity or the recipient: the SPA re-fetches through the normal authorized queries, so a hint can never show a record
-// its reader may not see, a member limited to some entities does not even learn that a record of another entity
-// changed, and no member learns when another got a notification. A stream also re-runs the session check, membership
-// and legal-entity scope of its org every STREAM_RECHECK_SECONDS and after every RECHECK_EVERY_HINTS hints, holding
+// includes it, and a hint with a recipient only to the streams of that user, or for a shared note also to the streams
+// that read the org's shared notes. A stream sends ids, never row data, the entity or the recipient: the SPA re-fetches
+// through the normal authorized queries, so a hint can never show a record its reader may not see, a member limited to
+// some entities does not even learn that a record of another entity changed, and no member learns when another's
+// notification, to-do or private note changed. A stream also re-runs the session check, membership, legal-entity scope
+// and shared-note access of its org every STREAM_RECHECK_SECONDS and after every RECHECK_EVERY_HINTS hints, holding
 // further hints back while it does, closes with a reason when the check fails, and applies the scope it returns to
 // every hint it sends afterwards. It ends when the access token it was opened with expires.
 //
@@ -50,15 +52,17 @@ export const PENDING_HINT_LIMIT = 200;
 export const MAX_BUFFERED_BYTES = 256 * 1024;
 
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
-const PAYLOAD = new RegExp(`^(${UUID}) ([a-z_]{1,32}) (${UUID})(?: (${UUID}))?(?: @(${UUID}))?$`);
+const PAYLOAD = new RegExp(`^(${UUID}) ([a-z_]{1,32}) (${UUID})(?: (${UUID}))?(?: @(${UUID})(\\+shared)?)?$`);
 const UUID_ONLY = new RegExp(`^${UUID}$`);
 const TYPES: ReadonlySet<string> = new Set(STREAM_HINT_TYPES);
 const TICKET = /^[A-Za-z0-9_-]{43}$/;
 
-// The hints about one member's own rows, which only that member may read (the own_notification policy): each names its
-// recipient and reaches only the streams of that user. crove_kernel.stream_notify names the same types
-// (20261103220000_crove_kernel_stream_recipient.sql).
-export const RECIPIENT_HINT_TYPES: ReadonlySet<StreamHintType> = new Set<StreamHintType>(['notification']);
+// The hints about one member's own rows, which only that member may read (own_notification, todo_read, note_read): each
+// names its recipient and reaches only the streams of that user. crove_kernel.stream_notify names the same types
+// (20261104000000_crove_kernel_stream_notes_audience.sql).
+export const RECIPIENT_HINT_TYPES: ReadonlySet<StreamHintType> = new Set<StreamHintType>(['notification', 'todo', 'note']);
+// The hints that may add `+shared`: a shared note, which the members who read the org's shared notes may hear too.
+const SHARED_HINT_TYPES: ReadonlySet<StreamHintType> = new Set<StreamHintType>(['note']);
 
 export interface ParsedHint {
   orgId: string;
@@ -67,32 +71,55 @@ export interface ParsedHint {
   legalEntityId?: string;
   // The one user whose streams may get the hint; absent for a row every member (of its entity) may hear about.
   userId?: string;
+  // A shared note: the streams that read the org's shared notes may get it too.
+  shared?: true;
 }
 
 // A notification payload, or null for anything that is not exactly `<org_id> <known type> <id>`, optionally followed
-// by ` <legal_entity_id>`, then by ` @<user_id>`. A hint of a RECIPIENT_HINT_TYPES type that names no recipient is null
-// too: fail closed, it reaches no stream.
+// by ` <legal_entity_id>`, then by ` @<user_id>`, which a shared note follows with `+shared`. A hint of a
+// RECIPIENT_HINT_TYPES type that names no recipient is null too, and so is `+shared` on any other type than a note: fail
+// closed, it reaches no stream.
 export function parseHint(payload: string): ParsedHint | null {
   const match = PAYLOAD.exec(payload);
   if (!match) return null;
-  const [, orgId, type, id, legalEntityId, userId] = match as unknown as [string, string, string, string, string | undefined, string | undefined];
+  const [, orgId, type, id, legalEntityId, userId, shared] = match as unknown as [
+    string,
+    string,
+    string,
+    string,
+    string | undefined,
+    string | undefined,
+    string | undefined,
+  ];
   if (!TYPES.has(type)) return null;
   const hint = { type: type as StreamHintType, id };
   if (userId === undefined && RECIPIENT_HINT_TYPES.has(hint.type)) return null;
-  return { orgId, hint, ...(legalEntityId === undefined ? {} : { legalEntityId }), ...(userId === undefined ? {} : { userId }) };
+  if (shared !== undefined && !SHARED_HINT_TYPES.has(hint.type)) return null;
+  return {
+    orgId,
+    hint,
+    ...(legalEntityId === undefined ? {} : { legalEntityId }),
+    ...(userId === undefined ? {} : { userId }),
+    ...(shared === undefined ? {} : { shared: true as const }),
+  };
 }
 
-// The legal entities a stream may hear about: every entity of the org, or exactly these (none for an empty set).
-export type StreamScope = { all: true } | { all: false; entities: ReadonlySet<string> };
+// The legal entities a stream may hear about: every entity of the org, or exactly these (none for an empty set); and
+// whether it may hear about other members' shared notes (absent: it may not).
+export type StreamScope = ({ all: true } | { all: false; entities: ReadonlySet<string> }) & { sharedNotes?: boolean };
 export const ALL_ENTITIES: StreamScope = { all: true };
 
 // The scope a kernel.stream.check result grants (packages/kernel/src/queries.ts: `legalEntities` is '*' or a list of
-// entity ids). Anything else throws, so a malformed answer ends the stream as `unavailable` instead of widening it.
+// entity ids, `sharedNotes` a boolean). Anything else throws, so a malformed answer ends the stream as `unavailable`
+// instead of widening it.
 export function streamScopeOf(result: unknown): StreamScope {
-  const legalEntities = (result as { legalEntities?: unknown } | null)?.legalEntities;
-  if (legalEntities === '*') return ALL_ENTITIES;
+  const answer = result as { legalEntities?: unknown; sharedNotes?: unknown } | null;
+  const legalEntities = answer?.legalEntities;
+  const sharedNotes = answer?.sharedNotes;
+  if (typeof sharedNotes !== 'boolean') throw new Error('kernel.stream.check returned no shared-note access');
+  if (legalEntities === '*') return { all: true, sharedNotes };
   if (Array.isArray(legalEntities) && legalEntities.every((id): id is string => typeof id === 'string' && UUID_ONLY.test(id))) {
-    return { all: false, entities: new Set(legalEntities) };
+    return { all: false, entities: new Set(legalEntities), sharedNotes };
   }
   throw new Error('kernel.stream.check returned no legal-entity scope');
 }
@@ -102,10 +129,19 @@ export function inScope(scope: StreamScope, legalEntityId: string | undefined): 
   return legalEntityId === undefined || scope.all || scope.entities.has(legalEntityId);
 }
 
-// Whether the stream of streamUserId may get a hint of this type for this recipient (undefined: none named). A hint of
-// a RECIPIENT_HINT_TYPES type that names nobody reaches no stream.
-export function forRecipient(streamUserId: string, type: StreamHintType, recipientUserId: string | undefined): boolean {
-  if (recipientUserId !== undefined) return recipientUserId === streamUserId;
+// Whether the stream of streamUserId, with this scope, may get a hint of this type for this recipient (undefined: none
+// named): the recipient's own stream, and for a shared hint also a stream that reads shared notes. A hint of a
+// RECIPIENT_HINT_TYPES type that names nobody reaches no stream.
+export function forRecipient(
+  scope: StreamScope,
+  streamUserId: string,
+  type: StreamHintType,
+  recipientUserId: string | undefined,
+  shared = false,
+): boolean {
+  if (recipientUserId !== undefined) {
+    return recipientUserId === streamUserId || (shared && SHARED_HINT_TYPES.has(type) && scope.sharedNotes === true);
+  }
   return !RECIPIENT_HINT_TYPES.has(type);
 }
 
@@ -132,8 +168,9 @@ export interface HubSubscriber {
   readonly orgId: string;
   // legalEntityId: the entity of the row, for the subscriber to drop the hint when it is outside its scope; absent for
   // an org-wide row. userId: the recipient of a member's own row, for the subscriber to drop the hint when its stream
-  // is another user's; absent for a row every member may hear about.
-  hint(hint: StreamHint, legalEntityId?: string, userId?: string): void;
+  // is another user's; absent for a row every member may hear about. shared: a shared note, which a stream that reads
+  // the org's shared notes may get too.
+  hint(hint: StreamHint, legalEntityId?: string, userId?: string, shared?: boolean): void;
   // The process can no longer see changes (listener lost, shutdown): the stream must end.
   close(reason: StreamCloseReason): void;
 }
@@ -214,7 +251,7 @@ export class StreamHub {
     if (!parsed) return;
     const set = this.byOrg.get(parsed.orgId);
     if (!set) return;
-    for (const subscriber of set) subscriber.hint(parsed.hint, parsed.legalEntityId, parsed.userId);
+    for (const subscriber of set) subscriber.hint(parsed.hint, parsed.legalEntityId, parsed.userId, parsed.shared === true);
   }
 
   // Deleting from a Set or Map while iterating it is safe: a closed stream unsubscribes itself here.
@@ -434,6 +471,8 @@ export interface StreamConnectionOptions {
 interface HeldHint {
   hint: StreamHint;
   legalEntityId: string | undefined;
+  userId: string | undefined;
+  shared: boolean;
 }
 
 export class StreamConnection implements HubSubscriber {
@@ -483,18 +522,23 @@ export class StreamConnection implements HubSubscriber {
     this.send(sseEvent('ready', { recheckSeconds }));
   }
 
-  // A hint outside the scope, or about another member's own row, is dropped at once, so it neither waits nor counts
-  // toward PENDING_HINT_LIMIT; one that waits is checked again, when it is sent, against the scope then in force (a
-  // re-check may have narrowed it). A hint that arrives while a re-check that will widen the scope runs is dropped too:
-  // fail closed, the app's poll covers it. The recipient never changes for a stream, so it is checked here only.
-  hint(hint: StreamHint, legalEntityId?: string, userId?: string): void {
+  // A hint outside the scope, or about another member's own row that this stream may not read, is dropped at once, so
+  // it neither waits nor counts toward PENDING_HINT_LIMIT; one that waits is checked again, when it is sent, against
+  // the scope then in force (a re-check may have narrowed it, or taken away shared notes). A hint that arrives while a
+  // re-check that will widen the scope runs is dropped too: fail closed, the app's poll covers it.
+  hint(hint: StreamHint, legalEntityId?: string, userId?: string, shared = false): void {
     if (this.closed) return;
-    if (!forRecipient(this.userId, hint.type, userId)) return;
+    if (!forRecipient(this.scope, this.userId, hint.type, userId, shared)) return;
     if (!inScope(this.scope, legalEntityId)) return;
     if (!this.resyncPending) {
       // Keyed by the entity too: an extraction hint carries its file's id, and two readings of one file may belong to
       // different entities, so a narrowing re-check must not drop the in-scope one with the other.
-      this.pending.set(`${hint.type}:${hint.id}:${legalEntityId ?? ''}`, { hint: { type: hint.type, id: hint.id }, legalEntityId });
+      this.pending.set(`${hint.type}:${hint.id}:${legalEntityId ?? ''}`, {
+        hint: { type: hint.type, id: hint.id },
+        legalEntityId,
+        userId,
+        shared,
+      });
       if (this.pending.size > PENDING_HINT_LIMIT) {
         this.pending.clear();
         this.resyncPending = true;
@@ -527,6 +571,7 @@ export class StreamConnection implements HubSubscriber {
       const [key, held] = this.pending.entries().next().value as [string, HeldHint];
       this.pending.delete(key);
       if (!inScope(this.scope, held.legalEntityId)) continue;
+      if (!forRecipient(this.scope, this.userId, held.hint.type, held.userId, held.shared)) continue;
       this.sinceCheck++;
       this.send(sseEvent('invalidate', held.hint));
     }
