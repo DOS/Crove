@@ -44,7 +44,10 @@ describe('declared command writes (#1697)', () => {
       for (const w of c.writes ?? []) {
         const classes = manifestTables.get(w.table);
         if (!classes) problems.push(`${c.name}: ${w.table} is in no manifest`);
-        else if (JSON.stringify(Object.entries(w.classes).sort()) !== JSON.stringify(Object.entries(classes).sort())) {
+        else if (
+          Object.keys(w.classes).length !== Object.keys(classes).length ||
+          Object.entries(w.classes).some(([column, cls]) => !Object.hasOwn(classes, column) || classes[column] !== cls)
+        ) {
           problems.push(`${c.name}: the classes of ${w.table} are not its manifest's (build the write with tableWrite())`);
         }
       }
