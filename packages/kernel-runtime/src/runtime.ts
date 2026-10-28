@@ -1,6 +1,6 @@
 // The single write path. Every state change is a typed command executed through Runtime.execute(),
 // inside one transaction that enters the tenant context checked by RLS, and writes audit + outbox.
-import { sql, type Transaction } from 'kysely';
+import { sql, type RawBuilder, type Transaction } from 'kysely';
 import { v7 as uuidv7 } from 'uuid';
 import type { z } from 'zod';
 import { contextTaint, singleCell, type CellResolver, type Database, type Db, type MemberRole } from '@crove/db';
@@ -425,7 +425,20 @@ export interface RuntimeOptions {
   absentModules?: readonly string[];
   // The build this runtime runs: the git SHA of the image (CROVE_BUILD). Default 'dev' (a local build, tests).
   build?: string;
+  // How a command's input is hashed into audit_event.input_sha256 and idempotency_key.request_sha256 (#1732).
+  // 'keyed': crove_kernel.command_input_hash, an HMAC-SHA256 under the deployment's hash key that no runtime role can
+  // read, over the org of the sealed context, the actor key, the command and the canonical input ('k1:<hex>'): whoever
+  // holds an exported or archived row cannot confirm a guessed input (a private note's title, ADR-0037). The server
+  // always passes it (apps/kernel createKernel). 'sha256' (default; tests and tools): the plain SHA-256 of the
+  // canonical input, as before #1732.
+  inputHash?: InputHashMode;
 }
+
+export const INPUT_HASH_MODES = ['keyed', 'sha256'] as const;
+export type InputHashMode = (typeof INPUT_HASH_MODES)[number];
+// The prefix of a keyed input hash. A row without it was written with the plain SHA-256 (before #1732, or by a
+// runtime in 'sha256' mode).
+export const KEYED_INPUT_HASH_PREFIX = 'k1:';
 
 // Policy P11 (ADR-0028 section 5): a second factor used within the last 5 minutes.
 export const STEP_UP_MAX_AGE_S = 300;
@@ -664,7 +677,8 @@ interface CaughtRefusal {
   code: string;
   security: boolean;
   outcome: 'denied' | 'failed';
-  inputSha256: string;
+  // The canonical input (stableStringify), which the row's input hash is computed from when it is written.
+  input: string;
   target: { type: string; id: string } | null;
   proposalId: string | null;
   detail: Record<string, unknown>;
@@ -723,6 +737,7 @@ export class Runtime {
   // null: absentModules not given, so every unregistered module counts as absent.
   private readonly absentModules: ReadonlySet<string> | null;
   private readonly build: string;
+  private readonly inputHash: InputHashMode;
   // Numbers the savepoints of ctx.tryRun, so each call has its own.
   private savepointSeq = 0;
 
@@ -735,6 +750,9 @@ export class Runtime {
     this.refusalAudit = refusalAudit === 'unbounded' ? 'unbounded' : validateRefusalAuditLimits(refusalAudit);
     this.absentModules = options.absentModules ? new Set(options.absentModules) : null;
     this.build = options.build ?? 'dev';
+    const inputHash = options.inputHash ?? 'sha256';
+    if (!(INPUT_HASH_MODES as readonly string[]).includes(inputHash)) throw new Error(`unknown input hash mode ${String(inputHash)}`);
+    this.inputHash = inputHash;
   }
 
   // How sessions are checked (see BootstrapEnv), for org-less reads that apply the same upstream checks as a command.
@@ -1088,7 +1106,8 @@ export class Runtime {
       command: string;
       commandId: string;
       outcome: 'ok' | 'denied' | 'failed';
-      inputSha256: string;
+      // The canonical input (stableStringify); the row stores its input hash.
+      input: string;
       target: { type: string; id: string } | null;
       proposalId: string | null;
       detail?: Record<string, unknown>;
@@ -1105,11 +1124,19 @@ export class Runtime {
         outcome: row.outcome,
         target_type: row.target?.type ?? null,
         target_id: row.target?.id ?? null,
-        input_sha256: row.inputSha256,
+        input_sha256: this.inputHashOf(row.actor, row.command, row.input),
         proposal_id: row.proposalId,
         detail: JSON.stringify(row.detail ?? actorDetail(row.actor)),
       })
       .execute();
+  }
+
+  // The input hash of a command's audit or idempotency row (RuntimeOptions.inputHash): in 'keyed' mode an expression
+  // the row's own statement computes in the database, in the caller's sealed context (so it costs no round trip of
+  // its own), else the plain SHA-256.
+  private inputHashOf(actor: Actor, command: string, canonical: string): RawBuilder<string> | string {
+    if (this.inputHash === 'sha256') return sha256Hex(canonical);
+    return sql<string>`crove_kernel.command_input_hash(${actorKey(actor)}, ${command}, ${canonical})`;
   }
 
   private async runInTx<O>(
@@ -1232,8 +1259,9 @@ export class Runtime {
       // An unknown command or an input that does not parse is the caller's bug, never a recorded refusal, as for a
       // top-level command (refused before its org is entered, so never audited).
       const nested = resolveNested(name, nestedInput, options.proposalId);
-      // The row's input hash and target, from the input as parsed, before the nested handler can change it.
-      const inputSha256 = sha256Hex(stableStringify(nested.input));
+      // The row's input (canonical, hashed when the row is written) and target, from the input as parsed, before the
+      // nested handler can change it.
+      const canonicalInput = stableStringify(nested.input);
       const declared = nested.def.target?.(nested.input) ?? null;
       const target = declared ? Object.freeze({ type: String(declared.type), id: String(declared.id) }) : null;
       // Unique per call, so a tryRun nested in another one never rolls back to the outer savepoint.
@@ -1285,7 +1313,7 @@ export class Runtime {
             code,
             security: isSecurityRefusal(error),
             outcome: status === 403 ? 'denied' : 'failed',
-            inputSha256,
+            input: canonicalInput,
             target,
             proposalId: nested.proposalId,
             detail: deepFreeze({ ...caughtRefusalDetail(error, base.actor, { command: def.name, nested: nested.def.name, orgId: base.orgId, commandId }), parentCommand: def.name, parentCommandId: commandId }),
@@ -1372,7 +1400,7 @@ export class Runtime {
       command: def.name,
       commandId,
       outcome: 'ok',
-      inputSha256: sha256Hex(stableStringify(input)),
+      input: stableStringify(input),
       target: def.target?.(input) ?? null,
       proposalId: base.proposalId,
       ...(detail ? { detail } : {}),
@@ -1414,7 +1442,7 @@ export class Runtime {
     cell: () => Promise<Db>,
     resolveOrg: (trx: Transaction<Database>) => Promise<string>,
   ): Promise<O> {
-    const inputSha256 = sha256Hex(stableStringify(input));
+    const canonical = stableStringify(input);
     let orgId = '';
     let context: Entered = { role: null, agent: null };
     let entered = false;
@@ -1439,21 +1467,28 @@ export class Runtime {
 
         if (idempotencyKey) {
           const key = actorKey(actor);
+          const requestHash = this.inputHashOf(actor, name, canonical);
           const claimed = await trx
             .insertInto('crove_kernel.idempotency_key')
-            .values({ org_id: orgId, actor_key: key, key: idempotencyKey, command: name, request_sha256: inputSha256, response: null })
+            .values({ org_id: orgId, actor_key: key, key: idempotencyKey, command: name, request_sha256: requestHash, response: null })
             .onConflict((oc) => oc.doNothing())
             .returning('key')
             .executeTakeFirst();
           if (!claimed) {
+            // A row claimed before the switch to keyed hashes (#1732) holds the plain SHA-256 and still replays, until
+            // the 7-day retention removes it; a keyed row is compared only with the keyed hash.
             const existing = await trx
               .selectFrom('crove_kernel.idempotency_key')
-              .select(['command', 'request_sha256', 'response'])
+              .select([
+                'command',
+                'response',
+                sql<boolean>`(request_sha256 = ${requestHash} OR (NOT starts_with(request_sha256, ${KEYED_INPUT_HASH_PREFIX}) AND request_sha256 = ${sha256Hex(canonical)}))`.as('same_request'),
+              ])
               .where('org_id', '=', orgId)
               .where('actor_key', '=', key)
               .where('key', '=', idempotencyKey)
               .executeTakeFirst();
-            if (!existing || existing.command !== name || existing.request_sha256 !== inputSha256) {
+            if (!existing || existing.command !== name || existing.same_request !== true) {
               throw new DomainError('IDEMPOTENCY_MISMATCH', 422, 'Khóa idempotency đã dùng cho yêu cầu khác');
             }
             const stored = existing.response as { value?: O } | null;
@@ -1480,7 +1515,7 @@ export class Runtime {
       // MEMBER_NOT_FOUND for a member of another org) is audited as failed like 409 and 422. Other statuses are not
       // audited today.
       if (entered && !orgIsNew && AUDITED_REFUSAL_STATUSES.has(domain.status)) {
-        await this.writeRefusalAudit(name, def, input, inputSha256, actor, orgId, domain);
+        await this.writeRefusalAudit(name, def, input, canonical, actor, orgId, domain);
       } else if ((!entered || orgIsNew) && isPreMembershipRefusal(domain)) {
         // Refused before the caller was a member of the org (or the org-less command's new org rolled back with
         // it): there is no org to audit in, so it is noted in security_event (plan §4.4 step 3, issue #1006).
@@ -1500,7 +1535,7 @@ export class Runtime {
     name: string,
     def: CommandDef<unknown, unknown>,
     input: unknown,
-    inputSha256: string,
+    canonical: string,
     actor: Actor,
     orgId: string,
     refusal: DomainError,
@@ -1518,7 +1553,7 @@ export class Runtime {
           command: name,
           commandId,
           outcome,
-          inputSha256,
+          input: canonical,
           target: def.target?.(input) ?? null,
           proposalId: null,
           detail: refusalAuditDetail(refusal, actor),
@@ -1580,7 +1615,7 @@ export class Runtime {
       command: refusal.command,
       commandId: uuidv7(),
       outcome: refusal.outcome,
-      inputSha256: refusal.inputSha256,
+      input: refusal.input,
       target: refusal.target,
       proposalId: refusal.proposalId,
       detail: refusal.detail,
