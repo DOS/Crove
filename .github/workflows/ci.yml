@@ -343,8 +343,8 @@ jobs:
       # directory, a store entry and a scoped one (which only the store-entry check reads), a dangling link a store
       # entry holds (which only the per-entry walk reads), a package of a scope on the list, parser code in a .cjs
       # file of an excepted package outside its excepted files, parser code in the workspace's own code, a
-      # WebAssembly module under another name and one inlined in base64, and an excepted file gone. Each runs in a
-      # fresh container of the image.
+      # WebAssembly module under another name and one inlined in base64, a pinned file gone and one changed (#1770),
+      # a test file and the end-to-end suite. Each runs in a fresh container of the image.
       - name: The check fails on each planted parser
         run: |
           planted() {
@@ -374,7 +374,13 @@ jobs:
           planted 'echo "export const engine = \"AGFzbQEAAAA=\";" > /app/packages/db/src/engine.ts' \
             'native or WebAssembly module inlined in the image: /app/packages/db/src/engine\.ts'
           planted 'rm /app/node_modules/.pnpm/undici@*/node_modules/undici/lib/web/fetch/formdata-parser.js' \
-            'the reasoned exception undici/lib/web/fetch/formdata-parser\.js has no parser code in the image any more: update BUNDLED_PARSERS'
+            'the pinned file undici/lib/web/fetch/formdata-parser\.js is not in the image any more: update PINNED'
+          planted 'for f in /app/node_modules/.pnpm/undici@*/node_modules/undici/lib/web/fetch/formdata-parser.js; do echo "// changed" >> "$f"; done' \
+            'the pinned file undici/lib/web/fetch/formdata-parser\.js changed \(now undici@[^,]+, sha256 [0-9a-f]{64}; pinned [^)]+\): read the new file, then pin it again in PINNED'
+          planted 'echo "export {};" > /app/packages/db/src/planted.test.ts' \
+            'a test file is in the image: /app/packages/db/src/planted\.test\.ts'
+          planted 'mkdir /app/e2e' \
+            'the end-to-end suite is in the image: /app/e2e'
 
       - name: The entry point starts and stops at the missing configuration
         run: |

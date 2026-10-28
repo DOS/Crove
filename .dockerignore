@@ -13,6 +13,16 @@ apps/web/.next
 docs
 **/*.log
 spikes
-# pgTAP tests and the vendored pgTAP (#1627, #1643) are test-only: they never reach the image.
+# Tests, their fixtures and the repo's tooling never reach the image (#1770): the pgTAP tests and vendored pgTAP
+# (#1627, #1643), every test directory and test file, the end-to-end suite, and tools/ (CI, deploy and backup
+# scripts run from a checkout, and the backup scripts mount tools/backup into the container rather than read it from
+# the image). The image check fails if a test file or one of these directories is in it. The root package's
+# prepare script runs tools/install-git-hooks.mjs on every install (it does nothing outside a git checkout), so that
+# one file stays.
 supabase/tests
-packages/db/test/invariant/pgtap
+**/test
+**/*.test.ts
+**/*.test.tsx
+e2e
+tools
+!tools/install-git-hooks.mjs
