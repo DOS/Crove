@@ -155,6 +155,8 @@ suite('org purge on PostgreSQL (#1024)', () => {
       const privateNote = (await c.query<{ id: string }>(`INSERT INTO crove_notes.note (org_id, author_user_id, title, body) VALUES ($1, $2, 'Riêng', 'Mật khẩu') RETURNING id`, [org.orgId, owner])).rows[0]?.id;
       await c.query(`INSERT INTO crove_notes.note (org_id, author_user_id, visibility, title) VALUES ($1, $2, 'org', 'Dùng chung')`, [org.orgId, member]);
       await c.query(`INSERT INTO crove_notes.link (org_id, note_id, target_type, target_id, party_id, created_by) VALUES ($1, $2, 'kernel.party', $3, $3, $4)`, [org.orgId, privateNote, stray, owner]);
+      // A member's own to-do (#1673), made from the private note: deleted too, before the note it names.
+      await c.query(`INSERT INTO crove_notes.todo (org_id, owner_user_id, title, sort_key, source_note_id) VALUES ($1, $2, 'Việc riêng', 'V', $3)`, [org.orgId, member, privateNote]);
       return { stray, position, parent, pinned, free, ledgerParty };
     });
     return { org, owner, ownerEmail, member, booked, loose, partyEmail, proposalId, ...ids };
@@ -392,6 +394,7 @@ suite('org purge on PostgreSQL (#1024)', () => {
     expect(before['crove_social.media_archive']).toBe(2);
     expect(before['crove_notes.note']).toBe(2);
     expect(before['crove_notes.link']).toBe(1);
+    expect(before['crove_notes.todo']).toBe(1);
 
     // One audit row: by the system, with counts and the reason, and no personal data.
     const audits = await purgeAudits(s.org.orgId);
@@ -404,7 +407,7 @@ suite('org purge on PostgreSQL (#1024)', () => {
         minDays: 30,
         blobs: { deleted: 1, held: 0 },
         counts: {
-          deleted: expect.objectContaining({ 'crove_kernel.tenant_member': 2, 'crove_kernel.file': 1, 'crove_kernel.party': 1, 'crove_kernel.task': 1, 'crove_kernel.proposal': 1, 'crove_social.push_subscription': 1, 'crove_social.saved_view': 1, 'crove_social.media_archive': 2, 'crove_notes.note': 2, 'crove_notes.link': 1 }),
+          deleted: expect.objectContaining({ 'crove_kernel.tenant_member': 2, 'crove_kernel.file': 1, 'crove_kernel.party': 1, 'crove_kernel.task': 1, 'crove_kernel.proposal': 1, 'crove_social.push_subscription': 1, 'crove_social.saved_view': 1, 'crove_social.media_archive': 2, 'crove_notes.note': 2, 'crove_notes.link': 1, 'crove_notes.todo': 1 }),
           pinned: expect.objectContaining({ 'crove_kernel.task_comment': 1, 'crove_kernel.task': 2, 'crove_kernel.position': 1 }),
           anonymized: { 'crove_kernel.party': 2 },
           keptFiles: 1,

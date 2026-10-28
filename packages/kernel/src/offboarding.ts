@@ -78,6 +78,9 @@ export const EXPORT_TABLES = {
   'notes.note': { from: 'crove_notes.note', omit: ['search'] },
   'notes.link': { from: 'crove_notes.link', omit: [] },
   'notes.private_count': { from: 'crove_notes.private_counts()', omit: [] },
+  // Members' own to-dos (#1673) are private by nature, so none is exported; todo_count records how many each member
+  // had (crove_notes.todo_counts(), counts only).
+  'notes.todo_count': { from: 'crove_notes.todo_counts()', omit: [] },
   'social.post': { from: 'crove_social.post', omit: ['search_text'] },
   'social.post_variant': { from: 'crove_social.post_variant', omit: ['search_text'] },
   'social.post_approval': { from: 'crove_social.post_approval', omit: [] },

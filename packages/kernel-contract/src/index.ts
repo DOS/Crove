@@ -58,9 +58,10 @@ export type UploadPurpose = (typeof UPLOAD_PURPOSES)[number];
 
 // Realtime invalidation (issue #69): GET /api/stream sends hints `{ type, id }` only, never row data; the SPA re-fetches
 // through the normal authorized queries. extraction carries the id of the file whose reading changed, and document
-// both a recorded and a voided purchase document. note is a member's note (#1671), private or shared: every open app
-// of the org gets its id, and only those its policies let read it see a change.
-export const STREAM_HINT_TYPES = ['proposal', 'file', 'extraction', 'journal_entry', 'document', 'social_post', 'social_notification', 'notification', 'note'] as const;
+// both a recorded and a voided purchase document. note is a member's note (#1671), private or shared, and todo a
+// member's own to-do (#1673): every open app of the org gets its id, and only those its policies let read it see a
+// change.
+export const STREAM_HINT_TYPES = ['proposal', 'file', 'extraction', 'journal_entry', 'document', 'social_post', 'social_notification', 'notification', 'note', 'todo'] as const;
 export type StreamHintType = (typeof STREAM_HINT_TYPES)[number];
 export interface StreamHint {
   type: StreamHintType;

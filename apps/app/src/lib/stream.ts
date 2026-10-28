@@ -75,6 +75,9 @@ export function hintMatches(hint: StreamHint, query: Query): boolean {
     // A member's note (#1671): the notes lists and panels read again, and that note.
     case 'note':
       return path.startsWith('notes.');
+    // A member's own to-do (#1673): their to-do lists read again.
+    case 'todo':
+      return path.startsWith('notes.todos.');
   }
 }
 

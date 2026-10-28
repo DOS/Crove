@@ -99,6 +99,7 @@ export interface CroveKernelSchema {
 export interface CroveNotesSchema {
   'crove_notes.link': NotesLinkTable;
   'crove_notes.note': NotesNoteTable;
+  'crove_notes.todo': NotesTodoTable;
 }
 
 export interface CroveSocialSchema {
@@ -1300,6 +1301,32 @@ export interface NotesNoteTable {
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
   archived_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  deleted_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+}
+
+/** crove_notes.todo */
+export interface NotesTodoTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  owner_user_id: ColumnType<string, string, NotGranted>;
+  title: string;
+  details: string | null;
+  checklist: ColumnType<unknown, string | undefined, string>;
+  status: Generated<string>;
+  due_on: string | null;
+  due_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  time_zone: Generated<string>;
+  remind_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  reminded_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  sort_key: string;
+  source_note_id: ColumnType<string | null, string | null, NotGranted>;
+  task_id: string | null;
+  tainted: ColumnType<boolean, boolean | undefined, NotGranted>;
+  search: ColumnType<string, string | undefined, NotGranted>;
+  revision: Generated<number>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  done_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   deleted_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
 }
 
