@@ -3,7 +3,7 @@
 // database. It needs no Crove deployment and touches no other database.
 //
 //   node apps/kernel/load/load-test.ts --admin-url <postgres URL> [--parties 100000] [--commands 2000]
-//        [--concurrency 8] [--queries 30] [--rate 60] [--seconds 30] [--keep]
+//        [--concurrency 8] [--queries 30] [--rate 60] [--seconds 30] [--pause-seconds 30] [--check-seconds 10] [--keep]
 //
 // A tool, not product code: it lives outside apps/kernel/src, so the one-write-path check (#680) does not cover its
 // seeding and its own connections. Everything it measures runs through the runtime and the definers like the API.
@@ -18,7 +18,14 @@
 //     both by the database clock: an event id is a UUIDv7 whose first 48 bits are the emit time in milliseconds. Targets: p95 lag < 2 s, at least 50 events per second relayed.
 //     The relay here claims and drops; the worker also sends each claimed event to its job queue, so this is the
 //     database's share of the lag.
-//   - Back-pressure (plan §4.9: outbox lag > 30 s pauses background jobs) is not built yet (#894); reported as such.
+//   - Back-pressure (plan §4.9, built in #894, measured here since #1717): with pg-boss on the throwaway database and
+//     the worker's own PausableWork and checkBackPressure (apps/kernel/src/back-pressure.ts), the relay stops while
+//     kernel.file.ingest keeps running at --rate, so the outbox lag climbs past --pause-seconds
+//     (OUTBOX_LAG_PAUSE_SECONDS). The check runs every --check-seconds, as the worker's does. Measured: how long after
+//     the lag passed the threshold the agent, bulk mail, archive and retention queues paused, whether their jobs sent
+//     meanwhile waited while an interactive queue's job and the commands ran, and how long after the relay brought the
+//     lag back to half the threshold the queues resumed and worked the jobs that waited. Target: each within one check
+//     (plus BACK_PRESSURE_SLACK_MS for the check itself), every background job held, interactive work running.
 //
 // Exit codes: 0 every target met, 1 a target missed, 2 the run failed.
 import { randomUUID } from 'node:crypto';
@@ -31,6 +38,11 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime, contentGeneration, fileKey, type Actor } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
+import { PgBoss } from 'pg-boss';
+import { BACK_PRESSURE_CHECK_MS, DEFAULT_OUTBOX_LAG_PAUSE_SECONDS, PausableWork, checkBackPressure, outboxLagSeconds } from '../src/back-pressure.ts';
+import { jobKey } from '../src/job-keys.ts';
+import { JOB_SCHEMA, QUEUES } from '../src/jobs-schema.ts';
+import { MAIL_BULK_QUEUE } from '../src/mail-queue.ts';
 import { createSessionStatusSource } from '../src/sessions.ts';
 
 export const LOAD_EXIT = { ok: 0, missed: 1, failed: 2 } as const;
@@ -45,6 +57,9 @@ export interface LoadArgs {
   queries: number;
   rate: number;
   seconds: number;
+  // The back-pressure threshold (OUTBOX_LAG_PAUSE_SECONDS) and how often it is checked (BACK_PRESSURE_CHECK_MS).
+  pauseSeconds: number;
+  checkSeconds: number;
   keep: boolean;
 }
 
@@ -55,10 +70,21 @@ export const DEFAULT_LOAD_ARGS: Omit<LoadArgs, 'adminUrl'> = {
   queries: 30,
   rate: 60,
   seconds: 30,
+  pauseSeconds: DEFAULT_OUTBOX_LAG_PAUSE_SECONDS,
+  checkSeconds: BACK_PRESSURE_CHECK_MS / 1000,
   keep: false,
 };
 
-const INTEGER_FLAGS = { '--parties': 'parties', '--commands': 'commands', '--concurrency': 'concurrency', '--queries': 'queries', '--rate': 'rate', '--seconds': 'seconds' } as const;
+const INTEGER_FLAGS = {
+  '--parties': 'parties',
+  '--commands': 'commands',
+  '--concurrency': 'concurrency',
+  '--queries': 'queries',
+  '--rate': 'rate',
+  '--seconds': 'seconds',
+  '--pause-seconds': 'pauseSeconds',
+  '--check-seconds': 'checkSeconds',
+} as const;
 
 export function parseLoadArgs(argv: readonly string[], env: Record<string, string | undefined> = {}): LoadArgs {
   const args: LoadArgs = { adminUrl: env.CROVE_TEST_ADMIN_URL ?? '', ...DEFAULT_LOAD_ARGS };
@@ -111,6 +137,38 @@ export interface LoadResult {
   // Locks held server-wide (pg_locks), sampled while the commands run: the context guard reads pg_locks on every
   // context entry (plan §4.5 item 1, gate row T10).
   locks: { samples: number; p50: number | null; p95: number | null; max: number | null };
+  backPressure: BackPressureResult;
+}
+
+// One queue of each kind the worker pauses (plan §4.9; apps/kernel/src/worker.ts registers them with background.add),
+// and one queue a person waits for, which back-pressure leaves running.
+export const BACK_PRESSURE_QUEUES: readonly string[] = [QUEUES.agentDispatch, MAIL_BULK_QUEUE, QUEUES.archiveWrite, QUEUES.retention];
+export const INTERACTIVE_QUEUE = QUEUES.notify;
+// What a pause or resume may take beyond one check interval: the check's own lag read and pg-boss offWork or work.
+export const BACK_PRESSURE_SLACK_MS = 1000;
+// How long background jobs sent during the pause must wait: longer than pg-boss's default polling interval (2 s), so a
+// queue still being fetched would have run its job by then.
+export const BACK_PRESSURE_HOLD_MS = 4000;
+
+// Times are milliseconds from the start of the stall (the relay stopped), null for what never happened.
+export interface BackPressureResult {
+  thresholdSeconds: number;
+  checkSeconds: number;
+  queues: string[];
+  lagOverAt: number | null;
+  pausedAt: number | null;
+  lagUnderHalfAt: number | null;
+  resumedAt: number | null;
+  maxLagSeconds: number;
+  // Background jobs sent once the queues paused (or once the wait for a pause gave up): how many did not run before the
+  // relay caught up, and how many ran after the resume.
+  sent: number;
+  held: number;
+  ranAfterResume: number;
+  // The interactive queue's job sent at the same time ran while the background queues were paused.
+  interactiveRan: boolean;
+  // kernel.file.ingest at --rate during the stall and the pause: interactive commands keep running.
+  commands: { count: number; failed: number; firstError: string | null; p95: number | null };
 }
 
 // The guard's cost per context entry measured in #105: about 13 us with an idle lock table plus about 0.27 us per lock
@@ -127,6 +185,39 @@ export interface LoadVerdict {
 }
 
 const ms = (value: number | null) => (value === null ? '-' : `${value.toFixed(1)} ms`);
+const secs = (value: number | null) => (value === null ? 'never' : `${(value / 1000).toFixed(1)} s`);
+const delay = (from: number | null, to: number | null) => (from === null || to === null ? null : to - from);
+
+// The back-pressure targets: the background queues pause within one check of the lag passing the threshold and
+// hold every job sent meanwhile; they resume within one check of the lag falling to half the threshold and work
+// those jobs; interactive work (the commands, the interactive queue) keeps running throughout.
+export function judgeBackPressure(bp: BackPressureResult): LoadVerdict[] {
+  const withinMs = bp.checkSeconds * 1000 + BACK_PRESSURE_SLACK_MS;
+  const within = `within ${bp.checkSeconds} s + ${BACK_PRESSURE_SLACK_MS / 1000} s (one check and its own time)`;
+  const pauseDelay = delay(bp.lagOverAt, bp.pausedAt);
+  const resumeDelay = delay(bp.lagUnderHalfAt, bp.resumedAt);
+  const total = bp.queues.length;
+  return [
+    {
+      check: 'back-pressure pause',
+      target: `${within} of outbox lag > ${bp.thresholdSeconds} s; ${total}/${total} background jobs held`,
+      measured: `${pauseDelay === null ? 'never paused' : `${secs(pauseDelay)} after the lag passed ${bp.thresholdSeconds} s`}; ${bp.held}/${bp.sent} held`,
+      ok: pauseDelay !== null && pauseDelay <= withinMs && bp.sent === total && bp.held === total,
+    },
+    {
+      check: 'back-pressure resume',
+      target: `${within} of outbox lag <= ${bp.thresholdSeconds / 2} s; the held jobs run`,
+      measured: `${resumeDelay === null ? 'never resumed' : `${secs(resumeDelay)} after the lag fell to ${bp.thresholdSeconds / 2} s`}; ${bp.ranAfterResume}/${bp.held} ran`,
+      ok: resumeDelay !== null && resumeDelay <= withinMs && bp.held === total && bp.ranAfterResume === total,
+    },
+    {
+      check: 'interactive work under back-pressure',
+      target: `p95 kernel.file.ingest < ${LOAD_TARGETS.commandP95Ms} ms, no failures; ${INTERACTIVE_QUEUE} runs while paused`,
+      measured: `${ms(bp.commands.p95)}, ${bp.commands.failed} failed; ${bp.interactiveRan ? 'ran' : 'did not run'}`,
+      ok: bp.interactiveRan && bp.commands.count > 0 && bp.commands.failed === 0 && bp.commands.p95 !== null && bp.commands.p95 < LOAD_TARGETS.commandP95Ms,
+    },
+  ];
+}
 
 // Each plan target against what was measured. ok is null for a target that cannot be measured yet.
 export function judge(result: LoadResult): LoadVerdict[] {
@@ -148,7 +239,7 @@ export function judge(result: LoadResult): LoadVerdict[] {
     measured: result.outbox.eventsPerSecond.toFixed(1),
     ok: result.outbox.eventsPerSecond >= LOAD_TARGETS.eventsPerSecond,
   });
-  verdicts.push({ check: 'back-pressure', target: 'pauses background jobs when lag > 30 s', measured: 'not built yet (#894)', ok: null });
+  verdicts.push(...judgeBackPressure(result.backPressure));
   return verdicts;
 }
 
@@ -171,6 +262,17 @@ export function formatReport(result: LoadResult, verdicts: readonly LoadVerdict[
   } else {
     lines.push('Locks held server-wide during the commands: no sample');
   }
+  const bp = result.backPressure;
+  lines.push(`Back-pressure (threshold ${bp.thresholdSeconds} s, checked every ${bp.checkSeconds} s; ${bp.queues.join(', ')}), times from the relay stopping:`);
+  const step = (what: string, from: number | null, to: number | null) =>
+    to === null ? `${what}: never` : `${what} at ${secs(to)}${from === null ? '' : ` (${secs(to - from)} later)`}`;
+  lines.push(`  lag passed ${bp.thresholdSeconds} s at ${secs(bp.lagOverAt)}, ${step('queues paused', bp.lagOverAt, bp.pausedAt)}, max lag ${bp.maxLagSeconds.toFixed(1)} s`);
+  lines.push(`  lag back to ${bp.thresholdSeconds / 2} s at ${secs(bp.lagUnderHalfAt)}, ${step('queues resumed', bp.lagUnderHalfAt, bp.resumedAt)}`);
+  lines.push(
+    `  background jobs: ${bp.sent} sent ${bp.pausedAt === null ? 'after the wait for a pause' : 'while paused'}, ${bp.held} held, ${bp.ranAfterResume} ran after the resume; ${INTERACTIVE_QUEUE} ${bp.interactiveRan ? 'ran' : 'did not run'} while paused`,
+  );
+  lines.push(`  kernel.file.ingest meanwhile: n=${bp.commands.count} failed=${bp.commands.failed} p95=${ms(bp.commands.p95)}`);
+  if (bp.commands.firstError) lines.push(`    first failure: ${bp.commands.firstError}`);
   lines.push('', 'Targets (plan §13 Phase 1, exit criterion 7):');
   for (const v of verdicts) lines.push(`  ${v.ok === null ? 'N/A ' : v.ok ? 'PASS' : 'FAIL'}  ${v.check}: ${v.measured} (target ${v.target})`);
   return lines.join('\n');
@@ -217,6 +319,9 @@ export function sampleLocks(
   };
 }
 
+const describeError = (error: unknown) =>
+  error instanceof Error ? `${(error as { code?: string }).code ?? error.name}: ${error.message}`.slice(0, 200) : String(error);
+
 async function timed(fn: () => Promise<unknown>): Promise<number> {
   const started = performance.now();
   await fn();
@@ -237,12 +342,190 @@ async function pool(count: number, concurrency: number, fn: (i: number) => Promi
           samples.push(await timed(() => fn(i)));
         } catch (error) {
           failed++;
-          firstError ??= error instanceof Error ? `${(error as { code?: string }).code ?? error.name}: ${error.message}`.slice(0, 200) : String(error);
+          firstError ??= describeError(error);
         }
       }
     }),
   );
   return { samples, failed, firstError };
+}
+
+export interface BackPressureRun {
+  // pg-boss on the throwaway database, as the worker login.
+  bossUrl: string;
+  worker: Db;
+  orgId: string;
+  // An interactive command, and the relay's claim of up to 100 outbox events (returns their lags).
+  ingest: () => Promise<unknown>;
+  claim: () => Promise<number[]>;
+  rate: number;
+  thresholdSeconds: number;
+  checkSeconds: number;
+  log: (line: string) => void;
+}
+
+// The back-pressure phase. It starts with an empty outbox and leaves one: the relay stops while kernel.file.ingest runs
+// at `rate` per second, the worker's check (checkBackPressure, every checkSeconds) pauses the background queues once
+// the lag passes the threshold, background and interactive jobs are sent, and the relay then catches up so the check
+// resumes the queues. A lag sampler on its own connection records when the lag passed the threshold and when it fell
+// back to half of it.
+export async function measureBackPressure(run: BackPressureRun): Promise<BackPressureResult> {
+  const thresholdMs = run.thresholdSeconds * 1000;
+  const checkMs = run.checkSeconds * 1000;
+  const boss = new PgBoss({ connectionString: run.bossUrl, schema: JOB_SCHEMA, migrate: false, createSchema: false, supervise: false, schedule: false });
+  boss.on('error', (error) => run.log(`[pg-boss] ${describeError(error)}`));
+  await boss.start();
+  // When each job ran (performance.now()), by its tag.
+  const ran = new Map<string, number>();
+  const handler = async ([job]: { data: { tag: string } }[]) => {
+    if (job) ran.set(job.data.tag, performance.now());
+  };
+  const send = (queue: string, tag: string) => boss.send(queue, { tag }, { singletonKey: jobKey(run.orgId, queue, tag) });
+  const waitFor = async (tags: readonly string[], timeoutMs: number) => {
+    const until = performance.now() + timeoutMs;
+    while (tags.some((t) => !ran.has(t)) && performance.now() < until) await sleep(50);
+    return tags.every((t) => ran.has(t));
+  };
+  const work = new PausableWork(boss);
+  let running = true;
+  let pressureTimer: ReturnType<typeof setInterval> | undefined;
+  const loops: Promise<unknown>[] = [];
+  try {
+    // The background queues as the worker works them (batch of 1, pg-boss's default polling), the interactive one
+    // polled as fast as pg-boss allows so the check of it is quick.
+    for (const queue of BACK_PRESSURE_QUEUES) await work.add(queue, () => boss.work<{ tag: string }>(queue, { batchSize: 1 }, handler));
+    await boss.work<{ tag: string }>(INTERACTIVE_QUEUE, { batchSize: 1, pollingIntervalSeconds: 0.5 }, handler);
+    const warm = [...BACK_PRESSURE_QUEUES, INTERACTIVE_QUEUE];
+    for (const queue of warm) await send(queue, `${queue}:before`);
+    if (!(await waitFor(warm.map((q) => `${q}:before`), 30_000))) {
+      throw new Error(`back-pressure: a queue did not work its job before the stall (${warm.filter((q) => !ran.has(`${q}:before`)).join(', ')})`);
+    }
+
+    run.log(`back-pressure: relay stopped, kernel.file.ingest at ${run.rate}/s, threshold ${run.thresholdSeconds} s, checked every ${run.checkSeconds} s`);
+    const stallStart = performance.now();
+    const at = () => performance.now() - stallStart;
+    // Set by the loops below; an object, so the reads after each wait are not narrowed to the initial null.
+    const m: Pick<BackPressureResult, 'lagOverAt' | 'pausedAt' | 'lagUnderHalfAt' | 'resumedAt' | 'maxLagSeconds'> = {
+      lagOverAt: null,
+      pausedAt: null,
+      lagUnderHalfAt: null,
+      resumedAt: null,
+      maxLagSeconds: 0,
+    };
+
+    // Interactive commands at `rate` per second until the end of the phase.
+    const samples: number[] = [];
+    let failed = 0;
+    let firstError: string | null = null;
+    const inflight: Promise<unknown>[] = [];
+    loops.push(
+      (async () => {
+        for (let i = 0; running; i++) {
+          const wait = stallStart + (i * 1000) / run.rate - performance.now();
+          if (wait > 0) await sleep(wait);
+          if (!running) break;
+          inflight.push(
+            timed(run.ingest).then(
+              (d) => samples.push(d),
+              (error: unknown) => {
+                failed++;
+                firstError ??= describeError(error);
+              },
+            ),
+          );
+        }
+      })(),
+    );
+    // The lag, every 100 ms on its own connection.
+    loops.push(
+      (async () => {
+        while (running) {
+          const lag = await outboxLagSeconds(run.worker);
+          const t = at();
+          m.maxLagSeconds = Math.max(m.maxLagSeconds, lag);
+          if (m.lagOverAt === null && lag > run.thresholdSeconds) m.lagOverAt = t;
+          else if (m.lagOverAt !== null && m.lagUnderHalfAt === null && lag <= run.thresholdSeconds / 2) m.lagUnderHalfAt = t;
+          await sleep(100);
+        }
+      })(),
+    );
+    // The worker's check on the worker's schedule: one at a time, every checkSeconds.
+    let checking = false;
+    let checkError: unknown = null;
+    pressureTimer = setInterval(() => {
+      if (checking || !running) return;
+      checking = true;
+      void checkBackPressure({ work, readLagSeconds: () => outboxLagSeconds(run.worker), thresholdSeconds: run.thresholdSeconds, log: run.log })
+        .then(
+          () => {
+            const t = at();
+            if (work.paused && m.pausedAt === null) m.pausedAt = t;
+            if (!work.paused && m.pausedAt !== null && m.resumedAt === null) m.resumedAt = t;
+          },
+          (error: unknown) => {
+            checkError ??= error;
+          },
+        )
+        .finally(() => {
+          checking = false;
+        });
+    }, checkMs);
+    const until = async (done: () => boolean, deadline: number) => {
+      while (!done() && at() < deadline && checkError === null) await sleep(50);
+      if (checkError !== null) throw checkError;
+    };
+
+    // Wait for the pause, giving up three checks after the lag should have passed the threshold.
+    await until(() => m.pausedAt !== null, thresholdMs + 3 * checkMs + 5000);
+    if (m.pausedAt === null) run.log(`back-pressure: the queues did not pause (lag ${m.maxLagSeconds.toFixed(1)} s); sending the jobs anyway`);
+    const held = BACK_PRESSURE_QUEUES.map((q) => `${q}:paused`);
+    const interactiveTag = `${INTERACTIVE_QUEUE}:paused`;
+    const sentAt = performance.now();
+    for (const queue of BACK_PRESSURE_QUEUES) await send(queue, `${queue}:paused`);
+    await send(INTERACTIVE_QUEUE, interactiveTag);
+    await waitFor([interactiveTag], 15_000);
+    const holdLeft = sentAt + BACK_PRESSURE_HOLD_MS - performance.now();
+    if (holdLeft > 0) await sleep(holdLeft);
+    const interactiveRan = ran.has(interactiveTag) && work.paused;
+    const heldCount = held.filter((t) => !ran.has(t)).length;
+
+    // The relay catches up and keeps up until the end; the check then resumes the queues.
+    run.log('back-pressure: relay running again');
+    const releasedAt = at();
+    loops.push(
+      (async () => {
+        while (running) if ((await run.claim()).length === 0) await sleep(10);
+      })(),
+    );
+    await until(() => m.resumedAt !== null, releasedAt + 3 * checkMs + 5000);
+    const resumedPerf = m.resumedAt === null ? null : stallStart + m.resumedAt;
+    if (resumedPerf !== null) await waitFor(held, 15_000);
+    const ranAfterResume = resumedPerf === null ? 0 : held.filter((t) => (ran.get(t) ?? -1) >= resumedPerf).length;
+
+    running = false;
+    clearInterval(pressureTimer);
+    await Promise.all(loops);
+    await Promise.all(inflight);
+    while (checking) await sleep(10);
+    // What the commands still in flight emitted, so the outbox is empty again.
+    while ((await run.claim()).length > 0);
+    return {
+      thresholdSeconds: run.thresholdSeconds,
+      checkSeconds: run.checkSeconds,
+      queues: [...BACK_PRESSURE_QUEUES],
+      ...m,
+      sent: held.length,
+      held: heldCount,
+      ranAfterResume,
+      interactiveRan,
+      commands: { count: samples.length, failed, firstError, p95: percentile(samples, 95) },
+    };
+  } finally {
+    running = false;
+    if (pressureTimer) clearInterval(pressureTimer);
+    await Promise.allSettled(loops);
+    await boss.stop({ graceful: false });
+  }
 }
 
 const login = (adminUrl: string, user: string, password: string) => {
@@ -271,7 +554,8 @@ export async function runLoad(args: LoadArgs, log: (line: string) => void = cons
     await migrate({ adminUrl, dir: process.env.MIGRATIONS_DIR ?? fileURLToPath(new URL('../../../supabase/migrations', import.meta.url)) });
     await setRolePasswords(adminUrl, { crove_app: appPassword, crove_worker: workerPassword });
     appPool = createPool({ connectionString: login(adminUrl, 'crove_app', appPassword), max: args.concurrency + 2 });
-    workerPool = createPool({ connectionString: login(adminUrl, 'crove_worker', workerPassword), max: 2 });
+    // The relay, the lag sampler and the back-pressure check each hold one at a time.
+    workerPool = createPool({ connectionString: login(adminUrl, 'crove_worker', workerPassword), max: 4 });
     const db: Db = createDb(appPool);
     const worker: Db = createDb(workerPool);
     const runtime = new Runtime(db, { sessions: createSessionStatusSource('off') }).register({
@@ -393,6 +677,18 @@ export async function runLoad(args: LoadArgs, log: (line: string) => void = cons
     for (let batch = await claim(); batch.length > 0; batch = await claim()) drained += batch.length;
     const drainSeconds = (performance.now() - drainStarted) / 1000;
 
+    const backPressure = await measureBackPressure({
+      bossUrl: login(adminUrl, 'crove_worker', workerPassword),
+      worker,
+      orgId,
+      ingest,
+      claim,
+      rate: args.rate,
+      thresholdSeconds: args.pauseSeconds,
+      checkSeconds: args.checkSeconds,
+      log,
+    });
+
     return {
       parties: args.parties,
       commands: [
@@ -416,6 +712,7 @@ export async function runLoad(args: LoadArgs, log: (line: string) => void = cons
         p95: percentile(lockCounts, 95),
         max: lockCounts.length ? Math.max(...lockCounts) : null,
       },
+      backPressure,
     };
   } finally {
     await appPool?.end();
