@@ -835,18 +835,20 @@ export function emittersOf(events: readonly string[], sources: Sources, known: K
       problems.push(`nested run of ${textOf(arg)}: ${callers}`);
       return;
     }
-    // A dynamic run is named by the commands it is in, so the same expression in another command is not covered.
-    const key = `${callers.join(', ')}: ${textOf(arg)}`;
-    let callees = readable(() => valuesOf(arg, sources, known));
-    if (callees === null && Object.hasOwn(dynamic, key)) {
-      usedDynamic.add(key);
-      callees = [...(dynamic[key] as readonly string[])];
-    }
-    if (callees === null) {
-      problems.push(`${at(node)}: a nested run whose command the test cannot read (${key}); name the commands it may run in the test's dynamic runs`);
-      return;
-    }
+    const read = readable(() => valuesOf(arg, sources, known));
     for (const caller of callers) {
+      // A dynamic run is named for each command it is in, so the same expression in another command (a new caller of
+      // its helper included) is not covered until it is named too.
+      const key = `${caller}: ${textOf(arg)}`;
+      let callees = read;
+      if (callees === null && Object.hasOwn(dynamic, key)) {
+        usedDynamic.add(key);
+        callees = [...(dynamic[key] as readonly string[])];
+      }
+      if (callees === null) {
+        problems.push(`${at(node)}: a nested run whose command the test cannot read (${key}); name the commands it may run in the test's dynamic runs`);
+        continue;
+      }
       const to = runs.get(caller) ?? new Set<string>();
       for (const callee of callees) to.add(callee);
       runs.set(caller, to);
@@ -890,7 +892,9 @@ export function emittersOf(events: readonly string[], sources: Sources, known: K
     });
   }
   for (const key of Object.keys(dynamic)) if (!usedDynamic.has(key)) problems.push(`the dynamic run ${key} is no longer in the sources`);
-  for (const site of NOT_RUNS) if (files.includes(site.slice(0, site.indexOf(': '))) && !usedNotRuns.has(site)) problems.push(`${site} is no longer in the sources (NOT_RUNS)`);
+  // An entry under the scanned directories that matched nothing, its file moved or deleted included.
+  const scanned = (file: string) => dirs.some((dir) => file.startsWith(`${dir}/`));
+  for (const site of NOT_RUNS) if (scanned(site.slice(0, site.indexOf(': '))) && !usedNotRuns.has(site)) problems.push(`${site} is no longer in the sources (NOT_RUNS)`);
   // A command that runs an emitter, or a command that runs one, emits what it emits.
   for (const by of commands.values()) {
     for (let grown = true; grown; ) {

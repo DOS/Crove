@@ -322,7 +322,12 @@ describe('job egress (#1653)', () => {
       'modules/planted/src/b.ts': `
         import { nestOut as n, listed as l } from './a.ts';
         export const aliased = defineCommand({ name: 'planted.aliased', risk: 'R1', handler: async (ctx) => n(ctx) });
-        export const far = defineCommand({ name: 'planted.far', risk: 'R1', handler: async (ctx) => l(ctx, 'planted.other') });`,
+        export const far = defineCommand({ name: 'planted.far', risk: 'R1', handler: async (ctx) => l(ctx, 'planted.other') });
+        function pass(ctx, input) {
+          return ctx.run(input.name, {});
+        }
+        export const one = defineCommand({ name: 'planted.one', risk: 'R1', handler: async (ctx, input) => pass(ctx, input) });
+        export const two = defineCommand({ name: 'planted.two', risk: 'R1', handler: async (ctx, input) => pass(ctx, input) });`,
     });
     const external = (name: string) => name === 'planted.emit';
     const fed = (event: string) => [`${event} -> planted-queue (provider:planted)`];
@@ -335,11 +340,22 @@ describe('job egress (#1653)', () => {
       "modules/planted/src/a.ts:16: a nested run whose command the test cannot read (planted.dynamic: input.name); name the commands it may run in the test's dynamic runs",
       'modules/planted/src/a.ts:19: run destructured from its context; call it on the context',
       "modules/planted/src/a.ts:24: a nested run whose command the test cannot read (planted.far: name); name the commands it may run in the test's dynamic runs",
+      "modules/planted/src/b.ts:6: a nested run whose command the test cannot read (planted.one: input.name); name the commands it may run in the test's dynamic runs",
+      "modules/planted/src/b.ts:6: a nested run whose command the test cannot read (planted.two: input.name); name the commands it may run in the test's dynamic runs",
     ]);
     expect(belowR2(blind.commands, external, fed)).toEqual(Object.fromEntries(reached.map((name) => [name, route])));
-    // Told what the dynamic run may run, it follows that one too; a stale entry is a problem.
-    const told = emittersOf(['planted.fed'], planted, known, ['modules/planted'], { 'planted.dynamic: input.name': ['planted.twice'], 'planted.gone: x': ['planted.emit'] });
-    expect(told.problems).toEqual([...blind.problems.slice(1), 'the dynamic run planted.gone: x is no longer in the sources']);
-    expect(Object.keys(belowR2(told.commands, external, fed)).sort()).toEqual([...reached, 'planted.dynamic'].sort());
+    // Told what a dynamic run may run, it follows it for each command it is named for: the helper's other caller stays
+    // a problem. A stale entry is a problem too.
+    const told = emittersOf(['planted.fed'], planted, known, ['modules/planted'], {
+      'planted.dynamic: input.name': ['planted.twice'],
+      'planted.one: input.name': ['planted.emit'],
+      'planted.gone: x': ['planted.emit'],
+    });
+    expect(told.problems).toEqual([blind.problems[1], blind.problems[2], blind.problems[4], 'the dynamic run planted.gone: x is no longer in the sources']);
+    expect(Object.keys(belowR2(told.commands, external, fed)).sort()).toEqual([...reached, 'planted.dynamic', 'planted.one'].sort());
+    // A call listed as not a command's run that is no longer there, under the scanned directories, is a problem.
+    expect(emittersOf([], new Sources({ 'apps/kernel/src/stream.ts': 'export {};' }), known, ['apps/kernel/src']).problems).toEqual([
+      'apps/kernel/src/stream.ts: gate.run is no longer in the sources (NOT_RUNS)',
+    ]);
   });
 });
