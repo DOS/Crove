@@ -42,6 +42,16 @@ export const financeManifest = defineModule({
     // approval policy's LEDGER_APPROVE_PERMISSION, and the accountant preset's guard on the last chief accountant).
     { key: 'finance.proposal.approve', risk: 'R3', defaultRoles: ['finance.chief_accountant'] },
   ],
+  // Its entities (#1656), each with its table: every type its commands name as their audit target, the records the
+  // kernel numbers, and the records other code names by type; apps/kernel/test/manifest.db.test.ts checks them.
+  entities: [
+    { type: 'finance.cash_voucher', table: 'cash_voucher', legalEntityScoped: true, numbering: { docType: 'finance.cash_voucher.<voucher_type>' }, audit: 'append_only' },
+    { type: 'finance.categorization_rule', table: 'categorization_rule', legalEntityScoped: true, audit: 'command' },
+    { type: 'finance.fixed_asset', table: 'fixed_asset', legalEntityScoped: true, audit: 'command' },
+    { type: 'finance.journal_entry', table: 'journal_entry', legalEntityScoped: true, audit: 'append_only' },
+    { type: 'finance.journal_voucher', table: 'journal_voucher', legalEntityScoped: true, numbering: { docType: 'finance.journal_voucher' }, audit: 'append_only' },
+    { type: 'finance.purchase_document', table: 'purchase_document', legalEntityScoped: true, audit: 'append_only' },
+  ],
   // Its screens in the app and its menu items (#1652), kept with the other modules' in @crove/kernel-contract.
   ...MODULE_SCREENS.finance,
 });

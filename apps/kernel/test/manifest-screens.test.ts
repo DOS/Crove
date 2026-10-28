@@ -35,6 +35,7 @@ describe('module manifests declare their screens (#1652)', () => {
           permissions: [{ key: 'finance.period.unlock', risk: 'R3', defaultRoles: ['finance.chief_accountant'] }],
           routes: [{ path: 'periods', permission: 'finance.period.unlock' }, { path: 'payroll', permission: 'finance.payroll.read' }],
           nav: [],
+          entities: [],
         }),
         file: 'finance.ts',
       },

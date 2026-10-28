@@ -14,6 +14,11 @@ export const crmManifest = defineModule({
   },
   // It owns no permission: no command of the module declares one and no role grants one.
   permissions: [],
+  // Its entities (#1656), each with its table: every type its commands name as their audit target, the records the
+  // kernel numbers, and the records other code names by type; apps/kernel/test/manifest.db.test.ts checks them.
+  entities: [
+    { type: 'crm.booking', table: 'booking', legalEntityScoped: false, audit: 'command' },
+  ],
   // Its screens in the app and its menu items (#1652), kept with the other modules' in @crove/kernel-contract.
   ...MODULE_SCREENS.crm,
 });
