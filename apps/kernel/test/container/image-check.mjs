@@ -1,9 +1,10 @@
 // Check of the built kernel image, run by the `kernel-image` CI job inside the image (External-tenant gate T12):
 // every kernel module loads without starting anything, the web app is there, no PDF, XML or MIME parser package
-// exists anywhere in the image's node_modules, and the finance exports write workbooks without one (exceljs's XML
+// exists anywhere in the image's node_modules nor parser code inside another package (but the reasoned exceptions
+// in BUNDLED_PARSERS, #1740), and the finance exports write workbooks without one (exceljs's XML
 // reader, saxes, is removed at build time and reading a workbook fails, #1719).
 // Usage: node image-check.mjs [app root, default /app]
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { basename, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -37,7 +38,43 @@ const PARSERS = [
   'libxmljs',
   'libxmljs2',
   'libxml2-wasm',
+  'parse5',
+  'cheerio',
+  'jsdom',
+  'happy-dom',
+  'linkedom',
+  'node-html-parser',
+  '@oozcitak/*',
+  'pdf2json',
+  'pdfreader',
+  'mailsplit',
+  '@zone-eu/mailsplit',
+  'libmime',
+  'libqp',
+  'libbase64',
+  'emailjs-mime-parser',
 ];
+// A name, or `@scope/*` for every package of the scope.
+const isParser = (name) => PARSERS.some((p) => (p.endsWith('/*') ? name.startsWith(p.slice(0, -1)) && !name.slice(p.length - 1).includes('/') : p === name));
+
+// Parser code bundled inside another package, which no name shows (#1740): a parser defined by its name (parseXML,
+// class AwsXmlParser, function multipartFormDataParser), a DOM parser at work, or the PDF cross-reference table a
+// PDF reader looks for. A tripwire, not a proof: the names are what bundled parsers call themselves.
+const PARSER_CODE = [
+  /\b(?:class|function\*?)\s+(?:\w*(?:xml|sax|pdf|mime|html|multipart|formdata|mail|eml)\w*(?:parser|reader|tokeni[sz]er)|parse_?(?:xml|pdf|mime|html|mail|eml|multipart)\w*)\b/i,
+  /\b(?:const|let|var)\s+parse_?(?:xml|pdf|mime|html|mail|eml|multipart)\w*\s*=/i,
+  /^\s*(?:async\s+)?parse_?(?:xml|pdf|mime|html|mail|eml|multipart)\w*\s*\([^)]*\)\s*\{/im,
+  /\bnew\s+DOMParser\b|\.parseFromString\s*\(/,
+  /\bstartxref\b/,
+];
+// Packages whose parser code is accepted, each with its reason. Anything else that matches PARSER_CODE fails.
+const BUNDLED_PARSERS = new Map([
+  ['@aws-sdk/xml-builder', "its hand-written parseXML reads only the S3 answers of the operator's own endpoint"],
+  ['@aws-sdk/core', 'the S3 client\'s protocol layer, which hands those answers to @aws-sdk/xml-builder'],
+  ['undici', "fetch's multipart/form-data reader (Request.formData()), the same one Node ships built in"],
+]);
+const accepted = new Set();
+let scannedFiles = 0;
 const failures = [];
 
 // 1. No parser in the virtual store (pnpm names entries <name>@<version>, with "/" in scoped names as "+").
@@ -48,30 +85,43 @@ for (const entry of entries) {
   // The name ends at the "@" of the version (the second "@" for a scoped name); peer suffixes come after it.
   const at = entry.indexOf('@', entry.startsWith('@') ? 1 : 0);
   const name = (at > 0 ? entry.slice(0, at) : entry).replace('+', '/');
-  if (PARSERS.includes(name)) failures.push(`parser package in the image: ${entry}`);
+  if (isParser(name)) failures.push(`parser package in the image: ${entry}`);
 }
 
 // 2. No parser directory or link in any node_modules, the store's included: the links each store entry holds to
 // its dependencies (<entry>/node_modules/<name>) and pnpm's hidden hoisting (.pnpm/node_modules/<name>). A link
 // counts by its name, whether its target exists or not, and is never followed. No crove-extract app either.
-function walk(dir, scope) {
+// 3. On the way, every JavaScript file of a package (`pkg`, the package the walk is in) is read for PARSER_CODE.
+function walk(dir, scope, pkg) {
   const inNodeModules = basename(dir) === 'node_modules';
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
     const path = join(dir, entry.name);
+    if (entry.isFile() && pkg !== undefined && /\.[cm]?js$/.test(entry.name)) scanFile(path, pkg);
+    if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+    let inside = pkg;
     if (inNodeModules || scope) {
-      const pkg = scope ? `${scope}/${entry.name}` : entry.name;
-      if (PARSERS.includes(pkg)) failures.push(`parser package in the image: ${path}`);
+      const name = scope ? `${scope}/${entry.name}` : entry.name;
+      if (isParser(name)) failures.push(`parser package in the image: ${path}`);
+      inside = name.startsWith('.') || (inNodeModules && name.startsWith('@')) ? undefined : name;
     }
-    if (entry.isDirectory()) walk(path, inNodeModules && entry.name.startsWith('@') ? entry.name : undefined);
+    if (entry.isDirectory()) walk(path, inNodeModules && entry.name.startsWith('@') ? entry.name : undefined, inside);
   }
 }
+function scanFile(path, pkg) {
+  scannedFiles++;
+  const code = readFileSync(path, 'utf8');
+  const match = PARSER_CODE.map((re) => re.exec(code)?.[0]).find((m) => m !== undefined);
+  if (match === undefined) return;
+  if (BUNDLED_PARSERS.has(pkg)) accepted.add(pkg);
+  else failures.push(`parser code in the image, in ${pkg}: ${path} (${match.trim().slice(0, 60)})`);
+}
 walk(root);
+if (scannedFiles === 0) failures.push(`no JavaScript file of a package was read under ${root}`);
 if (existsSync(join(root, 'apps/extract'))) failures.push('apps/extract is in the kernel image');
 if (!existsSync(join(root, 'apps/app/dist/index.html'))) failures.push('the web app build (apps/app/dist) is missing');
 
-// 3. exceljs carries no build that bundles or loads saxes (dist/ holds the browser and ES5 builds). Whether its
-// lib/ loads without saxes (the patch) is what steps 4 and 5 show.
+// 4. exceljs carries no build that bundles or loads saxes (dist/ holds the browser and ES5 builds). Whether its
+// lib/ loads without saxes (the patch) is what steps 5 and 6 show.
 const finance = join(root, 'modules/finance');
 const requireFromFinance = createRequire(join(finance, 'package.json'));
 let exceljsDir = null;
@@ -82,7 +132,7 @@ try {
 }
 if (exceljsDir && existsSync(join(exceljsDir, 'dist'))) failures.push(`exceljs's dist (it bundles saxes) is in the image: ${join(exceljsDir, 'dist')}`);
 
-// 4. Every kernel module loads (main.ts starts a role, so it is left to the entry point check).
+// 5. Every kernel module loads (main.ts starts a role, so it is left to the entry point check).
 const src = join(root, 'apps/kernel/src');
 const modules = existsSync(src) ? readdirSync(src).filter((f) => f.endsWith('.ts') && f !== 'main.ts') : [];
 if (modules.length === 0) failures.push(`no kernel modules at ${src}`);
@@ -94,7 +144,7 @@ for (const file of modules) {
   }
 }
 
-// 5. The finance exports write workbooks without an XML reader, and reading one fails: saxes cannot be loaded.
+// 6. The finance exports write workbooks without an XML reader, and reading one fails: saxes cannot be loaded.
 const XLSX_MAGIC = [0x50, 0x4b, 0x03, 0x04];
 try {
   const { buildJournalWorkbook } = await import(pathToFileURL(join(finance, 'src/export.ts')).href);
@@ -151,7 +201,8 @@ try {
   failures.push(`the finance exports do not write a workbook: ${error?.code ?? ''} ${error?.message ?? error}`);
 }
 
-console.log(`checked ${entries.length} store entries and ${modules.length} kernel modules, wrote 2 workbooks`);
+console.log(`checked ${entries.length} store entries, ${scannedFiles} package files and ${modules.length} kernel modules, wrote 2 workbooks`);
+for (const pkg of accepted) console.log(`accepted parser code in ${pkg}: ${BUNDLED_PARSERS.get(pkg)}`);
 if (failures.length > 0) {
   console.error(failures.join('\n'));
   process.exit(1);

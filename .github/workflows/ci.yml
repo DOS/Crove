@@ -338,16 +338,31 @@ jobs:
         run: |
           docker run --rm --read-only -v "$PWD/apps/kernel/test/container:/c:ro" --entrypoint node "$IMAGE" /c/image-check.mjs /app
 
-      # Control run (#1719): with an XML reader planted in pnpm's hidden hoisting directory, the check must fail
-      # and name it, so a check that stopped looking cannot pass.
-      - name: The check fails on a planted XML reader
+      # Control runs (#1719, #1740): with a parser planted where each part of the check looks, the check must fail
+      # and name it on a line of its own, so a part that stopped looking cannot pass: pnpm's hidden hoisting
+      # directory, a store entry (which only the store-entry check reads), a dangling link a store entry holds
+      # (which only the per-entry walk reads), parser code bundled in another package, and a package of a scope
+      # on the list. Each runs in a fresh container of the image.
+      - name: The check fails on each planted parser
         run: |
-          if docker run --rm -v "$PWD/apps/kernel/test/container:/c:ro" --entrypoint sh "$IMAGE" -c \
-            'mkdir -p /app/node_modules/.pnpm/node_modules/saxes && node /c/image-check.mjs /app' > planted.txt 2>&1; then
-            cat planted.txt; echo "::error::the image check passed with saxes planted in the image"; exit 1
-          fi
-          cat planted.txt
-          grep -q 'parser package in the image: /app/node_modules/.pnpm/node_modules/saxes' planted.txt
+          planted() {
+            if docker run --rm -v "$PWD/apps/kernel/test/container:/c:ro" --entrypoint sh "$IMAGE" -c \
+              "$1 && node /c/image-check.mjs /app" > planted.txt 2>&1; then
+              cat planted.txt; echo "::error::the image check passed after: $1"; exit 1
+            fi
+            cat planted.txt
+            grep -qxE "$2" planted.txt || { echo "::error::the image check did not name what this planted: $1"; exit 1; }
+          }
+          planted 'mkdir -p /app/node_modules/.pnpm/node_modules/saxes' \
+            'parser package in the image: /app/node_modules/\.pnpm/node_modules/saxes'
+          planted 'mkdir /app/node_modules/.pnpm/saxes@6.0.0' \
+            'parser package in the image: saxes@6\.0\.0'
+          planted 'ln -s /nowhere /app/node_modules/.pnpm/exceljs@*/node_modules/saxes' \
+            'parser package in the image: /app/node_modules/\.pnpm/exceljs@[^/]+/node_modules/saxes'
+          planted 'for d in /app/node_modules/.pnpm/exceljs@*/node_modules/exceljs/lib; do echo "module.exports = function parseXML(s) { return s; };" > "$d/planted.js"; done' \
+            'parser code in the image, in exceljs: /app/node_modules/\.pnpm/exceljs@[^/]+/node_modules/exceljs/lib/planted\.js \(function parseXML\)'
+          planted 'mkdir -p /app/node_modules/.pnpm/node_modules/@oozcitak/dom' \
+            'parser package in the image: /app/node_modules/\.pnpm/node_modules/@oozcitak/dom'
 
       - name: The entry point starts and stops at the missing configuration
         run: |
