@@ -24,4 +24,4 @@ Use the name in plain text, not in a stylized form that looks like a logo.
 
 ## Questions
 
-For permission requests or to report misuse, contact the project owner by opening an issue on `DOS/Crove` (without sensitive details).
+For permission requests or to report misuse, contact the project owner by opening an issue on `DOS/Ludy` (without sensitive details).

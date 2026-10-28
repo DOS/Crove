@@ -169,6 +169,13 @@ suite('personal to-dos on PostgreSQL (#1673)', () => {
       dueTime: '09:30',
       dueAt: '2026-11-05T02:30:00.000Z',
     });
+    // Saving the same steps again changes nothing: jsonb reads them back as {done, text}, and the audit row must not
+    // name the checklist for it.
+    const same = [
+      { text: STEP, done: true },
+      { text: 'Lưu sao kê vào hồ sơ', done: false },
+    ];
+    expect(await edit(2, same)).toEqual({ todoId, revision: 3 });
     // A stale revision is refused, and names the current one.
     await expect(edit(1, [])).rejects.toMatchObject({ code: 'TODO_REVISION_CONFLICT', status: 409 });
     // The database keeps the shape of a checklist whoever writes it.
@@ -178,8 +185,10 @@ suite('personal to-dos on PostgreSQL (#1673)', () => {
       c.query<{ command: string; detail: unknown }>(`SELECT command, detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command LIKE 'notes.todo.%' ORDER BY occurred_at, id`, [o.orgId]),
     );
     const text = JSON.stringify(audit.rows);
-    // The edit, then the stale one the runtime refused, which is audited too.
-    expect(audit.rows.map((r) => r.command)).toEqual(['notes.todo.create', 'notes.todo.update', 'notes.todo.update']);
+    // The two edits, then the stale one the runtime refused, which is audited too.
+    expect(audit.rows.map((r) => r.command)).toEqual(['notes.todo.create', 'notes.todo.update', 'notes.todo.update', 'notes.todo.update']);
+    expect(JSON.stringify(audit.rows[1]?.detail)).toMatch(/"changed":\[[^\]]*"checklist"/);
+    expect(JSON.stringify(audit.rows[2]?.detail)).toContain('"changed":[]');
     for (const secret of [TITLE, DETAILS, STEP, 'Lưu sao kê']) expect(text).not.toContain(secret);
     expect(text).toContain('"redacted":"pii"');
     // Results and outbox events carry no text either.

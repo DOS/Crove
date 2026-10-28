@@ -236,7 +236,7 @@ export const todoUpdate = defineCommand({
     const changed = [
       ...(before.title !== input.title ? ['title'] : []),
       ...(before.details !== details ? ['details'] : []),
-      ...(JSON.stringify(steps(before.checklist)) !== checklist ? ['checklist'] : []),
+      ...(checklistOf(steps(before.checklist)) !== checklist ? ['checklist'] : []),
       ...(before.due_on !== next.due_on || beforeDueAt !== (next.due_at?.getTime() ?? null) ? ['due'] : []),
       ...(before.time_zone !== next.time_zone ? ['timeZone'] : []),
     ];

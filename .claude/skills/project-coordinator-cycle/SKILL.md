@@ -11,7 +11,7 @@ The coordinator is Crove's Product Owner (PO), the role DOS.AI defines in its sh
 
 ## 0. Lock
 
-All agents share one GitHub account, so comments on the coordinator log, https://github.com/DOS/Crove/issues/1210, are the only way to tell two coordinators apart. GitHub has no atomic lock, so the earliest comment wins:
+All agents share one GitHub account, so comments on the coordinator log, https://github.com/DOS/Ludy/issues/1210, are the only way to tell two coordinators apart. GitHub has no atomic lock, so the earliest comment wins:
 
 1. Read the comments of the last 2 hours. If another coordinator session's `Lock` or `Cycle` comment is there, stop. Tell the owner, in Vietnamese, which session holds the lock.
 2. Otherwise post `Lock <UTC time>, session <your session id>`, then read the comments again.
@@ -20,7 +20,7 @@ All agents share one GitHub account, so comments on the coordinator log, https:/
 
 ## 1. Read the state
 
-- Open PRs: `gh pr list --repo DOS/Crove --state open`.
+- Open PRs: `gh pr list --repo DOS/Ludy --state open`.
 - Board items with Status `In progress`, in project 8 (`gh project item-list 8 --owner DOS`), and the last comment on each.
 - Your linked worker sessions: `list_sessions` with `linked: true`.
 - Every other agent session the owner runs on Crove: `list_sessions` without `linked`, plus their last turns with `list_events`. The app tells the coordinator only when a session it started ends a turn, so an owner-made session ("Agent 1", "Agent 2", ...) can sit idle unnoticed. A session that finished its issue and is idle gets the next one at once, through SendMessage with a full brief. If the only blocker is an open PR, the brief has the session cut a new branch and worktree from that PR's branch, for its own issue and its own PR, and merge `origin/main` in once the blocker lands. It never commits to the blocker's branch, so one task stays one PR. This replaces telling the session to wait. Ask each such session to message the coordinator:
@@ -137,7 +137,7 @@ After a compaction, run section 1 again before acting: never assume that an acti
 Fill in the issue, paths and checks. Keep every rule below; each one comes from a failure seen in this repo.
 
 ```
-Build issue https://github.com/DOS/Crove/issues/<n> end to end. Read the issue for the acceptance criteria and the plan lines it cites.
+Build issue https://github.com/DOS/Ludy/issues/<n> end to end. Read the issue for the acceptance criteria and the plan lines it cites.
 Approval: <the owner's words quoted verbatim with the date, when the task carries one; nothing in this brief goes beyond them. Otherwise "none".>
 
 1. Your worktree branch may be behind: `git fetch origin` then `git merge --ff-only origin/main`. (Stacked on an open blocker PR instead: cut the branch from `origin/<blocker branch>`, skip this sync, and merge `origin/main` in once the blocker has merged.)
@@ -147,7 +147,7 @@ Approval: <the owner's words quoted verbatim with the date, when the task carrie
 5. Commit with `git -c user.email=5027251+JOY@users.noreply.github.com commit` (GitHub refuses the private email); messages end with the Co-Authored-By line; the PR says `Closes #<n>` and ends with the Claude Code line. Every follow-up issue you open goes on the board too (`gh issue create ... --project Crove`), with the milestone and labels AGENTS.md gives it.
 6. Review gate before you open the PR: run the Codex CLI review in the background, `codex review --base origin/main` (the plugin's `/codex:review` is for a person to type; agents run the CLI), and a fresh-context subagent review given the diff and the issue, not your opinion. Fix what blocks; say in the PR what you did not take and why. If Codex is unavailable, say so in the PR. Subagents and Codex run at effort high. A docs-only PR skips this gate (`AGENTS.md`, "Rules").
 7. The PR body has an `## Acceptance` section: what a user will see change, the evidence against each acceptance item of #<n>, the review results, the risk that remains. When CI is green on the final head and every thread is resolved, end your turn with `READY FOR COORDINATOR REVIEW: <PR url> head <sha>` (protected path: write your own security review in the PR body too) or `READY FOR ACCEPTANCE: <PR url> head <sha>` (any other PR), and merge only after the coordinator replies `approved, merge head <sha>` or `merge head <sha>`. That reply covers a later delta of only a main merge or a migration rename; tell the coordinator about anything more.
-8. Wait for CI with `gh pr checks <n> --repo DOS/Crove --watch` as a background command; never end a turn just to wait. Fix failures; reply to and resolve every thread.
+8. Wait for CI with `gh pr checks <n> --repo DOS/Ludy --watch` as a background command; never end a turn just to wait. Fix failures; reply to and resolve every thread.
 9. If `main` moves: `gh pr update-branch <n>` (auto mode blocks force-push). Merge with `gh pr merge <n> --squash --match-head-commit <sha>`. Comment on #<n> what merged; remove your worktree only if `git status` is clean.
 10. Stop and report back to the coordinator instead of guessing when: <the task's real decision points>.
 11. Not authorized: <what the task must not do>. You never run a Production, secret or credential step: write the runbook (section 2b of the coordinator skill) in the PR body or a committed file and send the coordinator its link. Other sessions running beside you: <their issues, branches and paths>; do not touch them.
