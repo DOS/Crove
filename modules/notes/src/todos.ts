@@ -144,13 +144,14 @@ async function ownKeys(ctx: CommandContext, except: string | null): Promise<Arra
 // Fresh, evenly spread keys for the caller's whole list, in its current order (keys grown long, or two equal).
 async function rebalance(ctx: CommandContext, rows: ReadonlyArray<{ id: string }>): Promise<Map<string, string>> {
   const keys = spreadKeys(rows.length);
-  const fresh = new Map<string, string>();
-  for (const [i, row] of rows.entries()) {
-    const key = keys[i] as string;
-    fresh.set(row.id, key);
-    await ctx.trx.updateTable('crove_notes.todo').set({ sort_key: key }).where('org_id', '=', ctx.orgId).where('id', '=', row.id).execute();
+  const ids = rows.map((r) => r.id);
+  if (ids.length > 0) {
+    // One statement for the whole list; the update policy still limits it to the caller's own rows.
+    await sql`UPDATE crove_notes.todo AS t SET sort_key = v.key
+      FROM unnest(${ids}::uuid[], ${keys}::text[]) AS v(id, key)
+      WHERE t.org_id = ${ctx.orgId}::uuid AND t.id = v.id`.execute(ctx.trx);
   }
-  return fresh;
+  return new Map(ids.map((id, i) => [id, keys[i] as string]));
 }
 
 // A key between two neighbors of the caller's list (by index in `rows`, -1 or rows.length for an end), giving the list

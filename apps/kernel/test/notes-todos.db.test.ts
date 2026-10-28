@@ -205,6 +205,18 @@ suite('personal to-dos on PostgreSQL (#1673)', () => {
     expect(await order()).toBe('CBA');
     const keys = await admin((cl) => cl.query<{ sort_key: string }>(`SELECT sort_key FROM crove_notes.todo WHERE org_id = $1`, [o.orgId]));
     for (const r of keys.rows) expect(r.sort_key.length).toBeLessThanOrEqual(49);
+    // Keys so close that the one between them would be long: the list gets fresh keys in one statement, in its order.
+    const setKey = (id: string, key: string) => admin((cl) => cl.query(`UPDATE crove_notes.todo SET sort_key = $2 WHERE id = $1`, [id, key]));
+    await setKey(c, 'V');
+    await setKey(b, `V${'0'.repeat(47)}1`);
+    await setKey(a, 'k');
+    expect(await order()).toBe('CBA');
+    await o.exec(o.mine, 'notes.todo.reorder', { todoId: a, place: 'before', anchorId: b });
+    expect(await order()).toBe('CAB');
+    const fresh = await admin((cl) => cl.query<{ sort_key: string }>(`SELECT sort_key FROM crove_notes.todo WHERE org_id = $1`, [o.orgId]));
+    expect(new Set(fresh.rows.map((r) => r.sort_key)).size).toBe(3);
+    await o.exec(o.mine, 'notes.todo.reorder', { todoId: a, place: 'after', anchorId: b });
+    expect(await order()).toBe('CBA');
 
     await o.exec(o.mine, 'notes.todo.complete', { todoId: b });
     expect(await order()).toBe('CA');

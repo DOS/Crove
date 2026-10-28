@@ -50,18 +50,19 @@ function TodoEditor({ todo, onClose }: { todo: Todo; onClose: () => void }) {
   const [dueTime, setDueTime] = useState(todo.dueTime ?? '');
   const titleRef = useRef<HTMLInputElement>(null);
   useEffect(() => titleRef.current?.focus(), []);
+  // The values of one save are its variables, so an edit made while it runs does not change what it sends.
   const save = useMutation({
-    mutationFn: () =>
+    mutationFn: (v: { title: string; details: string; steps: TodoStep[]; dueOn: string; dueTime: string }) =>
       client.notes.todos.update({
         todoId: todo.id,
         revision: todo.revision,
-        title: title.trim(),
-        details,
-        checklist: steps,
-        dueOn: dueOn || null,
-        dueTime: dueOn && dueTime ? dueTime : null,
+        title: v.title.trim(),
+        details: v.details,
+        checklist: v.steps,
+        dueOn: v.dueOn || null,
+        dueTime: v.dueOn && v.dueTime ? v.dueTime : null,
         // A due day is read in the zone the to-do was written in, unless it gets a new day here.
-        timeZone: dueOn && dueOn !== todo.dueOn ? browserTimeZone() : todo.timeZone,
+        timeZone: v.dueOn && v.dueOn !== todo.dueOn ? browserTimeZone() : todo.timeZone,
       }),
     onSuccess: () => {
       refresh();
@@ -83,7 +84,7 @@ function TodoEditor({ todo, onClose }: { todo: Todo; onClose: () => void }) {
   };
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (title.trim()) save.mutate();
+    if (title.trim()) save.mutate({ title, details, steps, dueOn, dueTime });
   };
   return (
     <Card className="block p-4" data-testid="todo-editor">
@@ -241,13 +242,16 @@ export function MyWorkPage() {
   });
 
   const shortcuts = useRef<Partial<Record<MyWorkAction, () => void>>>({});
-  shortcuts.current = {
-    new: () => quickAdd.current?.focus(),
-    next: () => setSelected(stepSelection(order, selected, 1)),
-    previous: () => setSelected(stepSelection(order, selected, -1)),
-    ...(selected && view === 'open' ? { done: () => act.mutate({ what: 'complete', todoId: selected }) } : {}),
-    ...(selected && view === 'open' ? { edit: () => setEditing(selected) } : {}),
-  };
+  // The handlers of this render, set after it commits; the key listener reads them through the ref.
+  useEffect(() => {
+    shortcuts.current = {
+      new: () => quickAdd.current?.focus(),
+      next: () => setSelected(stepSelection(order, selected, 1)),
+      previous: () => setSelected(stepSelection(order, selected, -1)),
+      ...(selected && view === 'open' ? { done: () => act.mutate({ what: 'complete', todoId: selected }) } : {}),
+      ...(selected && view === 'open' ? { edit: () => setEditing(selected) } : {}),
+    };
+  });
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const action = myWorkShortcut(event);
