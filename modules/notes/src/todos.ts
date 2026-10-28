@@ -32,7 +32,6 @@ import {
   type TodoWritten,
 } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
-import { TASK_LIST_LIMIT, createTaskFromTodo } from '@crove/kernel';
 import { DomainError, defineCommand, defineQuery, type CommandContext, type QueryContext } from '@crove/kernel-runtime';
 import { notesManifest } from './manifest.ts';
 import { REBALANCE_AT, keyBetween, spreadKeys } from './sort-key.ts';
@@ -341,7 +340,7 @@ function taskDue(row: Pick<SummaryRow, 'due_on' | 'due_at' | 'time_zone'>): Date
   return row.due_on === null ? null : todoDueInstant(row.due_on, '23:59', row.time_zone);
 }
 
-// Hands an open to-do over to a position (notes.md §3.1, step N5, #1674): the kernel's helper creates the task in this
+// Hands an open to-do over to a position (notes.md §3.1, step N5, #1674): kernel.task.create_from_todo creates the task in this
 // transaction, with the title and description the member confirmed and a `notes.todo` source_ref of its own, and the
 // to-do becomes `handed_over` with the task's id. Nothing of the to-do reaches the task but that confirmed text and
 // its due time: not its details unless the member put them in the description, not its steps, not its links. The
@@ -366,7 +365,14 @@ export const todoHandOver = defineCommand({
       .where('id', '=', input.todoId)
       .executeTakeFirstOrThrow();
     const description = detailsOf(input.description);
-    const { taskId } = await createTaskFromTodo(ctx, { todoId: input.todoId, title: input.title, description, positionId: input.positionId, due: taskDue(before), tainted });
+    const { taskId } = await ctx.run<{ taskId: string }>('kernel.task.create_from_todo', {
+      todoId: input.todoId,
+      title: input.title,
+      description,
+      positionId: input.positionId,
+      due: taskDue(before)?.toISOString() ?? null,
+      tainted,
+    });
     const row = await ctx.trx
       .updateTable('crove_notes.todo')
       .set({ status: 'handed_over', task_id: taskId, revision: before.revision + 1, updated_at: ctx.now })
@@ -416,7 +422,9 @@ export const todoGet = defineQuery({
   },
 });
 
-// The open statuses of a kernel task (ADR-0029): what My work lists.
+// The open statuses of a kernel task (ADR-0029): what My work lists. kernel.task.list answers at most this many tasks
+// (TASK_LIST_LIMIT in @crove/kernel), the newest first.
+const KERNEL_TASK_LIST_LIMIT = 200;
 const OPEN_TASK_STATUSES = ['todo', 'in_progress', 'waiting', 'in_review'] as const;
 // The most open to-dos My work shows, as the app's list.
 const MY_WORK_LIMIT = 500;
@@ -463,8 +471,8 @@ export const myWork = defineQuery({
         ...taskStanding(t.due === null ? null : new Date(t.due), input.timeZone, now),
       }))
       .sort((a, b) => (a.due === b.due ? 0 : a.due === null ? 1 : b.due === null ? -1 : a.due < b.due ? -1 : 1));
-    // The kernel lists at most TASK_LIST_LIMIT tasks, the newest; a full page says the screen may miss older ones.
-    return { todos: rows.map((r) => summary(r, now)), tasks, tasksTruncated: listed.length >= TASK_LIST_LIMIT };
+    // A full page from the kernel says the screen may miss older tasks.
+    return { todos: rows.map((r) => summary(r, now)), tasks, tasksTruncated: listed.length >= KERNEL_TASK_LIST_LIMIT };
   },
 });
 

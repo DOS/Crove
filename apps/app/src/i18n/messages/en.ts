@@ -5965,6 +5965,7 @@ export const en = {
         checkout: 'Check out a task',
         comment: 'Comment on a task',
         create: 'Create a task',
+        create_from_todo: "Create a team task from a member's own to-do",
         delegate: 'Delegate part of a task',
         escalate: 'Escalate a task',
         get: 'Read a task',

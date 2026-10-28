@@ -670,9 +670,6 @@ importers:
       '@crove/db':
         specifier: workspace:*
         version: link:../../packages/db
-      '@crove/kernel':
-        specifier: workspace:*
-        version: link:../../packages/kernel
       '@crove/kernel-contract':
         specifier: workspace:*
         version: link:../../packages/kernel-contract

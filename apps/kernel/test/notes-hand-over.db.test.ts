@@ -152,6 +152,10 @@ suite('to-do hand-over and My work on PostgreSQL (#1674)', () => {
     );
     expect(audit.rows).toHaveLength(1);
     expect(audit.rows[0]?.detail).toMatchObject({ todoId, taskId: handed.taskId, positionId: o.positions.team, title: { redacted: 'pii' }, description: { redacted: 'pii' } });
+    // The kernel's nested command writes its own row, with ids only.
+    const all = await admin((c) => c.query<{ command: string; detail: unknown }>(`SELECT command, detail FROM crove_kernel.audit_event WHERE org_id = $1`, [o.orgId]));
+    expect(all.rows.find((r) => r.command === 'kernel.task.create_from_todo')?.detail).toMatchObject({ taskId: handed.taskId, todoId });
+    for (const secret of [TITLE, DETAILS, STEP, TEAM_TEXT]) expect(JSON.stringify(all.rows)).not.toContain(secret);
     const events = await admin((c) => c.query<{ type: string; payload: unknown }>(`SELECT type, payload FROM crove_kernel.outbox_event WHERE org_id = $1`, [o.orgId]));
     expect(events.rows.map((e) => e.type)).toEqual(expect.arrayContaining(['notes.todo.handed_over', 'kernel.task.created']));
     for (const secret of [TITLE, DETAILS, STEP, TEAM_TITLE, TEAM_TEXT]) {

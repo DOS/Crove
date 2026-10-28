@@ -5965,6 +5965,7 @@ export const vi = {
         checkout: 'Nhận việc',
         comment: 'Bình luận về việc',
         create: 'Giao việc',
+        create_from_todo: 'Tạo việc nhóm từ việc riêng của một thành viên',
         delegate: 'Giao lại một phần việc',
         escalate: 'Chuyển việc lên cấp trên',
         get: 'Xem việc',

@@ -614,24 +614,39 @@ async function insertHumanTask(
 }
 
 // A member's own to-do handed over to a position (notes plan docs/plan/notes.md §3.1 and step N5, #1674): the notes
-// module calls this inside its notes.todo.hand_over command, so the task and the to-do's change commit together. The
-// task takes the text the member confirmed, the rules of kernel.task.create (an archived position is refused with
-// POSITION_ARCHIVED) and a `notes.todo` source_ref this helper sets itself; the to-do's taint carries over. For the
-// notes module only: it trusts the caller to have read and locked the to-do under its owner-only row policies.
-export async function createTaskFromTodo(
-  ctx: CommandContext,
-  input: { todoId: string; title: string; description: string | null; positionId: string; due: Date | null; tainted: boolean },
-): Promise<{ taskId: string }> {
-  requireUser(ctx);
-  return insertHumanTask(ctx, {
-    title: zTaskTitle.parse(input.title),
-    description: z.string().max(10000).nullable().parse(input.description),
-    assigneePositionId: zId.parse(input.positionId),
-    due: input.due?.toISOString() ?? null,
-    sourceRef: { type: 'notes.todo', id: zId.parse(input.todoId) },
-    tainted: input.tainted,
-  });
-}
+// module runs this inside its notes.todo.hand_over command (ctx.run), so the task and the to-do's change commit
+// together, and the task's events and wake-up are the kernel's own. The task takes the text the member confirmed, the
+// rules of kernel.task.create (an archived position is refused with POSITION_ARCHIVED) and a `notes.todo` source_ref
+// this command sets itself from the to-do's id; the to-do's taint carries over. No RPC route reaches it: the notes
+// command reads and locks the to-do under its owner-only row policies first. Called directly it could only name a
+// `notes.todo` the kernel attaches nothing to, never a `kernel.proposal`.
+export const createTaskFromTodo = defineCommand({
+  name: 'kernel.task.create_from_todo',
+  input: z.strictObject({
+    todoId: zId,
+    title: zTaskTitle,
+    description: z.string().max(10000).nullable(),
+    positionId: zId,
+    due: z.iso.datetime().nullable(),
+    tainted: z.boolean(),
+  }),
+  risk: 'R1',
+  sideEffect: 'internal',
+  access: MEMBERS,
+  handler: async (ctx, input) => {
+    requireUser(ctx);
+    const created = await insertHumanTask(ctx, {
+      title: input.title,
+      description: input.description,
+      assigneePositionId: input.positionId,
+      due: input.due,
+      sourceRef: { type: 'notes.todo', id: input.todoId },
+      tainted: input.tainted,
+    });
+    ctx.audit({ taskId: created.taskId, todoId: input.todoId, positionId: input.positionId });
+    return created;
+  },
+});
 
 // The task row an agent's run holds the lease on with this fencing token, locked; refused once the lease was lost
 // (expired, taken by another run, or released).
@@ -1791,6 +1806,7 @@ export const agentCommands = [
   engageKillSwitch,
   releaseKillSwitch,
   createTask,
+  createTaskFromTodo,
   checkoutTask,
   commentTask,
   setTaskStatus,
