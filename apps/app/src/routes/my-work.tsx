@@ -418,6 +418,9 @@ export function MyWorkPage() {
             disabled={act.isPending}
             onCheckedChange={(checked) => act.mutate({ what: checked === true ? 'complete' : 'reopen', todoId: todo.id })}
           />
+        ) : view === 'open' || view === 'done' ? (
+          // A handed-over to-do has no checkbox; the space keeps its title in line with the others.
+          <span aria-hidden="true" className="size-4 shrink-0" />
         ) : null}
         <button
           type="button"
