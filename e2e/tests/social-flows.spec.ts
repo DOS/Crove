@@ -186,7 +186,7 @@ test('retries a failed channel and settles the channels Crove could not account 
   const droppedCard = channelCard(page, dropped);
   for (const card of [seenCard, droppedCard]) {
     await expect(card.getByText('Cần bạn xem', { exact: true })).toBeVisible();
-    await expect(card.getByText(/^Crove không xác định được bài đã lên kênh hay chưa\./)).toBeVisible();
+    await expect(card.getByText(/^Ludy không xác định được bài đã lên kênh hay chưa\./)).toBeVisible();
     await expect(card.getByRole('button', { name: 'Chưa thấy bài, đăng lại' })).toBeVisible();
   }
 
@@ -476,10 +476,10 @@ test('says AI drafting is off on a server without a model', async ({ page, reque
   await connectSandbox(page, 'Trang Không AI');
   await compose(page, 'Bài viết tay, không nhờ AI');
 
-  await expect(page.getByText('Soạn bằng AI', { exact: true })).toBeVisible();
+  await expect(page.getByText('Soạn cùng Vy', { exact: true })).toBeVisible();
   await expect(page.getByText('Máy chủ chưa cấu hình AI (AI_BASE_URL, AI_MODEL).')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Soạn nháp bằng AI' })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Nhờ AI viết lại' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Nhờ Vy soạn nháp' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Nhờ Vy viết lại' })).toHaveCount(0);
 });
 
 test('approves several posts at once from the review list (#635)', async ({ page }) => {
@@ -656,7 +656,7 @@ test('moves a draft to review on the board and approves it with four-eyes; an il
 
   // Dropped on Published: refused with the reason, nothing sent, nothing changed.
   await card.dragTo(column('Đã đăng'));
-  await expect(page.getByText('Crove tự đăng bài vào giờ đã hẹn, không chuyển tay sang Đã đăng được.')).toBeVisible();
+  await expect(page.getByText('Ludy tự đăng bài vào giờ đã hẹn, không chuyển tay sang Đã đăng được.')).toBeVisible();
   await expect(column('Chờ duyệt').getByTestId('board-card')).toHaveCount(1);
   expect(moves).toHaveLength(1);
   expect(statuses()).toEqual(['in_review']);

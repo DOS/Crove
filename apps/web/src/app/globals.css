@@ -1,4 +1,4 @@
-/* Crove marketing site theme (DESIGN.md v3). Colors are tokens only: light values on :root, the default for every
+/* Ludy marketing site theme (DESIGN.md v3). Colors are tokens only: light values on :root, the default for every
    visitor; dark values only when the visitor picks dark with the toggle. Components use the Tailwind
    names below (bg-surface, text-muted, border-line, ...), never palette classes or literal colors. */
 @import 'tailwindcss';

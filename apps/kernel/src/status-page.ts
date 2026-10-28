@@ -5,6 +5,7 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { z } from 'zod';
+import { DEFAULT_BRAND_NAME } from './config.ts';
 
 // What the page shows, and the prober checks (prober.ts) behind each. A check not listed shows on no line.
 export const STATUS_COMPONENTS = [
@@ -109,7 +110,7 @@ function vietnamTime(iso: string): string {
 const escapeHtml = (text: string) => text.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string);
 
 // brand: the product name users see (BRAND_NAME, #1045).
-export function renderStatusPage(view: StatusView, brand = 'Crove'): string {
+export function renderStatusPage(view: StatusView, brand = DEFAULT_BRAND_NAME): string {
   const rows = view.components
     .map((c) => `<li><span>${c.label}</span><span class="state ${c.state}">${STATE_TEXT[c.state]}</span></li>`)
     .join('\n');

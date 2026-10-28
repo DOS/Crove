@@ -20,7 +20,7 @@ self.addEventListener('push', (event) => {
   } catch {
     data = {};
   }
-  const title = text(data.title, 60) || 'Crove';
+  const title = text(data.title, 60) || 'Ludy';
   const path = safePath(data.url);
   event.waitUntil(
     self.registration.showNotification(title, {

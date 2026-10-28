@@ -82,7 +82,7 @@ test('set the tax code, upload a sales e-invoice, approve it, then find it in th
     const download = page.waitForEvent('download');
     await page.getByRole('button', { name: 'Xuất chứng từ bán hàng cho MISA' }).click();
     const file = await download;
-    expect(file.suggestedFilename()).toBe(`crove-misa-ban-hang-${slug}.xlsx`);
+    expect(file.suggestedFilename()).toBe(`ludy-misa-ban-hang-${slug}.xlsx`);
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.readFile(await file.path());
     const sheet = workbook.getWorksheet('Chứng từ bán hàng');

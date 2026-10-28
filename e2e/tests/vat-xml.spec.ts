@@ -69,7 +69,7 @@ test('export the VAT return of a month as the HTKK XML of form 01/GTGT', async (
     const download = page.waitForEvent('download');
     await page.getByRole('button', { name: 'Xuất XML cho HTKK' }).click();
     const file = await download;
-    expect(file.suggestedFilename()).toBe(`crove-01gtgt-2026-09-${slug}.xml`);
+    expect(file.suggestedFilename()).toBe(`ludy-01gtgt-2026-09-${slug}.xml`);
     const xml = await readFile(await file.path(), 'utf8');
     expect(xml.startsWith('<?xml version="1.0" encoding="UTF-8"?>')).toBe(true);
     expect(valueOf(xml, 'mst')).toBe(SELLER_TAX_CODE);

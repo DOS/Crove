@@ -608,7 +608,7 @@ function excelDate(value: string): Date {
 
 /** One sheet named as MISA's template, its header row, then one row per voucher line. */
 // brand: the product name users see (BRAND_NAME, #1045), as the file's creator.
-export async function buildMisaWorkbook<Row>(template: MisaTemplate<Row>, rows: readonly Row[], brand = 'Crove'): Promise<Uint8Array> {
+export async function buildMisaWorkbook<Row>(template: MisaTemplate<Row>, rows: readonly Row[], brand = 'Ludy'): Promise<Uint8Array> {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = brand;
   const sheet = workbook.addWorksheet(template.sheetName);

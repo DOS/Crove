@@ -12,7 +12,7 @@ test('the agents screen asks for a second factor in place, then does what was as
   await expect(page.getByRole('heading', { name: 'Sơ đồ tổ chức và tác tử AI' })).toBeVisible();
 
   await page.getByTestId('template').first().getByRole('button', { name: 'Cài', exact: true }).click();
-  await expect(page.getByText('Việc này cần xác thực hai lớp. Bật xác thực hai lớp cho tài khoản, Crove sẽ thực hiện lại ngay sau đó.')).toBeVisible();
+  await expect(page.getByText('Việc này cần xác thực hai lớp. Bật xác thực hai lớp cho tài khoản, Ludy sẽ thực hiện lại ngay sau đó.')).toBeVisible();
   await expect(page.getByText(/^Đang chờ: cài mẫu .+\.$/)).toBeVisible();
 
   await page.getByRole('button', { name: 'Bật xác thực hai lớp' }).click();
