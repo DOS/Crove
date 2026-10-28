@@ -430,7 +430,8 @@ export interface RuntimeOptions {
   // read, over the org of the sealed context, the actor key, the command and the canonical input ('k1:<hex>'): whoever
   // holds an exported or archived row cannot confirm a guessed input (a private note's title, ADR-0037). The default
   // (#1741), and what the server runs (apps/kernel createKernel). 'sha256': the plain SHA-256 of the canonical input,
-  // as before #1732, only for a test that shows what the plain hash gives away.
+  // as before #1732, only for tests: one that shows what the plain hash gives away, and those that seed a database
+  // migrated to a version before crove_kernel.command_input_hash exists.
   inputHash?: InputHashMode;
 }
 

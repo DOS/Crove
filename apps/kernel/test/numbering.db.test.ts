@@ -13,7 +13,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity, type NumberSeriesPage } from '@crove/kernel';
-import { Runtime } from '@crove/kernel-runtime';
+import { Runtime, type InputHashMode } from '@crove/kernel-runtime';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -49,10 +49,12 @@ suite('gapless numbering on PostgreSQL (#1401)', () => {
     }
   }
 
-  function connect() {
+  // The database starts before the keyed input hash's migration (20261103180000_crove_kernel_input_hash.sql), where
+  // crove_kernel.command_input_hash does not exist yet: the runtime that seeds it writes the plain hash (#1741).
+  function connect(inputHash: InputHashMode = 'keyed') {
     pool = createPool({ connectionString: appUrl, max: 4 });
     db = createDb(pool);
-    rt = new Runtime(db).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
+    rt = new Runtime(db, { inputHash }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
   }
 
   // The voucher's number columns, also before the migration added number_period and number_allocation_id.
@@ -119,7 +121,7 @@ suite('gapless numbering on PostgreSQL (#1401)', () => {
     app.username = 'crove_app';
     app.password = 'test-app-pw';
     appUrl = app.toString();
-    connect();
+    connect('sha256');
     owner = await upsertIdentity(db, { issuer: 'test', subject: randomUUID(), email: 'owner@numbering.test', name: null });
     adminUser = await upsertIdentity(db, { issuer: 'test', subject: randomUUID(), email: 'admin@numbering.test', name: null });
     member = await upsertIdentity(db, { issuer: 'test', subject: randomUUID(), email: 'member@numbering.test', name: null });
