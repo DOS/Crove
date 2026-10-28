@@ -34,7 +34,8 @@ const AGENT_PROPOSAL_COMMANDS: Record<string, 'propagate' | undefined> = {
   'kernel.task.approve_proposal': undefined,
 };
 
-// Probe commands for the runtime's agent policy, each declaring agent access for any role.
+// Probe commands for the runtime's agent policy, each declaring agent access for any role. Every probe an agent may run
+// declares its writes (#1710): none of them writes a table, only the rows the runtime writes for it.
 const probe = (name: string, risk: Risk, taint?: 'propagate'): CommandDef<unknown, unknown> =>
   defineCommand({
     name,
@@ -42,6 +43,7 @@ const probe = (name: string, risk: Risk, taint?: 'propagate'): CommandDef<unknow
     risk,
     access: [],
     agent: { roles: 'any', ...(taint ? { taint } : {}) },
+    writes: [],
     handler: async () => ({ ok: true }),
   }) as CommandDef<unknown, unknown>;
 // t18.whoami: who the runtime runs a command as, and an activity row written in that context.
@@ -51,6 +53,7 @@ const whoami = defineCommand({
   risk: 'R0',
   access: [],
   agent: { roles: 'any' },
+  writes: [],
   handler: async (ctx, input) => {
     await ctx.activity('t18.probe', input.recordId, 't18.whoami', 'probe');
     return { actor: ctx.actor, orgId: ctx.orgId, positionId: ctx.agent?.positionId ?? null };
@@ -63,6 +66,7 @@ const forgeRun333 = defineCommand({
   risk: 'R0',
   access: [],
   agent: { roles: 'any' },
+  writes: [],
   handler: async (ctx) => {
     ctx.audit({ agentRun: '00000000-0000-4000-8000-000000000000', note: 1 });
     return { ok: true };
@@ -76,6 +80,7 @@ const prepare260 = defineCommand({
   risk: 'R0',
   access: ['owner', 'admin', 'member'],
   agent: { roles: 'any' },
+  writes: [],
   handler: async (_ctx, input) => ({ kind: 't260', command: input.command, title: `T260 ${input.command}`, payload: { n: 1 } }),
 }) as CommandDef<unknown, unknown>;
 const proposal260 = (name: string, risk: Risk, roles?: string[]) =>
@@ -84,7 +89,7 @@ const proposal260 = (name: string, risk: Risk, roles?: string[]) =>
     input: z.object({ payload: z.unknown(), acceptFailedChecks: z.boolean().optional() }),
     risk,
     access: 'proposal',
-    ...(roles ? { agentApprovers: { roles, noContactOrPayment: true as const } } : {}),
+    ...(roles ? { agentApprovers: { roles }, writes: [] } : {}),
     handler: async () => ({ executed: name }),
   }) as CommandDef<unknown, unknown>;
 // The same preparer without agent access: humans only.
@@ -102,6 +107,7 @@ const prepareR1260 = defineCommand({
   risk: 'R1',
   access: ['owner', 'admin', 'member'],
   agent: { roles: 'any', taint: 'propagate' },
+  writes: [],
   handler: async (_ctx, input) => ({ kind: 't260', command: input.command, title: `T260 ${input.command}`, payload: { n: 1 } }),
 }) as CommandDef<unknown, unknown>;
 // #435: a preparer that echoes what the agent gives it (kind, title, payload): none of that may become the proposal's
@@ -112,6 +118,7 @@ const prepareEcho435 = defineCommand({
   risk: 'R0',
   access: ['owner', 'admin', 'member'],
   agent: { roles: 'any' },
+  writes: [],
   handler: async (_ctx, input) => ({ kind: input.kind, command: input.command, title: input.title, payload: input.payload }),
 }) as CommandDef<unknown, unknown>;
 const proposalKind435 = defineCommand({
@@ -1333,7 +1340,17 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
     expect(() => new Runtime(db).register({ commands: [def({ roles: [TEMPLATE] })] })).toThrow(/noContactOrPayment/);
     expect(() => new Runtime(db).register({ commands: [def({ roles: [], noContactOrPayment: true })] })).toThrow(/noContactOrPayment/);
     expect(() => new Runtime(db).register({ commands: [def({ roles: [TEMPLATE], noContactOrPayment: true }, 'R3')] })).toThrow(/R1 or R2/);
-    expect(() => new Runtime(db).register({ commands: [def({ roles: [TEMPLATE], noContactOrPayment: true })] })).not.toThrow();
+    // The old form alone, with no declared writes: accepted as free of contact and payment writes until #1710's second
+    // step removes it, refused from then on (the command must declare its writes). This holds on both sides.
+    let registered: Runtime | null = null;
+    let refusal: unknown = null;
+    try {
+      registered = new Runtime(db).register({ commands: [def({ roles: [TEMPLATE], noContactOrPayment: true })] });
+    } catch (error) {
+      refusal = error;
+    }
+    if (registered) expect(registered.commandInfo('t260.reg')?.contactOrPayment).toBe(false);
+    else expect(String(refusal)).toMatch(/noContactOrPayment/);
   });
 
   // #1697: P04 derived from the manifests' column classes. A proposal command declares the tables and columns it
