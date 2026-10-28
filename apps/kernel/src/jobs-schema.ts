@@ -11,7 +11,8 @@ import { CHANNEL_PROVIDERS } from '@crove/channel';
 
 export const JOB_SCHEMA = 'crove_jobs';
 
-// Created by the migration that vendors the schema. A new queue, or a new policy, needs a new migration.
+// Created by the migration that vendors the schema. A new queue, or a new policy, needs a new migration; a new queue
+// names QUEUES.deadLetter as its dead letter queue there ('{"policy":"standard","deadLetter":"kernel-job.dlq"}', #1720).
 export const QUEUES = {
   extract: 'finance-file-extract',
   inbound: 'kernel-inbound-email',
@@ -57,8 +58,10 @@ export const QUEUES = {
   // Created by the notes core migration (20261103130000).
   notesMemberPurge: 'notes-member-purge',
   notesTrash: 'notes-trash',
-  // Created by the notes reminders migration (20261103180000).
+  // Created by the notes reminders migration (20261103200000).
   notesRemind: 'notes-reminders',
+  // Created by the dead letter migration (20261103150000): every other queue's dead letters (#1720, dead-letter.ts).
+  deadLetter: 'kernel-job.dlq',
 } as const;
 type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
 
@@ -125,6 +128,7 @@ const QUEUE_EGRESS: { readonly [Q in QueueName]: JobEgress } = {
   [QUEUES.notesMemberPurge]: 'none',
   [QUEUES.notesTrash]: 'none',
   [QUEUES.notesRemind]: 'none',
+  [QUEUES.deadLetter]: 'none',
 };
 
 // The channel providers whose host the tenant names: their adapters get the egress guard (channelPublishers).

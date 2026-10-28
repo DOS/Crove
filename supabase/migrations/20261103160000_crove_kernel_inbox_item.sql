@@ -1,10 +1,44 @@
--- Crove kernel (issue #1673): the org purge (#1024) deletes a closing org's to-dos (crove_notes.todo, ADR-0037 §6)
--- with its notes. The function is copied verbatim from 20261103140000_crove_kernel_org_purge_notes.sql (the newest
--- definition), with only crove_notes.todo added to v_kernel_first between the links and the notes: before the notes
--- (a to-do's source note), and before tasks (a handed-over to-do's task, N5). It lives in a kernel migration because
--- the function is the kernel's. Idempotent; applied files stay untouched.
+-- Crove kernel (issue #1720, plan §4.9 "pg-boss contract"): the Inbox item kernel.job.dead_lettered, raised in its own
+-- org for a job that failed its last retry (the dead letter queue is the previous migration). Idempotent; applied files
+-- stay untouched.
+--
+-- crove_kernel.inbox_item  an Inbox item the system raised: one row per org, kind and key (here kind
+--                          kernel.job.dead_lettered, key job:<id of the failed job>), with a small detail object (the
+--                          queue name, the job id and how many retries it had; never the job's data or its error).
+--                          Only a system context raises one (the worker's command kernel.job.dead_letter); owners and
+--                          admins read and dismiss them (kernel.inbox.raised, kernel.inbox.dismiss). Tenant roles update
+--                          only the dismissal columns and delete none.
 SET LOCAL lock_timeout = '2s';
 
+CREATE TABLE IF NOT EXISTS crove_kernel.inbox_item (
+  org_id uuid NOT NULL REFERENCES crove_kernel.tenant (org_id) ON DELETE CASCADE,
+  id uuid NOT NULL DEFAULT crove_kernel.uuid_v7(),
+  kind text NOT NULL CHECK (kind IN ('kernel.job.dead_lettered')),
+  -- What makes it one item: an org gets each key of a kind once (the failed job's id).
+  dedupe_key text NOT NULL CHECK (pg_catalog.length(dedupe_key) BETWEEN 1 AND 200),
+  detail jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (pg_catalog.jsonb_typeof(detail) = 'object' AND pg_catalog.pg_column_size(detail) <= 1024),
+  raised_at timestamptz NOT NULL DEFAULT now(),
+  dismissed_at timestamptz,
+  dismissed_by uuid,
+  PRIMARY KEY (org_id, id),
+  CONSTRAINT inbox_item_once UNIQUE (org_id, kind, dedupe_key),
+  CONSTRAINT inbox_item_dismissed CHECK ((dismissed_at IS NULL) = (dismissed_by IS NULL))
+);
+CREATE INDEX IF NOT EXISTS inbox_item_open_idx ON crove_kernel.inbox_item (org_id, raised_at DESC) WHERE dismissed_at IS NULL;
+SELECT crove_kernel.apply_tenant_rls('crove_kernel.inbox_item');
+REVOKE UPDATE, DELETE ON crove_kernel.inbox_item FROM crove_tenant;
+GRANT UPDATE (dismissed_at, dismissed_by) ON crove_kernel.inbox_item TO crove_tenant;
+-- Only the system raises items: a member context cannot make one up. Wrapped in a subquery, as the tenant policy is,
+-- so it runs once per statement.
+DROP POLICY IF EXISTS inbox_item_raise ON crove_kernel.inbox_item;
+CREATE POLICY inbox_item_raise ON crove_kernel.inbox_item AS RESTRICTIVE FOR INSERT TO crove_tenant
+  WITH CHECK ((SELECT crove_kernel.ctx_actor_type()) = 'system');
+
+-- ---------------------------------------------------------------------------
+-- The org purge deletes a closing org's Inbox items with its notices. Copied verbatim from
+-- 20261103140000_crove_kernel_org_purge_notes.sql (the newest definition on main), with only crove_kernel.inbox_item
+-- added to v_kernel_first.
+-- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION crove_kernel.org_purge(p_min_days integer)
 RETURNS TABLE (outcome text, counts jsonb, blob_keys text[])
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
@@ -29,9 +63,9 @@ DECLARE
   v_keys text[];
   -- Rows of these tables are deleted whole, in this order (children before the rows they reference).
   v_kernel_first text[] := ARRAY[
-    'crove_notes.link', 'crove_notes.todo', 'crove_notes.note',
+    'crove_notes.link', 'crove_notes.note',
     'crove_kernel.activity', 'crove_kernel.agent_wakeup', 'crove_kernel.extraction',
-    'crove_kernel.inbound_message', 'crove_kernel.notification', 'crove_kernel.notification_mute',
+    'crove_kernel.inbound_message', 'crove_kernel.notification', 'crove_kernel.notification_mute', 'crove_kernel.inbox_item',
     'crove_kernel.mail_event', 'crove_kernel.mail_suppression', 'crove_kernel.mail_message',
     'crove_kernel.member_invite', 'crove_kernel.auth_session_org', 'crove_kernel.inbound_drop',
     'crove_kernel.idempotency_key', 'crove_kernel.oauth_state', 'crove_kernel.outbox_pending',

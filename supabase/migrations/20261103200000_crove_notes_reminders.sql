@@ -85,4 +85,4 @@ REVOKE ALL ON FUNCTION crove_notes.todo_reminder_owner(uuid, timestamptz) FROM P
 GRANT EXECUTE ON FUNCTION crove_notes.todo_reminder_owner(uuid, timestamptz) TO crove_worker;
 
 -- The worker's 5-minute reminder sweep (apps/kernel/src/notes-worker.ts).
-SELECT crove_jobs.create_queue('notes-reminders', '{"policy":"standard"}'::jsonb);
+SELECT crove_jobs.create_queue('notes-reminders', '{"policy":"standard","deadLetter":"kernel-job.dlq"}'::jsonb);

@@ -67,7 +67,14 @@ export function OrgLayout() {
   const reviews = useQuery({ ...orpc.social.reviewInbox.queryOptions({ input: {} }), enabled: socialOn, refetchInterval: pollEvery(live, 30_000, SAFETY_POLL_MS) });
   // And what needs a person there (#771): channels to reconnect, posts that did not go out.
   const attention = useQuery({ ...orpc.social.attentionInbox.queryOptions({ input: {} }), enabled: socialOn, refetchInterval: pollEvery(live, 30_000, SAFETY_POLL_MS) });
-  const inboxCount = (pending.data?.length ?? 0) + (reviews.data?.total ?? 0) + (attention.data?.total ?? 0);
+  // And background work that failed (#1720), which only owners and admins see.
+  const roleHere = me.data?.orgs.find((o) => o.slug === slug)?.role;
+  const failedJobs = useQuery({
+    ...orpc.inbox.raised.queryOptions({ input: {} }),
+    enabled: roleHere === 'owner' || roleHere === 'admin',
+    refetchInterval: pollEvery(live, 60_000, SAFETY_POLL_MS),
+  });
+  const inboxCount = (pending.data?.length ?? 0) + (reviews.data?.total ?? 0) + (attention.data?.total ?? 0) + (failedJobs.data?.total ?? 0);
   // The member's unread notifications (#637), where Social runs.
   const notifications = useNotifications(NAV.some((n) => n.module === 'social'));
   const unread = unreadLabel(notifications.data?.unread ?? 0);
@@ -80,19 +87,35 @@ export function OrgLayout() {
   const { locale, setLocale } = useLocaleSetting();
   const [theme, setTheme] = useThemeSetting();
   const [paletteOpen, setPaletteOpen] = useState(false);
-  // The org's search (#673): parties, documents and journal entries for what is typed in the palette, where finance runs.
+  // The org's search (#673): parties, documents and journal entries for what is typed in the palette, where finance runs;
+  // and the notes the member may read, where notes runs (#1675).
   const financeOn = NAV.some((n) => n.module === 'finance');
+  const notesOn = NAV.some((n) => n.module === 'notes');
   const [paletteQuery, setPaletteQuery] = useState('');
-  const typed = financeOn && paletteOpen ? searchTerm(paletteQuery) : null;
+  const typed = (financeOn || notesOn) && paletteOpen ? searchTerm(paletteQuery) : null;
   const term = useSettled(typed, 250);
   // Documents and journal entries of the entity chosen in the shell (#1280), where the results link to.
   const entity = useChosenEntity();
   const found = useQuery({
     ...orpc.search.query.queryOptions({ input: { q: term ?? '', legalEntityId: entity.legalEntityId } }),
-    enabled: entity.ready && term !== null && term === typed,
+    enabled: financeOn && entity.ready && term !== null && term === typed,
     staleTime: 30_000,
   });
-  const searchState = typed === null ? 'idle' : found.isError ? 'failed' : term !== typed || !entity.ready || found.isFetching ? 'searching' : 'idle';
+  // Words typed without marks find them ("hoa don" finds "hóa đơn"); the server's row policies keep other members'
+  // private notes out.
+  const notesFound = useQuery({
+    ...orpc.notes.search.queryOptions({ input: { q: term ?? '', limit: 8 } }),
+    enabled: notesOn && term !== null && term === typed,
+    staleTime: 30_000,
+  });
+  const searchState =
+    typed === null
+      ? 'idle'
+      : (financeOn && found.isError) || (notesOn && notesFound.isError)
+        ? 'failed'
+        : term !== typed || (financeOn && (!entity.ready || found.isFetching)) || (notesOn && notesFound.isFetching)
+          ? 'searching'
+          : 'idle';
   const paletteKeys = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.userAgent) ? '⌘ K' : 'Ctrl K';
 
   // Ctrl K (Cmd K on a Mac) opens or closes the command palette from any screen of the org.
@@ -155,8 +178,17 @@ export function OrgLayout() {
     [NAV, pending.data, reviews.data, me.data, slug, locale, theme, t, tp, tc, f, navigate, setLocale, setTheme],
   );
   const foundEntries = useMemo<PaletteEntry[]>(() => {
-    const data = typed !== null && term === typed ? found.data : undefined;
-    if (!data) return [];
+    const settled = typed !== null && term === typed;
+    const notes = (settled && notesOn ? notesFound.data : undefined) ?? [];
+    const noteEntries = notes.map((n) => ({
+      id: `note:${n.id}`,
+      group: 'notes' as const,
+      label: n.title,
+      detail: tp(n.visibility === 'private' ? 'notePrivate' : 'noteShared'),
+      run: () => void navigate({ to: '/o/$slug/notes', params: { slug }, search: { note: n.id } }),
+    }));
+    const data = settled && financeOn ? found.data : undefined;
+    if (!data) return noteEntries;
     return [
       ...data.parties.map((p) => ({
         id: `party:${p.id}`,
@@ -193,8 +225,9 @@ export function OrgLayout() {
         detail: tp('entryDetail', { date: f.date(e.entryDate), amount: f.money(e.amount) }),
         run: () => void navigate({ to: '/o/$slug/journal', params: { slug }, search: { from: e.entryDate, to: e.entryDate }, hash: `entry-${e.id}` }),
       })),
+      ...noteEntries,
     ];
-  }, [found.data, typed, term, slug, tp, f, navigate]);
+  }, [found.data, notesFound.data, financeOn, notesOn, typed, term, slug, tp, f, navigate]);
 
   const shellNav = (onNavigate?: () => void) => (
     <ShellNav

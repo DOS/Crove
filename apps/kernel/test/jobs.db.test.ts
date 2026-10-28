@@ -50,11 +50,14 @@ suite('crove_jobs from committed migrations', () => {
     await withClient(adminUrl, async (admin) => {
       const version = await admin.query<{ version: number }>(`SELECT max(version) AS version FROM ${JOB_SCHEMA}.version`);
       expect(version.rows[0]?.version).toBe(pgBossSchemaVersion());
-      const queues = await admin.query<{ name: string; policy: string }>(`SELECT name, policy FROM ${JOB_SCHEMA}.queue ORDER BY name`);
+      // Every queue but the dead letter queue sends its dead letters there (#1720), a queue a later migration creates too.
+      const queues = await admin.query<{ name: string; policy: string; dead_letter: string | null }>(`SELECT name, policy, dead_letter FROM ${JOB_SCHEMA}.queue ORDER BY name`);
       expect(queues.rows).toEqual(
-        [...Object.values(QUEUES), ...SOCIAL_PUBLISH_QUEUES, ...MAIL_QUEUES]
-          .sort()
-          .map((name) => ({ name, policy: name === QUEUES.agentWake || SOCIAL_PUBLISH_QUEUES.includes(name) || MAIL_QUEUES.includes(name) ? 'stately' : 'standard' })),
+        [...Object.values(QUEUES), ...SOCIAL_PUBLISH_QUEUES, ...MAIL_QUEUES].sort().map((name) => ({
+          name,
+          policy: name === QUEUES.agentWake || SOCIAL_PUBLISH_QUEUES.includes(name) || MAIL_QUEUES.includes(name) ? 'stately' : 'standard',
+          dead_letter: name === QUEUES.deadLetter ? null : QUEUES.deadLetter,
+        })),
       );
 
       const functions = await admin.query<{ fn: string; pinned: boolean; public: boolean; worker: boolean; app: boolean }>(`

@@ -814,6 +814,19 @@ export const zNotifications = z.object({
 });
 export type Notifications = z.infer<typeof zNotifications>;
 
+// Inbox items the system raised (#1720), open ones only: a job of the org that failed its last retry, named by the
+// queue it ran on. Neither the job's data nor its error is part of it. total counts every open item.
+export const zRaisedInboxItem = z.object({
+  id: zId,
+  kind: z.literal('kernel.job.dead_lettered'),
+  queue: z.string().max(100),
+  jobId: zId,
+  retries: z.number().int().min(0),
+  raisedAt: z.string(),
+});
+export type RaisedInboxItem = z.infer<typeof zRaisedInboxItem>;
+export const zRaisedInboxItems = z.object({ items: z.array(zRaisedInboxItem), total: z.number().int().min(0) });
+
 // What the command palette's search found (#673): at most 8 rows per group. A party that is customerOnly (a customer of
 // sales that never sold to the org) is not among the vendors. A document's proposalId opens it in the Inbox.
 export const zSearchResult = z.object({
