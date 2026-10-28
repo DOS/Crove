@@ -9,7 +9,8 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 
-const git = (...args) => execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+// The buffer reaches past Node's default 1 MiB, which `git ls-files` outgrows near 15k paths (#1640).
+const git = (...args) => execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 256 * 1024 * 1024 });
 const root = git('rev-parse', '--show-toplevel').trim();
 const lines = (out) => out.split('\n').map((s) => s.trim()).filter(Boolean);
 

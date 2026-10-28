@@ -39,7 +39,8 @@ export function findViolations(paths) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
-  const paths = execFileSync('git', ['ls-files', '-z'], { encoding: 'utf8' }).split('\0').filter(Boolean);
+  // Past Node's default 1 MiB buffer, which a listing of about 15k paths reaches (#1640).
+  const paths = execFileSync('git', ['ls-files', '-z'], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 }).split('\0').filter(Boolean);
   const violations = findViolations(paths);
   for (const v of violations) {
     console.error(`::error file=${v.path}::${v.path} is ${v.rule}, which belongs in the private crove-cloud repository (G1, kernel plan §10); move it there, or add it to ALLOWED in tools/ci/path-boundary.mjs with a reason`);

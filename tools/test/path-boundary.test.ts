@@ -57,7 +57,7 @@ describe('G1 path boundary (#1560)', () => {
   });
 
   it('passes on the tree as it is', () => {
-    const paths = execFileSync('git', ['ls-files', '-z'], { encoding: 'utf8' }).split('\0').filter(Boolean);
+    const paths = execFileSync('git', ['ls-files', '-z'], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 }).split('\0').filter(Boolean);
     expect(findViolations(paths)).toEqual([]);
   });
 });

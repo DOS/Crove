@@ -353,20 +353,21 @@ suite('invite mail limits on PostgreSQL (#185)', () => {
   });
 
   it('folds address variants for the cap, never for who the invite is for (#270)', async () => {
+    // Gmail addresses with an underscore, which Gmail never issues, so no one holds them (#1640).
     const r = randomUUID().slice(0, 8);
     const stranger = await person('stranger');
     const strangerOrg = await orgOf(stranger);
     // Another org used up the cap of two inboxes today.
-    await sent(strangerOrg, stranger.id, Array.from({ length: TIGHT }, () => `ab${r}@gmail.com`));
+    await sent(strangerOrg, stranger.id, Array.from({ length: TIGHT }, () => `a_b${r}@gmail.com`));
     await sent(strangerOrg, stranger.id, Array.from({ length: TIGHT }, () => `ab${r}@example.com`));
     const owner = await person('owner');
     const orgId = await orgOf(owner);
 
     // a.b+x@gmail.com is the inbox ab@gmail.com: the org's first invite of it passes, a repeat under another
     // spelling is refused by the cap.
-    const first = await invite(tight, orgId, owner.id, `a.b${r}+x@gmail.com`);
-    expect(first).toMatchObject({ email: `a.b${r}+x@gmail.com` });
-    await expect(invite(tight, orgId, owner.id, `ab${r}@googlemail.com`)).rejects.toMatchObject({
+    const first = await invite(tight, orgId, owner.id, `a_.b${r}+x@gmail.com`);
+    expect(first).toMatchObject({ email: `a_.b${r}+x@gmail.com` });
+    await expect(invite(tight, orgId, owner.id, `a_b${r}@googlemail.com`)).rejects.toMatchObject({
       code: 'INVITE_RATE_LIMITED',
       status: 429,
       details: { rule: 'invite_recipient_per_day', limit: TIGHT },
@@ -385,15 +386,15 @@ suite('invite mail limits on PostgreSQL (#185)', () => {
     // The invite stays bound to the email it names: the account of the inbox's plain address cannot accept it, the
     // account with that exact address can.
     const token = first.acceptPath.slice(first.acceptPath.indexOf('#') + 1);
-    const plain = await upsertIdentity(db, { issuer: 'test', subject: randomUUID(), email: `ab${r}@gmail.com`, name: null });
+    const plain = await upsertIdentity(db, { issuer: 'test', subject: randomUUID(), email: `a_b${r}@gmail.com`, name: null });
     await expect(runtime.executeOrgless('kernel.member.invite.accept', { token }, { actor: asUser(plain) })).rejects.toMatchObject({
       code: 'INVITE_EMAIL_MISMATCH',
       status: 403,
     });
-    const tagged = await upsertIdentity(db, { issuer: 'test', subject: randomUUID(), email: `a.b${r}+x@gmail.com`, name: null });
+    const tagged = await upsertIdentity(db, { issuer: 'test', subject: randomUUID(), email: `a_.b${r}+x@gmail.com`, name: null });
     await expect(runtime.executeOrgless('kernel.member.invite.accept', { token }, { actor: asUser(tagged) })).resolves.toMatchObject({ orgId });
     // The rows keep the addresses as given.
-    expect(await invitesOf('org_id = $1 AND email = $2', [orgId, `a.b${r}+x@gmail.com`])).toBe(1);
+    expect(await invitesOf('org_id = $1 AND email = $2', [orgId, `a_.b${r}+x@gmail.com`])).toBe(1);
     expect(await invitesOf('org_id = $1 AND email = $2', [orgId, `a.b${r}+y@example.com`])).toBe(1);
   });
 

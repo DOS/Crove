@@ -291,18 +291,29 @@ describe('G5 PII scan (#1628)', () => {
       'reports/ledger.CSV': 'account,amount\n111,1000\n',
       'docs/manual.pdf': null,
       'packages/agent/test/fixtures/documents/invoice.pdf': null,
-      'apps/extract/test/invoice.xlsx': null,
+      'apps/extract/testdata/invoice.xlsx': null,
       'docs/notes.md': 'a@example.com',
+      // Only a fixtures or testdata directory, by its exact name, holds documents without an entry (review probes):
+      // not a test, e2e, mocks or seed directory, not a name with "fixture" or "seed" in it, not another letter case.
+      'apps/kernel/test/khach-hang.xlsx': null,
+      'test/a.xlsx': null,
+      'seed/a.xlsx': null,
+      'exports/so-cai-seed.xlsx': null,
+      'exports/fixture-export.xlsx': null,
+      'docs/Fixtures/a.pdf': null,
+      'backup/khach-hang.zip': null,
+      'scans/cccd.jpg': null,
     };
     const { findings, unused } = scanFiles(Object.keys(texts), (p: string) => texts[p] ?? null, [allowed]);
-    expect(findings.map((f: { path: string; kind: string; line: number }) => [f.path, f.kind, f.line])).toEqual([
-      ['exports/so-cai-2026.xlsx', 'document', 1],
-      ['reports/ledger.CSV', 'document', 1],
-      ['docs/manual.pdf', 'document', 1],
-    ]);
+    expect(findings.map((f: { path: string; kind: string; line: number }) => [f.path, f.kind, f.line])).toEqual(
+      [
+        'exports/so-cai-2026.xlsx', 'reports/ledger.CSV', 'docs/manual.pdf', 'apps/kernel/test/khach-hang.xlsx', 'test/a.xlsx', 'seed/a.xlsx',
+        'exports/so-cai-seed.xlsx', 'exports/fixture-export.xlsx', 'docs/Fixtures/a.pdf', 'backup/khach-hang.zip', 'scans/cccd.jpg',
+      ].map((path) => [path, 'document', 1]),
+    );
     expect(unused).toEqual([]);
-    for (const name of ['a.pdf', 'a.doc', 'a.docx', 'a.xls', 'a.xlsx', 'a.xlsm', 'a.ods', 'a.odt', 'a.pptx', 'a.csv', 'a.tsv']) expect(DOCUMENT.test(name), name).toBe(true);
-    for (const name of ['a.md', 'a.ts', 'a.pdf.md', 'csv.ts']) expect(DOCUMENT.test(name), name).toBe(false);
+    for (const name of ['a.pdf', 'a.doc', 'a.docx', 'a.dotx', 'a.xls', 'a.xlsx', 'a.xlsm', 'a.xltx', 'a.ods', 'a.odt', 'a.pptx', 'a.pptm', 'a.ppsx', 'a.csv', 'a.tsv', 'a.rtf', 'a.numbers', 'a.dbf', 'a.mdb', 'a.sqlite', 'a.zip', 'a.xlsx.gz', 'a.7z', 'a.jpg', 'a.HEIC', 'a.tiff']) expect(DOCUMENT.test(name), name).toBe(true);
+    for (const name of ['a.md', 'a.ts', 'a.pdf.md', 'csv.ts', 'icon.png', 'logo.svg', 'a.webp', 'a.woff2', 'a.json']) expect(DOCUMENT.test(name), name).toBe(false);
     // A document entry names exact files: no directory prefix, no values, never everything.
     expect(allowlistErrors([
       { kind: 'document', paths: ['docs/templates/'], reason: 'a reason that is long enough' },
@@ -324,7 +335,7 @@ describe('G5 PII scan (#1628)', () => {
   });
 
   it('lists 20k tracked paths without running out of buffer (#1640)', () => {
-    // 20,000 paths of 79 characters each: about 1.6 MB, past Node's default 1 MiB buffer.
+    // 20,000 paths of 60 characters each and their separators: about 1.2 MB, past Node's default 1 MiB buffer.
     const script = "process.stdout.write(Array.from({ length: 20000 }, (_, i) => 'apps/kernel/test/a-long-directory-name/' + String(i).padStart(8, '0') + '-file.test.ts').join('\\0'))";
     expect(() => execFileSync(process.execPath, ['-e', script], { encoding: 'utf8' })).toThrow(/maxBuffer|ENOBUFS/);
     const paths = trackedPaths(execFileSync, process.execPath, ['-e', script]);
