@@ -158,5 +158,17 @@ export interface ModuleManifest extends ModuleScreens {
   readonly entities: readonly EntityDeclaration[];
 }
 
-// `const` keeps each manifest's lists readonly, so an importer cannot change who owns a table.
-export const defineModule = <const M extends ModuleManifest>(manifest: M): M => manifest;
+// `const` keeps each manifest's lists readonly at typecheck, and the manifest is deep-frozen when it is defined, so no
+// code that imports it (another module at import time, a command) can change who owns a table or swap a table's column
+// classes before the runtime reads them (P04 rests on them, #1710).
+export const defineModule = <const M extends ModuleManifest>(manifest: M): M => deepFreeze(manifest);
+
+// Freezes the value and everything it holds, already frozen parts included (a shallow freeze leaves their children).
+function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
+  if (typeof value === 'object' && value !== null && !seen.has(value)) {
+    seen.add(value);
+    Object.freeze(value);
+    for (const key of Reflect.ownKeys(value)) deepFreeze((value as Record<PropertyKey, unknown>)[key], seen);
+  }
+  return value;
+}

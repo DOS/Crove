@@ -2,20 +2,24 @@
 // #1710). P04 flags an agent's proposal of a command that writes a `contact` or `payment` column, refuses agent access
 // to such a command, and lets agents approve only proposals of commands declared free of them. Those answers rest on
 // the declared writes and on the manifests' column classes, so this file holds both: the runtime, given the
-// manifests, refuses a declaration whose classes are not its manifest's (a hand-built map, a '*' column); every
-// command the server registers declares writes that match the manifests, every command an agent may run declares its
-// writes and none is a contact or payment column; no proposal command escapes P04 unless it is listed here; and no
+// manifests, refuses a declaration whose classes are not its manifest's (a hand-built map, a '*' column); the server
+// builds its one runtime with the manifests, which are frozen; every command the server registers declares writes
+// that match the manifests, every command an agent may run declares its writes (the runtime refuses one that does
+// not) and none is a contact or payment column; no proposal command escapes P04 unless it is listed here; and no
 // contact or payment column of the manifests is reclassified away. No database needed. Keep this file
 // self-contained: import package code under test, never helpers from outside test/invariant/.
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join, relative, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import type { CellResolver } from '@crove/db';
 import { kernelManifest } from '@crove/kernel';
 import { DATA_CLASSES, tableWrite } from '@crove/kernel-contract';
-import { Runtime, WRITE_DATA_CLASSES, defineCommand, type CommandDef, type CommandWrite, type ManifestTables } from '@crove/kernel-runtime';
+import { Runtime, WRITE_DATA_CLASSES, defineCommand, type AgentApprovers, type CommandDef, type CommandWrite, type ManifestTables } from '@crove/kernel-runtime';
 import { financeManifest } from '@crove/mod-finance';
 import { loadConfig } from '../../src/config.ts';
-import { moduleDefinitions, moduleManifests } from '../../src/kernel.ts';
+import { moduleDefinitions, moduleManifests, serverRuntime } from '../../src/kernel.ts';
 import { orgPurgeCommand } from '../../src/org-purge.ts';
 
 const noDatabase = (): never => {
@@ -24,7 +28,8 @@ const noDatabase = (): never => {
 const cells: CellResolver = { resolveTenant: async () => noDatabase(), controlPlane: () => noDatabase() };
 
 // Every module on, as the server runs when CROVE_MODULES is unset.
-const config = loadConfig({ DATABASE_URL: 'postgres://localhost/x', AUTH_JWT_SECRET: 'unit-test-jwt-secret-0123456789abcdef', AUTH_ISSUER: 'crove-auth' });
+const CONFIG_ENV = { DATABASE_URL: 'postgres://localhost/x', AUTH_JWT_SECRET: 'unit-test-jwt-secret-0123456789abcdef', AUTH_ISSUER: 'crove-auth' };
+const config = loadConfig(CONFIG_ENV);
 const manifests = (): ManifestTables[] => moduleManifests(config).map((m) => m.tables);
 const shipped = (): Array<CommandDef<unknown, unknown>> =>
   [...moduleDefinitions(config).commands, orgPurgeCommand({ store: {} as never })] as Array<CommandDef<unknown, unknown>>;
@@ -116,6 +121,60 @@ describe('declared command writes against the manifests (#1697, #1710)', () => {
     expect(moduleManifests(config).map((m) => m.id)).toEqual([...config.CROVE_MODULES]);
   });
 
+  it('builds the server runtime with the manifests, for every set of enabled modules', () => {
+    const forgedCommand = def({ name: 'kernel.t1710_forged', writes: [forged({ ...PARTY, email: 'internal' })] });
+    for (const modules of [undefined, 'finance', 'crm', 'notes', 'social']) {
+      const runtime = serverRuntime(cells, loadConfig({ ...CONFIG_ENV, ...(modules ? { CROVE_MODULES: modules } : {}) }), {});
+      // Registered on it later, as createKernel registers the org purge, a forged write is refused too.
+      expect(() => runtime.register({ commands: [forgedCommand] }), String(modules)).toThrow(/not its manifest's/);
+    }
+  });
+
+  it('constructs a runtime in the server only through serverRuntime()', () => {
+    const src = fileURLToPath(new URL('../../src/', import.meta.url));
+    const files = (dir: string): string[] =>
+      readdirSync(dir).flatMap((name) => {
+        const path = join(dir, name);
+        return statSync(path).isDirectory() ? files(path) : path.endsWith('.ts') ? [path] : [];
+      });
+    const sites = files(src).flatMap((file) => (readFileSync(file, 'utf8').match(/new\s+Runtime\b/g) ?? []).map(() => relative(src, file).split(sep).join('/')));
+    expect(sites).toEqual(['kernel.ts']);
+    const kernel = readFileSync(join(src, 'kernel.ts'), 'utf8');
+    const body = kernel.slice(kernel.indexOf('export function serverRuntime('));
+    expect(body.slice(0, body.indexOf('\n}\n'))).toMatch(/new\s+Runtime\b/);
+  });
+
+  it('freezes every manifest, and the runtime keeps its own copy of the classes', () => {
+    const unfrozen: string[] = [];
+    const walk = (value: unknown, path: string) => {
+      if (typeof value !== 'object' || value === null) return;
+      if (!Object.isFrozen(value)) unfrozen.push(path);
+      for (const [key, child] of Object.entries(value)) walk(child, `${path}.${key}`);
+    };
+    for (const manifest of moduleManifests(config)) walk(manifest, manifest.id);
+    expect(unfrozen).toEqual([]);
+    expect(() => {
+      (kernelManifest.tables.crove_kernel as Record<string, unknown>).party = { email: 'internal' };
+    }).toThrow(TypeError);
+    // A manifest object changed after the runtime read it does not change the check.
+    const tables = { crove_kernel: { party: { ...PARTY } } };
+    const runtime = new Runtime(cells, { manifests: [tables] });
+    tables.crove_kernel.party.email = 'internal';
+    expect(() => runtime.register({ commands: [def({ writes: [forged({ ...PARTY, email: 'internal' })] })] })).toThrow(/not its manifest's/);
+  });
+
+  it('refuses a command an agent may run that does not declare its writes, and the old noContactOrPayment form', () => {
+    for (const register of [withManifests, withoutManifests]) {
+      expect(register({ access: [], agent: { roles: 'any' } })).toThrow(/an agent may run it, so it declares its writes/);
+      expect(register({ access: [], agent: { roles: 'any' }, writes: [] })).not.toThrow();
+      expect(register({ agentApprovers: { roles: ['finance.chief_accountant'] } })).toThrow(/declares its writes/);
+      expect(register({ agentApprovers: { roles: ['finance.chief_accountant'], noContactOrPayment: true } as AgentApprovers })).toThrow(/declares its writes/);
+      expect(register({ agentApprovers: { roles: ['finance.chief_accountant'], noContactOrPayment: true } as AgentApprovers, writes: [INTERNAL] })).toThrow(
+        /no longer take noContactOrPayment/,
+      );
+    }
+  });
+
   it('registers every command the server ships against the manifests', () => {
     const commands = shipped();
     expect(() => new Runtime(cells, { manifests: manifests() }).register({ commands })).not.toThrow();
@@ -130,7 +189,7 @@ describe('declared command writes against the manifests (#1697, #1710)', () => {
     expect(agentCommands.filter((c) => runtime.commandInfo(c.name)?.contactOrPayment !== false).map((c) => c.name)).toEqual([]);
   });
 
-  it('declares the writes of every command with agent approvers, never the old noContactOrPayment alone', () => {
+  it('declares the writes of every command with agent approvers', () => {
     expect(shipped().filter((c) => c.agentApprovers !== undefined && c.writes === undefined).map((c) => c.name)).toEqual([]);
   });
 
