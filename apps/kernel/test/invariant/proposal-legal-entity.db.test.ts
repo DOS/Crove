@@ -38,6 +38,8 @@ const prepare1538 = defineCommand({
   risk: 'R0',
   access: ['owner', 'admin', 'member'],
   agent: { roles: 'any' },
+  // It writes no table (#1710: a command an agent may run declares its writes).
+  writes: [],
   handler: async (_ctx, input) => ({ kind: 't1538', command: 't1538.prop', title: 'T1538', payload: input.legalEntityId ? { legalEntityId: input.legalEntityId } : { n: 1 } }),
 }) as CommandDef<unknown, unknown>;
 const proposal1538 = defineCommand({
@@ -45,7 +47,8 @@ const proposal1538 = defineCommand({
   input: z.object({ payload: z.unknown(), acceptFailedChecks: z.boolean().optional() }),
   risk: 'R1',
   access: 'proposal',
-  agentApprovers: { roles: [TEMPLATE], noContactOrPayment: true },
+  agentApprovers: { roles: [TEMPLATE] },
+  writes: [],
   handler: async () => ({ executed: 't1538.prop' }),
 }) as CommandDef<unknown, unknown>;
 
