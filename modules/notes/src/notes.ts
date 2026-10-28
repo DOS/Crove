@@ -115,11 +115,38 @@ function assertNotInTrash(row: SummaryRow): void {
   if (row.deleted_at !== null) throw new DomainError('NOTE_IN_TRASH', 409, 'Ghi chú đang ở thùng rác; hãy khôi phục trước');
 }
 
-// The linked record must be one the writer can open in this org (its row policies apply).
+// The query that opens a record another module owns (notes.md §3.4, #1672). No foreign key goes to another module's
+// schema, so such a target is checked by running that module's own get query in the caller's context: its role check,
+// its row policies and the caller's legal entities apply, as on the record's own screen.
+const MODULE_GETS = {
+  'finance.purchase_document': 'finance.documents.get',
+  'finance.journal_entry': 'finance.journal.get',
+  'crm.booking': 'crm.booking.get',
+} as const satisfies Record<Exclude<NoteLinkTarget, 'kernel.party' | 'kernel.file'>, string>;
+
+// Whether the caller can open the record now: a party or a file through the kernel's row policies, any other target
+// through its module's get query. A record the caller may not read, that is not there, or whose module is off (not
+// installed) is not, and the three are not told apart.
+async function canOpen(ctx: QueryContext, targetType: NoteLinkTarget, targetId: string): Promise<boolean> {
+  if (targetType === 'kernel.party' || targetType === 'kernel.file') {
+    const table = targetType === 'kernel.party' ? 'crove_kernel.party' : 'crove_kernel.file';
+    const found = await ctx.trx.selectFrom(table).select('id').where('org_id', '=', ctx.orgId).where('id', '=', targetId).executeTakeFirst();
+    return found !== undefined;
+  }
+  try {
+    const answer = await ctx.query(MODULE_GETS[targetType], { id: targetId });
+    return answer.status === 'ok';
+  } catch (error) {
+    // Not found, or not for the caller's role: the get queries refuse before they read or after a read that found
+    // nothing, so the transaction stays usable.
+    if (error instanceof DomainError && (error.status === 403 || error.status === 404)) return false;
+    throw error;
+  }
+}
+
+// The linked record must be one the writer can open in this org.
 async function assertTarget(ctx: CommandContext, targetType: NoteLinkTarget, targetId: string): Promise<void> {
-  const table = targetType === 'kernel.party' ? 'crove_kernel.party' : 'crove_kernel.file';
-  const found = await ctx.trx.selectFrom(table).select('id').where('org_id', '=', ctx.orgId).where('id', '=', targetId).executeTakeFirst();
-  if (!found) throw new DomainError('NOTE_LINK_TARGET_NOT_FOUND', 404, 'Không tìm thấy bản ghi để gắn ghi chú');
+  if (!(await canOpen(ctx, targetType, targetId))) throw new DomainError('NOTE_LINK_TARGET_NOT_FOUND', 404, 'Không tìm thấy bản ghi để gắn ghi chú');
 }
 
 async function addLink(ctx: CommandContext, row: Pick<SummaryRow, 'id' | 'visibility'>, userId: string, targetType: NoteLinkTarget, targetId: string): Promise<string> {
@@ -378,11 +405,19 @@ export const noteGet = defineQuery({
       .orderBy('created_at')
       .orderBy('id')
       .execute();
-    return {
-      ...summary(row, userId),
-      body: row.body,
-      links: links.map((l): NoteLink => ({ id: l.id, targetType: l.target_type, targetId: l.target_id, createdAt: new Date(l.created_at).toISOString() })),
-    };
+    // Each link as the reader may follow it now: a record they cannot open (another legal entity, another role, its
+    // module off) shows as such, by type and id only.
+    const shown: NoteLink[] = [];
+    for (const l of links) {
+      shown.push({
+        id: l.id,
+        targetType: l.target_type,
+        targetId: l.target_id,
+        createdAt: new Date(l.created_at).toISOString(),
+        available: await canOpen(ctx, l.target_type, l.target_id),
+      });
+    }
+    return { ...summary(row, userId), body: row.body, links: shown };
   },
 });
 

@@ -5121,6 +5121,7 @@ export const vi = {
       ALREADY_REVERSED: 'Bút toán này đã được đảo',
       ENTRY_IS_REVERSAL: 'Đây là bút toán đảo nên không đảo lại được; hãy ghi một bút toán mới',
       ENTRY_NOT_FOUND: 'Không tìm thấy bút toán',
+      DOCUMENT_NOT_FOUND: 'Không tìm thấy chứng từ',
       REVERSAL_DATE_BEFORE_ENTRY: 'Ngày bút toán đảo không được trước ngày của bút toán gốc',
       REVERSAL_PENDING: 'Bút toán này đã có đề xuất đảo đang chờ duyệt; hãy duyệt hoặc từ chối đề xuất đó trong Hộp thư',
       OPENING_BALANCE_EXISTS: 'Tổ chức đã có bút toán số dư đầu kỳ; hãy đảo bút toán đó trước khi nhập lại',
@@ -5501,6 +5502,7 @@ export const vi = {
       booking: {
         cancel: 'Hủy lịch hẹn',
         confirm: 'Xác nhận lịch hẹn',
+        get: 'Xem một lịch hẹn',
         list: 'Xem danh sách lịch hẹn',
         mail_data: 'Lấy thông tin cho thư về lịch hẹn',
         manage: 'Thực hiện yêu cầu đổi hoặc hủy lịch hẹn của khách',
@@ -5567,6 +5569,7 @@ export const vi = {
         exports: 'Xem các lần xuất của chứng từ',
       },
       documents: {
+        get: 'Xem một chứng từ',
         list: 'Xem danh sách chứng từ',
         voided_proposals: 'Tìm đề xuất có chứng từ đã hủy',
       },

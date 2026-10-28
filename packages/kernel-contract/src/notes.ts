@@ -6,8 +6,9 @@ import { zId } from './schemas.ts';
 
 export const NOTE_VISIBILITIES = ['private', 'org'] as const;
 export type NoteVisibility = (typeof NOTE_VISIBILITIES)[number];
-// The records a note links to in this step; finance, crm and meeting records come later (notes.md §3.4).
-export const NOTE_LINK_TARGETS = ['kernel.party', 'kernel.file'] as const;
+// The records a note links to (notes.md §3.4): the kernel's parties and files, and finance's documents and journal
+// entries and crm's bookings (#1672), which another module owns and may be off; meetings come later (N10).
+export const NOTE_LINK_TARGETS = ['kernel.party', 'kernel.file', 'finance.purchase_document', 'finance.journal_entry', 'crm.booking'] as const;
 export type NoteLinkTarget = (typeof NOTE_LINK_TARGETS)[number];
 // The lists of the notes screen (notes.md §3.10).
 export const NOTE_LIST_VIEWS = ['mine', 'shared', 'pinned', 'archived', 'trash'] as const;
@@ -80,7 +81,9 @@ export const zNoteSummary = z.object({
 });
 export type NoteSummary = z.infer<typeof zNoteSummary>;
 
-export const zNoteLinkView = z.object({ id: z.string(), targetType: z.enum(NOTE_LINK_TARGETS), targetId: z.string(), createdAt: z.string() });
+// available: the reader can open the record now, checked in their context through its module's own query (its row
+// policies, role and legal entities apply); false when they cannot, or its module is off ("Bản ghi không mở được").
+export const zNoteLinkView = z.object({ id: z.string(), targetType: z.enum(NOTE_LINK_TARGETS), targetId: z.string(), createdAt: z.string(), available: z.boolean() });
 export type NoteLink = z.infer<typeof zNoteLinkView>;
 
 export const zNote = zNoteSummary.extend({ body: z.string(), links: z.array(zNoteLinkView) });

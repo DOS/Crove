@@ -696,9 +696,9 @@ export type CrmBookingTable = Refine<
 >;
 
 // The notes module (issue #1671, ADR-0037): a note is private to its author or shared with the org, and links to a
-// party or a file.
+// party, a file, a purchase document, a journal entry or a booking (#1672).
 export const NOTE_VISIBILITIES = ['private', 'org'] as const;
-export const NOTE_LINK_TARGET_TYPES = ['kernel.party', 'kernel.file'] as const;
+export const NOTE_LINK_TARGET_TYPES = ['kernel.party', 'kernel.file', 'finance.purchase_document', 'finance.journal_entry', 'crm.booking'] as const;
 export type NotesNoteTable = Refine<G.NotesNoteTable, { visibility: Generated<(typeof NOTE_VISIBILITIES)[number]> }>;
 export type NotesLinkTable = Refine<G.NotesLinkTable, { target_type: (typeof NOTE_LINK_TARGET_TYPES)[number] }>;
 

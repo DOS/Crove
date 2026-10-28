@@ -5121,6 +5121,7 @@ export const en = {
       ALREADY_REVERSED: 'This journal entry was already reversed.',
       ENTRY_IS_REVERSAL: 'This is a reversal, so it cannot be reversed. Post a new entry instead.',
       ENTRY_NOT_FOUND: 'Journal entry not found.',
+      DOCUMENT_NOT_FOUND: 'Document not found.',
       REVERSAL_DATE_BEFORE_ENTRY: 'The reversal cannot be dated before the original entry.',
       REVERSAL_PENDING: 'This entry already has a reversal proposal waiting for approval. Approve or reject it in the inbox.',
       OPENING_BALANCE_EXISTS: 'The organization already has an opening entry. Reverse it before importing again.',
@@ -5501,6 +5502,7 @@ export const en = {
       booking: {
         cancel: 'Cancel a booking',
         confirm: 'Confirm a booking',
+        get: 'Read a booking',
         list: 'List bookings',
         mail_data: 'Read the details of a booking mail',
         manage: "Carry out a visitor's change or cancellation of a booking",
@@ -5567,6 +5569,7 @@ export const en = {
         exports: "List a document's exports",
       },
       documents: {
+        get: 'Read a document',
         list: 'List documents',
         voided_proposals: 'Find proposals whose document was voided',
       },
