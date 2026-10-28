@@ -2,7 +2,9 @@
 // kernel-job.dlq, and its worker raises exactly one Inbox item kernel.job.dead_lettered in the job's own org and none in
 // another, with nothing of the job's data or error. Owners and admins read and dismiss it; members do not see it. A job
 // of no org raises nothing in any org; the failed job stays where the prober counts it. Taking the same dead letter
-// twice raises nothing new, and a member context cannot raise an item itself.
+// twice counts it once, and a member context cannot raise an item itself. Failures of one queue on one day count on
+// one open item, and one after it was dismissed raises a new one (#1747). The daily prune removes items dismissed 30
+// days ago and any raised 90 days ago, in their own org only.
 // Set CROVE_TEST_ADMIN_URL to a superuser URL; each run creates and drops its own database.
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -11,10 +13,10 @@ import { PgBoss, type JobWithMetadata } from 'pg-boss';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
-import { zRaisedInboxItems, type RaisedInboxItem } from '@crove/kernel-contract';
+import { vietnamToday, zRaisedInboxItems, type RaisedInboxItem } from '@crove/kernel-contract';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
-import { takeDeadLetter } from '../src/dead-letter.ts';
+import { pruneInboxItems, takeDeadLetter } from '../src/dead-letter.ts';
 import { jobGroup, jobKey } from '../src/job-keys.ts';
 import { JOB_SCHEMA, QUEUES } from '../src/jobs-schema.ts';
 
@@ -131,11 +133,19 @@ suite('dead letters raise an Inbox item in their own org (#1720)', () => {
     expect(failed).toEqual([{ state: 'failed' }]);
 
     expect(await takeDeadLetter(workerRuntime, letter)).toBe('raised');
-    // The same copy again (a retry after the command committed): nothing new.
-    expect(await takeDeadLetter(workerRuntime, letter)).toBe('repeat');
+    // The same copy again (a retry after the command committed): the first answer replays, nothing is counted twice.
+    expect(await takeDeadLetter(workerRuntime, letter)).toBe('raised');
 
     const a = await items(orgA.orgId);
-    expect(a).toEqual([{ org_id: orgA.orgId, kind: 'kernel.job.dead_lettered', dedupe_key: `job:${id}`, detail: { queue: QUEUES.portalList, jobId: id, retries: 0 }, dismissed_at: null }]);
+    expect(a).toEqual([
+      {
+        org_id: orgA.orgId,
+        kind: 'kernel.job.dead_lettered',
+        dedupe_key: `queue:${QUEUES.portalList}:${vietnamToday()}`,
+        detail: { queue: QUEUES.portalList, jobId: id, retries: 0, failures: 1, lastAt: expect.any(String) },
+        dismissed_at: null,
+      },
+    ]);
     expect(await items(orgB.orgId)).toEqual([]);
     expect(JSON.stringify(a)).not.toContain(SECRET);
     expect(JSON.stringify(a)).not.toContain(listId);
@@ -143,7 +153,9 @@ suite('dead letters raise an Inbox item in their own org (#1720)', () => {
     // Owners and admins of the org see it; its members and the other org do not.
     const shown = await raised(people.owner, orgA.orgId);
     expect(shown.total).toBe(1);
-    expect(shown.items).toEqual([{ id: expect.any(String), kind: 'kernel.job.dead_lettered', queue: QUEUES.portalList, jobId: id, retries: 0, raisedAt: expect.any(String) }] satisfies RaisedInboxItem[]);
+    expect(shown.items).toEqual([
+      { id: expect.any(String), kind: 'kernel.job.dead_lettered', queue: QUEUES.portalList, jobId: id, retries: 0, failures: 1, raisedAt: expect.any(String), lastAt: expect.any(String) },
+    ] satisfies RaisedInboxItem[]);
     expect(JSON.stringify(shown)).not.toContain(SECRET);
     expect((await raised(people.admin, orgA.orgId)).total).toBe(1);
     expect(await raised(people.member, orgA.orgId)).toEqual({ items: [], total: 0 });
@@ -168,8 +180,62 @@ suite('dead letters raise an Inbox item in their own org (#1720)', () => {
     expect(await takeDeadLetter(workerRuntime, letter)).toBe('raised');
     const b = await items(orgB.orgId);
     expect(b).toHaveLength(before + 1);
-    expect(b.at(-1)).toMatchObject({ dedupe_key: `job:${id}`, detail: { queue: QUEUES.extract, jobId: id } });
-    expect((await items(orgA.orgId)).some((i) => i.dedupe_key === `job:${id}`)).toBe(false);
+    expect(b.at(-1)).toMatchObject({ dedupe_key: `queue:${QUEUES.extract}:${vietnamToday()}`, detail: { queue: QUEUES.extract, jobId: id, failures: 1 } });
+    expect((await items(orgA.orgId)).some((i) => i.detail.jobId === id)).toBe(false);
+  });
+
+  it('counts further failures of a queue on the open item of the day, and raises a new one after a dismissal (#1747)', async () => {
+    const queueItems = async () => (await items(orgA.orgId)).filter((i) => i.detail.queue === QUEUES.yearArchive);
+    const first = await deadLetter(QUEUES.yearArchive, { orgId: orgA.orgId, year: 2024 }, { singletonKey: jobKey(orgA.orgId, QUEUES.yearArchive, '2024') });
+    const second = await deadLetter(QUEUES.yearArchive, { orgId: orgA.orgId, year: 2025 }, { singletonKey: jobKey(orgA.orgId, QUEUES.yearArchive, '2025') });
+    expect(await takeDeadLetter(workerRuntime, first.letter)).toBe('raised');
+    expect(await takeDeadLetter(workerRuntime, second.letter)).toBe('counted');
+    // The second copy taken again counts nothing more.
+    expect(await takeDeadLetter(workerRuntime, second.letter)).toBe('counted');
+    const open = await queueItems();
+    expect(open).toHaveLength(1);
+    expect(open[0]?.detail).toEqual({ queue: QUEUES.yearArchive, jobId: second.id, retries: 0, failures: 2, lastAt: expect.any(String) });
+    const shown = (await raised(people.owner, orgA.orgId)).items.find((i) => i.queue === QUEUES.yearArchive);
+    expect(shown).toMatchObject({ jobId: second.id, failures: 2 });
+
+    // Dismissed: the next failure of the day raises a new item rather than vanishing into the dismissed one.
+    await runtime.execute('kernel.inbox.dismiss', { id: shown?.id }, { actor: asUser(people.owner), orgId: orgA.orgId });
+    const third = await deadLetter(QUEUES.yearArchive, { orgId: orgA.orgId, year: 2026 }, { singletonKey: jobKey(orgA.orgId, QUEUES.yearArchive, '2026') });
+    expect(await takeDeadLetter(workerRuntime, third.letter)).toBe('raised');
+    const after = await queueItems();
+    expect(after.map((i) => [i.detail.failures, i.dismissed_at === null])).toEqual([
+      [2, false],
+      [1, true],
+    ]);
+    expect(after[1]?.detail.jobId).toBe(third.id);
+  });
+
+  it('prunes items dismissed 30 days ago and any raised 90 days ago, in their own org only (#1747)', async () => {
+    const day = 86_400_000;
+    const now = Date.now();
+    const ago = (days: number) => new Date(now - days * day);
+    const make = (orgId: string, key: string, raisedAt: Date, dismissedAt: Date | null) =>
+      admin(async (c) =>
+        (
+          await c.query<{ id: string }>(
+            `INSERT INTO crove_kernel.inbox_item (org_id, kind, dedupe_key, detail, raised_at, dismissed_at, dismissed_by)
+             VALUES ($1, 'kernel.job.dead_lettered', $2, $3, $4, $5, $6) RETURNING id`,
+            [orgId, key, JSON.stringify({ queue: QUEUES.portalList, jobId: randomUUID(), retries: 0 }), raisedAt, dismissedAt, dismissedAt ? people.owner : null],
+          )
+        ).rows[0]?.id as string,
+      );
+    const gone = [await make(orgA.orgId, `prune:${randomUUID()}`, ago(40), ago(31)), await make(orgA.orgId, `prune:${randomUUID()}`, ago(91), null)];
+    const kept = [
+      await make(orgA.orgId, `prune:${randomUUID()}`, ago(40), ago(29)),
+      await make(orgA.orgId, `prune:${randomUUID()}`, ago(89), null),
+      await make(orgB.orgId, `prune:${randomUUID()}`, ago(10), ago(5)),
+    ];
+    // Another org's old item goes too, in that org's own system context.
+    const otherGone = await make(orgB.orgId, `prune:${randomUUID()}`, ago(100), null);
+    const removed = await pruneInboxItems({ runtime: workerRuntime, workerDb: createDb(workerPool) }, new Date(now));
+    expect(removed).toBeGreaterThanOrEqual(3);
+    const left = await admin(async (c) => (await c.query<{ id: string }>('SELECT id FROM crove_kernel.inbox_item WHERE id = ANY($1::uuid[])', [[...gone, ...kept, otherGone]])).rows.map((r) => r.id));
+    expect(left.sort()).toEqual([...kept].sort());
   });
 
   it('raises nothing in any org for a job of no org, which the prober still counts', async () => {

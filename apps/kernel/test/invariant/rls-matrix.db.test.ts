@@ -683,9 +683,10 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
     },
   },
   'crove_kernel.inbound_message': { make: (o) => ({ row: { org_id: o.id, message_id: `<${randomUUID()}@rls.test>` } }) },
-  // Inbox items the system raises (#1720), one per kind and key: a job that failed its last retry. Only the system
-  // context adds rows (a RESTRICTIVE insert policy refuses member contexts), so the own-org control, which also runs in
-  // member contexts, is skipped. Tenant roles update only the dismissal columns (a column grant) and delete none.
+  // Inbox items the system raises (#1720), one open item per kind and key: work that failed its last retry. Only the
+  // system context adds rows (a RESTRICTIVE insert policy refuses member contexts), so the own-org control, which also
+  // runs in member contexts, is skipped. Tenant roles update only the dismissal columns and the detail (column grants;
+  // a trigger keeps the detail to the system context), and only the system context deletes (#1747).
   'crove_kernel.inbox_item': {
     noInsertControl: 'only the system context raises items (the worker taking a dead letter); a member context is refused',
     update: { set: 'dismissed_at = dismissed_at' },

@@ -1705,6 +1705,7 @@ export const vi = {
       title: 'Việc chạy nền bị lỗi ({count, number})',
       hint: 'Mỗi việc dưới đây lỗi ở lần thử cuối và {brand} đã ngừng thử. Có thể một phần việc đã xong trước khi lỗi: hãy kiểm tra kết quả ở nơi nó hiện ra. Nếu lỗi cứ lặp lại, hãy báo cho người quản trị máy chủ {brand} của bạn, kèm mã việc.',
       item: '{work}: lỗi sau {count, number} lần thử',
+      itemRepeated: '{work}: lỗi {failures, number} lần trong ngày, lần cuối sau {count, number} lần thử',
       meta: '{when} · mã việc {job}',
       work: {
         extract: 'Đọc chứng từ',
@@ -5976,6 +5977,7 @@ export const vi = {
         dismiss: 'Ẩn một mục trong hộp thư',
         get: 'Xem một mục trong hộp thư chứng từ',
         list: 'Xem hộp thư chứng từ',
+        prune: 'Dọn các mục cũ hệ thống đưa vào hộp thư',
         raised: 'Xem các mục hệ thống đưa vào hộp thư',
       },
       job: {
