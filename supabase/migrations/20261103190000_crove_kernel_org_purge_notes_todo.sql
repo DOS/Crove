@@ -1,8 +1,8 @@
 -- Crove kernel (issue #1673): the org purge (#1024) deletes a closing org's to-dos (crove_notes.todo, ADR-0037 §6)
--- with its notes. The function is copied verbatim from 20261103140000_crove_kernel_org_purge_notes.sql (the newest
--- definition), with only crove_notes.todo added to v_kernel_first between the links and the notes: before the notes
--- (a to-do's source note), and before tasks (a handed-over to-do's task, N5). It lives in a kernel migration because
--- the function is the kernel's. Idempotent; applied files stay untouched.
+-- with its notes. The function is copied verbatim from 20261103160000_crove_kernel_inbox_item.sql (the newest
+-- definition on main), with only crove_notes.todo added to v_kernel_first between the links and the notes: before the
+-- notes (a to-do's source note), and before tasks (a handed-over to-do's task, N5). It lives in a kernel migration
+-- because the function is the kernel's. Idempotent; applied files stay untouched.
 SET LOCAL lock_timeout = '2s';
 
 CREATE OR REPLACE FUNCTION crove_kernel.org_purge(p_min_days integer)
@@ -31,7 +31,7 @@ DECLARE
   v_kernel_first text[] := ARRAY[
     'crove_notes.link', 'crove_notes.todo', 'crove_notes.note',
     'crove_kernel.activity', 'crove_kernel.agent_wakeup', 'crove_kernel.extraction',
-    'crove_kernel.inbound_message', 'crove_kernel.notification', 'crove_kernel.notification_mute',
+    'crove_kernel.inbound_message', 'crove_kernel.notification', 'crove_kernel.notification_mute', 'crove_kernel.inbox_item',
     'crove_kernel.mail_event', 'crove_kernel.mail_suppression', 'crove_kernel.mail_message',
     'crove_kernel.member_invite', 'crove_kernel.auth_session_org', 'crove_kernel.inbound_drop',
     'crove_kernel.idempotency_key', 'crove_kernel.oauth_state', 'crove_kernel.outbox_pending',
