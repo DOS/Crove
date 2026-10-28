@@ -3,7 +3,7 @@
 --
 -- member_items_purge  redefined from its newest body (20261103230000_crove_notes_purge_guards.sql) with the same
 --   signature, grants, checks and deletes, plus crove_kernel.membership_lock(org, user) before the membership check.
---   invite_accept takes the same lock before it inserts the membership (20261104030000_crove_kernel_membership_lock.sql),
+--   invite_accept takes the same lock before it inserts the membership (20261104040000_crove_kernel_membership_lock.sql),
 --   so a re-add that commits while the purge runs can no longer slip between the purge's check and its deletes: the
 --   purge waits for it, then sees the member and removes nothing.
 -- former_members_due is unchanged: it only lists candidates, and each purge it leads to checks again under the lock.
