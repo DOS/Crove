@@ -11,7 +11,7 @@
 //   request are never recovered; one tryRun at a time; and ctx.audit cannot set the runtime's keys of an ok row.
 // Set CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
 // Part of the invariant suite: CI runs this file from the base branch on protected-path PRs (AGENTS.md).
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
@@ -84,6 +84,16 @@ suite('bulk approval on PostgreSQL (#315)', () => {
     } finally {
       await admin.end();
     }
+  }
+
+  // The keyed input hash crove_kernel.command_input_hash writes (#1732), recomputed with the deployment's key as the
+  // admin reads it: 'k1:' and the HMAC-SHA256 of the domain label, the org, the actor key, the command and the input.
+  async function keyedHashOf(orgId: string, actorKey: string, command: string, input: string): Promise<string> {
+    const key = await withAdmin(async (a) => (await a.query<{ k_ipad: Buffer; k_opad: Buffer }>('SELECT k_ipad, k_opad FROM crove_kernel.mail_hash_key WHERE id = 1')).rows[0]);
+    if (!key) throw new Error('no key');
+    const message = ['crove.input.v1', orgId, actorKey, command, input].join(String.fromCharCode(31));
+    const inner = createHash('sha256').update(key.k_ipad).update(message, 'utf8').digest();
+    return `k1:${createHash('sha256').update(key.k_opad).update(inner).digest('hex')}`;
   }
 
   async function orgWith(name: string, roles: Role[]) {
@@ -568,6 +578,12 @@ suite('bulk approval on PostgreSQL (#315)', () => {
       commands: [...kernelCommands, ...financeCommands, ...commands],
       queries: [...kernelQueries({ inboundDomain: 'in.test' }), ...financeQueries],
     });
+  // The same in the server's mode: input hashes keyed under the deployment's key (#1732).
+  const keyedRuntimeWith = (...commands: CommandDef<any, any>[]) =>
+    new Runtime(db, { inputHash: 'keyed' }).register({
+      commands: [...kernelCommands, ...financeCommands, ...commands],
+      queries: [...kernelQueries({ inboundDomain: 'in.test' }), ...financeQueries],
+    });
   // Tries every way to change a refusal; each try may throw (the copy ctx.tryRun hands out is frozen).
   const tamper = (error: DomainError) => {
     const attempts = [
@@ -608,7 +624,7 @@ suite('bulk approval on PostgreSQL (#315)', () => {
       return { code: refusal.code, status: refusal.status, rule: refusal.details?.rule, note: refusal.audit?.note, frozen: Object.isFrozen(refusal) };
     });
     const id = randomUUID();
-    expect(await runtimeWith(mutable, mutate).execute('test.mutate', { id }, { actor: asUser(owner), orgId })).toEqual({
+    expect(await keyedRuntimeWith(mutable, mutate).execute('test.mutate', { id }, { actor: asUser(owner), orgId })).toEqual({
       code: 'NOT_FOUND',
       status: 404,
       rule: 'T1',
@@ -620,10 +636,10 @@ suite('bulk approval on PostgreSQL (#315)', () => {
     const [parent] = await auditRows(orgId, 'test.mutate');
     const rows = await auditRows(orgId, 'test.mutable');
     expect(rows).toHaveLength(1);
-    // The input hash of the input as parsed: the plain SHA-256 of a runtime in 'sha256' mode, or a keyed one (#1732).
+    // The keyed hash of the input as parsed, before the nested handler changed it (#1732): exactly the HMAC of that
+    // input, so a row hashed after the change, or under another org, actor or command, fails.
     expect(rows[0]).toMatchObject({ outcome: 'failed', target_type: 'test.thing', target_id: id });
-    const hash = rows[0]?.input_sha256 ?? '';
-    expect(hash === sha256Hex(JSON.stringify({ id })) || /^k1:[0-9a-f]{64}$/.test(hash)).toBe(true);
+    expect(rows[0]?.input_sha256).toBe(await keyedHashOf(orgId, `user:${owner}`, 'test.mutable', JSON.stringify({ id })));
     expect(rows[0]?.detail).toEqual({
       note: 'kept',
       code: 'NOT_FOUND',
