@@ -832,6 +832,19 @@ function snapshotQuery(def: QueryDef<any, any>): QueryDef<unknown, unknown> {
   return Object.freeze(copy) as unknown as QueryDef<unknown, unknown>;
 }
 
+// The rows inserted, updated and deleted so far in this transaction, per crove_* table (#1710). The counts need
+// track_counts, which is on by default; with it off they would read zero, so the runtime refuses to go on.
+async function tableWriteCounts(trx: Transaction<Database>): Promise<Map<string, number>> {
+  const { rows } = await sql<{ counting: boolean; counts: Record<string, string> | null }>`
+    SELECT pg_catalog.current_setting('track_counts') = 'on' AS counting,
+      (SELECT pg_catalog.json_object_agg(t.schemaname || '.' || t.relname, (t.n_tup_ins + t.n_tup_upd + t.n_tup_del)::text)
+         FROM pg_catalog.pg_stat_xact_user_tables t
+        WHERE pg_catalog.starts_with(t.schemaname, 'crove_')) AS counts`.execute(trx);
+  const row = rows[0];
+  if (row?.counting !== true) throw new Error('the declared-writes check needs track_counts on (#1710)');
+  return new Map(Object.entries(row.counts ?? {}).map(([table, n]) => [table, Number(n)]));
+}
+
 const ACCESS_KINDS: readonly string[] = ['system', 'proposal', 'proposal_revision'];
 // A role list (strings), or one of the access kinds a definition may name instead.
 const validAccess = (access: unknown, kinds: readonly string[]): boolean =>
@@ -1332,6 +1345,35 @@ export class Runtime {
       while (running.size > 0) await Promise.all(running);
       return any;
     };
+    // What the handler writes, table by table, against what the command declares (#1710): a command that declares its
+    // writes fails when its transaction's row counts (pg_stat_xact_user_tables) show a change in a crove_* table it
+    // does not declare, the rows the runtime writes for it (ctx.emit, ctx.activity, ctx.numbering) and those of nested
+    // commands that declare their own writes aside. A nested command that declares none counts as this command's. The
+    // check is per table: a column left out of a declared table is not seen.
+    const writeCheck = def.writes === undefined ? null : { declared: new Set(def.writes.map((w) => w.table)), start: await tableWriteCounts(trx), aside: new Map<string, number>(), unmeasured: false };
+    // Runs work whose writes are not this handler's, and sets them aside.
+    const aside = async <T>(work: () => Promise<T>): Promise<T> => {
+      if (writeCheck === null) return work();
+      const before = await tableWriteCounts(trx);
+      const setAside = async () => {
+        for (const [table, n] of await tableWriteCounts(trx)) writeCheck.aside.set(table, (writeCheck.aside.get(table) ?? 0) + n - (before.get(table) ?? 0));
+      };
+      let value: T;
+      try {
+        value = await work();
+      } catch (error) {
+        // A failed tryRun rolled back to its savepoint, so the counts can still be read; after a failed ctx.run the
+        // transaction is aborted, and the command cannot be checked (it fails at the end if it still answers).
+        await setAside().catch(() => {
+          writeCheck.unmeasured = true;
+        });
+        throw error;
+      }
+      await setAside();
+      return value;
+    };
+    // Whether the writes of a nested command are its own to declare (it declares writes) or this command's.
+    const ownsWrites = (name: string): boolean => this.#commands.get(name)?.writes !== undefined;
     // Set once the handler settled: from then on the runtime writes this command's rows, and nothing the handler
     // left running may write, run a command or roll back to a savepoint in this transaction.
     let closed = false;
@@ -1347,24 +1389,26 @@ export class Runtime {
       emit: async (type, payload) => {
         refuseClosed('ctx.emit');
         if (!type.startsWith(`${def.name.split('.')[0]}.`)) throw new Error(`command ${def.name} cannot emit ${type}`);
-        const { rows } = await sql<{ id: string }>`SELECT crove_kernel.emit(${type}, ${JSON.stringify(payload)}::jsonb, ${commandId}::uuid) AS id`.execute(trx);
+        const { rows } = await aside(() => sql<{ id: string }>`SELECT crove_kernel.emit(${type}, ${JSON.stringify(payload)}::jsonb, ${commandId}::uuid) AS id`.execute(trx));
         return rows[0]?.id ?? '';
       },
       activity: async (recordType, recordId, kind, summary) => {
         refuseClosed('ctx.activity');
-        await trx
-          .insertInto('crove_kernel.activity')
-          .values({
-            org_id: base.orgId,
-            record_type: recordType,
-            record_id: recordId,
-            kind,
-            summary,
-            actor_id: base.actor.type === 'user' ? base.actor.userId : null,
-            // The database stamps it from the sealed context too (activity_stamp_agent).
-            agent_id: base.actor.type === 'agent' ? base.actor.agentId : null,
-          })
-          .execute();
+        await aside(() =>
+          trx
+            .insertInto('crove_kernel.activity')
+            .values({
+              org_id: base.orgId,
+              record_type: recordType,
+              record_id: recordId,
+              kind,
+              summary,
+              actor_id: base.actor.type === 'user' ? base.actor.userId : null,
+              // The database stamps it from the sealed context too (activity_stamp_agent).
+              agent_id: base.actor.type === 'agent' ? base.actor.agentId : null,
+            })
+            .execute(),
+        );
       },
       audit: (detail) => {
         refuseClosed('ctx.audit');
@@ -1377,19 +1421,20 @@ export class Runtime {
         // One nested command at a time: a sibling running beside a tryRun, also one nested inside this run, could have
         // its writes and ok row undone by that tryRun's rollback while it answers success.
         if (running.size > 0) throw new Error(`command ${def.name}: ctx.run runs only while no other nested command runs`);
-        return tracked(() => runNested<R>(resolveNested(name, nestedInput, options?.proposalId)));
+        const nested = resolveNested(name, nestedInput, options?.proposalId);
+        return tracked(() => (ownsWrites(name) ? aside(() => runNested<R>(nested)) : runNested<R>(nested)));
       },
       tryRun: <R>(name: string, nestedInput: unknown, options: TryRunOptions): Promise<TryRunResult<R>> => {
         if (closed) return Promise.reject(new Error(`command ${def.name}: ctx.tryRun after the handler returned`));
         if (running.size > 0) return Promise.reject(new Error(`command ${def.name}: ctx.tryRun runs only while no other nested command runs`));
-        return tracked(() => tryNested<R>(name, nestedInput, options));
+        return tracked(() => (ownsWrites(name) ? aside(() => tryNested<R>(name, nestedInput, options)) : tryNested<R>(name, nestedInput, options)));
       },
       numbering: {
         allocate: async (n) => {
           refuseClosed('ctx.numbering.allocate');
-          const { rows } = await sql<{ period_key: string; number: string; allocation_id: string }>`
+          const { rows } = await aside(() => sql<{ period_key: string; number: string; allocation_id: string }>`
             SELECT a.period_key, a.number::text AS number, a.allocation_id
-            FROM crove_kernel.allocate_number(${n.legalEntityId}::uuid, ${n.docType}::text, ${n.documentDate}::date, ${n.targetType}::text, ${n.targetId}::uuid) a`.execute(trx);
+            FROM crove_kernel.allocate_number(${n.legalEntityId}::uuid, ${n.docType}::text, ${n.documentDate}::date, ${n.targetType}::text, ${n.targetId}::uuid) a`.execute(trx));
           const row = rows[0];
           const number = Number(row?.number);
           if (!row || !Number.isSafeInteger(number) || number < 1) throw new Error(`command ${def.name}: allocate_number answered no number`);
@@ -1397,7 +1442,7 @@ export class Runtime {
         },
         void: async (n) => {
           refuseClosed('ctx.numbering.void');
-          const { rows } = await sql<{ id: string }>`SELECT crove_kernel.void_number(${n.allocationId}::uuid, ${n.reason}::text) AS id`.execute(trx);
+          const { rows } = await aside(() => sql<{ id: string }>`SELECT crove_kernel.void_number(${n.allocationId}::uuid, ${n.reason}::text) AS id`.execute(trx));
           const voidId = rows[0]?.id;
           if (!voidId) throw new Error(`command ${def.name}: void_number answered no void`);
           return { voidId };
@@ -1535,6 +1580,14 @@ export class Runtime {
     // Before the runtime writes this command's rows: a nested command still running would share the connection with
     // them, and a tryRun's rollback could undo them, so the command fails instead and commits nothing.
     if (await settleRunning()) throw new Error(`command ${def.name}: the handler returned while a nested command was still running`);
+    if (writeCheck !== null) {
+      if (writeCheck.unmeasured) throw new Error(`command ${def.name}: its writes cannot be checked after a nested command failed (#1710)`);
+      const undeclared = [...(await tableWriteCounts(trx))]
+        .filter(([table, n]) => n - (writeCheck.start.get(table) ?? 0) - (writeCheck.aside.get(table) ?? 0) > 0 && !writeCheck.declared.has(table))
+        .map(([table]) => table)
+        .sort();
+      if (undeclared.length > 0) throw new Error(`command ${def.name}: wrote ${undeclared.join(', ')}, which it does not declare (#1710)`);
+    }
     // Each refusal row first counts the refusal in its refusal_tally row (actor, command, code), which stays locked
     // until commit. Written only now, after every nested command ran, and in (command, code) order, so two commands of
     // one actor never wait on each other's tally rows while either still waits for a lock its nested commands take.
