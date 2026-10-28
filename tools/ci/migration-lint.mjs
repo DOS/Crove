@@ -14,19 +14,21 @@
 //   function-revoke       REVOKE ALL ON FUNCTION <name> ... FROM PUBLIC after every new CREATE FUNCTION or PROCEDURE
 //                         (one no earlier migration created, or one this file dropped first);
 //   contract-header       put `-- crove:contract adr=<id>` (the ADR that records the change, a file in docs/adr) on the
-//                         comment lines right before every contract change (plan §3.5 and §5.5, #1693): a DROP of a
-//                         table, view, sequence, type, domain, function, extension, operator or role, any RENAME or
-//                         SET SCHEMA, a DROP COLUMN or ATTRIBUTE, and a column or attribute type change (a DROP and
-//                         CREATE of the same name too). One header covers one statement. Indexes, constraints,
-//                         triggers, policies and rules are internals, not contract; nor is dropping a helper a
-//                         top-level statement of this file created;
+//                         comment lines right before every contract change (plan §3.5 and §5.5, #1693): every DROP
+//                         (OWNED, COLLATION, CAST and the rest too, #1709), any RENAME or SET SCHEMA, a DROP COLUMN or
+//                         ATTRIBUTE, and a column or attribute type change (a DROP and CREATE of the same name too).
+//                         One header covers one statement. Indexes, constraints, triggers, event triggers, policies,
+//                         rules and statistics are internals, not contract; nor is dropping a helper a top-level
+//                         statement of this file created (a routine with the same argument list);
 //   hot-table-retry       run DDL that locks a hot table (crove_jobs.*, crove_kernel.outbox_*, audit_event, record,
 //                         idempotency_key, processed_message; plan §5.5, #1693) directly inside the lock-retry block,
 //                         in the shape of the plan's template (retryBlocks): a BEGIN ... EXCEPTION ... END block in a
-//                         bare LOOP, which sets a local lock_timeout other than 0 before the statement and EXITs after
-//                         it, and whose lock_not_available branch (with no OTHERS before or in it) counts a counter
-//                         declared as 0 and re-raises once it reaches a bound. A table a top-level plain CREATE TABLE
-//                         of this file made is not hot yet;
+//                         bare LOOP, which sets a local lock_timeout of 1 ms to 1 min in a statement directly in it
+//                         before the statement, with nothing that may change it in between (#1709), EXITs directly in
+//                         it after the statement, and whose lock_not_available branch (with no OTHERS before or in it)
+//                         counts a counter declared as 0 and re-raises once it reaches a bound. DDL that locks a table
+//                         includes CREATE RULE ... TO, CREATE STATISTICS ... FROM, ATTACH or DETACH PARTITION and
+//                         [NO] INHERIT. A table a top-level plain CREATE TABLE of this file made is not hot yet;
 //   no-edit-applied       with --since, not change or delete a migration that is already on the base branch.
 // contract-header and hot-table-retry skip the files up to BREAKING_RULES_AFTER (20261103090000), the newest of the 262
 // on main when they landed.
@@ -42,10 +44,13 @@
 //   - a function body the same file then calls (SELECT f()), whose statements run at migration time;
 //   - SET standard_conforming_strings = off, which changes how '...' strings end and so where statements split;
 //   - a hot table named by a bare placeholder or crove_kernel.%I in an EXECUTE, an index of a hot table whose name
-//     does not say so, and a hot table locked by a function the file calls (apply_tenant_rls and the like);
+//     does not say so, a hot table locked by a function the file calls (apply_tenant_rls and the like), and the
+//     table of ALTER or DROP STATISTICS (the statistics object's name does not say it);
 //   - a contract change whose command words come from a placeholder (EXECUTE format('DROP %s ...', 'TABLE'));
-//   - the control flow of a retry block beyond its shape: any EXIT or RETURN after the statement counts (one in an
-//     IF or an inner loop too), and the lock_timeout setting may sit in an IF;
+//   - a lock_timeout changed between its setting and the statement by a function the block calls, or by the
+//     statement itself when it is an EXECUTE of a string built from pieces ('SET LOCAL lock_' || 'timeout = 0; ...');
+//   - argument types written as different aliases than the lint knows (TYPE_ALIASES), which only makes a dropped
+//     helper need a header;
 //   - an unquoted PL/pgSQL keyword used as a name (SELECT 1 AS loop), which can confuse the block structure.
 //
 // The plan names libpg-query for this. This lint uses its own small lexer instead (comments, strings, quoted
@@ -83,9 +88,35 @@ const TRANSACTION_WORDS = new Set(['begin', 'start', 'commit', 'end', 'rollback'
 
 // --- Lexer -------------------------------------------------------------------------------------------------------
 
+// The value of an E'...' string's content: '' and the backslash escapes decoded as PostgreSQL does, so a name spelled
+// with escapes (E'lock\x5ftimeout') reads as the name it is (#1709 review).
+function decodeE(raw) {
+  return raw.replace(/''|\\(?:([0-7]{1,3})|x([0-9A-Fa-f]{1,2})|u([0-9A-Fa-f]{4})|U([0-9A-Fa-f]{8})|([\s\S]))/g, (all, oct, hex, u4, u8, other) => {
+    if (all === "''") return "'";
+    if (oct !== undefined) return String.fromCharCode(parseInt(oct, 8) & 0xff);
+    if (hex !== undefined) return String.fromCharCode(parseInt(hex, 16));
+    if (u4 !== undefined || u8 !== undefined) return codePoint(parseInt(u4 ?? u8, 16));
+    return { b: '\b', f: '\f', n: '\n', r: '\r', t: '\t' }[other] ?? other;
+  });
+}
+
+// The value of a U&'...' string's or U&"..." identifier's content, with `escape` as the escape character (UESCAPE,
+// default backslash): the doubled quote, the doubled escape, <escape>XXXX and <escape>+XXXXXX decoded.
+function decodeU(raw, quote, escape) {
+  const e = escape.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
+  const pattern = new RegExp(`${quote}${quote}|${e}${e}|${e}\\+([0-9A-Fa-f]{6})|${e}([0-9A-Fa-f]{4})`, 'g');
+  return raw.replace(pattern, (all, u6, u4) => (all === quote + quote ? quote : u6 === undefined && u4 === undefined ? escape : codePoint(parseInt(u6 ?? u4, 16))));
+}
+
+// After a literal's closing quote: whitespace holding a newline (with comments), then the next piece's quote. Each
+// comment runs to its line's end, so the pattern cannot backtrack.
+const QUOTE_CONTINUE = /[ \t\f\v]*(?:--[^\n\r]*)?[\n\r](?:[ \t\n\r\f\v]|--[^\n\r]*[\n\r])*'/y;
+
+const codePoint = (cp) => (cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : '\ufffd');
+
 // Tokens: { t: 'word' | 'qident' | 'string' | 'punct' | 'other', v, line, body? }. A word's v is lowercased; a
-// quoted identifier keeps its case. A string's body is its content, with bodyLine the line it starts on. Line
-// comments are pushed to `comments` as { line, text, alone } when it is given; `alone` is true when no code comes
+// quoted identifier keeps its case, with U& escapes decoded. A string's body is its value (E and U& escapes decoded,
+// continued pieces joined), with bodyLine the line it starts on. Line comments are pushed to `comments` as { line, text, alone } when it is given; `alone` is true when no code comes
 // before the comment on its line (`afterCode`: the first line starts after code, as a DO body does after its $).
 export function lex(sql, firstLine = 1, comments = undefined, afterCode = false) {
   const tokens = [];
@@ -101,7 +132,8 @@ export function lex(sql, firstLine = 1, comments = undefined, afterCode = false)
     const c = sql[i];
     const next = sql[i + 1];
     const before = tokens.length;
-    if (c === '\n' || c === ' ' || c === '\t' || c === '\r' || c === '\f') {
+    // PostgreSQL 16 and later count a vertical tab as whitespace too (ALTER\vTABLE is ALTER TABLE).
+    if (c === '\n' || c === ' ' || c === '\t' || c === '\r' || c === '\f' || c === '\v') {
       advance(i + 1);
     } else if (c === '-' && next === '-') {
       const end = sql.indexOf('\n', i);
@@ -116,18 +148,41 @@ export function lex(sql, firstLine = 1, comments = undefined, afterCode = false)
         else k++;
       }
       advance(k);
-    } else if (c === "'" || ((c === 'e' || c === 'E') && next === "'")) {
-      const escapes = c !== "'";
-      const start = escapes ? i + 2 : i + 1;
-      let k = start;
+    } else if ((c === 'u' || c === 'U') && next === '&' && sql[i + 2] === '"') {
+      // U&"...": decoded after the loop, once the UESCAPE that may follow it is known.
+      let k = i + 3;
       while (k < n) {
-        if (escapes && sql[k] === '\\') k += 2;
-        else if (sql[k] === "'" && sql[k + 1] === "'") k += 2;
-        else if (sql[k] === "'") break;
+        if (sql[k] === '"' && sql[k + 1] === '"') k += 2;
+        else if (sql[k] === '"') break;
         else k++;
       }
+      tokens.push({ t: 'qident', v: sql.slice(i + 3, k), uraw: sql.slice(i + 3, k), quote: '"', line });
+      advance(k + 1);
+    } else if (c === "'" || ((c === 'e' || c === 'E') && next === "'") || ((c === 'u' || c === 'U') && next === '&' && sql[i + 2] === "'")) {
+      // '...', E'...' or U&'...', continued by every further '...' after whitespace that holds a newline, which
+      // PostgreSQL joins into one literal ('SET LOCAL lock_'<newline>'timeout = 0' is one string).
+      const mode = c === "'" ? 'plain' : next === '&' ? 'u' : 'e';
+      let open = mode === 'plain' ? i : mode === 'e' ? i + 1 : i + 2;
+      const pieces = [];
+      let k;
+      for (;;) {
+        k = open + 1;
+        while (k < n) {
+          if (mode === 'e' && sql[k] === '\\') k += 2;
+          else if (sql[k] === "'" && sql[k + 1] === "'") k += 2;
+          else if (sql[k] === "'") break;
+          else k++;
+        }
+        pieces.push(sql.slice(open + 1, k));
+        QUOTE_CONTINUE.lastIndex = k + 1;
+        if (k >= n || !QUOTE_CONTINUE.test(sql)) break;
+        open = QUOTE_CONTINUE.lastIndex - 1;
+      }
+      const raw = pieces.join('');
       const tokenLine = line;
-      tokens.push({ t: 'string', v: sql.slice(i, k + 1), body: sql.slice(start, k).replaceAll("''", "'"), line: tokenLine, bodyLine: tokenLine });
+      const token = { t: 'string', v: sql.slice(i, k + 1), body: mode === 'e' ? decodeE(raw) : raw.replaceAll("''", "'"), line: tokenLine, bodyLine: tokenLine };
+      if (mode === 'u') Object.assign(token, { body: raw, uraw: raw, quote: "'" });
+      tokens.push(token);
       advance(k + 1);
     } else if (c === '"') {
       let k = i + 1;
@@ -162,6 +217,22 @@ export function lex(sql, firstLine = 1, comments = undefined, afterCode = false)
       advance(i + 1);
     }
     if (tokens.length > before) codeLine = line;
+  }
+  // U& escapes, with the escape character of a UESCAPE after the literal (PostgreSQL finds it past comments and
+  // takes any string form), or backslash.
+  for (let k = 0; k < tokens.length; k++) {
+    const token = tokens[k];
+    if (token.uraw === undefined) continue;
+    let escape = '\\';
+    if (isWord(tokens[k + 1], 'uescape') && tokens[k + 2]?.t === 'string') {
+      escape = tokens[k + 2].body;
+      tokens.splice(k + 1, 2);
+    }
+    const value = decodeU(token.uraw, token.quote, escape.length === 1 ? escape : '\\');
+    if (token.t === 'string') token.body = value;
+    else token.v = value;
+    delete token.uraw;
+    delete token.quote;
   }
   return tokens;
 }
@@ -301,6 +372,14 @@ const OBJECT_KINDS = new Set([
 // Kinds named as `<name> ON <table>`: the table is what is touched.
 const ON_TABLE_KINDS = new Set(['trigger', 'policy', 'rule', 'constraint']);
 
+// The table of CREATE [OR REPLACE] RULE <name> AS ON <event> TO <table>, from the word after the kind: the name after
+// the TO that follows ON (ON is followed by the event, not the table).
+function ruleTable(tokens, k) {
+  const on = findWord(tokens, k, 'on');
+  const to = on === -1 ? -1 : findWord(tokens, on + 1, 'to');
+  return to === -1 ? undefined : qualifiedName(tokens, skipWords(tokens, to + 1, 'only'));
+}
+
 // The objects a statement touches: [{ schema, name, line }]; `schemas` are schemas named whole (CREATE SCHEMA,
 // GRANT ... ON SCHEMA, ... IN SCHEMA). Function calls (SELECT f(), PERFORM) are not touches.
 export function touchedObjects(tokens) {
@@ -332,8 +411,10 @@ export function touchedObjects(tokens) {
         if (name) schemas.push({ schema: name.v, line: head.line });
       } else if (kind === 'index') {
         onTable(k + 1);
-      } else if (kind === 'trigger' || kind === 'policy' || kind === 'rule') {
+      } else if (kind === 'trigger' || kind === 'policy') {
         onTable(k + 1);
+      } else if (kind === 'rule') {
+        push(ruleTable(tokens, k + 1));
       } else if (kind === 'extension') {
         const at = findWord(tokens, k + 1, 'schema');
         if (at !== -1 && tokens[at + 1]) schemas.push({ schema: tokens[at + 1].v, line: head.line });
@@ -442,11 +523,17 @@ function policyKey(tokens, nameAt) {
   return `${text(tokens.slice(nameAt, on))} ON ${text(tokens.slice(on + 1, end))}`;
 }
 
-// Kinds whose DROP is a contract change: what application code names. Indexes, constraints, triggers, policies and
-// rules are the schema's internals (the idempotent re-create pattern drops them), so dropping or renaming them is not.
-const CONTRACT_DROP_KINDS = new Set(['table', 'view', 'materialized', 'foreign', 'sequence', 'type', 'domain', 'function', 'procedure', 'routine', 'aggregate', 'extension', 'operator', 'role']);
-const FUNCTION_KINDS = new Set(['function', 'procedure', 'routine', 'aggregate']);
+// Every DROP is a contract change but of the schema's internals: indexes, constraints, triggers (event triggers too),
+// policies, rules and statistics (the idempotent re-create pattern drops them), so dropping or renaming them is not.
+// DROP SCHEMA is refused outright (no-drop-schema). A DROP of any other kind (OWNED, COLLATION, CAST, SERVER, ...)
+// needs the header.
 const INTERNAL_KINDS = new Set(['index', 'trigger', 'policy', 'rule', 'statistics', 'event']);
+// The kinds whose DROP names objects a file may have created itself (see helper in lintMigration).
+const NAMED_DROP_KINDS = new Set(['table', 'view', 'materialized', 'foreign', 'sequence', 'type', 'domain', 'function', 'procedure', 'routine', 'aggregate']);
+const FUNCTION_KINDS = new Set(['function', 'procedure', 'routine', 'aggregate']);
+// ALTER of these kinds can add columns or attributes, whose names may read as actions (ADD COLUMN rename text), so
+// only the words that start an action count; for the other kinds a RENAME or SET SCHEMA anywhere at depth 0 does.
+const COLUMN_KINDS = new Set(['table', 'foreign', 'type', 'view', 'materialized']);
 // ALTER TABLE ... DROP <word>: these drop a property of a column or table, not a column.
 const NOT_A_COLUMN = new Set(['constraint', 'default', 'not', 'expression', 'identity']);
 
@@ -456,11 +543,24 @@ const NOT_A_COLUMN = new Set(['constraint', 'default', 'not', 'expression', 'ide
 export function breakingChange(tokens) {
   const head = tokens[0];
   if (isWord(head, 'drop')) {
-    if (!isWord(tokens[1]) || !CONTRACT_DROP_KINDS.has(tokens[1].v)) return undefined;
+    if (isWord(tokens[1], 'schema') || (isWord(tokens[1]) && INTERNAL_KINDS.has(tokens[1].v))) return undefined;
+    const kind = isWord(tokens[1]) ? tokens[1].v : '?';
+    if (!NAMED_DROP_KINDS.has(kind)) return { what: `DROP ${kind.toUpperCase()}`, kind, names: [] };
     const at = skipIfExists(tokens, skipWords(tokens, 2, 'view', 'table'));
-    return { what: `DROP ${tokens[1].v.toUpperCase()}`, kind: tokens[1].v, names: nameList(tokens, at, 'cascade', 'restrict') };
+    const names = nameList(tokens, at, 'cascade', 'restrict').map((name) => ({ ...name, args: signature(tokens, name.end) }));
+    return { what: `DROP ${kind.toUpperCase()}`, kind, names };
   }
   if (!isWord(head, 'alter') || !isWord(tokens[1]) || INTERNAL_KINDS.has(tokens[1].v) || isWord(tokens[1], 'default')) return undefined;
+  if (!COLUMN_KINDS.has(tokens[1].v)) {
+    let depth = 0;
+    for (let j = 2; j < tokens.length; j++) {
+      if (isPunct(tokens[j], '(')) depth++;
+      else if (isPunct(tokens[j], ')')) depth--;
+      else if (depth === 0 && isWord(tokens[j], 'rename') && !isWord(tokens[j + 1], 'constraint')) return { what: 'RENAME', names: [] };
+      else if (depth === 0 && isWord(tokens[j], 'set') && isWord(tokens[j + 1], 'schema')) return { what: 'SET SCHEMA', names: [] };
+    }
+    return undefined;
+  }
   const dropsColumns = isWord(tokens[1], 'table', 'foreign', 'type');
   // The actions start after the object's name (and a function's argument list) and after each comma at depth 0, so
   // a column named rename or drop is not read as an action.
@@ -493,15 +593,68 @@ export function breakingChange(tokens) {
   return undefined;
 }
 
+// Type names written two ways, so a DROP's argument list matches the CREATE's however each spells them.
+const TYPE_ALIASES = new Map([
+  ['int', 'integer'], ['int4', 'integer'], ['int8', 'bigint'], ['int2', 'smallint'], ['bool', 'boolean'], ['float4', 'real'],
+  ['float8', 'double precision'], ['decimal', 'numeric'], ['varchar', 'character varying'], ['timestamptz', 'timestamp with time zone'],
+  ['timetz', 'time with time zone'],
+]);
+
+// The argument list of a routine signature at the ( at `k`, for matching a DROP with the CREATE it undoes: for each
+// argument but OUT ones (DROP ignores them), the ways it may be written, with and without its name (one of them its
+// type alone). Undefined when there is no list.
+export function signature(tokens, k) {
+  if (!isPunct(tokens[k], '(')) return undefined;
+  const end = skipParens(tokens, k) - 1;
+  const args = [];
+  let current = [];
+  let depth = 0;
+  for (let j = k + 1; j < end; j++) {
+    if (isPunct(tokens[j], '(') || isPunct(tokens[j], '[')) depth++;
+    else if (isPunct(tokens[j], ')') || isPunct(tokens[j], ']')) depth--;
+    if (depth === 0 && isPunct(tokens[j], ',')) {
+      args.push(current);
+      current = [];
+    } else {
+      current.push(tokens[j]);
+    }
+  }
+  if (current.length > 0) args.push(current);
+  return args.flatMap((arg) => {
+    let rest = arg;
+    const stop = rest.findIndex((t) => isWord(t, 'default') || isPunct(t, '='));
+    if (stop !== -1) rest = rest.slice(0, stop);
+    if (isWord(rest[0], 'out')) return [];
+    if (isWord(rest[0], 'in', 'inout', 'variadic') && rest.length > 1) rest = rest.slice(1);
+    // Type modifiers are not part of a signature: numeric(10,2) is numeric.
+    let typmod = 0;
+    rest = rest.filter((t) => {
+      if (isPunct(t, '(')) typmod++;
+      const keep = typmod === 0;
+      if (isPunct(t, ')')) typmod--;
+      return keep;
+    });
+    rest = rest.filter((t, j) => !(isWord(t, 'pg_catalog') && isPunct(rest[j + 1], '.')) && !(isPunct(t, '.') && isWord(rest[j - 1], 'pg_catalog')));
+    const spell = (ts) => ts.map((t) => (t.t === 'qident' ? `"${t.v}"` : t.t === 'word' ? TYPE_ALIASES.get(t.v) ?? t.v : t.v)).join(' ');
+    const ways = [spell(rest)];
+    if (rest.length > 1 && (rest[0].t === 'word' || rest[0].t === 'qident')) ways.push(spell(rest.slice(1)));
+    return [ways];
+  });
+}
+
+// Whether two argument lists (signature) name the same routine: as many arguments, each written one same way.
+export const sameSignature = (a, b) => a.length === b.length && a.every((ways, i) => ways.some((way) => b[i].includes(way)));
+
 // Hot tables (plan §5.5): DDL on them waits behind every open transaction that uses them and queues every later one
 // behind itself, so it runs in the lock-retry block. Index names are matched like table names, so an index of a hot
 // table is recognised only when its name is (crove_jobs.*, outbox_*).
 const HOT_KERNEL = /^(outbox_.*|audit_event|record|idempotency_key|processed_message)$/;
 export const isHotTable = ({ schema, name }) => schema === 'crove_jobs' || (schema === 'crove_kernel' && HOT_KERNEL.test(name));
 
-// The existing tables a DDL statement locks: ALTER TABLE or INDEX, CREATE INDEX, TRIGGER, POLICY or RULE ON, the
-// parent of CREATE TABLE ... PARTITION OF or INHERITS, the table a REFERENCES names, DROP TABLE or INDEX, DROP or
-// ALTER TRIGGER, POLICY or RULE ON, REINDEX, CLUSTER and LOCK TABLE. [{ schema, name, line }]; reads, writes and
+// The existing tables a DDL statement locks: ALTER TABLE or INDEX (and the partition it attaches or detaches, the
+// parent it inherits from or stops inheriting), CREATE INDEX, TRIGGER or POLICY ON, CREATE RULE ... TO, CREATE
+// STATISTICS ... FROM, the parent of CREATE TABLE ... PARTITION OF or INHERITS, the table a REFERENCES names, DROP TABLE
+// or INDEX, DROP or ALTER TRIGGER, POLICY or RULE ON, REINDEX, CLUSTER and LOCK TABLE. [{ schema, name, line }]; reads, writes and
 // grants are not DDL.
 export function lockedTables(tokens) {
   const head = tokens[0];
@@ -516,7 +669,12 @@ export function lockedTables(tokens) {
   };
   if (isWord(head, 'create')) {
     const k = skipWords(tokens, 1, 'or', 'replace', 'unique', 'constraint', 'unlogged');
-    if (isWord(tokens[k], 'index', 'trigger', 'policy', 'rule')) onTable(k + 1);
+    if (isWord(tokens[k], 'index', 'trigger', 'policy')) onTable(k + 1);
+    if (isWord(tokens[k], 'rule')) push(ruleTable(tokens, k + 1));
+    if (isWord(tokens[k], 'statistics')) {
+      const from = findWord(tokens, k + 1, 'from');
+      if (from !== -1) push(qualifiedName(tokens, from + 1));
+    }
     if (isWord(tokens[k], 'table')) {
       const of = tokens.findIndex((token, j) => isWord(token, 'partition') && isWord(tokens[j + 1], 'of'));
       if (of !== -1) push(qualifiedName(tokens, of + 2));
@@ -528,6 +686,14 @@ export function lockedTables(tokens) {
     if (isWord(tokens[1], 'table', 'index')) {
       push(qualifiedName(tokens, skipWords(tokens, skipIfExists(tokens, 2), 'only')));
       references();
+      // ATTACH or DETACH PARTITION <child> locks the child too, and [NO] INHERIT <parent> the parent.
+      let depth = 0;
+      for (let j = 3; j < tokens.length; j++) {
+        if (isPunct(tokens[j], '(')) depth++;
+        else if (isPunct(tokens[j], ')')) depth--;
+        else if (depth === 0 && isWord(tokens[j], 'attach', 'detach') && isWord(tokens[j + 1], 'partition')) push(qualifiedName(tokens, j + 2));
+        else if (depth === 0 && isWord(tokens[j], 'inherit')) push(qualifiedName(tokens, j + 1));
+      }
     } else if (isWord(tokens[1], 'trigger', 'policy', 'rule')) {
       onTable(2);
     }
@@ -544,8 +710,44 @@ export function lockedTables(tokens) {
   return tables;
 }
 
-// A lock_timeout value that makes the wait end: a number or string other than 0 (DEFAULT is 0, no timeout).
-const waits = (token) => (token?.t === 'string' || token?.t === 'other') && !/^\s*0*(\.0*)?\s*(ms|s|min|h|d)?\s*$/i.test(token.t === 'string' ? token.body : token.v);
+// A lock_timeout value that makes the wait end, and soon: a whole number of ms (the default unit), s or min, from 1 ms
+// to 1 min, as a number or a string. Anything else is refused rather than parsed: 0 and DEFAULT wait for ever, and
+// PostgreSQL rounds fractions and smaller units ('0.4', '400us' are 0) and reads hex and exponents ('0x0', '0e3').
+const TIMEOUT_UNIT_MS = { ms: 1, s: 1000, min: 60_000 };
+const waits = (token) => {
+  const value = token?.t === 'string' ? token.body : token?.t === 'other' ? token.v : undefined;
+  const match = /^\s*(\d{1,9})\s*(ms|s|min)?\s*$/.exec(value ?? '');
+  if (!match) return false;
+  const ms = Number(match[1]) * TIMEOUT_UNIT_MS[match[2] ?? 'ms'];
+  return ms >= 1 && ms <= 60_000;
+};
+
+// The PL/pgSQL statement at `at` sets a local lock_timeout that waits (waits), and nothing else:
+// `PERFORM [pg_catalog.]set_config('lock_timeout', <value>, true);` or `SET LOCAL lock_timeout {= | TO} <value>;`.
+// `end` is where the statement's tokens end.
+function setsTimeout(tokens, at, end) {
+  const shape = (from, want) => from + want.length === end && want.every((w, j) => w(tokens[from + j]));
+  const word = (v) => (t) => isWord(t, v);
+  const punct = (v) => (t) => isPunct(t, v);
+  const name = (t) => t?.t === 'string' && t.body === 'lock_timeout';
+  const call = [word('set_config'), punct('('), name, punct(','), waits, punct(','), word('true'), punct(')'), punct(';')];
+  if (isWord(tokens[at], 'perform')) {
+    const k = isWord(tokens[at + 1], 'pg_catalog') && isPunct(tokens[at + 2], '.') ? at + 3 : at + 1;
+    return shape(k, call);
+  }
+  return shape(at, [word('set'), word('local'), word('lock_timeout'), (t) => isPunct(t, '=') || isWord(t, 'to'), waits, punct(';')]);
+}
+
+// Whether token k may change lock_timeout: it names the setting (a SET, RESET or set_config of it, or a string an
+// EXECUTE runs), it is RESET ALL, or it is a set_config whose setting is not a string literal.
+const touchesTimeout = (tokens, k) => {
+  const token = tokens[k];
+  if ((token.t === 'word' || token.t === 'qident') && token.v.toLowerCase() === 'lock_timeout') return true;
+  if (token.t === 'string' && /lock_timeout/i.test(token.body)) return true;
+  if (isWord(token, 'reset') && isWord(tokens[k + 1], 'all')) return true;
+  const setConfig = isWord(token, 'set_config') || (token.t === 'qident' && token.v === 'set_config');
+  return setConfig && !(isPunct(tokens[k + 1], '(') && tokens[k + 2]?.t === 'string' && isPunct(tokens[k + 3], ','));
+};
 
 // Whether a PL/pgSQL statement starts at token k: the token before it ends a statement, a label (>>) or opens a body.
 const startsStatement = (tokens, k) => {
@@ -618,19 +820,26 @@ export function retryBlocks(tokens) {
         return declared && handlerStatements.some((j) => BOUNDS.some((shape) => matches(tokens, j, shape, counter)));
       });
       if (!bounded) continue;
-      const timeouts = [];
-      const exits = [];
+      // The statements directly in the block, each with where it ends (where the next one starts).
+      const starts = statementsAt(top.at + 1, top.exception);
+      const ends = new Map(starts.map((s, i) => [s, starts[i + 1] ?? top.exception]));
+      // A timeout is a statement directly in the block (not in an IF or inner block, which may not run) that sets a
+      // local lock_timeout that waits: one of 0 waits for ever, and one that is not local outlives the transaction
+      // into the runner's session. Any other token that may change lock_timeout resets it.
+      const timeouts = starts.filter((s) => setsTimeout(tokens, s, ends.get(s)));
+      // An EXECUTE of anything but one string literal (format(), a variable, pieces joined with ||) may run any SET,
+      // so one before the statement resets it too (the statement itself may be one: the lint reads its format string).
+      const resets = [];
+      const dynamic = [];
       for (let j = top.at + 1; j < top.exception; j++) {
-        // set_config('lock_timeout', <not 0>, true) or SET LOCAL lock_timeout = <not 0>: a timeout of 0 waits for ever,
-        // and one that is not local outlives the transaction into the runner's session.
-        const isSetConfig = isWord(tokens[j], 'set_config') && isPunct(tokens[j + 1], '(') && tokens[j + 2]?.t === 'string' && tokens[j + 2].body === 'lock_timeout'
-          && isPunct(tokens[j + 3], ',') && waits(tokens[j + 4]) && isPunct(tokens[j + 5], ',') && isWord(tokens[j + 6], 'true');
-        const isSet = isWord(tokens[j], 'set') && isWord(tokens[j + 1], 'local') && isWord(tokens[j + 2], 'lock_timeout')
-          && (isPunct(tokens[j + 3], '=') || isWord(tokens[j + 3], 'to')) && waits(tokens[j + 4]);
-        if (isSetConfig || isSet) timeouts.push(j);
-        if (isWord(tokens[j], 'exit', 'return')) exits.push(j);
+        if (timeouts.some((s) => j >= s && j < ends.get(s))) continue;
+        if (touchesTimeout(tokens, j)) resets.push(j);
+        if (isWord(tokens[j], 'execute') && !(tokens[j + 1]?.t === 'string' && (isPunct(tokens[j + 2], ';') || isWord(tokens[j + 2], 'using', 'into')))) dynamic.push(j);
       }
-      blocks.push({ begin: top.at, exception: top.exception, statements: new Set(statementsAt(top.at + 1, top.exception)), timeouts, exits });
+      // An EXIT or RETURN directly in the block, with no condition: one in an IF or inner loop may not run.
+      const exits = starts.filter((s) => isWord(tokens[s], 'exit', 'return') && ends.get(s) <= s + 3
+        && isPunct(tokens[ends.get(s) - 1], ';') && !isWord(tokens[s + 1], 'when'));
+      blocks.push({ begin: top.at, exception: top.exception, statements: new Set(starts), ends, timeouts, resets, dynamic, exits });
     } else if (token.v === 'begin') {
       stack.push({ kind: 'block', at: k, exception: -1, parent: stack.at(-1), inner: stack.length + 1 });
     } else if (token.v === 'loop') {
@@ -659,9 +868,16 @@ function declaredZero(tokens, at) {
 }
 
 // Whether the statement at token index `at` runs inside a lock-retry block: directly in it, after it sets
-// lock_timeout, before an EXIT that ends the loop once the statement succeeded, and before the EXCEPTION that retries it.
+// lock_timeout with nothing that may change it again before the statement or in it, before an EXIT that ends the loop
+// once the statement succeeded, and before the EXCEPTION that retries it.
 export function inRetryBlock(blocks, at) {
-  return blocks.some((b) => b.statements.has(at) && b.timeouts.some((j) => j < at) && b.exits.some((j) => j > at));
+  return blocks.some((b) => {
+    if (!b.statements.has(at)) return false;
+    const timeout = b.timeouts.findLast((j) => j < at);
+    const end = b.ends.get(at);
+    return timeout !== undefined && !b.resets.some((j) => j > timeout && j < end) && !b.dynamic.some((j) => j > timeout && j < at)
+      && b.exits.some((j) => j > at);
+  });
 }
 
 // --- Rules -------------------------------------------------------------------------------------------------------
@@ -710,7 +926,7 @@ export function lintMigration(file, sql, {
   const revoked = []; // { key | schema, index }: REVOKE ALL ... FROM PUBLIC, in order
   const dropped = []; // { key, index }: DROP FUNCTION, PROCEDURE or ROUTINE, in order
   const createdPlain = new Set(); // "<kind>:<schema>.<name>" of tables, views, types ... a plain CREATE made new in this file
-  const createdFunctions = new Set(); // keys of functions this file created so far
+  const createdFunctions = new Map(); // key of each function this file created so far -> the argument lists it created
   const usedHeaders = new Set(); // lines of the contract headers a breaking statement used
   let order = 0;
   const comments = [];
@@ -734,10 +950,16 @@ export function lintMigration(file, sql, {
   const checkContract = (tokens, anchorLine) => {
     const change = breakingChange(tokens);
     if (change === undefined) return;
-    // Dropping a helper this file created (a one-shot backfill function, say) changes no contract.
-    const helper = (name) => !name.dynamic && (FUNCTION_KINDS.has(change.kind)
-      ? createdFunctions.has(`${name.schema ?? ''}.${name.name}`) && !existingFunctions.has(`${name.schema ?? ''}.${name.name}`)
-      : createdPlain.has(`${change.kind}:${name.schema ?? ''}.${name.name}`));
+    // Dropping a helper this file created (a one-shot backfill function, say) changes no contract. A routine is matched
+    // by its argument list too: another overload of the same name is not the helper (DROP without a list names the one
+    // routine of that name, which a name no earlier file created can only be this file's).
+    const helper = (name) => {
+      if (name.dynamic) return false;
+      const key = `${name.schema ?? ''}.${name.name}`;
+      if (!FUNCTION_KINDS.has(change.kind)) return createdPlain.has(`${change.kind}:${key}`);
+      const created = createdFunctions.get(key);
+      return created !== undefined && !existingFunctions.has(key) && (name.args === undefined || created.some((args) => args !== undefined && sameSignature(args, name.args)));
+    };
     if (change.names.length > 0 && change.names.every(helper)) return;
     const line = tokens[0].line;
     const header = contractHeader(anchorLine);
@@ -765,7 +987,10 @@ export function lintMigration(file, sql, {
     let k = skipWords(tokens, 1, 'or', 'replace', 'unlogged');
     if (isWord(tokens[k], 'function', 'procedure', 'aggregate')) {
       const name = qualifiedName(tokens, k + 1);
-      if (name && !name.dynamic) createdFunctions.add(`${name.schema ?? ''}.${name.name}`);
+      if (name && !name.dynamic) {
+        const key = `${name.schema ?? ''}.${name.name}`;
+        createdFunctions.set(key, [...(createdFunctions.get(key) ?? []), signature(tokens, name.end)]);
+      }
       return;
     }
     if (replace || !isWord(tokens[k]) || !PLAIN_CREATE_KINDS.has(tokens[k].v)) return;
