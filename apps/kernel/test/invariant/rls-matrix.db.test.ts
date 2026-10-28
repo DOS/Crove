@@ -10,7 +10,8 @@
 // assignments limit it to one entity reads, inserts, updates and deletes none of another entity's rows.
 // A nullable legal_entity_id is either an entity scope with org-level rows (NULLABLE_ENTITY_SCOPED: the RESTRICTIVE
 // le_scope policy that lets NULL through, and the scoped member reaches no row of another entity but reads the
-// org-level ones; #1716) or a reasoned exception (NULLABLE_ENTITY_UNSCOPED).
+// org-level ones; #1716) or a reasoned exception (NULLABLE_ENTITY_UNSCOPED). A scope on its way to main is also
+// listed in NULLABLE_ENTITY_SCOPE_PENDING.
 // Author-only tables (ADR-0037, AUTHOR_ONLY below) keep every cross-org case; only the system context's own-org
 // controls change there, since the system reads part of them and writes none.
 // Part of the invariant suite: CI runs this file from the base branch on protected-path PRs (AGENTS.md).
@@ -80,6 +81,17 @@ const AUTHOR_ONLY = new Map<string, string>([
 // the entity itself. Sorted, one table per line.
 const NULLABLE_ENTITY_SCOPED = new Map<string, (o: OrgFixture) => Values>([
   ['crove_kernel.activity', (o) => ({ org_id: o.id, record_type: 'finance.journal_entry', record_id: o.entry, kind: 'rls.matrix', summary: 'RLS matrix entity row' })],
+  // A task about a record of one entity takes the record's entity (#1762).
+  [
+    'crove_kernel.task',
+    (o) => ({ org_id: o.id, title: 'RLS matrix entity task', source: 'human', created_by_type: 'user', source_ref: JSON.stringify({ type: 'finance.journal_entry', id: o.entry }) }),
+  ],
+]);
+// NULLABLE_ENTITY_SCOPED tables whose nullable legal_entity_id is still on its way (two-step rule, AGENTS.md): until the
+// column exists the table is left out of the nullable list check and its le_scope case does not run; once it exists,
+// every case runs as for any other entry. Remove an entry once its column is on main. Sorted, one table per line.
+const NULLABLE_ENTITY_SCOPE_PENDING = new Set<string>([
+  'crove_kernel.task',
 ]);
 // Tables with a nullable legal_entity_id that is not such a scope, and why. Sorted, one table per line.
 const NULLABLE_ENTITY_UNSCOPED = new Map<string, string>([
@@ -1644,10 +1656,12 @@ suite('generated cross-org RLS matrix on PostgreSQL (T8)', () => {
     expect(entityTables).not.toContain('crove_kernel.role_assignment');
     // Every nullable legal_entity_id is a listed scope or a listed exception, and every listed table has one.
     const nullable = relations.filter((r) => r.nullableEntity).map((r) => r.name).sort();
+    const scopedLists = [...NULLABLE_ENTITY_SCOPED.keys()].filter((t) => !NULLABLE_ENTITY_SCOPE_PENDING.has(t) || nullable.includes(t));
     expect(nullable, 'tables with a nullable legal_entity_id: list each in NULLABLE_ENTITY_SCOPED or NULLABLE_ENTITY_UNSCOPED').toEqual(
-      [...NULLABLE_ENTITY_SCOPED.keys(), ...NULLABLE_ENTITY_UNSCOPED.keys()].sort(),
+      [...scopedLists, ...NULLABLE_ENTITY_UNSCOPED.keys()].sort(),
     );
-    for (const list of [[...NULLABLE_ENTITY_SCOPED.keys()], [...NULLABLE_ENTITY_UNSCOPED.keys()]]) {
+    expect([...NULLABLE_ENTITY_SCOPE_PENDING].filter((t) => !NULLABLE_ENTITY_SCOPED.has(t)), 'NULLABLE_ENTITY_SCOPE_PENDING lists only NULLABLE_ENTITY_SCOPED tables').toEqual([]);
+    for (const list of [[...NULLABLE_ENTITY_SCOPED.keys()], [...NULLABLE_ENTITY_UNSCOPED.keys()], [...NULLABLE_ENTITY_SCOPE_PENDING]]) {
       expect(list, 'NULLABLE_ENTITY_SCOPED and NULLABLE_ENTITY_UNSCOPED are kept sorted').toEqual([...list].sort());
     }
   });
@@ -1974,7 +1988,8 @@ suite('generated cross-org RLS matrix on PostgreSQL (T8)', () => {
         });
       }
 
-      const entityRow = NULLABLE_ENTITY_SCOPED.get(table);
+      // A pending table without its column yet gets no le_scope case (NULLABLE_ENTITY_SCOPE_PENDING).
+      const entityRow = relation.nullableEntity || !NULLABLE_ENTITY_SCOPE_PENDING.has(table) ? NULLABLE_ENTITY_SCOPED.get(table) : undefined;
       if (entityRow) {
         it('has the RESTRICTIVE le_scope policy that keeps org-level rows, and a member limited to another entity reaches only those', async () => {
           const { rows: policies } = await admin.query<{ cmd: string; roles: string[]; qual: string | null; check: string | null }>(
