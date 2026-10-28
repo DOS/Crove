@@ -1,0 +1,91 @@
+// Dead letters (#1720, plan §4.9 "pg-boss contract"): every queue sends a job that failed its last retry to
+// kernel-job.dlq (QUEUES.deadLetter). pg-boss keeps the failed job, which the prober counts and alerts on, and copies
+// it there with its data, singleton key and group, the queue it failed on (sourceName), its id (sourceId) and how many
+// retries it had. Its worker takes each copy here:
+//
+// - A job of an org raises one Inbox item kernel.job.dead_lettered in that org, through the system command
+//   kernel.job.dead_letter: the queue name, the job id and the retries, never the job's data or its error. The org is
+//   the one its key or group was built for (job-keys.ts, keyOrg) and the orgId of its data; when they name different
+//   orgs, or the data's orgId is not an org id, no org gets an item.
+// - A job of no org (a schedule, a sweep, raw inbound mail, a mail provider's event: no org key and no orgId) raises
+//   nothing in any org. It is logged here, and the failed job stays where the prober counts it, which alerts the
+//   operator (docs/runbooks/incidents.md).
+//
+// - An org the system may not enter (a closed org, one that no longer exists) gets no item either: logged, and the copy completes,
+//   so the one failure does not alert twice.
+// - A job that is not a copy pg-boss made (no source queue or id, as when the worker forgot includeMetadata) fails, so
+//   the prober counts the dead letter queue's own job too.
+//
+// A copy taken twice (a retry after the command committed) raises nothing new: the item's key is the failed job's id.
+import type { JobWithMetadata } from 'pg-boss';
+import { DomainError, type Runtime } from '@crove/kernel-runtime';
+import { keyOrg } from './job-keys.ts';
+
+const QUEUE_NAME = /^[a-z][a-z0-9_.-]{0,99}$/;
+const ORG_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// How the worker works the dead letter queue: one copy at a time, with the metadata that names its source.
+export const DEAD_LETTER_WORK = { batchSize: 1, includeMetadata: true, pollingIntervalSeconds: 10 } as const;
+
+/** What the dead letter queue's worker reads of a copy (work() with includeMetadata). */
+export type DeadLetter = Pick<JobWithMetadata<unknown>, 'id' | 'data' | 'singletonKey' | 'groupId' | 'sourceName' | 'sourceId' | 'sourceRetryCount'>;
+
+export type DeadLetterOwner =
+  | { orgId: string }
+  // no_source: not a copy pg-boss made; system: a job of no org; conflict: its key, group and data disagree.
+  | { orgId: null; reason: 'no_source' | 'system' | 'conflict' };
+
+/** The org a dead-lettered job belongs to, or why it has none. */
+export function deadLetterOrg(job: DeadLetter): DeadLetterOwner {
+  const source = job.sourceName;
+  if (!source || !QUEUE_NAME.test(source) || !job.sourceId || !UUID.test(job.sourceId)) return { orgId: null, reason: 'no_source' };
+  const orgs = new Set<string>();
+  for (const key of [job.singletonKey, job.groupId]) {
+    const org = keyOrg(key, source);
+    if (org) orgs.add(org);
+  }
+  const data = job.data;
+  if (data !== null && typeof data === 'object' && Object.hasOwn(data, 'orgId')) {
+    const raw = (data as { orgId: unknown }).orgId;
+    const org = typeof raw === 'string' ? raw.toLowerCase() : '';
+    if (!ORG_ID.test(org)) return { orgId: null, reason: 'conflict' };
+    orgs.add(org);
+  }
+  if (orgs.size === 0) return { orgId: null, reason: 'system' };
+  if (orgs.size > 1) return { orgId: null, reason: 'conflict' };
+  return { orgId: [...orgs][0] as string };
+}
+
+const WHY: Readonly<Record<Exclude<DeadLetterOwner, { orgId: string }>['reason'], string>> = {
+  no_source: 'not a dead letter pg-boss made',
+  system: 'a job of no org',
+  conflict: 'its key, group and data name different orgs',
+};
+
+/** Takes one dead letter: the Inbox item of its org, or a log line when it has none. */
+export async function takeDeadLetter(runtime: Runtime, job: DeadLetter): Promise<'raised' | 'repeat' | 'system' | 'conflict' | 'refused'> {
+  const owner = deadLetterOrg(job);
+  const queue = job.sourceName && QUEUE_NAME.test(job.sourceName) ? job.sourceName : 'an unknown queue';
+  const ref = (job.sourceId ?? job.id).slice(0, 8);
+  if (owner.orgId === null) {
+    if (owner.reason === 'no_source') throw new Error(`[dead-letter] job ${ref}: ${WHY.no_source}`);
+    console.warn(`[dead-letter] ${queue} job ${ref}: ${WHY[owner.reason]}, so no Inbox item; the prober counts the failed job`);
+    return owner.reason;
+  }
+  let raised: boolean;
+  try {
+    ({ raised } = await runtime.execute<{ raised: boolean }>(
+      'kernel.job.dead_letter',
+      // deadLetterOrg checked the source queue and job id.
+      { queue, jobId: job.sourceId as string, retries: Math.max(0, job.sourceRetryCount ?? 0) },
+      { actor: { type: 'system', component: 'kernel.job' }, orgId: owner.orgId },
+    ));
+  } catch (error) {
+    // The system context refuses an org that is not active (TENANT_NOT_ACTIVE, answered FORBIDDEN).
+    if (!(error instanceof DomainError) || error.code !== 'FORBIDDEN') throw error;
+    console.warn(`[dead-letter] ${queue} job ${ref} of org ${owner.orgId.slice(0, 8)}: the org refused it (closed?), so no Inbox item; the prober counts the failed job`);
+    return 'refused';
+  }
+  console.log(`[dead-letter] ${queue} job ${ref} of org ${owner.orgId.slice(0, 8)}: ${raised ? 'Inbox item raised' : 'already raised'}`);
+  return raised ? 'raised' : 'repeat';
+}

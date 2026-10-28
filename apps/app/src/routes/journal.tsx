@@ -10,6 +10,7 @@ import { Input } from '@crove/ui/components/input';
 import { Table, TableBody, TableCell, TableRow } from '@crove/ui/components/table';
 import { DateInput } from '../components/date-input.tsx';
 import { useChosenEntity } from '../components/entity-switcher.tsx';
+import { RecordNotesPanel, notesInstalled } from '../components/notes-panel.tsx';
 import { Empty, ErrorText, ListSkeleton, PageHeader, Spinner } from '../components/ui.tsx';
 import { apiFetch, errorMessage, getCurrentOrg, orpc, queryClient } from '../lib/api.ts';
 import { useFormat } from '../i18n/provider.tsx';
@@ -129,6 +130,32 @@ function ReversalForm({ entry, slug, onClose }: { entry: Entry; slug: string; on
   );
 }
 
+// An entry's notes (#1672), opened under it: the notes linked to this voucher and "Thêm ghi chú".
+function EntryNotes({ entry, slug }: { entry: { id: string; entryDate: string; description: string; voucher?: { code: string } | null | undefined }; slug: string }) {
+  const tn = useTranslations('notes');
+  const f = useFormat();
+  const [open, setOpen] = useState(false);
+  const name = entry.voucher?.code ?? `${entry.description} (${f.date(entry.entryDate)})`;
+  return (
+    <div className="mt-2">
+      <div className="flex justify-end">
+        <Button variant="ghost" size="sm" onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-label={tn('panel.toggleOf', { name })}>
+          {tn('panel.title')}
+        </Button>
+      </div>
+      {open && (
+        <RecordNotesPanel
+          slug={slug}
+          target={{ targetType: 'finance.journal_entry', targetId: entry.id }}
+          headingId={`notes-${entry.id}`}
+          label={tn('panel.toggleOf', { name })}
+          empty={tn('panel.emptyRecord')}
+        />
+      )}
+    </div>
+  );
+}
+
 export function JournalPage() {
   const t = useTranslations('journal');
   const ob = useTranslations('openingBalance');
@@ -154,6 +181,7 @@ export function JournalPage() {
   const entity = useChosenEntity();
   const journal = useQuery({ ...orpc.journal.list.queryOptions({ input: { ...range, legalEntityId: entity.legalEntityId } }), enabled: entity.ready });
   const org = useQuery(orpc.org.get.queryOptions());
+  const notes = notesInstalled();
 
   const download = async (path: string, filename: string) => {
     const response = await apiFetch(`${path}?${exportQuery(range, entity.legalEntityId)}`);
@@ -350,6 +378,7 @@ export function JournalPage() {
                   )}
                 </>
               )}
+              {notes && <EntryNotes entry={entry} slug={slug} />}
             </Card>
           ))}
         </div>

@@ -1,20 +1,90 @@
 import { useQuery } from '@tanstack/react-query';
-import { useSearch } from '@tanstack/react-router';
+import { useParams, useSearch } from '@tanstack/react-router';
 import { useDeferredValue, useEffect, useState } from 'react';
 import { useTranslations } from 'use-intl';
+import type { z } from 'zod';
+import type { zPurchaseDocument } from '@crove/kernel-contract';
 import { Badge } from '@crove/ui/components/badge';
+import { Button } from '@crove/ui/components/button';
 import { Input } from '@crove/ui/components/input';
 import { TableCell, TableRow } from '@crove/ui/components/table';
 import { useChosenEntity } from '../components/entity-switcher.tsx';
+import { RecordNotesPanel, notesInstalled } from '../components/notes-panel.tsx';
 import { DataTable, Empty, ErrorText, PageHeader, TableSkeleton } from '../components/ui.tsx';
 import { errorMessage, orpc } from '../lib/api.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { documentNumber, matchesDocument } from '../lib/search.ts';
 import { InvoiceCorrections } from '../components/invoice-corrections.tsx';
 
+type PurchaseDocument = z.infer<typeof zPurchaseDocument>;
+
+// A document's row and, when opened, its notes below it (#1672): the notes linked to this document and "Thêm ghi chú".
+function DocumentRow({ d, slug, notes }: { d: PurchaseDocument; slug: string; notes: boolean }) {
+  const t = useTranslations('documents');
+  const tn = useTranslations('notes');
+  const f = useFormat();
+  const [notesOpen, setNotesOpen] = useState(false);
+  const name = documentNumber(d);
+  return (
+    <>
+      <TableRow className={d.voided ? 'opacity-60' : undefined}>
+        <TableCell className="px-4 py-3 text-muted-foreground">{f.date(d.issueDate)}</TableCell>
+        <TableCell className="px-4 py-3 font-mono text-xs text-foreground">{name}</TableCell>
+        <TableCell className="px-4 py-3">
+          <Badge variant={d.direction === 'sale' ? 'secondary' : 'outline'}>{t(d.direction === 'sale' ? 'direction.sale' : 'direction.purchase')}</Badge>
+        </TableCell>
+        <TableCell className="px-4 py-3 text-foreground">{d.partyName}</TableCell>
+        <TableCell className="px-4 py-3 text-right text-muted-foreground tabular-nums">{f.money(d.subtotal)}</TableCell>
+        <TableCell className="px-4 py-3 text-right text-muted-foreground tabular-nums">{f.money(d.vatAmount)}</TableCell>
+        <TableCell className="px-4 py-3 text-right font-medium text-foreground tabular-nums">
+          {f.money(d.total)}
+          {d.foreign && (
+            <span className="block text-xs font-normal text-subtle-foreground">
+              {t('foreign', { total: f.money(d.foreign.total, d.foreign.currency), rate: f.number(d.foreign.rate) })}
+            </span>
+          )}
+        </TableCell>
+        <TableCell className="px-4 py-3">
+          {/* Voided by reversing its entry (#165): Crove no longer counts it; the supplier's invoice is unchanged. */}
+          {d.voided ? (
+            <Badge variant="destructive" title={t('voidReason', { reason: d.voided.reason })}>
+              {t('status.voided')}
+            </Badge>
+          ) : d.replacesDocumentId ? (
+            <Badge variant="secondary">{t('status.rerecorded')}</Badge>
+          ) : (
+            <Badge variant="success">{t('status.recorded')}</Badge>
+          )}
+          <InvoiceCorrections corrects={d.corrects} correctedBy={d.correctedBy} />
+        </TableCell>
+        {notes && (
+          <TableCell className="px-4 py-3 text-right">
+            <Button variant="ghost" size="sm" onClick={() => setNotesOpen((o) => !o)} aria-expanded={notesOpen} aria-label={tn('panel.toggleOf', { name })}>
+              {tn('panel.title')}
+            </Button>
+          </TableCell>
+        )}
+      </TableRow>
+      {notesOpen && (
+        <TableRow>
+          <TableCell colSpan={9} className="px-4 py-3">
+            <RecordNotesPanel
+              slug={slug}
+              target={{ targetType: 'finance.purchase_document', targetId: d.id }}
+              headingId={`notes-${d.id}`}
+              label={tn('panel.toggleOf', { name })}
+              empty={tn('panel.emptyRecord')}
+            />
+          </TableCell>
+        </TableRow>
+      )}
+    </>
+  );
+}
+
 export function DocumentsPage() {
   const t = useTranslations('documents');
-  const f = useFormat();
+  const { slug } = useParams({ strict: false }) as { slug: string };
   // The documents of the entity chosen in the shell (#1280).
   const entity = useChosenEntity();
   const docs = useQuery({ ...orpc.documents.list.queryOptions({ input: { legalEntityId: entity.legalEntityId } }), enabled: entity.ready });
@@ -26,6 +96,7 @@ export function DocumentsPage() {
   }, [search.q]);
   const term = useDeferredValue(q.trim());
   const shown = term ? docs.data?.filter((d) => matchesDocument(d, term)) : docs.data;
+  const notes = notesInstalled();
   return (
     <>
       <PageHeader title={t('title')} subtitle={t('subtitle')} />
@@ -54,40 +125,12 @@ export function DocumentsPage() {
             t('columns.vat'),
             t('columns.total'),
             t('columns.status'),
+            // The notes of each document (#1672), when the deployment runs the notes module.
+            ...(notes ? [''] : []),
           ]}
         >
           {shown?.map((d) => (
-            <TableRow key={d.id} className={d.voided ? 'opacity-60' : undefined}>
-              <TableCell className="px-4 py-3 text-muted-foreground">{f.date(d.issueDate)}</TableCell>
-              <TableCell className="px-4 py-3 font-mono text-xs text-foreground">{documentNumber(d)}</TableCell>
-              <TableCell className="px-4 py-3">
-                <Badge variant={d.direction === 'sale' ? 'secondary' : 'outline'}>{t(d.direction === 'sale' ? 'direction.sale' : 'direction.purchase')}</Badge>
-              </TableCell>
-              <TableCell className="px-4 py-3 text-foreground">{d.partyName}</TableCell>
-              <TableCell className="px-4 py-3 text-right text-muted-foreground tabular-nums">{f.money(d.subtotal)}</TableCell>
-              <TableCell className="px-4 py-3 text-right text-muted-foreground tabular-nums">{f.money(d.vatAmount)}</TableCell>
-              <TableCell className="px-4 py-3 text-right font-medium text-foreground tabular-nums">
-                {f.money(d.total)}
-                {d.foreign && (
-                  <span className="block text-xs font-normal text-subtle-foreground">
-                    {t('foreign', { total: f.money(d.foreign.total, d.foreign.currency), rate: f.number(d.foreign.rate) })}
-                  </span>
-                )}
-              </TableCell>
-              <TableCell className="px-4 py-3">
-                {/* Voided by reversing its entry (#165): Crove no longer counts it; the supplier's invoice is unchanged. */}
-                {d.voided ? (
-                  <Badge variant="destructive" title={t('voidReason', { reason: d.voided.reason })}>
-                    {t('status.voided')}
-                  </Badge>
-                ) : d.replacesDocumentId ? (
-                  <Badge variant="secondary">{t('status.rerecorded')}</Badge>
-                ) : (
-                  <Badge variant="success">{t('status.recorded')}</Badge>
-                )}
-                <InvoiceCorrections corrects={d.corrects} correctedBy={d.correctedBy} />
-              </TableCell>
-            </TableRow>
+            <DocumentRow key={d.id} d={d} slug={slug} notes={notes} />
           ))}
         </DataTable>
       )}
