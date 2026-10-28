@@ -41,6 +41,11 @@ suite('dead letters raise an Inbox item in their own org (#1720)', () => {
   const asUser = (userId: string) => ({ type: 'user' as const, userId, aal: 'aal1' as const });
   const asMfa = (userId: string) => ({ type: 'user' as const, userId, aal: 'aal2' as const, sessionId: randomUUID(), mfaAt: Math.floor(Date.now() / 1000) });
   const raised = async (userId: string, orgId: string) => zRaisedInboxItems.parse(await runtime.query('kernel.inbox.raised', {}, { actor: asUser(userId), orgId }));
+  // The key of a queue's item raised on `day` in Vietnam, or the day after (a run that crosses midnight there).
+  const keyOn = (queue: string, day: string) => {
+    const next = new Date(Date.parse(`${day}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
+    return expect.stringMatching(new RegExp(`^queue:${queue.replaceAll('.', '\\.')}:(${day}|${next})$`));
+  };
 
   async function admin<T>(fn: (client: pg.Client) => Promise<T>): Promise<T> {
     const client = new pg.Client({ connectionString: adminUrl });
@@ -132,6 +137,7 @@ suite('dead letters raise an Inbox item in their own org (#1720)', () => {
     const failed = await admin(async (c) => (await c.query<{ state: string }>(`SELECT state FROM ${JOB_SCHEMA}.job WHERE id = $1`, [id])).rows);
     expect(failed).toEqual([{ state: 'failed' }]);
 
+    const day = vietnamToday();
     expect(await takeDeadLetter(workerRuntime, letter)).toBe('raised');
     // The same copy again (a retry after the command committed): the first answer replays, nothing is counted twice.
     expect(await takeDeadLetter(workerRuntime, letter)).toBe('raised');
@@ -141,7 +147,7 @@ suite('dead letters raise an Inbox item in their own org (#1720)', () => {
       {
         org_id: orgA.orgId,
         kind: 'kernel.job.dead_lettered',
-        dedupe_key: `queue:${QUEUES.portalList}:${vietnamToday()}`,
+        dedupe_key: keyOn(QUEUES.portalList, day),
         detail: { queue: QUEUES.portalList, jobId: id, retries: 0, failures: 1, lastAt: expect.any(String) },
         dismissed_at: null,
       },
@@ -177,10 +183,11 @@ suite('dead letters raise an Inbox item in their own org (#1720)', () => {
     const before = (await items(orgB.orgId)).length;
     const fileId = randomUUID();
     const { id, letter } = await deadLetter(QUEUES.extract, { orgId: orgB.orgId, fileId }, { group: jobGroup(orgB.orgId, QUEUES.extract), singletonKey: jobKey(orgB.orgId, QUEUES.extract, fileId) });
+    const day = vietnamToday();
     expect(await takeDeadLetter(workerRuntime, letter)).toBe('raised');
     const b = await items(orgB.orgId);
     expect(b).toHaveLength(before + 1);
-    expect(b.at(-1)).toMatchObject({ dedupe_key: `queue:${QUEUES.extract}:${vietnamToday()}`, detail: { queue: QUEUES.extract, jobId: id, failures: 1 } });
+    expect(b.at(-1)).toMatchObject({ dedupe_key: keyOn(QUEUES.extract, day), detail: { queue: QUEUES.extract, jobId: id, failures: 1 } });
     expect((await items(orgA.orgId)).some((i) => i.detail.jobId === id)).toBe(false);
   });
 
@@ -188,8 +195,12 @@ suite('dead letters raise an Inbox item in their own org (#1720)', () => {
     const queueItems = async () => (await items(orgA.orgId)).filter((i) => i.detail.queue === QUEUES.yearArchive);
     const first = await deadLetter(QUEUES.yearArchive, { orgId: orgA.orgId, year: 2024 }, { singletonKey: jobKey(orgA.orgId, QUEUES.yearArchive, '2024') });
     const second = await deadLetter(QUEUES.yearArchive, { orgId: orgA.orgId, year: 2025 }, { singletonKey: jobKey(orgA.orgId, QUEUES.yearArchive, '2025') });
+    const day = vietnamToday();
     expect(await takeDeadLetter(workerRuntime, first.letter)).toBe('raised');
-    expect(await takeDeadLetter(workerRuntime, second.letter)).toBe('counted');
+    const outcome = await takeDeadLetter(workerRuntime, second.letter);
+    // A run that crosses midnight in Vietnam between the two takes has two days, so two items: nothing to group.
+    if (vietnamToday() !== day) return;
+    expect(outcome).toBe('counted');
     // The second copy taken again counts nothing more.
     expect(await takeDeadLetter(workerRuntime, second.letter)).toBe('counted');
     const open = await queueItems();
@@ -232,7 +243,7 @@ suite('dead letters raise an Inbox item in their own org (#1720)', () => {
     ];
     // Another org's old item goes too, in that org's own system context.
     const otherGone = await make(orgB.orgId, `prune:${randomUUID()}`, ago(100), null);
-    const removed = await pruneInboxItems({ runtime: workerRuntime, workerDb: createDb(workerPool) }, new Date(now));
+    const removed = await pruneInboxItems({ runtime: workerRuntime, workerDb: createDb(workerPool) });
     expect(removed).toBeGreaterThanOrEqual(3);
     const left = await admin(async (c) => (await c.query<{ id: string }>('SELECT id FROM crove_kernel.inbox_item WHERE id = ANY($1::uuid[])', [[...gone, ...kept, otherGone]])).rows.map((r) => r.id));
     expect(left.sort()).toEqual([...kept].sort());

@@ -21,7 +21,7 @@
 // its idempotency key, so the second take replays the first's answer.
 //
 // The daily retention run prunes old items (pruneInboxItems): the active orgs crove_kernel.inbox_item_prune_due names,
-// each in its own system context through kernel.inbox.prune.
+// page by page, each in its own system context through kernel.inbox.prune.
 import { sql } from 'kysely';
 import type { JobWithMetadata } from 'pg-boss';
 import type { Db } from '@crove/db';
@@ -29,8 +29,9 @@ import { inboxPruneCutoffs } from '@crove/kernel';
 import { DomainError, type Runtime } from '@crove/kernel-runtime';
 import { keyOrg } from './job-keys.ts';
 
-// Orgs one daily prune covers at most; the rest wait for the next night.
-const INBOX_PRUNE_ORGS = 500;
+// Orgs one page of the daily prune names, and pages one run takes at most (past them it logs an ALERT).
+const INBOX_PRUNE_PAGE = 500;
+const INBOX_PRUNE_PAGES = 100;
 
 const QUEUE_NAME = /^[a-z][a-z0-9_.-]{0,99}$/;
 const ORG_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -101,18 +102,30 @@ export async function takeDeadLetter(runtime: Runtime, job: DeadLetter): Promise
   return done.raised ? 'raised' : 'counted';
 }
 
-/** The daily prune of old Inbox items (#1747): each org with some, in its own system context. Logs org prefixes. */
-export async function pruneInboxItems(deps: { runtime: Runtime; workerDb: Db }, now = new Date()): Promise<number> {
-  const { dismissedBefore, raisedBefore } = inboxPruneCutoffs(now);
-  const { rows } = await sql<{ org_id: string }>`
-    SELECT org_id FROM crove_kernel.inbox_item_prune_due(${dismissedBefore}::timestamptz, ${raisedBefore}::timestamptz, ${INBOX_PRUNE_ORGS}::int)`.execute(deps.workerDb);
+/**
+ * The daily prune of old Inbox items (#1747): every org with some, page after page by org id, each in its own system
+ * context, so an org that cannot be pruned (or one that fills up again) never holds the others back. The command
+ * applies the cut-offs at its own time; these only pick the orgs. Logs org prefixes.
+ */
+export async function pruneInboxItems(deps: { runtime: Runtime; workerDb: Db }): Promise<number> {
+  const { dismissedBefore, raisedBefore } = inboxPruneCutoffs(new Date());
   let removed = 0;
-  for (const row of rows) {
-    try {
-      removed += (await deps.runtime.execute<{ removed: number }>('kernel.inbox.prune', {}, { actor: { type: 'system', component: 'kernel.job' }, orgId: row.org_id })).removed;
-    } catch (error) {
-      console.warn(`[inbox-prune] org ${row.org_id.slice(0, 8)}`, error instanceof DomainError ? error.code : error instanceof Error ? error.name : 'error');
+  let after: string | null = null;
+  for (let page = 0; page < INBOX_PRUNE_PAGES; page++) {
+    const { rows }: { rows: Array<{ org_id: string }> } = await sql<{ org_id: string }>`
+      SELECT org_id FROM crove_kernel.inbox_item_prune_due(${after}::uuid, ${dismissedBefore}::timestamptz, ${raisedBefore}::timestamptz, ${INBOX_PRUNE_PAGE}::int)`.execute(
+      deps.workerDb,
+    );
+    for (const row of rows) {
+      try {
+        removed += (await deps.runtime.execute<{ removed: number }>('kernel.inbox.prune', {}, { actor: { type: 'system', component: 'kernel.job' }, orgId: row.org_id })).removed;
+      } catch (error) {
+        console.warn(`[inbox-prune] org ${row.org_id.slice(0, 8)}`, error instanceof DomainError ? error.code : error instanceof Error ? error.name : 'error');
+      }
     }
+    if (rows.length < INBOX_PRUNE_PAGE) return removed;
+    after = rows[rows.length - 1]?.org_id ?? null;
   }
+  console.error(`[inbox-prune] ALERT more than ${INBOX_PRUNE_PAGES * INBOX_PRUNE_PAGE} orgs to prune; the rest wait for the next night`);
   return removed;
 }

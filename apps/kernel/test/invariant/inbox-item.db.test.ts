@@ -1,10 +1,10 @@
 // Dead-letter Inbox items on PostgreSQL 17 (issue #1747, from the review of #1738), through raw SQL in each context:
 //   - a dismissal names the context's own user: a member context cannot record another user as the one who dismissed
-//     an item, and the system context, which has no user, dismisses nothing;
+//     an item, and the system context, which has no user, dismisses nothing; a dismissal, once made, stays;
 //   - only the system context changes an item's detail (the count of the day's failures), and only on an open item;
 //     nobody changes its key, kind or raise time;
 //   - only the system context deletes items (the daily prune); a member context deletes none;
-//   - crove_kernel.inbox_item_prune_due answers the worker login alone, outside every context, with org ids only.
+//   - crove_kernel.inbox_item_prune_due answers the worker login alone, outside every context, with org ids only, paged.
 // Part of the invariant suite; it imports package code under test, never helpers from outside test/invariant/. Set
 // CROVE_TEST_ADMIN_URL to a superuser URL; each run makes its own database.
 import { randomUUID } from 'node:crypto';
@@ -128,6 +128,19 @@ suite('dead-letter Inbox items on PostgreSQL (#1747)', () => {
     }
   });
 
+  it('keeps a dismissal as it was made: no re-dismissal in another name, no reopening', async () => {
+    const change = (sql: string) => (c: pg.Client) => c.query(`UPDATE crove_kernel.inbox_item SET ${sql} WHERE id = $1`, [items.dismissed]);
+    for (const set of ['dismissed_at = now(), dismissed_by = crove_kernel.ctx_user_id()', 'dismissed_at = NULL, dismissed_by = NULL']) {
+      expect(await inContext(appUrl, asMember(users.owner), (c) => outcome(change(set)(c))), set).toMatchObject({
+        ok: false,
+        code: '42501',
+        message: expect.stringContaining('INBOX_ITEM_DISMISSED'),
+      });
+    }
+    // Writing the same values again changes nothing, and is allowed.
+    expect(await inContext(appUrl, asMember(users.admin), (c) => outcome(change('dismissed_at = dismissed_at')(c)))).toEqual({ ok: true, rows: 1 });
+  });
+
   it('lets only the system context change the detail, and only of an open item', async () => {
     const recount = (id: string) => (c: pg.Client) =>
       c.query(`UPDATE crove_kernel.inbox_item SET detail = detail || '{"failures": 7}'::jsonb WHERE id = $1`, [id]);
@@ -164,9 +177,12 @@ suite('dead-letter Inbox items on PostgreSQL (#1747)', () => {
   });
 
   it('answers inbox_item_prune_due to the worker login alone, outside every context', async () => {
-    const due = (c: pg.Client) => c.query(`SELECT org_id FROM crove_kernel.inbox_item_prune_due(now() + interval '1 day', now() - interval '1 day', 10)`);
+    const due = (c: pg.Client, after: string | null = null) =>
+      c.query(`SELECT org_id FROM crove_kernel.inbox_item_prune_due($1::uuid, now() + interval '1 day', now() - interval '1 day', 10)`, [after]);
     const outside = await inContext(workerUrl, null, (c) => due(c));
     expect(outside.rows).toEqual([{ org_id: orgId }]);
+    // Paged by org id: nothing after the last one.
+    expect((await inContext(workerUrl, null, (c) => due(c, orgId))).rows).toEqual([]);
     expect(await inContext(workerUrl, asSystem, (c) => outcome(due(c)))).toMatchObject({ ok: false, code: '42501', message: expect.stringContaining('INBOX_ITEM_WORKER_ONLY') });
     expect(await inContext(appUrl, null, (c) => outcome(due(c)))).toMatchObject({ ok: false, code: '42501' });
     expect(await inContext(appUrl, asMember(users.owner), (c) => outcome(due(c)))).toMatchObject({ ok: false, code: '42501' });
