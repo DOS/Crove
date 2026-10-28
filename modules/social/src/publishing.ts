@@ -479,8 +479,10 @@ export const publishRecord = defineCommand({
     result: zResult,
     connectionVersion: z.iso.datetime({ offset: true }).nullable().optional(),
   }),
-  risk: 'R1',
-  sideEffect: 'internal',
+  // Its events alert the org's team chat on Telegram or Discord, a third-party provider (plan §4.7: a job with
+  // egress derives R2; #1662). A system command, so the worker runs it as before.
+  risk: 'R2',
+  sideEffect: 'external',
   access: 'system',
   handler: async (ctx, input) => {
     requireSystem(ctx);

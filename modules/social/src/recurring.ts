@@ -135,8 +135,10 @@ async function endSeries(ctx: CommandContext, postId: string, reason: string): P
 export const recurringNext = defineCommand({
   name: 'social.recurring.next',
   input: z.strictObject({ postId: zId }),
-  risk: 'R1',
-  sideEffect: 'internal',
+  // The copy goes to review, which alerts the org's team chat on Telegram or Discord (plan §4.7: a job with egress
+  // derives R2; #1662). A system command, so the worker runs it as before.
+  risk: 'R2',
+  sideEffect: 'external',
   access: 'system',
   target: (input) => ({ type: 'social.post', id: input.postId }),
   handler: async (ctx, input): Promise<RecurringResult> => {

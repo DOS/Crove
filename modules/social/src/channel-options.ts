@@ -103,8 +103,10 @@ const zRequest = z.strictObject({ connectionId: zId });
 export const channelOptionRequest = defineCommand({
   name: 'social.channel_option.request',
   input: zRequest,
-  risk: 'R1',
-  sideEffect: 'internal',
+  // Its event queues the job that reads the list from the platform with the channel's token (plan §4.7: a job with
+  // egress derives R2; #1662).
+  risk: 'R2',
+  sideEffect: 'external',
   access: MEMBERS,
   target: (input) => ({ type: 'kernel.channel_connection', id: input.connectionId }),
   handler: async (ctx: CommandContext, input): Promise<ChannelOptionList> => {
