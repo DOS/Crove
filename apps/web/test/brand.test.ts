@@ -7,17 +7,11 @@ import { en } from '../src/content/en';
 import { vi } from '../src/content/vi';
 
 // Copy that may say Crove, by its path in the dictionary, with the reason.
-const ALLOWED_COPY: Readonly<Record<string, string>> = {
-  // The self-host command clones the repository and enters its folder; both keep the name until the owner renames
-  // the repository (DOS/Crove to DOS/Ludy, phase 2 of #1682).
-  'trust.command': 'repository URL and folder',
-};
+// None since the repository was renamed to DOS/Ludy (owner, 2026-10-28).
+const ALLOWED_COPY: Readonly<Record<string, string>> = {};
 
 // Source lines outside the copy that may say Crove, by file under src/, with the reason.
-const ALLOWED_SOURCE: Readonly<Record<string, RegExp>> = {
-  // The GitHub link's target, not text on the page: the repository keeps its name until phase 2 of #1682.
-  'content/site.ts': /^export const GITHUB_URL = 'https:\/\/github\.com\/DOS\/Crove';$/,
-};
+const ALLOWED_SOURCE: Readonly<Record<string, RegExp>> = {};
 
 const src = join(import.meta.dirname, '..', 'src');
 // The copy, which the first test reads as data.

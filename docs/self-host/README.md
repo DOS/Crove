@@ -31,7 +31,7 @@ security updates, SSH keys only, a firewall, container log rotation) you can fol
 Run a release tag, not `main`:
 
 ```bash
-git clone https://github.com/DOS/Crove.git /opt/crove
+git clone https://github.com/DOS/Ludy.git /opt/crove
 cd /opt/crove
 git tag --list 'v*' --sort=-v:refname | head -5      # the newest releases
 git checkout <tag>                                   # for example v0.3.0

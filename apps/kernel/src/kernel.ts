@@ -325,6 +325,9 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
       absentModules,
       // Approval audit rows name the build their policy ran under (plan §4.7, #1402).
       build: config.CROVE_BUILD ?? 'dev',
+      // Audit and idempotency rows hash a command's input under the deployment's key (#1732), so an exported or
+      // archived row never confirms a guessed input.
+      inputHash: 'keyed',
       // Every user request is checked against its session (ADR-0028); the identity port never resolves to "no check".
       sessions: resolved.identity.sessions,
       stepUp: config.AUTH_STEP_UP,

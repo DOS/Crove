@@ -4,7 +4,7 @@
 >
 > This document is a working draft modeled on the Apache Software Foundation ICLA and CCLA. It is not yet legal advice or a binding agreement, it may change, and CLA enforcement (CLA Assistant) is not enabled. Nobody should sign it yet.
 
-"Project Owner" means the owner of the Crove project and its repository `DOS/Crove` (name and legal entity to be confirmed in the final version). "Project" means the Crove software and its documentation.
+"Project Owner" means the owner of the Crove project and its repository `DOS/Ludy` (name and legal entity to be confirmed in the final version). "Project" means the Crove software and its documentation.
 
 This agreement is a license grant: **you keep the copyright in your Contribution**, and you grant the Project Owner and recipients of the Project the rights below.
 

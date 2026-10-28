@@ -4,7 +4,7 @@
 - Date: 2026-10-20
 - Deciders: Claude Code session for issue #432 (an engineering choice inside the existing queue; no product decision)
 - Builds on: ADR-0033 section 4 (per-org fairness on pg-boss), the bulk intake of #314
-- Issue: [#432](https://github.com/DOS/Crove/issues/432)
+- Issue: [#432](https://github.com/DOS/Ludy/issues/432)
 
 ## Context and problem statement
 

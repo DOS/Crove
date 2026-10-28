@@ -620,7 +620,10 @@ suite('bulk approval on PostgreSQL (#315)', () => {
     const [parent] = await auditRows(orgId, 'test.mutate');
     const rows = await auditRows(orgId, 'test.mutable');
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ outcome: 'failed', target_type: 'test.thing', target_id: id, input_sha256: sha256Hex(JSON.stringify({ id })) });
+    // The input hash of the input as parsed: the plain SHA-256 of a runtime in 'sha256' mode, or a keyed one (#1732).
+    expect(rows[0]).toMatchObject({ outcome: 'failed', target_type: 'test.thing', target_id: id });
+    const hash = rows[0]?.input_sha256 ?? '';
+    expect(hash === sha256Hex(JSON.stringify({ id })) || /^k1:[0-9a-f]{64}$/.test(hash)).toBe(true);
     expect(rows[0]?.detail).toEqual({
       note: 'kept',
       code: 'NOT_FOUND',
