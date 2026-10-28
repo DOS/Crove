@@ -2,15 +2,17 @@
 //
 // Writes to the records the SPA shows send `NOTIFY crove_stream, '<org_id> <type> <id>'` from a trigger
 // (20261018140000_crove_kernel_stream_invalidation.sql), and rows that belong to one legal entity add it:
-// `<org_id> <type> <id> <legal_entity_id>` (20261103080000 and 20261103090000 *_stream_legal_entity.sql, #1692). Each API
-// process LISTENs on one dedicated connection (StreamHub with a NotificationSource) and hands a hint only to the open
-// streams of that org, and a hint with an entity only to the streams whose legal-entity scope includes it. A stream
-// sends ids, never row data and never the entity: the SPA re-fetches through the normal authorized queries, so a hint
-// can never show a record its reader may not see, and a member limited to some entities does not even learn that a
-// record of another entity changed. A stream also re-runs the session check, membership and legal-entity scope of its
-// org every STREAM_RECHECK_SECONDS and after every RECHECK_EVERY_HINTS hints, holding further hints back while it
-// does, closes with a reason when the check fails, and applies the scope it returns to every hint it sends afterwards.
-// It ends when the access token it was opened with expires.
+// `<org_id> <type> <id> <legal_entity_id>` (20261103080000 and 20261103090000 *_stream_legal_entity.sql, #1692), and a
+// member's own row (a notification) names its recipient last, `... @<user_id>` (20261103220000_crove_kernel_stream_
+// recipient.sql, #1702). Each API process LISTENs on one dedicated connection (StreamHub with a NotificationSource) and
+// hands a hint only to the open streams of that org, a hint with an entity only to the streams whose legal-entity scope
+// includes it, and a hint with a recipient only to the streams of that user. A stream sends ids, never row data, the
+// entity or the recipient: the SPA re-fetches through the normal authorized queries, so a hint can never show a record
+// its reader may not see, a member limited to some entities does not even learn that a record of another entity
+// changed, and no member learns when another got a notification. A stream also re-runs the session check, membership
+// and legal-entity scope of its org every STREAM_RECHECK_SECONDS and after every RECHECK_EVERY_HINTS hints, holding
+// further hints back while it does, closes with a reason when the check fails, and applies the scope it returns to
+// every hint it sends afterwards. It ends when the access token it was opened with expires.
 //
 // EventSource cannot send the Authorization header, so a stream opens with a one-time ticket from an authenticated
 // POST (stream_ticket_issue, stored as its SHA-256), valid for seconds, bound to the user, org, session and assurance,
@@ -48,27 +50,36 @@ export const PENDING_HINT_LIMIT = 200;
 export const MAX_BUFFERED_BYTES = 256 * 1024;
 
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
-const PAYLOAD = new RegExp(`^(${UUID}) ([a-z_]{1,32}) (${UUID})(?: (${UUID}))?$`);
+const PAYLOAD = new RegExp(`^(${UUID}) ([a-z_]{1,32}) (${UUID})(?: (${UUID}))?(?: @(${UUID}))?$`);
 const UUID_ONLY = new RegExp(`^${UUID}$`);
 const TYPES: ReadonlySet<string> = new Set(STREAM_HINT_TYPES);
 const TICKET = /^[A-Za-z0-9_-]{43}$/;
+
+// The hints about one member's own rows, which only that member may read (the own_notification policy): each names its
+// recipient and reaches only the streams of that user. crove_kernel.stream_notify names the same types
+// (20261103220000_crove_kernel_stream_recipient.sql).
+export const RECIPIENT_HINT_TYPES: ReadonlySet<StreamHintType> = new Set<StreamHintType>(['notification']);
 
 export interface ParsedHint {
   orgId: string;
   hint: StreamHint;
   // The legal entity of the row the hint is about; absent for an org-wide row.
   legalEntityId?: string;
+  // The one user whose streams may get the hint; absent for a row every member (of its entity) may hear about.
+  userId?: string;
 }
 
-// A notification payload, or null for anything that is not exactly `<org_id> <known type> <id>` or
-// `<org_id> <known type> <id> <legal_entity_id>`.
+// A notification payload, or null for anything that is not exactly `<org_id> <known type> <id>`, optionally followed
+// by ` <legal_entity_id>`, then by ` @<user_id>`. A hint of a RECIPIENT_HINT_TYPES type that names no recipient is null
+// too: fail closed, it reaches no stream.
 export function parseHint(payload: string): ParsedHint | null {
   const match = PAYLOAD.exec(payload);
   if (!match) return null;
-  const [, orgId, type, id, legalEntityId] = match as unknown as [string, string, string, string, string | undefined];
+  const [, orgId, type, id, legalEntityId, userId] = match as unknown as [string, string, string, string, string | undefined, string | undefined];
   if (!TYPES.has(type)) return null;
   const hint = { type: type as StreamHintType, id };
-  return legalEntityId === undefined ? { orgId, hint } : { orgId, hint, legalEntityId };
+  if (userId === undefined && RECIPIENT_HINT_TYPES.has(hint.type)) return null;
+  return { orgId, hint, ...(legalEntityId === undefined ? {} : { legalEntityId }), ...(userId === undefined ? {} : { userId }) };
 }
 
 // The legal entities a stream may hear about: every entity of the org, or exactly these (none for an empty set).
@@ -89,6 +100,13 @@ export function streamScopeOf(result: unknown): StreamScope {
 // Whether a stream with this scope may get a hint about a row of this entity (undefined: an org-wide row).
 export function inScope(scope: StreamScope, legalEntityId: string | undefined): boolean {
   return legalEntityId === undefined || scope.all || scope.entities.has(legalEntityId);
+}
+
+// Whether the stream of streamUserId may get a hint of this type for this recipient (undefined: none named). A hint of
+// a RECIPIENT_HINT_TYPES type that names nobody reaches no stream.
+export function forRecipient(streamUserId: string, type: StreamHintType, recipientUserId: string | undefined): boolean {
+  if (recipientUserId !== undefined) return recipientUserId === streamUserId;
+  return !RECIPIENT_HINT_TYPES.has(type);
 }
 
 // Maps a failed check to the reason the stream closes with. 401s end the session (the app re-authenticates), 403s
@@ -113,8 +131,9 @@ export function sseEvent(event: string, data: unknown): string {
 export interface HubSubscriber {
   readonly orgId: string;
   // legalEntityId: the entity of the row, for the subscriber to drop the hint when it is outside its scope; absent for
-  // an org-wide row.
-  hint(hint: StreamHint, legalEntityId?: string): void;
+  // an org-wide row. userId: the recipient of a member's own row, for the subscriber to drop the hint when its stream
+  // is another user's; absent for a row every member may hear about.
+  hint(hint: StreamHint, legalEntityId?: string, userId?: string): void;
   // The process can no longer see changes (listener lost, shutdown): the stream must end.
   close(reason: StreamCloseReason): void;
 }
@@ -188,14 +207,14 @@ export class StreamHub {
     };
   }
 
-  // Only the streams of the payload's org get the hint, with its legal entity for each to filter by its own scope; a
-  // payload that does not parse is dropped.
+  // Only the streams of the payload's org get the hint, with its legal entity and recipient for each to filter by its
+  // own scope and user; a payload that does not parse is dropped.
   dispatch(payload: string): void {
     const parsed = parseHint(payload);
     if (!parsed) return;
     const set = this.byOrg.get(parsed.orgId);
     if (!set) return;
-    for (const subscriber of set) subscriber.hint(parsed.hint, parsed.legalEntityId);
+    for (const subscriber of set) subscriber.hint(parsed.hint, parsed.legalEntityId, parsed.userId);
   }
 
   // Deleting from a Set or Map while iterating it is safe: a closed stream unsubscribes itself here.
@@ -386,6 +405,8 @@ export function createPgNotificationSource(options: PgSourceOptions): Notificati
 
 export interface StreamConnectionOptions {
   orgId: string;
+  // The user the stream was opened for (its ticket's); hints about another member's own rows are dropped.
+  userId: string;
   // The legal-entity scope of the check that admitted the stream; hints about rows of other entities are dropped.
   scope: StreamScope;
   // The session check and membership of the org; throws a DomainError when the stream must end, else returns the
@@ -417,6 +438,7 @@ interface HeldHint {
 
 export class StreamConnection implements HubSubscriber {
   readonly orgId: string;
+  private readonly userId: string;
   private readonly pending = new Map<string, HeldHint>();
   private scope: StreamScope;
   private resyncPending = false;
@@ -431,6 +453,7 @@ export class StreamConnection implements HubSubscriber {
   constructor(options: StreamConnectionOptions) {
     this.options = options;
     this.orgId = options.orgId;
+    this.userId = options.userId;
     this.scope = options.scope;
     this.recheckEvery = options.recheckEveryHints ?? RECHECK_EVERY_HINTS;
     const now = options.now ?? Date.now;
@@ -460,11 +483,13 @@ export class StreamConnection implements HubSubscriber {
     this.send(sseEvent('ready', { recheckSeconds }));
   }
 
-  // A hint outside the scope is dropped at once, so it neither waits nor counts toward PENDING_HINT_LIMIT; one that
-  // waits is checked again, when it is sent, against the scope then in force (a re-check may have narrowed it). A hint
-  // that arrives while a re-check that will widen the scope runs is dropped too: fail closed, the app's poll covers it.
-  hint(hint: StreamHint, legalEntityId?: string): void {
+  // A hint outside the scope, or about another member's own row, is dropped at once, so it neither waits nor counts
+  // toward PENDING_HINT_LIMIT; one that waits is checked again, when it is sent, against the scope then in force (a
+  // re-check may have narrowed it). A hint that arrives while a re-check that will widen the scope runs is dropped too:
+  // fail closed, the app's poll covers it. The recipient never changes for a stream, so it is checked here only.
+  hint(hint: StreamHint, legalEntityId?: string, userId?: string): void {
     if (this.closed) return;
+    if (!forRecipient(this.userId, hint.type, userId)) return;
     if (!inScope(this.scope, legalEntityId)) return;
     if (!this.resyncPending) {
       // Keyed by the entity too: an extraction hint carries its file's id, and two readings of one file may belong to
