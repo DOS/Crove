@@ -30,19 +30,33 @@ export const trashEmpty = defineCommand({
   },
 });
 
-// Queued by the worker 30 days after kernel.member.removed (apps/kernel/src/notes-worker.ts). The definer removes
-// nothing when the user is a member of the org again.
+// Queued by the worker 30 days after kernel.member.removed (apps/kernel/src/notes-worker.ts), with that event's id. The
+// definer removes nothing when the user is a member of the org again. A later removal of the same user (added back,
+// then removed again) has a job of its own 30 days after it, so this one leaves the notes to it: outbox event ids are
+// UUIDv7, ordered by time, and that later event is younger than 30 days, so still in the outbox (#997).
 export const memberItemsPurge = defineCommand({
   name: 'notes.member_items.purge',
-  input: z.strictObject({ userId: zId }),
+  input: z.strictObject({ userId: zId, eventId: zId }),
   risk: 'R3',
   sideEffect: 'irreversible',
   access: 'system',
   handler: async (ctx, input): Promise<{ removed: number }> => {
     assertSystem(ctx);
+    const later = await ctx.trx
+      .selectFrom('crove_kernel.outbox_event')
+      .select('id')
+      .where('org_id', '=', ctx.orgId)
+      .where('type', '=', 'kernel.member.removed')
+      .where('id', '>', input.eventId)
+      .where(sql<string>`payload ->> 'userId'`, '=', input.userId)
+      .executeTakeFirst();
+    if (later) {
+      ctx.audit({ userId: input.userId, eventId: input.eventId, removed: 0, laterEventId: later.id });
+      return { removed: 0 };
+    }
     const { rows } = await sql<{ n: string }>`SELECT crove_notes.member_items_purge(${input.userId}::uuid) AS n`.execute(ctx.trx);
     const removed = Number(rows[0]?.n ?? 0);
-    ctx.audit({ userId: input.userId, removed });
+    ctx.audit({ userId: input.userId, eventId: input.eventId, removed });
     return { removed };
   },
 });

@@ -1294,8 +1294,8 @@ export interface NotesNoteTable {
   body: Generated<string>;
   tags: Generated<string[]>;
   pinned: Generated<boolean>;
-  tainted: Generated<boolean>;
-  search: Generated<string>;
+  tainted: ColumnType<boolean, boolean | undefined, NotGranted>;
+  search: ColumnType<string, string | undefined, NotGranted>;
   revision: Generated<number>;
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;

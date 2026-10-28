@@ -33,8 +33,10 @@ import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext, type QueryContext } from '@crove/kernel-runtime';
 import { notesManifest } from './manifest.ts';
 
-// Viewers read no note in v1 (notes.md decision N-4), so they run none of these.
+// Viewers write no note (notes.md decision N-4). They run the reads, where the row policies show them none but their
+// own: a member made a viewer still reads what they wrote (ADR-0037 §2).
 const WRITERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
+const READERS: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const MANAGERS: readonly MemberRole[] = ['owner', 'admin'];
 const NOTE = notesManifest.tables.crove_notes.note;
 
@@ -89,6 +91,13 @@ async function load(ctx: Pick<QueryContext, 'trx' | 'orgId'>, noteId: string, lo
   const row = await q.executeTakeFirst();
   if (!row) throw notFound();
   return row;
+}
+
+// The note for a change: checked against what the caller may read, then locked. FOR UPDATE also applies the update
+// policy, which hides a shared note from a plain member, so the check comes first and names the refusal.
+async function loadForChange(ctx: CommandContext, noteId: string, check: (row: SummaryRow) => void): Promise<SummaryRow> {
+  check(await load(ctx, noteId, false));
+  return load(ctx, noteId, true);
 }
 
 function assertAuthor(row: SummaryRow, userId: string): void {
@@ -185,8 +194,7 @@ export const noteUpdate = defineCommand({
   target,
   handler: async (ctx, input): Promise<NoteWritten> => {
     const userId = userOf(ctx.actor);
-    const before = await load(ctx, input.noteId, true);
-    assertAuthor(before, userId);
+    const before = await loadForChange(ctx, input.noteId, (row) => assertAuthor(row, userId));
     assertNotInTrash(before);
     if (before.revision !== input.revision) {
       throw new DomainError('NOTE_REVISION_CONFLICT', 409, 'Ghi chú vừa được sửa ở nơi khác; hãy tải lại trước khi lưu', { revision: before.revision });
@@ -218,8 +226,7 @@ export const noteSetVisibility = defineCommand({
   target,
   handler: async (ctx, input): Promise<NoteWritten> => {
     const userId = userOf(ctx.actor);
-    const before = await load(ctx, input.noteId, true);
-    assertAuthor(before, userId);
+    const before = await loadForChange(ctx, input.noteId, (row) => assertAuthor(row, userId));
     if (before.visibility === input.visibility) return written(before);
     const row = await ctx.trx
       .updateTable('crove_notes.note')
@@ -245,8 +252,7 @@ function stateCommand(name: string, change: (now: Date) => { pinned?: boolean; a
     target,
     handler: async (ctx, input): Promise<NoteWritten> => {
       const userId = userOf(ctx.actor);
-      const before = await load(ctx, input.noteId, true);
-      assertMayManage(ctx, before, userId);
+      const before = await loadForChange(ctx, input.noteId, (row) => assertMayManage(ctx, row, userId));
       if (!allowInTrash) assertNotInTrash(before);
       const set = change(ctx.now);
       await ctx.trx.updateTable('crove_notes.note').set(set).where('org_id', '=', ctx.orgId).where('id', '=', input.noteId).execute();
@@ -273,8 +279,7 @@ export const linkAdd = defineCommand({
   target,
   handler: async (ctx, input): Promise<{ noteId: string; linkId: string }> => {
     const userId = userOf(ctx.actor);
-    const note = await load(ctx, input.noteId, true);
-    assertAuthor(note, userId);
+    const note = await loadForChange(ctx, input.noteId, (row) => assertAuthor(row, userId));
     assertNotInTrash(note);
     const linkId = await addLink(ctx, note, userId, input.targetType, input.targetId);
     ctx.audit({ noteId: input.noteId, linkId, targetType: input.targetType, targetId: input.targetId });
@@ -297,8 +302,7 @@ export const linkRemove = defineCommand({
       .where('id', '=', input.linkId)
       .executeTakeFirst();
     if (!link) throw new DomainError('NOTE_LINK_NOT_FOUND', 404, 'Không tìm thấy liên kết này');
-    const note = await load(ctx, link.note_id, true);
-    assertAuthor(note, userId);
+    await loadForChange(ctx, link.note_id, (row) => assertAuthor(row, userId));
     await ctx.trx.deleteFrom('crove_notes.link').where('org_id', '=', ctx.orgId).where('id', '=', input.linkId).execute();
     ctx.audit({ noteId: link.note_id, linkId: input.linkId, targetType: link.target_type, targetId: link.target_id });
     return { noteId: link.note_id, linkId: input.linkId };
@@ -308,7 +312,7 @@ export const linkRemove = defineCommand({
 export const noteList = defineQuery({
   name: 'notes.note.list',
   input: zNoteList,
-  access: WRITERS,
+  access: READERS,
   handler: async (ctx, input): Promise<NoteSummary[]> => {
     const userId = userOf(ctx.actor);
     let q = ctx.trx.selectFrom('crove_notes.note as n').select(SUMMARY.map((c) => `n.${c}` as const)).where('n.org_id', '=', ctx.orgId);
@@ -343,7 +347,7 @@ export const noteList = defineQuery({
 export const noteGet = defineQuery({
   name: 'notes.note.get',
   input: zNoteRef,
-  access: WRITERS,
+  access: READERS,
   handler: async (ctx, input): Promise<Note> => {
     const userId = userOf(ctx.actor);
     const row = await ctx.trx
@@ -374,7 +378,7 @@ export const noteGet = defineQuery({
 export const noteSearch = defineQuery({
   name: 'notes.note.search',
   input: zNoteSearch,
-  access: WRITERS,
+  access: READERS,
   handler: async (ctx, input): Promise<NoteSummary[]> => {
     const userId = userOf(ctx.actor);
     const rows = await ctx.trx
@@ -397,7 +401,7 @@ const PANEL_LATEST = 3;
 export const recordPanel = defineQuery({
   name: 'notes.record.panel',
   input: zNoteLinkTarget,
-  access: WRITERS,
+  access: READERS,
   handler: async (ctx, input): Promise<NoteRecordPanel> => {
     const userId = userOf(ctx.actor);
     const base = ctx.trx

@@ -27,7 +27,7 @@ describe('notes worker (#1671)', () => {
     expect(sent).toEqual([
       {
         queue: QUEUES.notesMemberPurge,
-        data: { orgId, userId: 'user-1' },
+        data: { orgId, userId: 'user-1', eventId: 'event-1' },
         options: expect.objectContaining({ singletonKey: `${orgId}:notes-member-purge:user-1:event-1`, startAfter: new Date('2026-12-01T00:00:00Z') }),
       },
     ]);

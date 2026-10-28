@@ -236,7 +236,28 @@ suite('private notes on PostgreSQL (#1671, ADR-0037)', () => {
       if (result.ok) expect(result.value.rowCount, `${actor.name} pinning the shared note`).toBe(allowed ? 1 : 0);
       else expect(allowed, `${actor.name} pinning the shared note: ${result.message}`).toBe(false);
     }
-    // Nobody but its author changes who wrote a note, not even the author.
+    // An owner or admin keeps a shared note shared: the update policy's check refuses the new row.
+    for (const actor of managers()) {
+      expect(await outcome(run(actor, (c) => c.query(`UPDATE crove_notes.note SET visibility = 'private' WHERE id = $1`, [notes.shared]))), actor.name).toMatchObject({
+        ok: false,
+        code: '42501',
+      });
+    }
+    // Only the author links the shared note, though others read it.
+    for (const { actor } of others) {
+      const linked = await outcome(
+        run(actor, (c) =>
+          c.query(`INSERT INTO crove_notes.link (org_id, note_id, target_type, target_id, party_id, created_by) VALUES ($1, $2, 'kernel.party', $3, $3, $4)`, [
+            orgId,
+            notes.shared,
+            notes.party,
+            users.author,
+          ]),
+        ),
+      );
+      expect(linked, `${actor.name} linking the shared note`).toMatchObject({ ok: false, code: '42501' });
+    }
+    // Nobody changes who wrote a note, not even the author.
     expect(await outcome(run(author, (c) => c.query('UPDATE crove_notes.note SET author_user_id = $2 WHERE id = $1', [notes.shared, users.member])))).toMatchObject({
       ok: false,
       code: '42501',

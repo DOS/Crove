@@ -45,9 +45,11 @@ CREATE INDEX IF NOT EXISTS note_author_idx ON crove_notes.note (org_id, author_u
 CREATE INDEX IF NOT EXISTS note_deleted_idx ON crove_notes.note (deleted_at) WHERE deleted_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS note_search_idx ON crove_notes.note USING gin (search);
 SELECT crove_kernel.apply_tenant_rls('crove_notes.note');
--- The author, the org and the creation time never change; nothing deletes a note but the definers and the purge.
+-- The author, the org and the creation time never change; nothing deletes a note but the definers and the purge. The
+-- search words are the trigger's (a BEFORE trigger's assignment needs no column privilege), and taint (N8) is not the
+-- writer's to clear, so neither is granted for an update.
 REVOKE UPDATE, DELETE ON crove_notes.note FROM crove_tenant;
-GRANT UPDATE (visibility, title, body, tags, pinned, tainted, search, revision, updated_at, archived_at, deleted_at) ON crove_notes.note TO crove_tenant;
+GRANT UPDATE (visibility, title, body, tags, pinned, revision, updated_at, archived_at, deleted_at) ON crove_notes.note TO crove_tenant;
 
 CREATE OR REPLACE FUNCTION crove_notes.note_search() RETURNS trigger
 LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
@@ -105,18 +107,18 @@ DROP POLICY IF EXISTS note_insert ON crove_notes.note;
 CREATE POLICY note_insert ON crove_notes.note AS RESTRICTIVE FOR INSERT TO crove_tenant
   WITH CHECK (author_user_id = (SELECT crove_kernel.ctx_user_id()));
 -- The author changes their own notes; owners and admins also change a shared note (the commands limit them to pin,
--- archive and delete: a row policy cannot limit columns). Neither moves a note's visibility for someone else: a shared
--- note an owner changes stays shared.
+-- archive and delete: a row policy cannot limit columns), and only those they can read (whole-org scope). Neither moves
+-- a note's visibility for someone else: a shared note an owner changes stays shared.
 DROP POLICY IF EXISTS note_update ON crove_notes.note;
 CREATE POLICY note_update ON crove_notes.note AS RESTRICTIVE FOR UPDATE TO crove_tenant
   USING (
     author_user_id = (SELECT crove_kernel.ctx_user_id())
-    OR (visibility = 'org' AND EXISTS (
+    OR (visibility = 'org' AND '*' = ANY ((SELECT crove_kernel.ctx_le_scope())::text[]) AND EXISTS (
       SELECT 1 FROM crove_kernel.tenant_member m
       WHERE m.org_id = note.org_id AND m.user_id = (SELECT crove_kernel.ctx_user_id()) AND m.role IN ('owner', 'admin'))))
   WITH CHECK (
     author_user_id = (SELECT crove_kernel.ctx_user_id())
-    OR (visibility = 'org' AND EXISTS (
+    OR (visibility = 'org' AND '*' = ANY ((SELECT crove_kernel.ctx_le_scope())::text[]) AND EXISTS (
       SELECT 1 FROM crove_kernel.tenant_member m
       WHERE m.org_id = note.org_id AND m.user_id = (SELECT crove_kernel.ctx_user_id()) AND m.role IN ('owner', 'admin'))));
 
@@ -145,16 +147,17 @@ CREATE TRIGGER stream_hint AFTER INSERT OR UPDATE ON crove_notes.note
 -- Definers (ADR-0037 §2). None returns a title, body or tag.
 -- ---------------------------------------------------------------------------
 
--- The orgs with notes in the trash since before p_before, for the daily sweep (worker login only, no context).
+-- The orgs with notes in the trash since before p_before, for the daily sweep (worker login only, and outside every
+-- context: an agent's or an org's context on the worker login gets nothing of other orgs).
 CREATE OR REPLACE FUNCTION crove_notes.trash_due(p_before timestamptz, p_limit integer)
 RETURNS TABLE (org_id uuid) LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
 BEGIN
-  IF NOT pg_catalog.pg_has_role(SESSION_USER, 'crove_worker', 'MEMBER') THEN
+  IF NOT pg_catalog.pg_has_role(SESSION_USER, 'crove_worker', 'MEMBER') OR crove_kernel.ctx_actor_type() IS NOT NULL THEN
     RAISE EXCEPTION 'NOTES_WORKER_ONLY' USING ERRCODE = '42501';
   END IF;
   RETURN QUERY SELECT DISTINCT n.org_id FROM crove_notes.note n
     WHERE n.deleted_at IS NOT NULL AND n.deleted_at < p_before
-    ORDER BY 1 LIMIT pg_catalog.least(pg_catalog.greatest(p_limit, 1), 1000);
+    ORDER BY 1 LIMIT LEAST(GREATEST(p_limit, 1), 1000);
 END $$;
 REVOKE ALL ON FUNCTION crove_notes.trash_due(timestamptz, integer) FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant;
 GRANT EXECUTE ON FUNCTION crove_notes.trash_due(timestamptz, integer) TO crove_worker;

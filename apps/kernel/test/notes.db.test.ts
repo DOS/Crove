@@ -61,6 +61,18 @@ suite('notes on PostgreSQL (#1671)', () => {
     return { orgId, owner, author, other, viewer, party, exec, query, list };
   }
 
+  // The newest kernel.member.removed event of a user in an org.
+  const removalEvent = (orgId: string, userId: string) =>
+    admin(
+      async (c) =>
+        (
+          await c.query<{ id: string }>(
+            `SELECT id FROM crove_kernel.outbox_event WHERE org_id = $1 AND type = 'kernel.member.removed' AND payload ->> 'userId' = $2 ORDER BY id DESC LIMIT 1`,
+            [orgId, userId],
+          )
+        ).rows[0]?.id as string,
+    );
+
   // The author's private note and shared note, both on the client.
   async function written(o: Awaited<ReturnType<typeof org>>) {
     const link = { targetType: 'kernel.party', targetId: o.party };
@@ -115,8 +127,9 @@ suite('notes on PostgreSQL (#1671)', () => {
     expect(mine).toMatchObject({ title: PRIVATE_TITLE, body: PRIVATE_BODY, tags: ['ngân hàng'], visibility: 'private', mine: true, links: [{ targetType: 'kernel.party', targetId: o.party }] });
     const panel = await o.query<NoteRecordPanel>(o.author, 'notes.record.panel', { targetType: 'kernel.party', targetId: o.party });
     expect(panel.latest.map((x) => x.id).sort()).toEqual([n.priv, n.shared].sort());
-    // Viewers read no note in v1.
-    await expect(o.query(o.viewer, 'notes.note.list', { view: 'shared' })).rejects.toMatchObject({ status: 403 });
+    // Viewers read no note but their own, and write none.
+    expect(await o.list(o.viewer, 'shared')).toEqual([]);
+    await expect(o.exec(o.viewer, 'notes.note.create', { title: 'Ghi chú' })).rejects.toMatchObject({ status: 403 });
     // A party's timeline shows the shared note with a fixed summary, never the private one or a title.
     const activity = await admin((c) => c.query<{ summary: string }>(`SELECT summary FROM crove_kernel.activity WHERE org_id = $1 AND record_id = $2`, [o.orgId, o.party]));
     expect(activity.rows).toEqual([{ summary: 'Thêm ghi chú' }]);
@@ -153,9 +166,24 @@ suite('notes on PostgreSQL (#1671)', () => {
     await expect(o.exec(o.other, 'notes.link.add', { noteId: n.shared, targetType: 'kernel.party', targetId: o.party })).rejects.toMatchObject({ code: 'NOTE_AUTHOR_ONLY' });
     await expect(o.exec(o.author, 'notes.link.add', { noteId: n.shared, targetType: 'kernel.party', targetId: o.party })).rejects.toMatchObject({ code: 'NOTE_LINK_EXISTS' });
     await expect(o.exec(o.author, 'notes.link.add', { noteId: n.shared, targetType: 'kernel.party', targetId: randomUUID() })).rejects.toMatchObject({ code: 'NOTE_LINK_TARGET_NOT_FOUND' });
+    // Owners and admins pin a shared note but neither change its visibility nor its links.
+    await expect(o.exec(o.owner, 'notes.note.set_visibility', { noteId: n.shared, visibility: 'private' })).rejects.toMatchObject({ code: 'NOTE_AUTHOR_ONLY' });
+    const linkId = (await o.query<Note>(o.owner, 'notes.note.get', { noteId: n.shared })).links[0]?.id;
+    await expect(o.exec(o.owner, 'notes.link.remove', { linkId })).rejects.toMatchObject({ code: 'NOTE_AUTHOR_ONLY' });
     // Making the private note shared shows it to the others.
     await o.exec(o.author, 'notes.note.set_visibility', { noteId: n.priv, visibility: 'org' });
     expect((await o.list(o.other, 'shared')).sort()).toEqual([n.priv, n.shared].sort());
+  });
+
+  it('keeps a member who becomes a viewer reading their own notes, and nothing else', async () => {
+    const o = await org();
+    const n = await written(o);
+    const other = await o.exec<NoteWritten>(o.other, 'notes.note.create', { title: 'Của người khác', visibility: 'org' });
+    await admin((c) => c.query(`UPDATE crove_kernel.tenant_member SET role = 'viewer' WHERE org_id = $1 AND user_id = $2`, [o.orgId, o.author]));
+    expect((await o.list(o.author, 'mine')).sort()).toEqual([n.priv, n.shared].sort());
+    expect(await o.list(o.author, 'shared')).toEqual([n.shared]);
+    await expect(o.query(o.author, 'notes.note.get', { noteId: other.noteId })).rejects.toMatchObject({ code: 'NOTE_NOT_FOUND' });
+    await expect(o.exec(o.author, 'notes.note.pin', { noteId: n.priv })).rejects.toMatchObject({ status: 403 });
   });
 
   it('finds notes by words typed without marks, within what the caller may read', async () => {
@@ -213,15 +241,23 @@ suite('notes on PostgreSQL (#1671)', () => {
     // The author can no longer enter the org; the owner still reads the shared note, never the private one.
     await expect(o.list(o.author, 'mine')).rejects.toMatchObject({ status: 403 });
     expect(await o.list(o.owner, 'shared')).toEqual([n.shared]);
-    expect(await worker.execute('notes.member_items.purge', { userId: o.author }, { actor: SYSTEM, orgId: o.orgId })).toEqual({ removed: 1 });
+    const eventId = await removalEvent(o.orgId, o.author);
+    expect(await worker.execute('notes.member_items.purge', { userId: o.author, eventId }, { actor: SYSTEM, orgId: o.orgId })).toEqual({ removed: 1 });
     const left = await admin((c) => c.query<{ id: string }>('SELECT id FROM crove_notes.note WHERE org_id = $1', [o.orgId]));
     expect(left.rows.map((r) => r.id)).toEqual([n.shared]);
     // Back in the org before the purge: nothing is removed.
     const p = await org();
     const m = await written(p);
     await app.execute('kernel.member.remove', { userId: p.author }, { actor: asMfa(p.owner), orgId: p.orgId });
+    const first = await removalEvent(p.orgId, p.author);
     await admin((c) => c.query(`INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member')`, [p.orgId, p.author]));
-    expect(await worker.execute('notes.member_items.purge', { userId: p.author }, { actor: SYSTEM, orgId: p.orgId })).toEqual({ removed: 0 });
+    expect(await worker.execute('notes.member_items.purge', { userId: p.author, eventId: first }, { actor: SYSTEM, orgId: p.orgId })).toEqual({ removed: 0 });
     expect((await p.list(p.author, 'mine')).sort()).toEqual([m.priv, m.shared].sort());
+    // Removed again: the first removal's job leaves the notes to the second's, 30 days after it.
+    await app.execute('kernel.member.remove', { userId: p.author }, { actor: asMfa(p.owner), orgId: p.orgId });
+    const second = await removalEvent(p.orgId, p.author);
+    expect(second).not.toBe(first);
+    expect(await worker.execute('notes.member_items.purge', { userId: p.author, eventId: first }, { actor: SYSTEM, orgId: p.orgId })).toEqual({ removed: 0 });
+    expect(await worker.execute('notes.member_items.purge', { userId: p.author, eventId: second }, { actor: SYSTEM, orgId: p.orgId })).toEqual({ removed: 1 });
   });
 });

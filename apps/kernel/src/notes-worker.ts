@@ -22,6 +22,8 @@ const MEMBER_PURGE_RETRY_LIMIT = 5;
 export interface NotesMemberPurgeJob {
   orgId: string;
   userId: string;
+  // The kernel.member.removed event that queued it.
+  eventId: string;
 }
 
 const ACTOR = { type: 'system' as const, component: 'notes' };
@@ -32,7 +34,7 @@ const ACTOR = { type: 'system' as const, component: 'notes' };
 export function queueNotesMemberPurge(boss: PgBoss, row: { org_id: string; event_id: string; type: string; payload: Record<string, unknown> }, now = new Date()) {
   if (row.type !== 'kernel.member.removed' || typeof row.payload.userId !== 'string') return null;
   const userId = row.payload.userId;
-  return boss.send(QUEUES.notesMemberPurge, { orgId: row.org_id, userId } satisfies NotesMemberPurgeJob, {
+  return boss.send(QUEUES.notesMemberPurge, { orgId: row.org_id, userId, eventId: row.event_id } satisfies NotesMemberPurgeJob, {
     singletonKey: jobKey(row.org_id, QUEUES.notesMemberPurge, `${userId}:${row.event_id}`),
     startAfter: new Date(now.getTime() + NOTE_MEMBER_PURGE_DAYS * 86_400_000),
     retryLimit: MEMBER_PURGE_RETRY_LIMIT,
@@ -59,6 +61,6 @@ export async function sweepNotesTrash(deps: { runtime: Runtime; workerDb: Db }, 
 
 // A queued purge: the former member's private notes in that org, unless they are a member again.
 export async function runNotesMemberPurge(runtime: Runtime, job: NotesMemberPurgeJob): Promise<void> {
-  const done = await runtime.execute<{ removed: number }>('notes.member_items.purge', { userId: job.userId }, { actor: ACTOR, orgId: job.orgId });
+  const done = await runtime.execute<{ removed: number }>('notes.member_items.purge', { userId: job.userId, eventId: job.eventId }, { actor: ACTOR, orgId: job.orgId });
   console.log(`[notes-member-purge] org ${job.orgId.slice(0, 8)}: removed ${done.removed}`);
 }
