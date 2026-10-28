@@ -70,3 +70,19 @@ At 230 locks the guard adds about 0.08 ms to a command whose p95 is 15.8 ms, und
 |---|---|---|
 | `finance.vendors.list` p95 | 831 ms | 11.8 ms |
 | `finance.vendors.list` with a search term, p95 | 3315 ms | 71.6 ms |
+
+2026-10-28, after #1717 added back-pressure: a GitHub Actions runner (ubuntu-latest) with the `postgres:17` service of the CI database job, default flags (100k parties, threshold 30 s, checked every 10 s). Times run from the relay stopping:
+
+| Measure | Result | Target |
+|---|---|---|
+| Lag passed 30 s / queues paused | 30.0 s / 40.0 s, 10.0 s later | within 10 s + 1 s |
+| Background jobs sent during the pause, held | 4 of 4 (agent dispatch, bulk mail, archive write, retention) | 4 of 4 |
+| `kernel-notify` during the pause | ran | runs |
+| `kernel.file.ingest` at 60/s during the stall, p95 | 4.4 ms, 3003 runs, 0 failed | p95 < 150 ms, no failures |
+| Max outbox lag | 44.0 s | none |
+| Lag back to 15 s / queues resumed | 44.1 s / 50.0 s, 5.9 s later | within 10 s + 1 s |
+| Held jobs run after the resume | 4 of 4 | 4 of 4 |
+
+Back-pressure passes: plan §13 Phase 1 exit criterion 7 has no N/A left. The check timer starts with the stall, so the lag passes the threshold just after a check and the pause waits nearly a whole interval: 10.0 s is the worst case, not the typical one. In the same run the other targets passed again: `kernel.party.update` p95 19.5 ms, `kernel.file.ingest` p95 14.6 ms, outbox lag p95 12.7 ms, relay about 31,700 events/s, `finance.vendors.list` p95 9.6 ms (64.5 ms with a search term), `finance.search` p95 95 ms.
+
+`load-test.db.test.ts` runs the same phase at 300 parties with a 2 s threshold checked every second (paused 1.0 s and resumed 1.0 s after the crossings on the same runner). On #1723, a `checkBackPressure` that returned at once made it fail: no pause was recorded.
