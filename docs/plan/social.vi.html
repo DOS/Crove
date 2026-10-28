@@ -198,7 +198,7 @@ footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-si
 <main>
 <p class="eyebrow">Crove OS · Plan module</p>
 <h1>Crove Social</h1>
-<p class="lede">Viết bài một lần, chỉnh theo từng kênh, duyệt, rồi tự đăng đúng giờ lên mọi trang đã kết nối. AI soạn và viết lại, người duyệt. Tham khảo: Postiz (và fork DOS/Crove-Post), OpenPost, BrightBean Studio, TryPost, Mixpost, cùng docs chính thức của từng nền tảng.</p>
+<p class="lede">Viết bài một lần, chỉnh theo từng kênh, duyệt, rồi tự đăng đúng giờ lên mọi trang đã kết nối. AI soạn và viết lại, người duyệt. Tham khảo: Postiz (và fork DOS/Ludy-Post), OpenPost, BrightBean Studio, TryPost, Mixpost, cùng docs chính thức của từng nền tảng.</p>
 <div class="meta"><span>Ngày: 16/10/2026</span><span>Quyết định: D17 (owner chốt 16/10)</span><span>Nguồn chuẩn: <a href="social.md"><code>docs/plan/social.md</code></a></span></div>
 
 <div class="callout warn"><p><strong>Trang tóm tắt cho owner.</strong> Nguồn chuẩn là bản tiếng Anh <a href="social.md"><code>docs/plan/social.md</code></a> và <a href="../adr/0025-channel-layer.md">ADR-0025</a>. Khi hai bản khác nhau, bản tiếng Anh thắng.</p></div>
@@ -213,7 +213,7 @@ footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-si
 <div class="callout info"><p><strong>Quyết định D17.</strong> Plan gốc (D2) để Social chờ khách wedge đòi. Owner chốt 16/10/2026: Social làm ngay, song song với Kế toán, như một ngoại lệ chỉ cho Social. CRM, Service, Sign, HRM vẫn chờ. Social không lấy việc kernel mà Finance đang chờ.</p></div>
 
 <h2 id="tham-khao">Tham khảo đã research</h2>
-<p>3 lượt research chỉ đọc (không chạy code nào): Postiz và fork DOS/Crove-Post, các dự án open source khác, docs chính thức của nền tảng. Nguồn và link: <a href="social-research.md"><code>social-research.md</code></a>.</p>
+<p>3 lượt research chỉ đọc (không chạy code nào): Postiz và fork DOS/Ludy-Post, các dự án open source khác, docs chính thức của nền tảng. Nguồn và link: <a href="social-research.md"><code>social-research.md</code></a>.</p>
 <div class="table-wrap"><table>
 <thead><tr><th>Dự án</th><th>Stack, license</th><th>Học được gì</th></tr></thead>
 <tbody>
@@ -236,7 +236,7 @@ footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-si
 </ul>
 
 <h3>So sánh schema (tự đọc mã nguồn, 16/10/2026)</h3>
-<p>Đọc trực tiếp <code>schema.prisma</code> của Postiz (fork DOS/Crove-Post), model Go của OpenPost và model Django của BrightBean. Bảng chi tiết: <a href="social-research.md">social-research.md §5</a>.</p>
+<p>Đọc trực tiếp <code>schema.prisma</code> của Postiz (fork DOS/Ludy-Post), model Go của OpenPost và model Django của BrightBean. Bảng chi tiết: <a href="social-research.md">social-research.md §5</a>.</p>
 <ul>
 <li><strong>Token:</strong> Postiz lưu <code>token</code> và <code>refreshToken</code> dạng <strong>plaintext</strong>; hàm mã hóa của nó chỉ dùng cho API key. OpenPost và BrightBean có mã hóa. Crove mã hóa và khóa nằm ngoài DB.</li>
 <li><strong>Lỗ hổng thiết kế của S2:</strong> OpenPost tách "lần đăng nhập" (grant) khỏi "trang" (account). Một token LinkedIn phủ cả trang cá nhân lẫn các trang công ty; một tài khoản Google phủ nhiều kênh YouTube. Crove đang lưu mỗi kênh 1 token, nên trường hợp này sẽ sinh ra nhiều bản sao của cùng một token. Facebook Page và Zalo OA không bị ảnh hưởng (mỗi page hoặc OA có token riêng). Sửa trước khi làm adapter LinkedIn và YouTube.</li>
@@ -373,7 +373,7 @@ footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-si
 <tr><td>Nền tảng đổi luật hoặc chặn quyền</td><td>Adapter sau 1 interface; <code>sandbox</code> giữ sản phẩm luôn test được; kiểm lại ràng buộc mỗi khi làm adapter.</td></tr>
 <tr><td>Đăng trùng</td><td><code>external_call</code> + đối soát, không bao giờ gọi lại mù quáng.</td></tr>
 <tr><td>Lộ token</td><td>Mã hóa envelope, chỉ giải mã trong job và callback, có test che token.</td></tr>
-<tr><td>Nguồn gốc code</td><td>Postiz (kể cả fork DOS/Crove-Post), OpenPost và các dự án khác chỉ học thiết kế; adapter viết từ docs nền tảng. Muốn dùng lại code của fork thì theo ADR-0020.</td></tr>
+<tr><td>Nguồn gốc code</td><td>Postiz (kể cả fork DOS/Ludy-Post), OpenPost và các dự án khác chỉ học thiết kế; adapter viết từ docs nền tảng. Muốn dùng lại code của fork thì theo ADR-0020.</td></tr>
 <tr><td>Self-host nặng như Postiz</td><td>Chỉ Postgres và pg-boss, đã có sẵn; worker chỉ cho kênh đã cấu hình; prober bắt worker bị treo qua heartbeat.</td></tr>
 <tr><td>Nền tảng đổi tên hoặc bỏ metric (Meta đổi Page Insights năm 2026)</td><td>Lưu các trường chung cộng phần <code>extra</code>; mỗi adapter có bảng map metric và test.</td></tr>
 </tbody></table></div>

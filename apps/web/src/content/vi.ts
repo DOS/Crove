@@ -444,7 +444,7 @@ export const vi = {
     ],
     selfHostTitle: 'Cài trên máy chủ của bạn',
     selfHostBody: 'Mã nguồn mở theo giấy phép AGPL. Chỉ một lệnh là chạy đủ ứng dụng, cơ sở dữ liệu, đăng nhập và hộp thư thử nghiệm.',
-    command: 'git clone https://github.com/DOS/Crove.git\ncd Crove\ndocker compose up',
+    command: 'git clone https://github.com/DOS/Ludy.git\ncd Ludy\ndocker compose up',
     copy: 'Chép lệnh',
     copied: 'Đã chép',
     copyFail: 'Không chép được. Hãy chọn lệnh và chép thủ công.',

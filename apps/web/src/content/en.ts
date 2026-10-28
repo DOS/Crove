@@ -444,7 +444,7 @@ export const en: Dictionary = {
     ],
     selfHostTitle: 'Run it on your own machine',
     selfHostBody: 'Open source under the AGPL. One command starts the app, the database, sign-in and a test mailbox.',
-    command: 'git clone https://github.com/DOS/Crove.git\ncd Crove\ndocker compose up',
+    command: 'git clone https://github.com/DOS/Ludy.git\ncd Ludy\ndocker compose up',
     copy: 'Copy command',
     copied: 'Copied',
     copyFail: 'Could not copy. Select the command and copy it yourself.',

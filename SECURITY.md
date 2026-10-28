@@ -2,7 +2,7 @@
 
 ## Reporting a vulnerability
 
-Report vulnerabilities privately through GitHub Security Advisories for `DOS/Crove`: open the repository's **Security** tab and choose **Report a vulnerability** (https://github.com/DOS/Crove/security/advisories/new).
+Report vulnerabilities privately through GitHub Security Advisories for `DOS/Ludy`: open the repository's **Security** tab and choose **Report a vulnerability** (https://github.com/DOS/Ludy/security/advisories/new).
 
 Do not open a public issue, pull request or discussion for a vulnerability, and do not post exploit details publicly before a fix is released.
 

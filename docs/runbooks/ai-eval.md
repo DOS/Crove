@@ -33,7 +33,7 @@ The real documents never go into the repository, a pull request, an issue or a C
 
 The eval refuses to start when a document has no answer or an answer has no document, and names the files.
 
-The expected answer has the same shape as the committed samples in [packages/agent/test/fixtures/documents](https://github.com/DOS/Crove/tree/main/packages/agent/test/fixtures/documents):
+The expected answer has the same shape as the committed samples in [packages/agent/test/fixtures/documents](https://github.com/DOS/Ludy/tree/main/packages/agent/test/fixtures/documents):
 - `description`: one line on what the document is;
 - `expected`: the invoice as printed. That means the series (ký hiệu), number, date (`YYYY-MM-DD`), currency, seller and buyer (name and tax code), every goods or service line in printed order (description, quantity, unit price, amount before VAT, VAT rate, and `"discount": true` for a trade discount), the subtotal, the VAT and the total;
 - `expected` is `null` for a document that is not a purchase invoice, such as a quotation.
@@ -65,6 +65,6 @@ Post the summary on #153, which tracks fixing the top errors.
 
 ## 4. In GitHub Actions
 
-The workflow [ai-eval.yml](https://github.com/DOS/Crove/blob/main/.github/workflows/ai-eval.yml) runs on demand (Actions, "ai-eval", "Run workflow") and on every pull request that changes `packages/agent/src`. It scores only the committed synthetic set: the document eval and the older text eval (`pnpm ai:eval`).
+The workflow [ai-eval.yml](https://github.com/DOS/Ludy/blob/main/.github/workflows/ai-eval.yml) runs on demand (Actions, "ai-eval", "Run workflow") and on every pull request that changes `packages/agent/src`. It scores only the committed synthetic set: the document eval and the older text eval (`pnpm ai:eval`).
 
 It needs the repository secrets `AI_BASE_URL` and `AI_MODEL`, plus `AI_API_KEY` if the endpoint asks for one (owner action, #312). Without them, and on pull requests from forks (which never get secrets), the job passes with the notice "AI eval skipped" and runs nothing.
