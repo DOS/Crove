@@ -4,7 +4,7 @@
 // in BUNDLED_PARSERS, #1740), and the finance exports write workbooks without one (exceljs's XML
 // reader, saxes, is removed at build time and reading a workbook fails, #1719).
 // Usage: node image-check.mjs [app root, default /app]
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { basename, join, relative, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -97,8 +97,29 @@ const WORKSPACE_ACCEPTED = new Map([
 ]);
 const seen = new Set();
 // Native and WebAssembly modules, whose code no text check reads (a PDF engine such as mupdf or pdfium ships as
-// one), are refused outright; the image holds none.
-const BINARY = /\.(?:node|wasm)$/;
+// one), are refused outright, wherever they are and whatever their name: a file that starts with the WebAssembly or
+// ELF magic bytes, a .node or .wasm file, or JavaScript holding one in base64 ("\0asm" and "\x7fELF" encode to
+// AGFzbQ and f0VMRg). The image holds none.
+const BINARY_NAME = /\.(?:node|wasm)$/;
+const BINARY_MAGIC = [Buffer.from('\0asm', 'latin1'), Buffer.from('\x7fELF', 'latin1')];
+const BINARY_INLINE = /AGFzbQ|f0VMRg/;
+// Inlined modules accepted, by package and path inside it (pinned and checked like BUNDLED_PARSERS).
+const INLINE_ACCEPTED = new Map(
+  ['lib/llhttp/llhttp-wasm.js', 'lib/llhttp/llhttp_simd-wasm.js'].map((file) => [
+    `undici/${file}`,
+    "llhttp, the HTTP/1.1 parser undici's fetch runs, the one Node's own HTTP is built on",
+  ]),
+);
+const head = Buffer.alloc(4);
+function isBinary(path) {
+  const fd = openSync(path, 'r');
+  try {
+    const n = readSync(fd, head, 0, 4, 0);
+    return n === 4 && BINARY_MAGIC.some((magic) => magic.equals(head));
+  } finally {
+    closeSync(fd);
+  }
+}
 let scannedFiles = 0;
 const failures = [];
 
@@ -118,15 +139,16 @@ for (const entry of entries) {
 // counts by its name, whether its target exists or not, and is never followed. No crove-extract app either.
 // 3. On the way, every JavaScript file of a package (`pkg`: the package the walk is in, { name, dir }) and every
 // source file of the workspace's own code is read for PARSER_CODE, and no native or WebAssembly module may be
-// anywhere. The web app's build is browser code, which never runs in the kernel, so it is not read.
+// anywhere. The web app's build is browser code, which never runs in the kernel, so its text is not read; the
+// binary check covers it too.
 const WEB_DIST = join(root, 'apps/app/dist');
-function walk(dir, scope, pkg) {
+function walk(dir, scope, pkg, textScan = true) {
   const inNodeModules = basename(dir) === 'node_modules';
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name);
     if (entry.isFile()) {
-      if (BINARY.test(entry.name)) failures.push(`native or WebAssembly module in the image: ${path}`);
-      else if (pkg !== undefined ? /\.[cm]?js$/.test(entry.name) : /\.(?:[cm]?[jt]s|tsx)$/.test(entry.name)) scanFile(path, pkg);
+      if (BINARY_NAME.test(entry.name) || isBinary(path)) failures.push(`native or WebAssembly module in the image: ${path}`);
+      else if (textScan && (pkg !== undefined ? /\.[cm]?js$/.test(entry.name) : /\.(?:[cm]?[jt]s|tsx)$/.test(entry.name))) scanFile(path, pkg);
     }
     if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
     let inside = pkg;
@@ -135,15 +157,19 @@ function walk(dir, scope, pkg) {
       if (isParser(name)) failures.push(`parser package in the image: ${path}`);
       inside = name.startsWith('.') || (inNodeModules && name.startsWith('@')) ? undefined : { name, dir: path };
     }
-    if (entry.isDirectory() && path !== WEB_DIST) walk(path, inNodeModules && entry.name.startsWith('@') ? entry.name : undefined, inside);
+    if (entry.isDirectory()) walk(path, inNodeModules && entry.name.startsWith('@') ? entry.name : undefined, inside, textScan && path !== WEB_DIST);
   }
 }
 function scanFile(path, pkg) {
   scannedFiles++;
   const code = readFileSync(path, 'utf8');
+  const key = pkg === undefined ? undefined : `${pkg.name}/${relative(pkg.dir, path).split(sep).join('/')}`;
+  if (BINARY_INLINE.test(code)) {
+    if (key !== undefined && INLINE_ACCEPTED.has(key)) seen.add(key);
+    else if (!(pkg === undefined && WORKSPACE_ACCEPTED.has(relative(root, path).split(sep).join('/')))) failures.push(`native or WebAssembly module inlined in the image: ${path}`);
+  }
   const match = PARSER_CODE.map((re) => re.exec(code)?.[0]).find((m) => m !== undefined);
   if (match === undefined) return;
-  const key = pkg === undefined ? undefined : `${pkg.name}/${relative(pkg.dir, path).split(sep).join('/')}`;
   if (key !== undefined && ACCEPTED.has(key)) seen.add(key);
   else if (pkg === undefined && WORKSPACE_ACCEPTED.has(relative(root, path).split(sep).join('/'))) return;
   else failures.push(`parser code in the image, ${pkg === undefined ? 'outside node_modules' : `in ${pkg.name}`}: ${path} (${match.trim().slice(0, 60)})`);
@@ -152,6 +178,9 @@ walk(root);
 if (scannedFiles === 0) failures.push(`no JavaScript file was read under ${root}`);
 for (const key of ACCEPTED.keys()) {
   if (!seen.has(key)) failures.push(`the reasoned exception ${key} has no parser code in the image any more: update BUNDLED_PARSERS`);
+}
+for (const key of INLINE_ACCEPTED.keys()) {
+  if (!seen.has(key)) failures.push(`the reasoned exception ${key} has no inlined module in the image any more: update INLINE_ACCEPTED`);
 }
 if (existsSync(join(root, 'apps/extract'))) failures.push('apps/extract is in the kernel image');
 if (!existsSync(join(root, 'apps/app/dist/index.html'))) failures.push('the web app build (apps/app/dist) is missing');
@@ -238,7 +267,7 @@ try {
 }
 
 console.log(`checked ${entries.length} store entries, ${scannedFiles} package files and ${modules.length} kernel modules, wrote 2 workbooks`);
-for (const key of seen) console.log(`accepted parser code in ${key}: ${ACCEPTED.get(key)}`);
+for (const key of seen) console.log(`accepted ${ACCEPTED.has(key) ? 'parser code' : 'inlined module'} in ${key}: ${ACCEPTED.get(key) ?? INLINE_ACCEPTED.get(key)}`);
 if (failures.length > 0) {
   console.error(failures.join('\n'));
   process.exit(1);
