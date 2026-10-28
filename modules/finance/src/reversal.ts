@@ -43,7 +43,7 @@ const PARTIAL_MIRROR = () =>
 async function reversibleEntry(ctx: CommandContext, reversal: JournalReversal) {
   const entry = await ctx.trx
     .selectFrom('crove_finance.journal_entry')
-    .select(['id', 'entry_date', 'description', 'reverses_entry_id', 'source_type', 'source_id'])
+    .select(['id', 'entry_date', 'description', 'reverses_entry_id', 'source_type', 'source_id', 'legal_entity_id'])
     .where('org_id', '=', ctx.orgId)
     .where('id', '=', reversal.entryId)
     .executeTakeFirst();
@@ -131,7 +131,14 @@ export const prepareReversal = defineCommand({
     const request = { ...input, entryId: input.entryId.toLowerCase() };
     await refuseOpenReversal(ctx, request.entryId);
     const entry = await reversibleEntry(ctx, request);
-    return { kind: REVERSAL_KIND, command: REVERSAL_COMMAND, title: reversalTitle(entry, await documentDirection(ctx, entry)), payload: request };
+    // The proposal belongs to the entry's legal entity (#1538), which the payload does not name.
+    return {
+      kind: REVERSAL_KIND,
+      command: REVERSAL_COMMAND,
+      title: reversalTitle(entry, await documentDirection(ctx, entry)),
+      payload: request,
+      legalEntityId: entry.legal_entity_id,
+    };
   },
 });
 

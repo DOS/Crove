@@ -21,7 +21,9 @@ import {
   RECHECK_EVERY_HINTS,
   StreamConnection,
   StreamHub,
+  ENTITY_HINT_TYPES,
   closeReason,
+  entityNamed,
   forRecipient,
   inScope,
   newTicket,
@@ -89,9 +91,23 @@ const READS_SHARED: StreamScope = { all: true, sharedNotes: true };
 describe('parseHint', () => {
   const id = randomUUID();
   it('reads exactly `<org> <type> <id>` of a known type', () => {
-    expect(parseHint(`${ORG_A} proposal ${id}`)).toEqual({ orgId: ORG_A, hint: { type: 'proposal', id } });
-    expect(parseHint(`${ORG_A} journal_entry ${id}`)).toEqual({ orgId: ORG_A, hint: { type: 'journal_entry', id } });
-    expect(parseHint(`${ORG_A} proposal ${id}`)).not.toHaveProperty('legalEntityId');
+    expect(parseHint(`${ORG_A} file ${id}`)).toEqual({ orgId: ORG_A, hint: { type: 'file', id } });
+    expect(parseHint(`${ORG_A} file ${id}`)).not.toHaveProperty('legalEntityId');
+    // A proposal is entity-scoped since #1538: it names its entity.
+    expect(parseHint(`${ORG_A} proposal ${id} ${ENTITY_A}`)).toEqual({ orgId: ORG_A, hint: { type: 'proposal', id }, legalEntityId: ENTITY_A });
+  });
+
+  it('drops a hint of an entity-scoped type that names no entity, never treating it as org-wide (#1703)', () => {
+    for (const type of ENTITY_HINT_TYPES) {
+      // A notification also needs its recipient (#1702); without an entity it is dropped all the same.
+      const recipient = type === 'notification' ? ` @${USER_A}` : '';
+      expect(parseHint(`${ORG_A} ${type} ${id}${recipient}`), type).toBeNull();
+      expect(parseHint(`${ORG_A} ${type} ${id} ${ENTITY_A}${recipient}`), type).toMatchObject({ hint: { type, id }, legalEntityId: ENTITY_A });
+    }
+    expect([...ENTITY_HINT_TYPES].sort()).toEqual(['document', 'extraction', 'journal_entry', 'notification', 'proposal']);
+    expect(entityNamed('journal_entry', undefined)).toBe(false);
+    expect(entityNamed('journal_entry', ENTITY_A)).toBe(true);
+    expect(entityNamed('file', undefined)).toBe(true);
   });
 
   it('reads the legal entity of an entity-scoped row as a fourth field (#1692)', () => {
@@ -116,7 +132,8 @@ describe('parseHint', () => {
       legalEntityId: ENTITY_A,
       userId: USER_A,
     });
-    expect(parseHint(`${ORG_A} notification ${id} @${USER_A}`)).toEqual({ orgId: ORG_A, hint: { type: 'notification', id }, userId: USER_A });
+    // A notification belongs to a legal entity as well: without one it is dropped (#1703).
+    expect(parseHint(`${ORG_A} notification ${id} @${USER_A}`)).toBeNull();
     expect(parseHint(`${ORG_A} journal_entry ${id} ${ENTITY_A}`)).not.toHaveProperty('userId');
     for (const payload of [
       // Fail closed: a notification for nobody in particular reaches nobody.
@@ -198,11 +215,13 @@ describe('StreamHub', () => {
     offA2();
     offA2();
     expect(hub.size).toBe(2);
-    source.emit(`${ORG_B} document ${id}`);
+    source.emit(`${ORG_B} file ${id}`);
     source.emit(`${ORG_A} nonsense ${id}`);
+    // An entity-scoped type without its entity reaches nobody (#1703).
+    source.emit(`${ORG_A} document ${id}`);
     expect(a1.hints).toHaveLength(1);
     expect(a2.hints).toHaveLength(1);
-    expect(b.hints).toEqual([{ type: 'document', id }]);
+    expect(b.hints).toEqual([{ type: 'file', id }]);
   });
 
   it("passes a hint's legal entity on, for each stream to filter by its own scope (#1692)", () => {
@@ -415,12 +434,12 @@ describe('StreamConnection', () => {
     const { conn, chunks, events } = connection();
     conn.open(30);
     const id = randomUUID();
-    conn.hint({ type: 'proposal', id });
-    conn.hint({ type: 'proposal', id });
+    conn.hint({ type: 'file', id });
+    conn.hint({ type: 'file', id });
     await vi.advanceTimersByTimeAsync(0);
     expect(events()).toEqual([
       { event: 'ready', data: { recheckSeconds: 30 } },
-      { event: 'invalidate', data: { type: 'proposal', id } },
+      { event: 'invalidate', data: { type: 'file', id } },
     ]);
     await vi.advanceTimersByTimeAsync(25_000);
     expect(chunks.at(-1)).toBe(': ping\n\n');
@@ -473,7 +492,7 @@ describe('StreamConnection', () => {
     expect(events().filter((e) => e.event === 'invalidate')).toHaveLength(RECHECK_EVERY_HINTS + 6);
 
     // A check that fails while hints wait drops them: none reach a session that just ended.
-    for (let i = 0; i < RECHECK_EVERY_HINTS + 3; i++) conn.hint({ type: 'proposal', id: randomUUID() });
+    for (let i = 0; i < RECHECK_EVERY_HINTS + 3; i++) conn.hint({ type: 'file', id: randomUUID() });
     await vi.advanceTimersByTimeAsync(0);
     fail = true;
     const before = events().filter((e) => e.event === 'invalidate').length;
@@ -541,6 +560,23 @@ describe('StreamConnection', () => {
     conn.finish();
   });
 
+  it('drops a hint of an entity-scoped type that names no entity, even with every entity in scope (#1703)', async () => {
+    const { conn, events } = connection({ scope: ALL_ENTITIES });
+    const file = randomUUID();
+    conn.hint({ type: 'journal_entry', id: randomUUID() });
+    conn.hint({ type: 'document', id: randomUUID() });
+    conn.hint({ type: 'extraction', id: randomUUID() });
+    conn.hint({ type: 'notification', id: randomUUID() }, undefined, USER_A);
+    conn.hint({ type: 'file', id: file });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(events()).toEqual([{ event: 'invalidate', data: { type: 'file', id: file } }]);
+    // Never counted either: no resync however many arrive.
+    for (let i = 0; i < PENDING_HINT_LIMIT * 2; i++) conn.hint({ type: 'journal_entry', id: randomUUID() });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(events()).toHaveLength(1);
+    conn.finish();
+  });
+
   it("drops another member's notification at once, never counting it, and sends its own user's (#1702)", async () => {
     const { conn, events } = connection();
     const mine = randomUUID();
@@ -597,10 +633,11 @@ describe('StreamConnection', () => {
   it('sends nothing of any entity under an empty scope', async () => {
     const { conn, events } = connection({ scope: only(), check: async () => only() });
     conn.hint({ type: 'notification', id: randomUUID() }, ENTITY_A, USER_A);
-    const proposal = randomUUID();
-    conn.hint({ type: 'proposal', id: proposal });
+    // An org-wide hint (a file has no entity) still goes.
+    const file = randomUUID();
+    conn.hint({ type: 'file', id: file });
     await vi.advanceTimersByTimeAsync(0);
-    expect(events()).toEqual([{ event: 'invalidate', data: { type: 'proposal', id: proposal } }]);
+    expect(events()).toEqual([{ event: 'invalidate', data: { type: 'file', id: file } }]);
     conn.finish();
   });
 

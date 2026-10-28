@@ -1,7 +1,9 @@
 // Invariant suite (Decision 7): invalidation hints honor the legal-entity scope (issue #1692, plan §9 Updates, Phase 1
 // exit criterion 2), on a real PostgreSQL 17 with the NOTIFY triggers, one LISTEN connection and the HTTP API.
 //   - Every table with a stream hint that sits under the RESTRICTIVE le_scope policy names its entity column in the
-//     trigger, so its hints carry the row's entity; the hints of tables without le_scope stay org-wide.
+//     trigger, so its hints carry the row's entity; the hints of tables without le_scope stay org-wide. The API's
+//     ENTITY_HINT_TYPES, whose hints it drops when they name no entity, are exactly the types of the scoped tables
+//     (#1703).
 //   - A member limited to one legal entity gets no hint about a journal entry or a purchase document of another entity
 //     of the org, and does get those of its own entity; an owner (scope '*') gets both.
 //   - Org-wide hints (a file) reach every stream of the org as before, as `<org> <type> <id>` on the channel and
@@ -25,7 +27,7 @@ import { ConcurrencyLimiter } from '../../src/concurrency.ts';
 import { loadConfig } from '../../src/config.ts';
 import { createHttpApp, type StreamDeps } from '../../src/http.ts';
 import { createSessionStatusSource } from '../../src/sessions.ts';
-import { StreamHub, createDbTicketStore, createPgNotificationSource } from '../../src/stream.ts';
+import { ENTITY_HINT_TYPES, StreamHub, createDbTicketStore, createPgNotificationSource } from '../../src/stream.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -337,6 +339,26 @@ suite('invariant: invalidation hints honor the legal-entity scope', () => {
       if (t.scoped) expect(t, t.table).toMatchObject({ args: [expect.any(String), expect.any(String), 'legal_entity_id'] });
       else expect(t.args, t.table).toHaveLength(2);
     }
+  });
+
+  it("lists in the API's ENTITY_HINT_TYPES exactly the hint types of the tables under le_scope (#1703)", async () => {
+    const rows = await admin(async (c) =>
+      (
+        await c.query<{ args: Buffer; scoped: boolean }>(
+          `SELECT t.tgargs AS args,
+                  EXISTS (SELECT 1 FROM pg_catalog.pg_policy p WHERE p.polrelid = t.tgrelid AND p.polname = 'le_scope') AS scoped
+           FROM pg_catalog.pg_trigger t
+           WHERE t.tgname = 'stream_hint' AND NOT t.tgisinternal`,
+        )
+      ).rows,
+    );
+    const typeOf = (args: Buffer) => args.toString('utf8').split('\u0000')[0] as string;
+    const scopedTypes = new Set(rows.filter((r) => r.scoped).map((r) => typeOf(r.args)));
+    const orgWideTypes = new Set(rows.filter((r) => !r.scoped).map((r) => typeOf(r.args)));
+    // The API drops a hint of these types that names no entity, so none may come from an org-wide table, and every
+    // scoped table's type must be there: a hint of an unlisted scoped type that lost its entity would reach everyone.
+    expect([...ENTITY_HINT_TYPES].sort()).toEqual([...scopedTypes].sort());
+    expect([...orgWideTypes].filter((type) => scopedTypes.has(type))).toEqual([]);
   });
 
   it('carries the entity on the channel for an entity-scoped row and nothing more for an org-wide one', async () => {

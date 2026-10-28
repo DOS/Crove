@@ -1,7 +1,7 @@
 // The kernel projections per legal entity (#1280 part 3) on PostgreSQL 17: extractions and notifications written
 // before the migration move to the org's default entity, the entity never changes, and a member limited to one entity
-// sees and writes only that entity's rows, in the notification list as in raw SQL. Proposals wait for #1538. Set CROVE_TEST_ADMIN_URL to a superuser URL; each run makes its own
-// database.
+// sees and writes only that entity's rows, in the notification list as in raw SQL. Proposals are scoped by #1538
+// (proposal-legal-entity.db.test.ts). Set CROVE_TEST_ADMIN_URL to a superuser URL; each run makes its own database.
 import { randomUUID } from 'node:crypto';
 import { copyFileSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -149,11 +149,11 @@ suite('kernel projections per legal entity on PostgreSQL (#1280 part 3)', () => 
     await expect(admin((c) => c.query('UPDATE crove_kernel.extraction SET legal_entity_id = $3 WHERE org_id = $1 AND id = $2', [orgId, ids.extraction, defaultEntity]))).rejects.toThrow(
       /LEGAL_ENTITY_IMMUTABLE/,
     );
-    // Proposals carry a nullable stamp (#1280 part 3b) but no le_scope policy until #1538.
+    // Proposals carry the le_scope policy too since #1538.
     const proposalPolicies = await admin((c) =>
       c.query("SELECT 1 FROM pg_catalog.pg_policy WHERE polrelid = 'crove_kernel.proposal'::regclass AND polname = 'le_scope'"),
     );
-    expect(proposalPolicies.rowCount).toBe(0);
+    expect(proposalPolicies.rowCount).toBe(1);
   });
 
   it('shows a member limited to one entity only that entity in the notification list', async () => {

@@ -338,16 +338,54 @@ jobs:
         run: |
           docker run --rm --read-only -v "$PWD/apps/kernel/test/container:/c:ro" --entrypoint node "$IMAGE" /c/image-check.mjs /app
 
-      # Control run (#1719): with an XML reader planted in pnpm's hidden hoisting directory, the check must fail
-      # and name it, so a check that stopped looking cannot pass.
-      - name: The check fails on a planted XML reader
+      # Control runs (#1719, #1740): with a parser planted where each part of the check looks, the check must fail
+      # and name it on a line of its own, so a part that stopped looking cannot pass: pnpm's hidden hoisting
+      # directory, a store entry and a scoped one (which only the store-entry check reads), a dangling link a store
+      # entry holds (which only the per-entry walk reads), a package of a scope on the list, parser code in a .cjs
+      # file of an excepted package outside its excepted files, parser code in the workspace's own code, a
+      # WebAssembly module under another name and one inlined in base64, a pinned file gone and one changed (#1770),
+      # a test file, a test directory, the end-to-end suite and tooling. Each runs in a fresh container of the image.
+      - name: The check fails on each planted parser
         run: |
-          if docker run --rm -v "$PWD/apps/kernel/test/container:/c:ro" --entrypoint sh "$IMAGE" -c \
-            'mkdir -p /app/node_modules/.pnpm/node_modules/saxes && node /c/image-check.mjs /app' > planted.txt 2>&1; then
-            cat planted.txt; echo "::error::the image check passed with saxes planted in the image"; exit 1
-          fi
-          cat planted.txt
-          grep -q 'parser package in the image: /app/node_modules/.pnpm/node_modules/saxes' planted.txt
+          # As root: /app itself is root's (the image's WORKDIR), so the node user cannot plant at its top level.
+          planted() {
+            if docker run --rm --user 0 -v "$PWD/apps/kernel/test/container:/c:ro" --entrypoint sh "$IMAGE" -c \
+              "$1 && node /c/image-check.mjs /app" > planted.txt 2>&1; then
+              cat planted.txt; echo "::error::the image check passed after: $1"; exit 1
+            fi
+            cat planted.txt
+            grep -qxE "$2" planted.txt || { echo "::error::the image check did not name what this planted: $1"; exit 1; }
+          }
+          planted 'mkdir -p /app/node_modules/.pnpm/node_modules/saxes' \
+            'parser package in the image: /app/node_modules/\.pnpm/node_modules/saxes'
+          planted 'mkdir /app/node_modules/.pnpm/saxes@6.0.0' \
+            'parser package in the image: saxes@6\.0\.0'
+          planted 'mkdir /app/node_modules/.pnpm/@oozcitak+dom@1.0.0' \
+            'parser package in the image: @oozcitak\+dom@1\.0\.0'
+          planted 'for d in /app/node_modules/.pnpm/exceljs@*/node_modules; do ln -s /nowhere "$d/saxes"; done' \
+            'parser package in the image: /app/node_modules/\.pnpm/exceljs@[^/]+/node_modules/saxes'
+          planted 'mkdir -p /app/node_modules/.pnpm/node_modules/@oozcitak/dom' \
+            'parser package in the image: /app/node_modules/\.pnpm/node_modules/@oozcitak/dom'
+          planted 'for d in /app/node_modules/.pnpm/@aws-sdk+core@*/node_modules/@aws-sdk/core; do echo "module.exports = function parseXML(s) { return s; };" > "$d/planted.cjs"; done' \
+            'parser code in the image, in @aws-sdk/core: /app/node_modules/\.pnpm/@aws-sdk\+core@[^/]+/node_modules/@aws-sdk/core/planted\.cjs \(function parseXML\)'
+          planted 'echo "export function parsePdf(s) { return s; }" > /app/packages/db/src/planted.ts' \
+            'parser code in the image, outside node_modules: /app/packages/db/src/planted\.ts \(function parsePdf\)'
+          planted 'for d in /app/node_modules/.pnpm/pg@*/node_modules/pg; do printf "\000asm\001\000\000\000" > "$d/engine.bin"; done' \
+            'native or WebAssembly module in the image: /app/node_modules/\.pnpm/pg@[^/]+/node_modules/pg/engine\.bin'
+          planted 'echo "export const engine = \"AGFzbQEAAAA=\";" > /app/packages/db/src/engine.ts' \
+            'native or WebAssembly module inlined in the image: /app/packages/db/src/engine\.ts'
+          planted 'rm /app/node_modules/.pnpm/undici@*/node_modules/undici/lib/web/fetch/formdata-parser.js' \
+            'the pinned file undici/lib/web/fetch/formdata-parser\.js is not in the image any more: update PINNED'
+          planted 'for f in /app/node_modules/.pnpm/undici@*/node_modules/undici/lib/web/fetch/formdata-parser.js; do echo "// changed" >> "$f"; done' \
+            'the pinned file undici/lib/web/fetch/formdata-parser\.js changed \(now undici@[^,]+, sha256 [0-9a-f]{64}; pinned [^)]+\): read the new file, then pin it again in PINNED'
+          planted 'echo "export {};" > /app/packages/db/src/planted.test.ts' \
+            'a test file is in the image: /app/packages/db/src/planted\.test\.ts'
+          planted 'mkdir /app/e2e' \
+            'the end-to-end suite is in the image: /app/e2e'
+          planted 'mkdir /app/packages/db/test' \
+            'a test directory is in the image: /app/packages/db/test'
+          planted 'mkdir -p /app/tools/ci' \
+            'tooling is in the image: /app/tools/ci'
 
       - name: The entry point starts and stops at the missing configuration
         run: |
