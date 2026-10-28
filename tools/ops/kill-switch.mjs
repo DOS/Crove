@@ -12,6 +12,7 @@
 // crove_kernel.global_kill_switch_set, which only the database owner may run, so it needs the admin URL the migrations
 // use; no Crove login can flip it. Every change is a row of the switch's append-only history, with when, who and why:
 // that row is its audit trail.
+import { pathToFileURL } from 'node:url';
 import pg from 'pg';
 
 const KEYS = ['ai', 'mail'];
@@ -78,7 +79,8 @@ async function main() {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Run as a script (not imported by the tests); pathToFileURL makes the comparison hold on Windows too.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((error) => {
     console.error(`kill-switch: ${error instanceof Error ? error.message : String(error)}`);
     process.exit(1);
