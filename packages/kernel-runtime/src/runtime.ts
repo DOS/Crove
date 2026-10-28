@@ -155,7 +155,9 @@ export interface CommandDef<I = unknown, O = unknown> {
   // derive aside). The rows the runtime writes for it (ctx.emit, ctx.activity, ctx.audit, ctx.numbering, its audit row)
   // are not listed, and a nested command declares its own. Each entry carries the classes of its table from the
   // module's manifest (tableWrite() in @crove/kernel-contract builds it); register() refuses a column the classes do
-  // not have, an unknown class, a table listed twice or an empty column list. An agent's proposal of the command is
+  // not have, an unknown class, a table listed twice or an empty column list, and, on a runtime given the manifests
+  // (RuntimeOptions.manifests), a table no manifest has or classes that are not its manifest's (#1710). An empty list
+  // says the command writes no table (only the runtime's rows for it). An agent's proposal of the command is
   // flagged P04 when a declared column is `contact` or `payment`, and also when the command declares no writes at all
   // (nothing says it writes none), unless it declares agent approvers the old way (noContactOrPayment, below). A
   // proposal command whose declared writes have no such column may run, as a nested command at any depth, only commands
@@ -195,7 +197,7 @@ export interface CommandWrite {
 }
 
 // The data classes of the manifests (DATA_CLASSES in @crove/kernel-contract, which this package does not import;
-// apps/kernel/test/command-writes.test.ts checks the two lists are the same).
+// apps/kernel/test/invariant/command-writes.test.ts checks the two lists are the same).
 export const WRITE_DATA_CLASSES = ['internal', 'pii', 'contact', 'payment', 'national_id', 'national_id_if_individual', 'sensitive'] as const;
 // The classes whose write is policy P04 (plan §4.7: changing a payee, bank account or contact point).
 const P04_DATA_CLASSES: readonly string[] = ['contact', 'payment'];
@@ -433,7 +435,15 @@ export interface RuntimeOptions {
   // as before #1732, only for tests: one that shows what the plain hash gives away, and those that seed a database
   // migrated to a version before crove_kernel.command_input_hash exists.
   inputHash?: InputHashMode;
+  // The tables of the module manifests (ModuleManifest['tables'] of each module, #1710). Given, register() checks
+  // each declared write (CommandDef.writes) against them: the table is a manifest's and the classes it carries are
+  // exactly that manifest's, so P04 rests on the manifests rather than on classes a declaration builds by hand. The
+  // server passes every module's (apps/kernel createKernel); unset (tests and tools), only the shape is checked.
+  manifests?: readonly ManifestTables[];
 }
+
+// One module's tables as its manifest gives them: schema -> table -> column -> data class.
+export type ManifestTables = Readonly<Record<string, Readonly<Record<string, Readonly<Record<string, string>>>>>>;
 
 export const INPUT_HASH_MODES = ['keyed', 'sha256'] as const;
 export type InputHashMode = (typeof INPUT_HASH_MODES)[number];
@@ -686,10 +696,41 @@ interface CaughtRefusal {
 }
 
 const WRITE_TABLE = /^crove_[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/;
+// A column name as the manifests write them: never a pattern such as '*'.
+const WRITE_COLUMN = /^[a-z_][a-z0-9_]*$/;
 
-// Checks a command's declared writes (CommandDef.writes) against the classes they carry, and answers the contact and
-// payment columns among them (`<schema>.<table>.<column> (<class>)`), for P04.
-function checkedWrites(command: string, writes: readonly CommandWrite[]): string[] {
+// The classes of every manifest table by `<schema>.<table>` (RuntimeOptions.manifests). A table in two manifests, a
+// column name that is not one, or an unknown class is refused, so the runtime never starts on a manifest it misreads.
+function manifestTableClasses(manifests: readonly ManifestTables[]): Map<string, Readonly<Record<string, string>>> {
+  const out = new Map<string, Readonly<Record<string, string>>>();
+  for (const tables of manifests) {
+    for (const [schema, byTable] of Object.entries(tables)) {
+      for (const [table, classes] of Object.entries(byTable)) {
+        const name = `${schema}.${table}`;
+        if (!WRITE_TABLE.test(name)) throw new Error(`manifests: ${name} is not <schema>.<table> of a crove_* schema`);
+        if (out.has(name)) throw new Error(`manifests: ${name} is in two manifests`);
+        for (const [column, cls] of Object.entries(classes)) {
+          if (!WRITE_COLUMN.test(column) || !(WRITE_DATA_CLASSES as readonly string[]).includes(cls)) {
+            throw new Error(`manifests: ${name}.${column} has the unknown class ${String(cls)} or is not a column name`);
+          }
+        }
+        out.set(name, classes);
+      }
+    }
+  }
+  return out;
+}
+
+// Whether two class maps name the same columns with the same classes.
+function sameClasses(a: Readonly<Record<string, string>>, b: Readonly<Record<string, string>>): boolean {
+  const keys = Object.keys(a);
+  return keys.length === Object.keys(b).length && keys.every((column) => Object.hasOwn(b, column) && b[column] === a[column]);
+}
+
+// Checks a command's declared writes (CommandDef.writes) against the classes they carry and, when the runtime has
+// them, against the manifests' (#1710), and answers the contact and payment columns among them
+// (`<schema>.<table>.<column> (<class>)`), for P04.
+function checkedWrites(command: string, writes: readonly CommandWrite[], manifests: ReadonlyMap<string, Readonly<Record<string, string>>> | null): string[] {
   const refuse = (why: string): never => {
     throw new Error(`command ${command}: declared writes ${why}`);
   };
@@ -705,7 +746,13 @@ function checkedWrites(command: string, writes: readonly CommandWrite[]): string
     const classes = w.classes;
     if (typeof classes !== 'object' || classes === null || Array.isArray(classes) || Object.keys(classes).length === 0) refuse(`of ${w.table} carry no column classes`);
     for (const [column, cls] of Object.entries(classes)) {
+      if (!WRITE_COLUMN.test(column)) refuse(`of ${w.table} carry classes for ${column}, which is not a column name`);
       if (!(WRITE_DATA_CLASSES as readonly string[]).includes(cls)) refuse(`of ${w.table} give column ${column} the unknown class ${String(cls)}`);
+    }
+    if (manifests !== null) {
+      const known = manifests.get(w.table);
+      if (!known) refuse(`name ${w.table}, a table no module manifest has`);
+      if (!sameClasses(classes, known as Readonly<Record<string, string>>)) refuse(`of ${w.table} carry classes that are not its manifest's (build the write with tableWrite())`);
     }
     if (!Array.isArray(w.columns) || w.columns.length === 0) refuse(`of ${w.table} name no column`);
     const seen = new Set<string>();
@@ -730,6 +777,8 @@ export class Runtime {
   // Command -> whether an agent's proposal of it is flagged P04 (CommandInfo.contactOrPayment), derived once at
   // registration from its declared writes.
   private readonly contactOrPayment = new Map<string, boolean>();
+  // The classes of every manifest table (RuntimeOptions.manifests), or null when the runtime was given none.
+  private readonly manifestTables: ReadonlyMap<string, Readonly<Record<string, string>>> | null;
   // Where each transaction opens (Decision 14): tenant work on the org's cell, org-less work on the control plane.
   private readonly cells: CellResolver;
   private readonly sessions: SessionStatusSource | null;
@@ -754,6 +803,7 @@ export class Runtime {
     const inputHash = options.inputHash ?? 'keyed';
     if (!(INPUT_HASH_MODES as readonly string[]).includes(inputHash)) throw new Error(`unknown input hash mode ${String(inputHash)}`);
     this.inputHash = inputHash;
+    this.manifestTables = options.manifests ? manifestTableClasses(options.manifests) : null;
   }
 
   // How sessions are checked (see BootstrapEnv), for org-less reads that apply the same upstream checks as a command.
@@ -779,7 +829,7 @@ export class Runtime {
         throw new Error(`command ${c.name}: a reviser (access 'proposal_revision') names the command it revises, and only a reviser does`);
       }
       // The contact and payment columns it declares it writes (P04), or null when it declares no writes.
-      const contactOrPayment = c.writes === undefined ? null : checkedWrites(c.name, c.writes);
+      const contactOrPayment = c.writes === undefined ? null : checkedWrites(c.name, c.writes, this.manifestTables);
       if (contactOrPayment && contactOrPayment.length > 0 && c.agent !== undefined) {
         throw new Error(`command ${c.name}: writes ${contactOrPayment.join(', ')}, so no agent may run it (P04: an agent asks for a proposal instead)`);
       }
