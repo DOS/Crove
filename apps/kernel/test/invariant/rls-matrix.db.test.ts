@@ -53,19 +53,23 @@ const PENDING_TABLES = new Set<string>([
   'crove_notes.todo',
 ]);
 // Tables whose rows belong to one member (ADR-0037, notes plan §3.6 and step N1): unlike saved_view and notification,
-// the system context reads only what the value's predicate selects (over alias t) and writes none of its org's rows,
-// since the worker reaches them only through named definers. For the system actor, the read control expects that
-// count instead of every org A row (the factories seed a private row beside each probed one, so a system read of a
-// private row fails it), and the own-org insert and update controls become two checks: the system's own write
-// changes nothing, and the member context's same write succeeds, so the row and the assignment are well formed. The
-// system deletes none of its org's rows either. Every cross-org case stays as it is for every actor. The rest of the
+// the system context reads only what the value's predicate selects (over alias t, operators schema-qualified so a
+// migration cannot skew this oracle through search_path) and writes none of its org's rows, since the worker reaches
+// them only through named definers. For the system actor, the read control expects exactly those rows, by id, instead
+// of every org A row (the factories seed a private row beside each probed one, so a system read of a private row
+// fails it), and the own-org insert and update controls become two checks: the system's own write changes nothing,
+// and the member context's same write succeeds, so the row and the assignment are well formed. The system deletes
+// none of its org's rows either, and its no-WHERE update and delete sweeps change nothing. Every cross-org case stays as it is for every actor. The rest of the
 // private-row behavior (other members, owners, viewers, agents) is tested in notes-private.db.test.ts (N2), not
 // here. Sorted, one table per line.
 const AUTHOR_ONLY = new Map<string, string>([
   // A link reads through its parent: the system context sees the links of shared notes (the factory's parent).
-  ['crove_notes.link', "EXISTS (SELECT 1 FROM crove_notes.note n WHERE n.org_id = t.org_id AND n.id = t.note_id AND n.visibility = 'org')"],
+  [
+    'crove_notes.link',
+    "EXISTS (SELECT 1 FROM crove_notes.note n WHERE n.org_id OPERATOR(pg_catalog.=) t.org_id AND n.id OPERATOR(pg_catalog.=) t.note_id AND n.visibility OPERATOR(pg_catalog.=) 'org'::text)",
+  ],
   // The system context reads shared notes (the factory's rows), for the export.
-  ['crove_notes.note', "t.visibility = 'org'"],
+  ['crove_notes.note', "t.visibility OPERATOR(pg_catalog.=) 'org'::text"],
   // A to-do is its owner's alone, the system context's included.
   ['crove_notes.todo', 'false'],
 ]);
@@ -1688,11 +1692,13 @@ suite('generated cross-org RLS matrix on PostgreSQL (T8)', () => {
         const count = (org: OrgFixture) => seeded.find((s) => s.org === org.id)?.n ?? 0;
         expect(count(orgs.B), `${table} has no org B rows to probe`).toBeGreaterThan(0);
         expect(count(orgs.A), `${table} has no org A rows to probe`).toBeGreaterThan(0);
-        // On an AUTHOR_ONLY table, the org A rows the system context reads.
+        // On an AUTHOR_ONLY table, the ids of the org A rows the system context reads.
         const systemReads = AUTHOR_ONLY.get(table);
-        const systemCount = systemReads === undefined
+        const systemIds = systemReads === undefined
           ? undefined
-          : (await admin.query<{ n: number }>(`SELECT count(*)::int AS n FROM ${table} t WHERE t.org_id = $1 AND (${systemReads})`, [orgs.A.id])).rows[0]?.n;
+          : (await admin.query<{ id: string }>(`SELECT t.id::text AS id FROM ${table} t WHERE t.org_id OPERATOR(pg_catalog.=) $1::uuid AND (${systemReads})`, [orgs.A.id])).rows
+              .map((r) => r.id)
+              .sort();
         for (const actor of actors) {
           const where = `${actor.name} reading ${table}`;
           const outcome = await probe(actor, (c) => c.query(`SELECT org_id::text AS org FROM ${table}`));
@@ -1706,8 +1712,11 @@ suite('generated cross-org RLS matrix on PostgreSQL (T8)', () => {
           } else {
             expect(rows.filter((r) => r.org !== orgs.A.id), `${where}: rows of other orgs`).toEqual([]);
             // Control: the same query sees the actor's own rows, so the empty result for org B is the org filter.
-            if (actor.system && systemCount !== undefined) {
-              expect(rows.length, `${where}: its own org's rows that the system context reads (AUTHOR_ONLY)`).toBe(systemCount);
+            if (actor.system && systemIds !== undefined) {
+              // Exactly those rows, by id (in the probe's org column): a policy that showed the system as many rows but
+              // the wrong ones fails here.
+              const read = expectRows(await probe(actor, (c) => c.query(`SELECT id::text AS org FROM ${table}`)), where);
+              expect(read.rows.map((r) => r.org).sort(), `${where}: its own org's rows that the system context reads, by id (AUTHOR_ONLY)`).toEqual(systemIds);
             } else {
               expect(rows.length, `${where}: its own org's rows`).toBe(count(orgs.A));
             }
@@ -1748,17 +1757,24 @@ suite('generated cross-org RLS matrix on PostgreSQL (T8)', () => {
             const built = factory.make(orgs.A);
             const setupRows = built.setup ?? [];
             await adminTx(setupRows);
+            const cleanup = async () => {
+              for (const row of [...setupRows].reverse()) {
+                const { rowCount } = await admin.query(`DELETE FROM ${row.table} WHERE org_id = $1 AND id = $2`, [row.values.org_id, row.values.id]);
+                expect(rowCount, `removing the ${row.table} parent committed for ${actor.name}'s insert into ${table}`).toBe(1);
+              }
+            };
             try {
               const own = await probe(actor, (c) => {
                 const q = insertSql({ table, values: built.row });
                 return c.query(q.text, q.values);
               });
               expect(own, `${actor.name} inserting into ${table} for its own org: only definers write it (AUTHOR_ONLY)`).toMatchObject({ ok: false, code: '42501' });
-            } finally {
-              for (const row of [...setupRows].reverse()) {
-                await admin.query(`DELETE FROM ${row.table} WHERE org_id = $1 AND id = $2`, [row.values.org_id, row.values.id]);
-              }
+            } catch (error) {
+              // Keep the probe's own failure; a cleanup error must not replace it.
+              await cleanup().catch(() => {});
+              throw error;
             }
+            await cleanup();
             controlActor = member;
           }
           // Control: the same factory's row for the actor's own org is accepted, so the refusal above is about the org.
@@ -1791,6 +1807,8 @@ suite('generated cross-org RLS matrix on PostgreSQL (T8)', () => {
             ? await sweep(actor, table, `UPDATE ${table} SET org_id = $1`, [orgs.A.id])
             : await sweep(actor, table, `UPDATE ${table} SET ${set}`, []);
           if (pulled) expect(pulled.changed, `${where}: rows updated without a WHERE clause`).toBeLessThanOrEqual(pulled.visible);
+          // AUTHOR_ONLY: the sweep reads no column, so no SELECT policy hides private rows from it; the system changes none.
+          if (pulled && actor.system && AUTHOR_ONLY.has(table)) expect(pulled.changed, `${where}: rows updated without a WHERE clause (AUTHOR_ONLY)`).toBe(0);
           if (!byOrg) {
             // The role may not touch org_id at all.
             expectDenied(moved, PRIVILEGE_DENIED, `${where} (moving org A rows to org B)`);
@@ -1836,6 +1854,8 @@ suite('generated cross-org RLS matrix on PostgreSQL (T8)', () => {
             // Delete every row without reading a column: only rows the actor already sees may go.
             const swept = await sweep(actor, table, `DELETE FROM ${table}`, []);
             if (swept) expect(swept.changed, `${where}: rows deleted without a WHERE clause`).toBeLessThanOrEqual(swept.visible);
+            // AUTHOR_ONLY: as for updates, the system deletes none, private rows included.
+            if (swept && actor.system && AUTHOR_ONLY.has(table)) expect(swept.changed, `${where}: rows deleted without a WHERE clause (AUTHOR_ONLY)`).toBe(0);
           }
           if (actor.system && AUTHOR_ONLY.has(table) && can(table, actor.role, 'DELETE')) {
             // AUTHOR_ONLY: the system context deletes none of its own org's rows either (the trash, member purge and
