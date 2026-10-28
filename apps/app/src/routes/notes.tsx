@@ -20,14 +20,51 @@ import { Empty, ErrorText, ListSkeleton, PageHeader, Spinner } from '../componen
 import { useFormat } from '../i18n/provider.tsx';
 import { client, clientForOrg, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { Markdown } from '../lib/markdown.tsx';
+import { applyFormat, shortcutFormat, type MarkdownFormat } from '../lib/markdown-edit.ts';
 import { createAutosaver, type NoteValues, type SaveState } from '../lib/note-autosave.ts';
-import { looksLikePassword, parseTags, type NotesSearch } from '../lib/notes.ts';
+import { looksLikePassword, parseTags, tagCounts, type NotesSearch } from '../lib/notes.ts';
 
 const SAVE_AFTER_MS = 800;
 const isConflict = (error: unknown) => (error as { code?: string } | null)?.code === 'NOTE_REVISION_CONFLICT';
 const valuesOf = (note: Note): NoteValues => ({ title: note.title, body: note.body, tags: note.tags.join(', ') });
 
-function Editor({ note, slug, role, back, focusTitle }: { note: Note; slug: string; role: string | undefined; back: NotesSearch; focusTitle: boolean }) {
+const FORMATS: ReadonlyArray<{ format: MarkdownFormat; keys: string }> = [
+  { format: 'bold', keys: 'Control+B' },
+  { format: 'list', keys: 'Control+Shift+8' },
+  { format: 'task', keys: 'Control+Shift+9' },
+  { format: 'link', keys: 'Control+K' },
+];
+
+// A note's tags as buttons: each shows the notes with that tag (#1739).
+function TagChips({ tags, onTag }: { tags: readonly string[]; onTag: (tag: string) => void }) {
+  const t = useTranslations('notes');
+  if (tags.length === 0) return null;
+  return (
+    <p className="flex flex-wrap gap-1">
+      {tags.map((tag) => (
+        <Button key={tag} variant="outline" size="sm" className="h-auto rounded-full px-2 py-0.5 text-xs" onClick={() => onTag(tag)} aria-label={t('tagShow', { tag })}>
+          {tag}
+        </Button>
+      ))}
+    </p>
+  );
+}
+
+function Editor({
+  note,
+  slug,
+  role,
+  back,
+  focusTitle,
+  onTag,
+}: {
+  note: Note;
+  slug: string;
+  role: string | undefined;
+  back: NotesSearch;
+  focusTitle: boolean;
+  onTag: (tag: string) => void;
+}) {
   const t = useTranslations('notes');
   const f = useFormat();
   const navigate = useNavigate();
@@ -36,6 +73,7 @@ function Editor({ note, slug, role, back, focusTitle }: { note: Note; slug: stri
   const [state, setState] = useState<SaveState>('idle');
   const [saveError, setSaveError] = useState<unknown>(null);
   const [confirmShare, setConfirmShare] = useState(false);
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
   // Bound to the note's org: a save that runs as the editor closes, after the user switched org, still goes to its own.
   const api = useRef(clientForOrg(slug)).current;
   const saver = useRef(
@@ -83,6 +121,17 @@ function Editor({ note, slug, role, back, focusTitle }: { note: Note; slug: stri
     const next = { ...values, ...patch };
     setValues(next);
     saver.edit(next);
+  };
+  // The toolbar and its shortcuts (#1739): Markdown at the cursor, the selection kept where the member expects it.
+  const format = (kind: MarkdownFormat) => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const next = applyFormat({ value: values.body, start: el.selectionStart, end: el.selectionEnd }, kind);
+    edit({ body: next.value });
+    requestAnimationFrame(() => {
+      el.focus();
+      el.setSelectionRange(next.start, next.end);
+    });
   };
   // The server's copy, read again whatever the cache holds, replaces the text (after a conflict).
   const reload = async () => {
@@ -144,10 +193,41 @@ function Editor({ note, slug, role, back, focusTitle }: { note: Note; slug: stri
             </div>
           ) : (
             <>
+              <div role="toolbar" aria-label={t('toolbar.label')} aria-controls="note-body" className="flex flex-wrap gap-1">
+                {FORMATS.map(({ format: kind, keys }) => (
+                  <Button
+                    key={kind}
+                    variant="ghost"
+                    size="sm"
+                    // Keeps the textarea's selection: the button takes no focus from it.
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => format(kind)}
+                    aria-keyshortcuts={keys}
+                    title={t(`toolbar.${kind}Hint`)}
+                  >
+                    {t(`toolbar.${kind}`)}
+                  </Button>
+                ))}
+              </div>
               <label htmlFor="note-body" className="sr-only">
                 {t('bodyLabel')}
               </label>
-              <Textarea id="note-body" value={values.body} rows={14} maxLength={100_000} onChange={(e) => edit({ body: e.target.value })} placeholder={t('bodyPlaceholder')} className="font-mono text-sm" />
+              <Textarea
+                id="note-body"
+                ref={bodyRef}
+                value={values.body}
+                rows={14}
+                maxLength={100_000}
+                onChange={(e) => edit({ body: e.target.value })}
+                onKeyDown={(e) => {
+                  const kind = shortcutFormat(e);
+                  if (!kind) return;
+                  e.preventDefault();
+                  format(kind);
+                }}
+                placeholder={t('bodyPlaceholder')}
+                className="font-mono text-sm"
+              />
             </>
           )}
           {looksLikePassword(`${values.title}\n${values.body}`) && (
@@ -160,6 +240,7 @@ function Editor({ note, slug, role, back, focusTitle }: { note: Note; slug: stri
               {t('tagsLabel')}
             </label>
             <Input id="note-tags" value={values.tags} onChange={(e) => edit({ tags: e.target.value })} placeholder={t('tagsHint')} />
+            <TagChips tags={note.tags} onTag={onTag} />
           </div>
         </>
       ) : (
@@ -168,15 +249,7 @@ function Editor({ note, slug, role, back, focusTitle }: { note: Note; slug: stri
             {note.title}
           </h2>
           {note.body.trim() === '' ? <p className="text-sm text-subtle-foreground">{t('emptyBody')}</p> : <Markdown text={note.body} />}
-          {note.tags.length > 0 && (
-            <p className="flex flex-wrap gap-1">
-              {note.tags.map((tag) => (
-                <Badge key={tag} variant="outline">
-                  {tag}
-                </Badge>
-              ))}
-            </p>
-          )}
+          <TagChips tags={note.tags} onTag={onTag} />
           {!note.mine && <p className="text-xs text-subtle-foreground">{t('readOnly')}</p>}
         </>
       )}
@@ -250,12 +323,18 @@ export function NotesPage() {
   useEffect(() => setQ(search.q ?? ''), [search.q]);
   const [created, setCreated] = useState<string | null>(null);
   const go = (next: NotesSearch) => void navigate({ to: '/o/$slug/notes', params: { slug }, search: next });
-  const back: NotesSearch = search.q ? { q: search.q } : { list: view };
+  // A tag filters the lists, not a search.
+  const tag = search.q ? undefined : search.tag;
+  const back: NotesSearch = search.q ? { q: search.q } : { list: view, ...(tag ? { tag } : {}) };
 
   const me = useQuery(orpc.me.get.queryOptions());
   const role = me.data?.orgs.find((o) => o.slug === slug)?.role;
   const writer = role !== undefined && role !== 'viewer';
-  const list = useQuery({ ...orpc.notes.list.queryOptions({ input: { view } }), enabled: !search.q });
+  // The whole list gives the tag chips; with a tag chosen, the filtered list is the one shown.
+  const all = useQuery({ ...orpc.notes.list.queryOptions({ input: { view } }), enabled: !search.q });
+  const tagged = useQuery({ ...orpc.notes.list.queryOptions({ input: { view, tag: tag ?? '' } }), enabled: !search.q && tag !== undefined });
+  const list = tag ? tagged : all;
+  const chips = tagCounts(all.data ?? []);
   const found = useQuery({ ...orpc.notes.search.queryOptions({ input: { q: search.q ?? '' } }), enabled: Boolean(search.q) });
   const notes = search.q ? found : list;
   const open = useQuery({ ...orpc.notes.get.queryOptions({ input: { noteId: search.note ?? '' } }), enabled: Boolean(search.note) });
@@ -293,7 +372,7 @@ export function NotesPage() {
             <Input id="notes-search" type="search" value={q} placeholder={t('search')} onChange={(e) => setQ(e.target.value)} />
           </form>
           {!search.q && (
-            <Tabs value={view} onValueChange={(v) => go({ list: v as NoteListView })} className="mt-3">
+            <Tabs value={view} onValueChange={(v) => go({ list: v as NoteListView, ...(tag ? { tag } : {}) })} className="mt-3">
               <TabsList className="flex h-auto flex-wrap">
                 {NOTE_LIST_VIEWS.map((v) => (
                   <TabsTrigger key={v} value={v}>
@@ -302,6 +381,22 @@ export function NotesPage() {
                 ))}
               </TabsList>
             </Tabs>
+          )}
+          {!search.q && (chips.length > 0 || tag) && (
+            <div role="group" aria-label={t('tagFilter')} className="mt-3 flex flex-wrap gap-1">
+              {(tag && !chips.some((c) => c.tag === tag) ? [{ tag, count: 0 }, ...chips] : chips).map((c) => (
+                <Button
+                  key={c.tag}
+                  variant={c.tag === tag ? 'default' : 'outline'}
+                  size="sm"
+                  className="h-auto rounded-full px-2 py-0.5 text-xs"
+                  aria-pressed={c.tag === tag}
+                  onClick={() => go({ list: view, ...(c.tag === tag ? {} : { tag: c.tag }) })}
+                >
+                  {c.tag}
+                </Button>
+              ))}
+            </div>
           )}
           {search.q && (
             <p className="mt-3 text-xs text-subtle-foreground">
@@ -316,7 +411,7 @@ export function NotesPage() {
             {notes.isPending && !notes.error ? (
               <ListSkeleton />
             ) : notes.data && notes.data.length === 0 ? (
-              <Empty title={search.q ? t('searchEmpty') : t('emptyTitle')} hint={t('emptyScreenHint')} action={search.q ? undefined : newButton} />
+              <Empty title={search.q ? t('searchEmpty') : tag ? t('tagEmpty', { tag }) : t('emptyTitle')} hint={t('emptyScreenHint')} action={search.q || tag ? undefined : newButton} />
             ) : (
               <ul className="divide-y rounded-lg border">
                 {notes.data?.map((n) => (
@@ -353,7 +448,7 @@ export function NotesPage() {
           ) : open.error ? (
             <ErrorText>{errorMessage(open.error)}</ErrorText>
           ) : open.data ? (
-            <Editor key={open.data.id} note={open.data} slug={slug} role={role} back={back} focusTitle={created === open.data.id} />
+            <Editor key={open.data.id} note={open.data} slug={slug} role={role} back={back} focusTitle={created === open.data.id} onTag={(t) => go({ list: view, tag: t })} />
           ) : (
             <ListSkeleton />
           )}

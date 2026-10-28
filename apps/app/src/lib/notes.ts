@@ -24,10 +24,12 @@ export function looksLikePassword(text: string): boolean {
   return /(^|\s)(mat khau|password|pass)\s*[:=]/m.test(folded);
 }
 
-// ?note= opens a note and ?list= a list on the notes screen; ?q= searches. Not ?view=, which Social's calendar uses.
+// ?note= opens a note and ?list= a list on the notes screen, ?tag= keeps the notes with that tag (#1739); ?q= searches.
+// Not ?view=, which Social's calendar uses.
 export interface NotesSearch {
   note?: string;
   list?: NoteListView;
+  tag?: string;
   q?: string;
 }
 
@@ -37,6 +39,21 @@ export function parseNotesSearch(search: Record<string, unknown>): NotesSearch {
   const out: NotesSearch = {};
   if (typeof search.note === 'string' && ID.test(search.note)) out.note = search.note.toLowerCase();
   if (typeof search.list === 'string' && (NOTE_LIST_VIEWS as readonly string[]).includes(search.list)) out.list = search.list as NoteListView;
+  if (typeof search.tag === 'string') {
+    const [tag] = parseTags(search.tag);
+    if (tag !== undefined) out.tag = tag;
+  }
   if (typeof search.q === 'string' && search.q.trim() !== '') out.q = search.q.trim().slice(0, 200);
   return out;
 }
+
+// The tags of a list, most used first (then by name), for the filter's chips.
+export function tagCounts(notes: ReadonlyArray<{ tags: readonly string[] }>, limit = 12): Array<{ tag: string; count: number }> {
+  const counts = new Map<string, number>();
+  for (const n of notes) for (const tag of n.tags) counts.set(tag, (counts.get(tag) ?? 0) + 1);
+  return [...counts.entries()]
+    .map(([tag, count]) => ({ tag, count }))
+    .sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag, 'vi'))
+    .slice(0, limit);
+}
+
