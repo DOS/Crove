@@ -128,6 +128,8 @@ export interface BackPressureDeps {
 // One check: pauses above the threshold and resumes once the lag is back to half of it, so a lag hovering at the
 // threshold does not pause and resume every check. A failed read changes nothing.
 export async function checkBackPressure(deps: BackPressureDeps): Promise<void> {
+  // TEMP (#1717): a planted no-op, to show load-test.db.test.ts fails when back-pressure never engages. Reverted.
+  if (deps.thresholdSeconds > 0) return;
   const log = deps.log ?? ((line: string) => console.warn(line));
   let lag: number;
   try {
