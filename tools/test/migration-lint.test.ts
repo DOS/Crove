@@ -8,7 +8,8 @@ const FILE = 'supabase/migrations/20261101000000_crove_social_sample.sql';
 
 type Finding = { file: string; line: number; rule: string; message: string };
 const lint = (sql: string, existing: string[] = []): Finding[] =>
-  lintMigration(FILE, sql, { existingFunctions: new Set(existing) });
+  // contract-header and hot-table-retry have their own tests (migration-lint-contract and -hot-tables).
+  lintMigration(FILE, sql, { existingFunctions: new Set(existing), breakingRules: false });
 const rules = (sql: string, existing: string[] = []) => lint(sql, existing).map((f) => `${f.line} ${f.rule}`);
 
 // A migration that follows every rule: the base the bad samples below are compared with.
