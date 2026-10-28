@@ -178,7 +178,8 @@ suite('personal to-dos on PostgreSQL (#1673)', () => {
       c.query<{ command: string; detail: unknown }>(`SELECT command, detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command LIKE 'notes.todo.%' ORDER BY occurred_at, id`, [o.orgId]),
     );
     const text = JSON.stringify(audit.rows);
-    expect(audit.rows.map((r) => r.command)).toEqual(['notes.todo.create', 'notes.todo.update']);
+    // The edit, then the stale one the runtime refused, which is audited too.
+    expect(audit.rows.map((r) => r.command)).toEqual(['notes.todo.create', 'notes.todo.update', 'notes.todo.update']);
     for (const secret of [TITLE, DETAILS, STEP, 'Lưu sao kê']) expect(text).not.toContain(secret);
     expect(text).toContain('"redacted":"pii"');
     // Results and outbox events carry no text either.
