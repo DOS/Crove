@@ -13,7 +13,8 @@ const psqlClient = {
     const query = text.replace(/\$(\d+)/g, (_, n: string) => {
       const value = values[Number(n) - 1];
       if (value === null || value === undefined) return 'NULL';
-      vars[`p${n}`] = Array.isArray(value) ? `{${value.map(String).join(',')}}` : String(value);
+      // An array as a PostgreSQL array literal, each element double-quoted with its \ and " escaped.
+      vars[`p${n}`] = Array.isArray(value) ? `{${value.map((v) => `"${String(v).replace(/[\\"]/g, '\\$&')}"`).join(',')}}` : String(value);
       return `:'p${n}'`;
     });
     return Promise.resolve({ rows: sql(query, vars) });
