@@ -974,6 +974,8 @@ export function createHttpApp(deps: HttpDeps) {
       let unsubscribe = () => {};
       const connection = new StreamConnection({
         orgId,
+        // Hints about a member's own rows (a notification) go only to that member's streams (#1702).
+        userId: binding.userId,
         scope,
         check,
         ...(stream.rechecks ? { gate: stream.rechecks } : {}),
