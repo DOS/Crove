@@ -484,7 +484,12 @@ suite('org offboarding on PostgreSQL (#38)', () => {
     // began must not appear in the export.
     let maxBatch = 0;
     let sneaked = false;
-    const watching = Object.create(workerRuntime) as Runtime;
+    // The export uses the runtime's stream and execute only; the runtime itself is frozen, so they are wrapped here
+    // (#1766).
+    const watching = {
+      execute: workerRuntime.execute.bind(workerRuntime),
+      stream: undefined as unknown as Runtime['stream'],
+    } as unknown as Runtime & { stream: Runtime['stream'] };
     watching.stream = (name, input, options, sink) =>
       workerRuntime.stream(name, input, options, async (batch) => {
         const b = batch as { table: string; lines: string[] };
