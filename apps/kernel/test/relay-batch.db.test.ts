@@ -129,6 +129,10 @@ suite('relay batches send on the claim transaction (#1705)', () => {
     ['pg-boss refuses a send to a queue that does not exist', (jobs) => jobs.send('test-relay-missing-queue', {}, { retryLimit: 0 })],
     ['an insert fails in the database', (jobs, row) => jobs.send(STANDARD, { orgId, eventId: row.event_id }, { singletonKey: `${keyOf(row.event_id)}:x`, priority: 2 ** 31 })],
     [
+      'a step swallows a failed insert',
+      (jobs, row) => jobs.send(STANDARD, { orgId, eventId: row.event_id }, { singletonKey: `${keyOf(row.event_id)}:x`, priority: 2 ** 31 }).catch(() => null),
+    ],
+    [
       'the commit fails on the deferred dead letter check',
       (jobs, row) => jobs.send(STANDARD, { orgId, eventId: row.event_id }, { singletonKey: `${keyOf(row.event_id)}:x`, deadLetter: 'test-relay-missing-dlq' }),
     ],

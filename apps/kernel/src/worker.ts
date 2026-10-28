@@ -248,19 +248,27 @@ export async function relayBatch(
     const steps = await claim(trx);
     let closed = false;
     let tail: Promise<unknown> = Promise.resolve();
+    // The first statement of the batch that failed, which aborted the transaction: thrown even when a step caught it
+    // (PostgreSQL would answer the COMMIT with a silent rollback), and before the 25P02 errors every later statement
+    // gets, so the log names the real cause.
+    let aborted: { error: unknown } | null = null;
     const db: BossDb = {
       executeSql: (text, values) => {
         const run = tail.then(async () => {
           if (closed) throw new Error('relay batch closed: a job sent after its transaction ended');
           return (await trx.executeQuery(CompiledQuery.raw(text, values ?? []))).rows;
         });
-        tail = run.catch(() => undefined);
+        tail = run.catch((error: unknown) => {
+          if (!closed && !aborted && (error as { code?: unknown } | null)?.code !== '25P02') aborted = { error };
+        });
         return run.then((rows) => ({ rows: [...rows] }));
       },
     };
     const onBatch: JobSender = { send: (name, data, options) => sender.send(name, data, { ...options, db }) };
     try {
       const settled = await Promise.allSettled(steps.map((step) => step(onBatch)));
+      await tail;
+      if (aborted) throw (aborted as { error: unknown }).error;
       const failed = settled.find((s): s is PromiseRejectedResult => s.status === 'rejected');
       if (failed) throw failed.reason;
     } finally {
@@ -1307,8 +1315,8 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
 
   // A team chat alert (#863) for an outbox event, queued best effort on pg-boss's own connection, outside the relay
   // batch's transaction, where a failed insert would abort the batch: a failure here is logged and never rolls the claim
-  // back, so it holds up neither the relay nor the notices. A batch relayed again does not queue it twice, since its
-  // singletonSeconds slot refuses the second job (#1705).
+  // back, so it holds up neither the relay nor the notices. A batch relayed again within the same singletonSeconds slot
+  // does not queue it twice, since the slot refuses the second job (#1705); slots follow the clock, as before.
   const queueChatAlert = (row: OutboxRow, test: boolean) =>
     boss
       .send(QUEUES.socialChatAlert, { orgId: row.org_id, eventId: row.event_id, ...(test ? { test: true as const } : {}) } satisfies AgentDispatchJob & { test?: true }, {
