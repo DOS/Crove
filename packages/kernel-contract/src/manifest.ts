@@ -41,6 +41,28 @@ export function columns<const I extends string, const C extends string = never>(
   return Object.freeze(out) as Readonly<Record<I | C, DataClass>>;
 }
 
+// What a command writes in one table (plan §4.7 "Derived risk", #1697): the table as `<schema>.<table>`, the class of
+// every column of it as its manifest gives them, and the columns the command's statements set. A command declares one
+// per table it writes (CommandDef.writes); the runtime checks each column against the classes when the command
+// registers, and an agent's proposal of a command that writes a `contact` or `payment` column is flagged P04.
+export interface TableWrite {
+  readonly table: string;
+  readonly classes: TableColumns;
+  readonly columns: readonly string[];
+}
+
+// A TableWrite built from a module's manifest, so the classes are the manifest's and a column the table does not have
+// fails typecheck: tableWrite(kernelManifest.tables, 'crove_kernel', 'task', ['status']).
+export function tableWrite<
+  const T extends ModuleManifest['tables'],
+  const S extends keyof T & string,
+  const N extends keyof T[S] & string,
+>(tables: T, schema: S, table: N, columns: readonly (keyof T[S][N] & string)[]): TableWrite {
+  const classes = tables[schema]?.[table] as TableColumns | undefined;
+  if (!classes) throw new Error(`tableWrite: the manifest has no table ${schema}.${table}`);
+  return Object.freeze({ table: `${schema}.${table}`, classes, columns: Object.freeze([...columns]) });
+}
+
 // What an audit fact keeps of a classified column's value (plan §4.10, #1626): the class, never the value. Audit rows
 // are append-only and anchored in the WORM stream, so personal data the PDPL erasure (#923) must reach can never be
 // written there; the row's input_sha256 still ties it to the command's input.

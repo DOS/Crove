@@ -8,12 +8,13 @@ import { fileURLToPath } from 'node:url';
 import { sql } from 'kysely';
 import pg from 'pg';
 import { z } from 'zod';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
-import { agentCommands, createOrg, decideApproval, eligibleApprovers, kernelCommands, kernelQueries, runAgentWake, upsertIdentity } from '@crove/kernel';
-import { Runtime, defineCommand, type Actor, type AgentActor, type AgentRuntime, type CommandDef, type Risk } from '@crove/kernel-runtime';
-import { financeCommands, financeQueries } from '@crove/mod-finance';
+import { agentCommands, createOrg, decideApproval, eligibleApprovers, kernelCommands, kernelManifest, kernelQueries, runAgentWake, upsertIdentity } from '@crove/kernel';
+import { tableWrite } from '@crove/kernel-contract';
+import { Runtime, defineCommand, type Actor, type AgentActor, type AgentRuntime, type CommandDef, type CommandWrite, type Risk } from '@crove/kernel-runtime';
+import { financeCommands, financeManifest, financeQueries } from '@crove/mod-finance';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -1333,6 +1334,124 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
     expect(() => new Runtime(db).register({ commands: [def({ roles: [], noContactOrPayment: true })] })).toThrow(/noContactOrPayment/);
     expect(() => new Runtime(db).register({ commands: [def({ roles: [TEMPLATE], noContactOrPayment: true }, 'R3')] })).toThrow(/R1 or R2/);
     expect(() => new Runtime(db).register({ commands: [def({ roles: [TEMPLATE], noContactOrPayment: true })] })).not.toThrow();
+  });
+
+  // #1697: P04 derived from the manifests' column classes. A proposal command declares the tables and columns it
+  // writes; an agent's proposal of one that writes a contact or payment column is flagged P04, one that writes neither
+  // is not, and a declaration that does not match the classes is refused when the command registers.
+  const CONTACT_1697 = tableWrite(kernelManifest.tables, 'crove_kernel', 'party', ['email']);
+  const PAYMENT_1697 = tableWrite(financeManifest.tables, 'crove_finance', 'bank_line', ['bank_account']);
+  const INTERNAL_1697 = tableWrite(kernelManifest.tables, 'crove_kernel', 'task_comment', ['body']);
+  const proposal1697 = (name: string, writes: readonly CommandWrite[] | undefined, extra: Partial<CommandDef<unknown, unknown>> = {}) =>
+    defineCommand({
+      name,
+      input: z.object({ payload: z.unknown(), acceptFailedChecks: z.boolean().optional() }),
+      risk: 'R1',
+      access: 'proposal',
+      ...(writes ? { writes } : {}),
+      handler: async () => ({ executed: name }),
+      ...extra,
+    }) as CommandDef<unknown, unknown>;
+
+  it('flags P04 on an agent proposal of a command that writes a contact or payment column, and not on one that writes neither (#1697)', async () => {
+    const commands = [
+      proposal1697('t1697.contact', [CONTACT_1697]),
+      proposal1697('t1697.payment', [PAYMENT_1697]),
+      proposal1697('t1697.mixed', [INTERNAL_1697, CONTACT_1697]),
+      proposal1697('t1697.clean', [INTERNAL_1697]),
+      proposal1697('t1697.clean_approvers', [INTERNAL_1697], { agentApprovers: { roles: [TEMPLATE] } }),
+      // A clean proposal command that runs one which writes a contact column: refused when it executes.
+      proposal1697('t1697.nests', [INTERNAL_1697], {
+        agentApprovers: { roles: [TEMPLATE] },
+        handler: async (ctx) => ctx.run('t1697.inner', {}),
+      }),
+      defineCommand({ name: 't1697.inner', input: z.object({}), risk: 'R1', access: 'system', writes: [CONTACT_1697], handler: async () => ({ ok: true }) }) as CommandDef<unknown, unknown>,
+      // The same through a clean command in between: the bound holds at every depth.
+      proposal1697('t1697.nests_deep', [INTERNAL_1697], {
+        agentApprovers: { roles: [TEMPLATE] },
+        handler: async (ctx) => ctx.run('t1697.middle', {}),
+      }),
+      defineCommand({
+        name: 't1697.middle',
+        input: z.object({}),
+        risk: 'R1',
+        access: 'system',
+        writes: [INTERNAL_1697],
+        handler: async (ctx) => ctx.run('t1697.inner', {}),
+      }) as CommandDef<unknown, unknown>,
+    ];
+    worker.register({ commands });
+    app.register({ commands });
+    expect(worker.commandInfo('t1697.contact')?.contactOrPayment).toBe(true);
+    expect(worker.commandInfo('t1697.clean')?.contactOrPayment).toBe(false);
+    // Undeclared writes: nothing says the command writes no contact or payment column.
+    expect(worker.commandInfo('t260.prop_humans')?.contactOrPayment).toBe(true);
+
+    const flags = async (command: string) => {
+      const asked = await agentProposes(await liveAgent(orgA, owner), command);
+      expect(asked.reason, command).toBeNull();
+      return { id: asked.proposalId as string, flags: (await proposalRow(asked.proposalId as string)).policy_flags as string[] };
+    };
+    expect((await flags('t1697.contact')).flags).toEqual(['P04']);
+    expect((await flags('t1697.payment')).flags).toEqual(['P04']);
+    expect((await flags('t1697.mixed')).flags).toEqual(['P04']);
+    expect((await flags('t1697.clean')).flags).toEqual([]);
+
+    // A clean proposal with agent approvers is approved by an agent; one that would run a contact write fails instead.
+    const clean = await flags('t1697.clean_approvers');
+    expect(clean.flags).toEqual([]);
+    await expect((await agentApproves(await liveAgent(orgA, owner), clean.id)).execute()).resolves.toEqual({ approved: true, reason: null });
+    const nests = await flags('t1697.nests');
+    expect(nests.flags).toEqual([]);
+    // The runtime's refusal is a bug in the command, so the caller gets INTERNAL (the log names the cause) and nothing
+    // commits.
+    const approval = await agentApproves(await liveAgent(orgA, owner), nests.id);
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await expect(approval.execute()).rejects.toMatchObject({ code: 'INTERNAL' });
+      expect(logged.mock.calls.flat().map(String).join('\n')).toMatch(/t1697\.nests: declares no contact or payment write \(P04\), so it cannot run t1697\.inner/);
+    } finally {
+      logged.mockRestore();
+    }
+    expect((await proposalRow(nests.id)).status).toBe('pending');
+    const deep = await flags('t1697.nests_deep');
+    expect(deep.flags).toEqual([]);
+    const deepApproval = await agentApproves(await liveAgent(orgA, owner), deep.id);
+    const deepLogged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await expect(deepApproval.execute()).rejects.toMatchObject({ code: 'INTERNAL' });
+      expect(deepLogged.mock.calls.flat().map(String).join('\n')).toMatch(/t1697\.nests_deep: declares no contact or payment write \(P04\), so it cannot run t1697\.inner/);
+    } finally {
+      deepLogged.mockRestore();
+    }
+    expect((await proposalRow(deep.id)).status).toBe('pending');
+    expect(await withAdmin(async (c) => (await c.query('SELECT count(*)::int AS n FROM crove_kernel.audit_event WHERE org_id = $1 AND command = $2', [orgA, 't1697.inner'])).rows[0]?.n)).toBe(0);
+  });
+
+  it('refuses declared writes that do not match the column classes, and contact or payment writes by agents (#1697)', () => {
+    const register = (def: Partial<CommandDef<unknown, unknown>>) => () =>
+      new Runtime(db).register({ commands: [{ name: 't1697.reg', input: z.object({}), risk: 'R1', access: 'proposal', handler: async () => ({}), ...def } as CommandDef<unknown, unknown>] });
+    const party = kernelManifest.tables.crove_kernel.party;
+    // A column the table does not have, a table not named <schema>.<table>, a table twice, no column, an unknown class.
+    expect(register({ writes: [{ table: 'crove_kernel.party', classes: party, columns: ['iban'] }] })).toThrow(/a column its classes do not have/);
+    expect(register({ writes: [{ table: 'party', classes: party, columns: ['email'] }] })).toThrow(/<schema>\.<table>/);
+    expect(register({ writes: [CONTACT_1697, CONTACT_1697] })).toThrow(/twice/);
+    expect(register({ writes: [{ table: 'crove_kernel.party', classes: party, columns: [] }] })).toThrow(/name no column/);
+    expect(register({ writes: [{ table: 'crove_kernel.party', classes: party, columns: ['email', 'email'] }] })).toThrow(/twice/);
+    expect(register({ writes: [{ table: 'crove_kernel.party', classes: { ...party, email: 'secret' }, columns: ['email'] }] })).toThrow(/unknown class/);
+    expect(register({ writes: [{ table: 'crove_kernel.party', classes: {}, columns: ['email'] }] })).toThrow(/no column classes/);
+    // Agents never run a command that writes a contact or payment column, and never approve its proposals (P04).
+    for (const write of [CONTACT_1697, PAYMENT_1697]) {
+      expect(register({ access: [], agent: { roles: 'any' }, writes: [write] })).toThrow(/no agent may run it/);
+      expect(register({ agentApprovers: { roles: [TEMPLATE] }, writes: [INTERNAL_1697, write] })).toThrow(/only humans approve/);
+      expect(register({ agentApprovers: { roles: [TEMPLATE], noContactOrPayment: true }, writes: [write] })).toThrow(/only humans approve/);
+    }
+    // Agent approvers without the old noContactOrPayment need declared writes.
+    expect(register({ agentApprovers: { roles: [TEMPLATE] } })).toThrow(/noContactOrPayment/);
+    expect(register({ agentApprovers: { roles: [TEMPLATE], noContactOrPayment: false as unknown as true }, writes: [INTERNAL_1697] })).toThrow(/noContactOrPayment/);
+    expect(register({ agentApprovers: { roles: [TEMPLATE] }, writes: [INTERNAL_1697] })).not.toThrow();
+    expect(register({ access: [], agent: { roles: 'any' }, writes: [INTERNAL_1697] })).not.toThrow();
+    expect(register({ writes: [CONTACT_1697, PAYMENT_1697, INTERNAL_1697] })).not.toThrow();
   });
 
   it('lets an agent approve a clean R1 proposal within its max_risk, executed by the worker through the proposal gate', async () => {

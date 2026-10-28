@@ -146,13 +146,28 @@ export interface CommandDef<I = unknown, O = unknown> {
   // declares it: it locks the pending proposal and writes the revision the reviser computes. The runtime checks this
   // declaration on the calling definition, never a command name, and registers at most one editor, run by users.
   proposalEditor?: true;
-  // Agents that may run it (absent: none).
+  // Agents that may run it (absent: none). A command that declares writes of a `contact` or `payment` column never
+  // declares it (P04: an agent's change of a contact point, payee or bank account is reviewed, so it asks for a
+  // proposal instead); register() refuses the pair.
   agent?: AgentAccess;
+  // What it writes (plan §4.7 "Derived risk", #1697): one entry per table its statements write, directly, through a
+  // definer it calls or a trigger they fire, with the columns they set (database defaults and the columns triggers
+  // derive aside). The rows the runtime writes for it (ctx.emit, ctx.activity, ctx.audit, ctx.numbering, its audit row)
+  // are not listed, and a nested command declares its own. Each entry carries the classes of its table from the
+  // module's manifest (tableWrite() in @crove/kernel-contract builds it); register() refuses a column the classes do
+  // not have, an unknown class, a table listed twice or an empty column list. An agent's proposal of the command is
+  // flagged P04 when a declared column is `contact` or `payment`, and also when the command declares no writes at all
+  // (nothing says it writes none), unless it declares agent approvers the old way (noContactOrPayment, below). A
+  // proposal command whose declared writes have no such column may run, as a nested command at any depth, only commands
+  // that declare none either: the runtime refuses any other at execution, so a nested write cannot escape P04. Events it
+  // emits are not writes: a command that handles them runs on its own, under its own declaration (a proposal command
+  // declared free of contact and payment writes must not emit one whose handler writes such a column, #1710).
+  writes?: readonly CommandWrite[];
   // access 'proposal' only, R1 or R2 only (ADR-0029 section 6): the role keys of positions whose agents may approve
   // a proposal of this command, within their max_risk and only when the proposal's outcome names none of P03 to
-  // P07 and the agent is neither an author nor in its causal chain. Absent: humans only. R3 is always human.
-  // No code classifies P04 (contact or payment fields) yet, so the command declares it writes none of them; an
-  // agent's proposal of any other command is flagged P04.
+  // P07 and the agent is neither an author nor in its causal chain. Absent: humans only. R3 is always human. The
+  // command declares its writes, none of them a `contact` or `payment` column (P04), or, until every such command
+  // declares them (the old form the invariant suite still registers), noContactOrPayment: true.
   agentApprovers?: AgentApprovers;
   // access 'proposal' only: the kind its proposals carry (the Inbox renders a proposal by its kind), within the
   // command's module. Absent: the command's name. A proposal an agent asks for always takes its kind from here,
@@ -164,9 +179,26 @@ export interface CommandDef<I = unknown, O = unknown> {
 // Who may approve a proposal of a command besides humans (ADR-0029 section 6).
 export interface AgentApprovers {
   roles: readonly string[];
-  // The command writes no contact or payment field (P04).
-  noContactOrPayment: true;
+  // The old form of "the command writes no contact or payment field" (P04), for a command that declares no writes.
+  // With writes declared it may be left out; given, it must be true and the writes must bear it out.
+  noContactOrPayment?: true;
 }
+
+// One table a command writes (CommandDef.writes): the shape of TableWrite in @crove/kernel-contract.
+export interface CommandWrite {
+  // `<schema>.<table>`.
+  readonly table: string;
+  // The class of every column of the table, from its module's manifest.
+  readonly classes: Readonly<Record<string, string>>;
+  // The columns the command sets.
+  readonly columns: readonly string[];
+}
+
+// The data classes of the manifests (DATA_CLASSES in @crove/kernel-contract, which this package does not import;
+// apps/kernel/test/command-writes.test.ts checks the two lists are the same).
+export const WRITE_DATA_CLASSES = ['internal', 'pii', 'contact', 'payment', 'national_id', 'national_id_if_individual', 'sensitive'] as const;
+// The classes whose write is policy P04 (plan §4.7: changing a payee, bank account or contact point).
+const P04_DATA_CLASSES: readonly string[] = ['contact', 'payment'];
 
 // What a handler may learn about a registered command (ADR-0029 section 6): enough to judge a proposal of it.
 export interface CommandInfo {
@@ -176,6 +208,9 @@ export interface CommandInfo {
   agentApprovers: readonly string[];
   // The kind of its proposals: the declared proposalKind, or the command's name.
   proposalKind: string;
+  // Whether an agent's proposal of it is flagged P04: it declares a write of a `contact` or `payment` column, or it
+  // declares no writes (and no agent approvers of the old form), so nothing says it writes none.
+  contactOrPayment: boolean;
 }
 
 export interface BootstrapEnv {
@@ -635,6 +670,41 @@ interface CaughtRefusal {
   detail: Record<string, unknown>;
 }
 
+const WRITE_TABLE = /^crove_[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/;
+
+// Checks a command's declared writes (CommandDef.writes) against the classes they carry, and answers the contact and
+// payment columns among them (`<schema>.<table>.<column> (<class>)`), for P04.
+function checkedWrites(command: string, writes: readonly CommandWrite[]): string[] {
+  const refuse = (why: string): never => {
+    throw new Error(`command ${command}: declared writes ${why}`);
+  };
+  if (!Array.isArray(writes)) refuse('are a list of table writes');
+  const tables = new Set<string>();
+  const out: string[] = [];
+  for (const w of writes) {
+    if (typeof w !== 'object' || w === null || typeof w.table !== 'string' || !WRITE_TABLE.test(w.table)) {
+      refuse(`name a table as <schema>.<table> of a crove_* schema (${String((w as Partial<CommandWrite> | null)?.table)})`);
+    }
+    if (tables.has(w.table)) refuse(`list ${w.table} twice`);
+    tables.add(w.table);
+    const classes = w.classes;
+    if (typeof classes !== 'object' || classes === null || Array.isArray(classes) || Object.keys(classes).length === 0) refuse(`of ${w.table} carry no column classes`);
+    for (const [column, cls] of Object.entries(classes)) {
+      if (!(WRITE_DATA_CLASSES as readonly string[]).includes(cls)) refuse(`of ${w.table} give column ${column} the unknown class ${String(cls)}`);
+    }
+    if (!Array.isArray(w.columns) || w.columns.length === 0) refuse(`of ${w.table} name no column`);
+    const seen = new Set<string>();
+    for (const column of w.columns) {
+      if (typeof column !== 'string' || !Object.hasOwn(classes, column)) refuse(`name ${w.table}.${String(column)}, a column its classes do not have`);
+      if (seen.has(column)) refuse(`name ${w.table}.${column} twice`);
+      seen.add(column);
+      const cls = classes[column] as string;
+      if (P04_DATA_CLASSES.includes(cls)) out.push(`${w.table}.${column} (${cls})`);
+    }
+  }
+  return out;
+}
+
 export class Runtime {
   private readonly commands = new Map<string, CommandDef<unknown, unknown>>();
   private readonly queries = new Map<string, QueryDef<unknown, unknown>>();
@@ -642,6 +712,9 @@ export class Runtime {
   private readonly installedModules = new Set<string>();
   // Proposal command -> the revisers registered for it, derived from `revises` (one source for the pairing).
   private readonly revisers = new Map<string, string[]>();
+  // Command -> whether an agent's proposal of it is flagged P04 (CommandInfo.contactOrPayment), derived once at
+  // registration from its declared writes.
+  private readonly contactOrPayment = new Map<string, boolean>();
   // Where each transaction opens (Decision 14): tenant work on the org's cell, org-less work on the control plane.
   private readonly cells: CellResolver;
   private readonly sessions: SessionStatusSource | null;
@@ -686,13 +759,22 @@ export class Runtime {
       if ((c.access === 'proposal_revision') !== (typeof c.revises === 'string' && c.revises.length > 0)) {
         throw new Error(`command ${c.name}: a reviser (access 'proposal_revision') names the command it revises, and only a reviser does`);
       }
+      // The contact and payment columns it declares it writes (P04), or null when it declares no writes.
+      const contactOrPayment = c.writes === undefined ? null : checkedWrites(c.name, c.writes);
+      if (contactOrPayment && contactOrPayment.length > 0 && c.agent !== undefined) {
+        throw new Error(`command ${c.name}: writes ${contactOrPayment.join(', ')}, so no agent may run it (P04: an agent asks for a proposal instead)`);
+      }
       if (c.agentApprovers !== undefined) {
         if (c.access !== 'proposal' || (c.risk !== 'R1' && c.risk !== 'R2')) {
           throw new Error(`command ${c.name}: agent approvers are declared only on an R1 or R2 proposal command (access 'proposal')`);
         }
         const { roles, noContactOrPayment } = c.agentApprovers;
-        if (!Array.isArray(roles) || roles.length === 0 || roles.some((r) => typeof r !== 'string' || r.length === 0) || noContactOrPayment !== true) {
-          throw new Error(`command ${c.name}: agent approvers name at least one role key and declare noContactOrPayment: true (P04)`);
+        const declared = contactOrPayment === null ? noContactOrPayment === true : noContactOrPayment === undefined || noContactOrPayment === true;
+        if (!Array.isArray(roles) || roles.length === 0 || roles.some((r) => typeof r !== 'string' || r.length === 0) || !declared) {
+          throw new Error(`command ${c.name}: agent approvers name at least one role key, and the command declares its writes or noContactOrPayment: true (P04)`);
+        }
+        if (contactOrPayment && contactOrPayment.length > 0) {
+          throw new Error(`command ${c.name}: writes ${contactOrPayment.join(', ')}, so only humans approve its proposals (P04): it may not declare agent approvers`);
         }
       }
       if (c.proposalKind !== undefined) {
@@ -709,6 +791,7 @@ export class Runtime {
         if (editor) throw new Error(`command ${c.name}: ${editor.name} is already the proposal editor`);
       }
       this.commands.set(c.name, c as CommandDef<unknown, unknown>);
+      this.contactOrPayment.set(c.name, contactOrPayment === null ? c.agentApprovers?.noContactOrPayment !== true : contactOrPayment.length > 0);
       this.installedModules.add(moduleOf(c.name));
       if (c.revises) this.revisers.set(c.revises, [...(this.revisers.get(c.revises) ?? []), c.name]);
     }
@@ -724,7 +807,14 @@ export class Runtime {
   commandInfo(name: string): CommandInfo | null {
     const def = this.commands.get(name);
     if (!def) return null;
-    return { name: def.name, risk: def.risk, access: def.access, agentApprovers: [...(def.agentApprovers?.roles ?? [])], proposalKind: def.proposalKind ?? def.name };
+    return {
+      name: def.name,
+      risk: def.risk,
+      access: def.access,
+      agentApprovers: [...(def.agentApprovers?.roles ?? [])],
+      proposalKind: def.proposalKind ?? def.name,
+      contactOrPayment: this.contactOrPayment.get(def.name) !== false,
+    };
   }
 
   // Whether this runtime registered any command or query of the module (plan Decision 12). The server asks it
@@ -1026,9 +1116,12 @@ export class Runtime {
     trx: Transaction<Database>,
     def: CommandDef<unknown, unknown>,
     input: unknown,
-    base: { orgId: string; actor: Actor; entered: Entered; proposalId: string | null },
+    // cleanRoot: the proposal command, declared free of contact and payment writes, this command runs under (as
+    // itself or nested at any depth below it), if any (P04, #1697).
+    base: { orgId: string; actor: Actor; entered: Entered; proposalId: string | null; cleanRoot?: string },
   ): Promise<O> {
     const commandId = uuidv7();
+    const cleanRoot = base.cleanRoot ?? (def.access === 'proposal' && this.contactOrPayment.get(def.name) === false ? def.name : undefined);
     let auditDetail: Record<string, unknown> | undefined;
     // Refusals ctx.tryRun caught and rolled back, written after the handler returns.
     const caught: CaughtRefusal[] = [];
@@ -1230,6 +1323,11 @@ export class Runtime {
       return { status: 'ok', value };
     };
     const runNested = async <R>(nested: NestedRun): Promise<R> => {
+      // P04 is derived from a proposal command's declared writes, so one that declares no contact or payment write never
+      // runs a command that may write one (or declares nothing), whoever runs it and however deep it is nested.
+      if (cleanRoot !== undefined && this.contactOrPayment.get(nested.def.name) !== false) {
+        throw new Error(`command ${cleanRoot}: declares no contact or payment write (P04), so it cannot run ${nested.def.name}, which may write one`);
+      }
       const { proposalId } = nested;
       await this.authorize(trx, nested.def, base.actor, base.entered, proposalId !== null);
       if (proposalId !== null && (nested.def.access === 'proposal' || nested.def.access === 'proposal_revision')) {
@@ -1238,7 +1336,7 @@ export class Runtime {
       this.requireStepUp(nested.def, base.actor);
       // An R3 command already confirmed the session live for this execution.
       if (def.risk !== 'R3') await this.requireLiveSession(nested.def, base.actor);
-      return this.runInTx<R>(trx, nested.def, nested.input, { ...base, proposalId });
+      return this.runInTx<R>(trx, nested.def, nested.input, { ...base, proposalId, ...(cleanRoot !== undefined ? { cleanRoot } : {}) });
     };
     let output: O;
     try {
