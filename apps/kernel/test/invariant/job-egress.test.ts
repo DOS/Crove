@@ -9,8 +9,8 @@ import { deriveRisk, type CommandDef } from '@crove/kernel-runtime';
 import { crmCommands } from '@crove/mod-crm';
 import { FINANCE_NOTIFYING_EVENTS, financeCommands } from '@crove/mod-finance';
 import { CHAT_ALERTING_EVENTS, CHAT_ALERT_TEST_EVENT, NOTIFYING_EVENTS, socialCommands } from '@crove/mod-social';
-import { MAIL_QUEUES, QUEUES, SOCIAL_PUBLISH_QUEUES, TENANT_HOSTED_PROVIDERS, queueEgress, socialPublishQueue, type JobEgress } from '../src/jobs-schema.ts';
-import { orgPurgeCommand } from '../src/org-purge.ts';
+import { MAIL_QUEUES, QUEUES, SOCIAL_PUBLISH_QUEUES, TENANT_HOSTED_PROVIDERS, queueEgress, socialPublishQueue, type JobEgress } from '../../src/jobs-schema.ts';
+import { orgPurgeCommand } from '../../src/org-purge.ts';
 import { DEPS_REACH, Sources, emittersOf, reachOf, sendSites, workSites, type DynamicRuns, type Known, type WorkSite } from './job-egress.ts';
 
 const known: Known = {

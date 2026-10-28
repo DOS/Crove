@@ -18,7 +18,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { parseAst } from 'vitest/node';
 
-const ROOT = resolve(import.meta.dirname, '../../..');
+const ROOT = resolve(import.meta.dirname, '../../../..');
 const KERNEL_SRC = 'apps/kernel/src';
 
 // An ESTree node.
@@ -407,7 +407,7 @@ function depsReach(path: readonly string[], node: N): readonly Reach[] {
     const key = path.slice(0, n).join('.');
     if (Object.hasOwn(DEPS_REACH, key)) return DEPS_REACH[key] as readonly Reach[];
   }
-  throw new Error(`WorkerDeps field ${path[0]} is not classified in DEPS_REACH (apps/kernel/test/job-egress.ts)`);
+  throw new Error(`WorkerDeps field ${path[0]} is not classified in DEPS_REACH (apps/kernel/test/invariant/job-egress.ts)`);
 }
 
 // A use that only tests the value (`if (deps.push)`, `!channels`, `social && deps.channels ? ...`) or names it for
