@@ -146,9 +146,12 @@ describe('migration lint: contract-header', () => {
 
   it('skips the files on main before the rule, unless a PR adds them', () => {
     expect(lint('DROP TABLE crove_social.sample;', { breakingRules: false })).toEqual([]);
-    expect(breakingRulesApply(`20261103070000_crove_kernel_tax_code_audit_marker.sql`, false)).toBe(false);
+    // Pinned: the newest migration on main when the rules landed. Raising it would exempt later files from the
+    // full-tree run, so a change here needs a reason in review.
+    expect(BREAKING_RULES_AFTER).toBe('20261103090000');
+    expect(breakingRulesApply(`20261103090000_crove_finance_stream_legal_entity.sql`, false)).toBe(false);
     expect(breakingRulesApply(`supabase/migrations/${BREAKING_RULES_AFTER}_crove_kernel_x.sql`, false)).toBe(false);
-    expect(breakingRulesApply('20261103070001_crove_kernel_x.sql', false)).toBe(true);
+    expect(breakingRulesApply('20261103090001_crove_kernel_x.sql', false)).toBe(true);
     expect(breakingRulesApply('20261013120000_crove_kernel_bootstrap.sql', true)).toBe(true);
   });
 });

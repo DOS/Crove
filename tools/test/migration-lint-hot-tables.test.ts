@@ -40,23 +40,55 @@ const HOT_DDL = [
 describe('migration lint: hot-table-retry', () => {
   it('accepts DDL on each hot table inside the lock-retry block', () => {
     for (const statement of HOT_DDL) expect(rules(retry(statement)), statement).toEqual([]);
-    // A block whose loop counts and sets the timeout with SET LOCAL, around a dynamic statement.
+    // The same shape written out: a label, SET LOCAL, DEFAULT 0, >, RETURN, two statements, one through EXECUTE, and
+    // a first handler for another error.
     expect(rules([
       'DO $$',
-      'DECLARE n int := 0;',
+      'DECLARE',
+      '  tries integer DEFAULT 0;',
       'BEGIN',
-      '  FOR i IN 1..15 LOOP',
+      '  <<retry>>',
+      '  LOOP',
       '    BEGIN',
       "      SET LOCAL lock_timeout = '2s';",
-      "      EXECUTE format('ALTER TABLE crove_kernel.%I ADD COLUMN IF NOT EXISTS y int', 'audit_event');",
+      '      ALTER TABLE crove_kernel.audit_event ADD COLUMN IF NOT EXISTS y int;',
       "      EXECUTE 'CREATE INDEX IF NOT EXISTS y_idx ON crove_kernel.audit_event (y)';",
       '      RETURN;',
-      '    EXCEPTION WHEN lock_not_available OR deadlock_detected THEN',
-      '      IF i = 15 THEN RAISE; END IF;',
+      '    EXCEPTION',
+      '      WHEN duplicate_column THEN RAISE;',
+      '      WHEN lock_not_available OR deadlock_detected THEN',
+      '        tries := tries + 1;',
+      '        IF tries > 15 THEN RAISE; END IF;',
+      '        PERFORM pg_sleep(1);',
       '    END;',
-      '  END LOOP;',
+      '  END LOOP retry;',
       'END $$;',
     ].join('\n'))).toEqual([]);
+  });
+
+  it('refuses a retry that swallows the lock error, may skip the statement or never ends (coordinator review)', () => {
+    const base = retry('ALTER TABLE crove_kernel.audit_event ADD COLUMN x int');
+    const bounded = 'n := n + 1; IF n >= 15 THEN RAISE; END IF;';
+    const handler = (text: string) => base.replace(/EXCEPTION WHEN lock_not_available THEN .*\n/, `EXCEPTION ${text}\n`);
+    const variants = {
+      'the lock branch swallows, another raises': handler('WHEN lock_not_available THEN NULL; WHEN others THEN RAISE;'),
+      'the lock branch catches OTHERS too': handler(`WHEN lock_not_available OR others THEN ${bounded}`),
+      'OTHERS before the lock branch': handler(`WHEN others THEN NULL; WHEN lock_not_available THEN ${bounded}`),
+      'a bound that never fires': handler('WHEN lock_not_available THEN n := n + 1; IF false THEN RAISE; END IF;'),
+      'a bound on another variable': handler('WHEN lock_not_available THEN n := n + 1; IF m >= 15 THEN RAISE; END IF;'),
+      'a counter that never counts': handler('WHEN lock_not_available THEN IF n >= 15 THEN RAISE; END IF;'),
+      'a counter without 0': base.replace('DECLARE n int := 0;', 'DECLARE n int;'),
+      'a raise inside the bound that only logs': handler("WHEN lock_not_available THEN n := n + 1; IF n >= 15 THEN RAISE NOTICE 'x'; END IF;"),
+      'a FOR loop that may end first': base.replace('LOOP BEGIN', 'FOR i IN 1..1 LOOP BEGIN').replace(bounded, 'IF i > 5 THEN RAISE; END IF;'),
+      'a FOR loop with the counter': base.replace('LOOP BEGIN', 'FOR i IN 1..1 LOOP BEGIN'),
+      'a WHILE loop': base.replace('LOOP BEGIN', 'WHILE false LOOP BEGIN'),
+      'the statement in an IF': base.replace('ALTER TABLE crove_kernel.audit_event ADD COLUMN x int;', 'IF false THEN ALTER TABLE crove_kernel.audit_event ADD COLUMN x int; END IF;'),
+      'the statement in an inner block': base.replace('ALTER TABLE crove_kernel.audit_event ADD COLUMN x int;', 'BEGIN ALTER TABLE crove_kernel.audit_event ADD COLUMN x int; END;'),
+    };
+    for (const [name, sql] of Object.entries(variants)) {
+      expect(sql, name).not.toBe(base);
+      expect(lint(sql).length, name).toBe(1);
+    }
   });
 
   it('refuses DDL on each hot table outside it', () => {

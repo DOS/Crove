@@ -21,12 +21,15 @@
 //                         triggers, policies and rules are internals, not contract; nor is dropping a helper a
 //                         top-level statement of this file created;
 //   hot-table-retry       run DDL that locks a hot table (crove_jobs.*, crove_kernel.outbox_*, audit_event, record,
-//                         idempotency_key, processed_message; plan §5.5, #1693) inside the lock-retry block: a
-//                         BEGIN ... EXCEPTION WHEN lock_not_available block directly in a LOOP, which sets a local
-//                         lock_timeout other than 0 before the statement, EXITs after it, and RAISEs (not a NOTICE)
-//                         in the handler. A table a top-level plain CREATE TABLE of this file made is not hot yet;
+//                         idempotency_key, processed_message; plan §5.5, #1693) directly inside the lock-retry block,
+//                         in the shape of the plan's template (retryBlocks): a BEGIN ... EXCEPTION ... END block in a
+//                         bare LOOP, which sets a local lock_timeout other than 0 before the statement and EXITs after
+//                         it, and whose lock_not_available branch (with no OTHERS before or in it) counts a counter
+//                         declared as 0 and re-raises once it reaches a bound. A table a top-level plain CREATE TABLE
+//                         of this file made is not hot yet;
 //   no-edit-applied       with --since, not change or delete a migration that is already on the base branch.
-// contract-header and hot-table-retry skip the files up to BREAKING_RULES_AFTER, the newest on main when they landed.
+// contract-header and hot-table-retry skip the files up to BREAKING_RULES_AFTER (20261103090000), the newest of the 262
+// on main when they landed.
 // DO bodies are linted too: their PL/pgSQL is split into statements and each SQL statement is checked like a top-level
 // one, and so is every statement of the command string an EXECUTE runs. Function bodies are not: they run when the
 // function is called, not when the migration is applied.
@@ -41,8 +44,8 @@
 //   - a hot table named by a bare placeholder or crove_kernel.%I in an EXECUTE, an index of a hot table whose name
 //     does not say so, and a hot table locked by a function the file calls (apply_tenant_rls and the like);
 //   - a contract change whose command words come from a placeholder (EXECUTE format('DROP %s ...', 'TABLE'));
-//   - the control flow of a retry block: any EXIT or RETURN after the statement counts (one in an IF or an inner
-//     loop too), and so does a statement in an inner block whose own handler swallows the lock error;
+//   - the control flow of a retry block beyond its shape: any EXIT or RETURN after the statement counts (one in an
+//     IF or an inner loop too), and the lock_timeout setting may sit in an IF;
 //   - an unquoted PL/pgSQL keyword used as a name (SELECT 1 AS loop), which can confuse the block structure.
 //
 // The plan names libpg-query for this. This lint uses its own small lexer instead (comments, strings, quoted
@@ -68,11 +71,12 @@ import { pathToFileURL } from 'node:url';
 const DIR = 'supabase/migrations/';
 const ALLOWLIST = 'tools/ci/migration-lint-allowlist.txt';
 const ADR_DIR = 'docs/adr/';
-// contract-header and hot-table-retry (#1693) apply to migrations with a version above this one, the newest on main
-// when they landed: the files up to it cannot be edited (the runner checks each applied file's hash), and listing the
-// 60 of them that are not on the allowlist by name would only repeat what their version already says. With --since,
-// as CI runs, the cutoff is not used: every file a PR adds gets every rule, so raising it exempts nothing in CI.
-export const BREAKING_RULES_AFTER = '20261103070000';
+// contract-header and hot-table-retry (#1693) apply to migrations with a version above this one, the newest of the 262
+// on main when they landed: the files up to it cannot be edited (the runner checks each applied file's hash), and
+// listing the 62 of them that are not on the allowlist by name would only repeat what their version already says
+// (some break them: they predate the rules). With --since, as CI runs, the cutoff is not used: every file a PR adds
+// gets every rule, so raising it exempts nothing in CI.
+export const BREAKING_RULES_AFTER = '20261103090000';
 const MODULE = /^\d{14}_crove_([a-z0-9]+)_[a-z0-9_]+\.sql$/;
 const BANNED_GRANTEES = new Set(['anon', 'authenticated', 'public']);
 const TRANSACTION_WORDS = new Set(['begin', 'start', 'commit', 'end', 'rollback', 'abort']);
@@ -543,50 +547,98 @@ export function lockedTables(tokens) {
 // A lock_timeout value that makes the wait end: a number or string other than 0 (DEFAULT is 0, no timeout).
 const waits = (token) => (token?.t === 'string' || token?.t === 'other') && !/^\s*0*(\.0*)?\s*(ms|s|min|h|d)?\s*$/i.test(token.t === 'string' ? token.body : token.v);
 
-// The lock-retry blocks of a PL/pgSQL body (plan §5.5): a BEGIN ... EXCEPTION WHEN lock_not_available ... END block
-// directly inside a LOOP, whose handler RAISEs (so the retries are bounded). Returns, for each, the token indexes of
-// its BEGIN and EXCEPTION, where it sets lock_timeout (set_config('lock_timeout', ..., true) or SET LOCAL lock_timeout)
-// and where it EXITs or RETURNs, so the caller can check a statement sits between them in that order.
+// Whether a PL/pgSQL statement starts at token k: the token before it ends a statement, a label (>>) or opens a body.
+const startsStatement = (tokens, k) => {
+  const before = tokens[k - 1];
+  return before === undefined || isPunct(before, ';') || isPunct(before, '>') || isWord(before, 'begin', 'then', 'else', 'loop', 'declare');
+};
+
+// The tokens of `tokens` from `at` match `shape`, where a string is a word or punctuation as written, `n` the
+// counter's name and `N` a positive integer.
+function matches(tokens, at, shape, counter) {
+  return shape.every((want, j) => {
+    const token = tokens[at + j];
+    if (want === 'n') return isWord(token, counter);
+    if (want === 'N') return token?.t === 'other' && /^[1-9]\d*$/.test(token.v);
+    if (/^\d+$/.test(want)) return token?.t === 'other' && token.v === want;
+    return /^\w+$/.test(want) ? isWord(token, want) : isPunct(token, want);
+  });
+}
+const INCREMENT = ['n', ':', '=', 'n', '+', '1'];
+const BOUNDS = [['if', 'n', '>', '=', 'N', 'then', 'raise', ';', 'end', 'if'], ['if', 'n', '>', 'N', 'then', 'raise', ';', 'end', 'if']];
+
+// The lock-retry blocks of a PL/pgSQL body, in the shape of the plan's template (§5.5):
+//   DECLARE n int := 0; ... LOOP BEGIN <set lock_timeout>; <statement>; EXIT;
+//   EXCEPTION WHEN lock_not_available THEN n := n + 1; IF n >= 15 THEN RAISE; END IF; ... END; END LOOP;
+// that is, a BEGIN ... EXCEPTION ... END block directly in a bare LOOP (not FOR or WHILE, which may end before
+// reaching the statement), whose first handler that catches lock_not_available (no OTHERS before or in it) counts
+// with a counter declared as 0 and re-raises the lock error once the count is reached. Returns, for each, the token
+// indexes of its BEGIN and EXCEPTION, the statements directly in it (not in an IF, CASE, inner loop or block), where it
+// sets lock_timeout (set_config('lock_timeout', ..., true) or SET LOCAL lock_timeout) and where it EXITs or RETURNs,
+// so the caller can check a statement sits between them in that order.
 export function retryBlocks(tokens) {
   const blocks = [];
-  const stack = []; // { kind: 'block' | 'loop' | 'case', at, exception, parent }
+  const stack = []; // { kind: 'block' | 'loop' | 'case' | 'if', at, exception, parent, inner, bare }
+  const depth = []; // the stack depth at each token
+  const popTo = (kind) => {
+    const at = stack.findLastIndex((entry) => entry.kind === kind);
+    if (at !== -1) stack.length = at;
+  };
   for (let k = 0; k < tokens.length; k++) {
+    depth[k] = stack.length;
     const token = tokens[k];
     if (token.t !== 'word') continue;
     if (token.v === 'end') {
-      if (isWord(tokens[k + 1], 'if')) {
-        k++;
-      } else if (isWord(tokens[k + 1], 'loop', 'case')) {
-        const kind = tokens[k + 1].v;
-        while (stack.length > 0 && stack.pop().kind !== kind);
-        k++;
-      } else {
-        const top = stack.pop();
-        if (top?.kind !== 'block' || top.exception === -1 || top.parent !== 'loop') continue;
-        const handler = tokens.slice(top.exception, k);
-        // RAISE; or RAISE [EXCEPTION] ... ends the retries; RAISE NOTICE and the other levels only log.
-        const raises = handler.some((t, j) => isWord(t, 'raise') && !isWord(handler[j + 1], 'debug', 'log', 'info', 'notice', 'warning'));
-        if (!handler.some((t) => isWord(t, 'lock_not_available')) || !raises) continue;
-        const timeouts = [];
-        const exits = [];
-        for (let j = top.at + 1; j < top.exception; j++) {
-          // set_config('lock_timeout', <not 0>, true) or SET LOCAL lock_timeout = <not 0>: a timeout of 0 waits for ever,
-          // and one that is not local outlives the transaction into the runner's session.
-          const isSetConfig = isWord(tokens[j], 'set_config') && isPunct(tokens[j + 1], '(') && tokens[j + 2]?.t === 'string' && tokens[j + 2].body === 'lock_timeout'
-            && isPunct(tokens[j + 3], ',') && waits(tokens[j + 4]) && isPunct(tokens[j + 5], ',') && isWord(tokens[j + 6], 'true');
-          const isSet = isWord(tokens[j], 'set') && isWord(tokens[j + 1], 'local') && isWord(tokens[j + 2], 'lock_timeout')
-            && (isPunct(tokens[j + 3], '=') || isWord(tokens[j + 3], 'to')) && waits(tokens[j + 4]);
-          if (isSetConfig || isSet) timeouts.push(j);
-          if (isWord(tokens[j], 'exit', 'return')) exits.push(j);
-        }
-        blocks.push({ begin: top.at, exception: top.exception, timeouts, exits });
+      if (isWord(tokens[k + 1], 'if', 'loop', 'case')) {
+        popTo(tokens[k + 1].v);
+        depth[++k] = stack.length;
+        continue;
       }
+      const top = stack.pop();
+      if (top?.kind !== 'block' || top.exception === -1 || top.parent?.kind !== 'loop' || !top.parent.bare) continue;
+      const inner = top.inner;
+      // The handler's branches: each WHEN directly in the block, its conditions up to THEN, its body up to the next.
+      const whens = [];
+      for (let j = top.exception + 1; j < k; j++) if (depth[j] === inner && isWord(tokens[j], 'when') && startsBranch(tokens, j)) whens.push(j);
+      const branches = whens.map((w, i) => {
+        const then = tokens.findIndex((t, j) => j > w && depth[j] === inner && isWord(t, 'then'));
+        return { conditions: tokens.slice(w + 1, then), from: then + 1, to: whens[i + 1] ?? k };
+      });
+      const branch = branches.find((b) => b.conditions.some((t) => isWord(t, 'lock_not_available', 'others')));
+      if (!branch || !branch.conditions.some((t) => isWord(t, 'lock_not_available')) || branch.conditions.some((t) => isWord(t, 'others'))) continue;
+      const statementsAt = (from, to) => {
+        const at = [];
+        for (let j = from; j < to; j++) if (depth[j] === inner && startsStatement(tokens, j)) at.push(j);
+        return at;
+      };
+      const handlerStatements = statementsAt(branch.from, branch.to);
+      const counters = handlerStatements.filter((j) => tokens[j].t === 'word' && matches(tokens, j, INCREMENT, tokens[j].v)).map((j) => tokens[j].v);
+      const bounded = counters.some((counter) => {
+        const declared = tokens.some((t, j) => j < top.at && isWord(t, counter) && startsStatement(tokens, j) && declaredZero(tokens, j));
+        return declared && handlerStatements.some((j) => BOUNDS.some((shape) => matches(tokens, j, shape, counter)));
+      });
+      if (!bounded) continue;
+      const timeouts = [];
+      const exits = [];
+      for (let j = top.at + 1; j < top.exception; j++) {
+        // set_config('lock_timeout', <not 0>, true) or SET LOCAL lock_timeout = <not 0>: a timeout of 0 waits for ever,
+        // and one that is not local outlives the transaction into the runner's session.
+        const isSetConfig = isWord(tokens[j], 'set_config') && isPunct(tokens[j + 1], '(') && tokens[j + 2]?.t === 'string' && tokens[j + 2].body === 'lock_timeout'
+          && isPunct(tokens[j + 3], ',') && waits(tokens[j + 4]) && isPunct(tokens[j + 5], ',') && isWord(tokens[j + 6], 'true');
+        const isSet = isWord(tokens[j], 'set') && isWord(tokens[j + 1], 'local') && isWord(tokens[j + 2], 'lock_timeout')
+          && (isPunct(tokens[j + 3], '=') || isWord(tokens[j + 3], 'to')) && waits(tokens[j + 4]);
+        if (isSetConfig || isSet) timeouts.push(j);
+        if (isWord(tokens[j], 'exit', 'return')) exits.push(j);
+      }
+      blocks.push({ begin: top.at, exception: top.exception, statements: new Set(statementsAt(top.at + 1, top.exception)), timeouts, exits });
     } else if (token.v === 'begin') {
-      stack.push({ kind: 'block', at: k, exception: -1, parent: stack.at(-1)?.kind });
+      stack.push({ kind: 'block', at: k, exception: -1, parent: stack.at(-1), inner: stack.length + 1 });
     } else if (token.v === 'loop') {
-      stack.push({ kind: 'loop', at: k });
+      stack.push({ kind: 'loop', at: k, bare: startsStatement(tokens, k) });
     } else if (token.v === 'case') {
       stack.push({ kind: 'case', at: k });
+    } else if (token.v === 'if' && startsStatement(tokens, k)) {
+      stack.push({ kind: 'if', at: k });
     } else if (token.v === 'exception' && isWord(tokens[k + 1], 'when') && stack.at(-1)?.kind === 'block') {
       stack.at(-1).exception = k;
     }
@@ -594,10 +646,22 @@ export function retryBlocks(tokens) {
   return blocks;
 }
 
-// Whether the statement at token index `at` runs inside a lock-retry block: after it sets lock_timeout, before an EXIT
-// that ends the loop once the statement succeeded, and before the EXCEPTION that retries it.
+// A WHEN that starts a handler branch: right after EXCEPTION or after the ; that ends the previous branch's body.
+const startsBranch = (tokens, k) => isWord(tokens[k - 1], 'exception') || isPunct(tokens[k - 1], ';');
+
+// The declaration starting at `at` (DECLARE n int := 0, = 0 or DEFAULT 0) gives the variable 0.
+function declaredZero(tokens, at) {
+  let end = at;
+  while (end < tokens.length && !isPunct(tokens[end], ';')) end++;
+  const value = tokens[end - 1];
+  const before = tokens[end - 2];
+  return value?.t === 'other' && value.v === '0' && (isPunct(before, '=') || isWord(before, 'default'));
+}
+
+// Whether the statement at token index `at` runs inside a lock-retry block: directly in it, after it sets
+// lock_timeout, before an EXIT that ends the loop once the statement succeeded, and before the EXCEPTION that retries it.
 export function inRetryBlock(blocks, at) {
-  return blocks.some((b) => b.begin < at && at < b.exception && b.timeouts.some((j) => j < at) && b.exits.some((j) => j > at));
+  return blocks.some((b) => b.statements.has(at) && b.timeouts.some((j) => j < at) && b.exits.some((j) => j > at));
 }
 
 // --- Rules -------------------------------------------------------------------------------------------------------
