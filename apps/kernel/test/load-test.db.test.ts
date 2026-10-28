@@ -44,6 +44,7 @@ suite('load test on PostgreSQL (#998)', () => {
     expect(bp.commands).toMatchObject({ failed: 0, firstError: null });
     expect(bp.commands.count).toBeGreaterThan(0);
     // Pause and resume each within one check (1 s) plus the slack: the timing is the worker's loop, not the machine.
+    // The check's own lag reads are recorded too, so a pause or resume never comes before the crossing it answers.
     expect(verdicts.filter((v) => v.check.startsWith('back-pressure ')).map((v) => [v.check, v.ok])).toEqual([
       ['back-pressure pause', true],
       ['back-pressure resume', true],

@@ -1,8 +1,10 @@
 // The Phase 1 load test's arguments, percentiles and verdicts (issue #998). The run itself is
 // load-test.db.test.ts.
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   BACK_PRESSURE_QUEUES,
+  INTERACTIVE_QUEUE,
   DEFAULT_LOAD_ARGS,
   formatReport,
   guardCostUs,
@@ -86,11 +88,25 @@ describe('load test', () => {
     expect(ok({ pausedAt: 30_200 + 11_001 })[0]).toBe(false);
     expect(ok({ resumedAt: 44_300 + 11_001 })[1]).toBe(false);
     expect(ok({ resumedAt: null, ranAfterResume: 0 })).toEqual([true, false, true]);
+    // A pause or resume recorded before the crossing it answers is a measurement error, never a pass.
+    expect(ok({ pausedAt: 30_100 })[0]).toBe(false);
+    expect(ok({ resumedAt: 44_200 })[1]).toBe(false);
     // Interactive work: the interactive queue's job, and the commands meanwhile.
     expect(ok({ interactiveRan: false })[2]).toBe(false);
     expect(ok({ commands: { count: 10, failed: 1, firstError: 'X: boom', p95: 19 } })[2]).toBe(false);
     expect(ok({ commands: { count: 10, failed: 0, firstError: null, p95: 150 } })[2]).toBe(false);
     expect(ok({ commands: { count: 0, failed: 0, firstError: null, p95: null } })[2]).toBe(false);
+  });
+
+  it('measures the queues the worker pauses, and an interactive one it leaves running', () => {
+    // The load test works its own copy of the list; the worker registers its pausable queues with background.add.
+    const worker = readFileSync(new URL('../src/worker.ts', import.meta.url), 'utf8');
+    const names: Record<string, string> = { 'kernel-agent-dispatch': 'QUEUES.agentDispatch', 'kernel-mail-bulk': 'MAIL_BULK_QUEUE', 'kernel-archive-write': 'QUEUES.archiveWrite', 'kernel-retention-purge': 'QUEUES.retention' };
+    expect(BACK_PRESSURE_QUEUES.map((q) => names[q])).toEqual(Object.values(names));
+    for (const ref of Object.values(names)) expect(worker).toContain(`background.add(${ref},`);
+    expect(INTERACTIVE_QUEUE).toBe('kernel-notify');
+    expect(worker).toMatch(/boss\.work<[^>]*>\(QUEUES\.notify,/);
+    expect(worker).not.toContain('background.add(QUEUES.notify');
   });
 
   it('prints every measure, the first failure and a verdict per target', () => {

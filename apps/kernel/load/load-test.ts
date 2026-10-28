@@ -202,13 +202,13 @@ export function judgeBackPressure(bp: BackPressureResult): LoadVerdict[] {
       check: 'back-pressure pause',
       target: `${within} of outbox lag > ${bp.thresholdSeconds} s; ${total}/${total} background jobs held`,
       measured: `${pauseDelay === null ? 'never paused' : `${secs(pauseDelay)} after the lag passed ${bp.thresholdSeconds} s`}; ${bp.held}/${bp.sent} held`,
-      ok: pauseDelay !== null && pauseDelay <= withinMs && bp.sent === total && bp.held === total,
+      ok: pauseDelay !== null && pauseDelay >= 0 && pauseDelay <= withinMs && bp.sent === total && bp.held === total,
     },
     {
       check: 'back-pressure resume',
       target: `${within} of outbox lag <= ${bp.thresholdSeconds / 2} s; the held jobs run`,
       measured: `${resumeDelay === null ? 'never resumed' : `${secs(resumeDelay)} after the lag fell to ${bp.thresholdSeconds / 2} s`}; ${bp.ranAfterResume}/${bp.held} ran`,
-      ok: resumeDelay !== null && resumeDelay <= withinMs && bp.held === total && bp.ranAfterResume === total,
+      ok: resumeDelay !== null && resumeDelay >= 0 && resumeDelay <= withinMs && bp.ranAfterResume === total,
     },
     {
       check: 'interactive work under back-pressure',
@@ -319,8 +319,12 @@ export function sampleLocks(
   };
 }
 
-const describeError = (error: unknown) =>
-  error instanceof Error ? `${(error as { code?: string }).code ?? error.name}: ${error.message}`.slice(0, 200) : String(error);
+// pg-boss emits its errors as plain objects with a message, not as Error instances.
+const describeError = (error: unknown) => {
+  if (error === null || typeof error !== 'object' || typeof (error as { message?: unknown }).message !== 'string') return String(error);
+  const { code, name, message } = error as { code?: string; name?: string; message: string };
+  return `${code ?? name ?? 'Error'}: ${message}`.slice(0, 200);
+};
 
 async function timed(fn: () => Promise<unknown>): Promise<number> {
   const started = performance.now();
@@ -367,8 +371,8 @@ export interface BackPressureRun {
 // The back-pressure phase. It starts with an empty outbox and leaves one: the relay stops while kernel.file.ingest runs
 // at `rate` per second, the worker's check (checkBackPressure, every checkSeconds) pauses the background queues once
 // the lag passes the threshold, background and interactive jobs are sent, and the relay then catches up so the check
-// resumes the queues. A lag sampler on its own connection records when the lag passed the threshold and when it fell
-// back to half of it.
+// resumes the queues. The lag is read every 100 ms on its own connection and by each check, which records when it passed
+// the threshold and when it fell back to half of it.
 export async function measureBackPressure(run: BackPressureRun): Promise<BackPressureResult> {
   const thresholdMs = run.thresholdSeconds * 1000;
   const checkMs = run.checkSeconds * 1000;
@@ -388,11 +392,24 @@ export async function measureBackPressure(run: BackPressureRun): Promise<BackPre
   };
   const work = new PausableWork(boss);
   let running = true;
+  let checking = false;
   let pressureTimer: ReturnType<typeof setInterval> | undefined;
+  // The first failure of a loop or a check; the waits below stop on it and the phase fails with it.
+  let phaseError: unknown = null;
   const loops: Promise<unknown>[] = [];
+  const inflight: Promise<unknown>[] = [];
+  const loop = (body: () => Promise<void>) => {
+    loops.push(
+      body().catch((error: unknown) => {
+        phaseError ??= error;
+      }),
+    );
+  };
   try {
-    // The background queues as the worker works them (batch of 1, pg-boss's default polling), the interactive one
-    // polled as fast as pg-boss allows so the check of it is quick.
+    // The background queues as the worker works them (batch of 1, pg-boss's default polling). The interactive queue is
+    // worked outside PausableWork, as the worker works the queues a person waits for, and polled as fast as pg-boss
+    // allows so the check of it is quick; that it keeps running is a sanity check of the setup, while the commands
+    // below are the interactive work the plan means.
     for (const queue of BACK_PRESSURE_QUEUES) await work.add(queue, () => boss.work<{ tag: string }>(queue, { batchSize: 1 }, handler));
     await boss.work<{ tag: string }>(INTERACTIVE_QUEUE, { batchSize: 1, pollingIntervalSeconds: 0.5 }, handler);
     const warm = [...BACK_PRESSURE_QUEUES, INTERACTIVE_QUEUE];
@@ -412,67 +429,81 @@ export async function measureBackPressure(run: BackPressureRun): Promise<BackPre
       resumedAt: null,
       maxLagSeconds: 0,
     };
+    // Every lag read, the sampler's and the check's own, so the check never acts on a crossing not yet recorded. While
+    // the relay is stopped the lag grows one second per second, so the crossing of the threshold is placed where the
+    // first reading over it says it was; the fall to half is abrupt (the relay drains the backlog at once) and is the
+    // first reading at or under it.
+    const observe = (lag: number) => {
+      const t = at();
+      m.maxLagSeconds = Math.max(m.maxLagSeconds, lag);
+      if (m.lagOverAt === null && lag > run.thresholdSeconds) m.lagOverAt = Math.max(0, t - (lag - run.thresholdSeconds) * 1000);
+      else if (m.lagOverAt !== null && m.lagUnderHalfAt === null && lag <= run.thresholdSeconds / 2) m.lagUnderHalfAt = t;
+    };
+    const readLag = async () => {
+      const lag = await outboxLagSeconds(run.worker);
+      observe(lag);
+      return lag;
+    };
 
     // Interactive commands at `rate` per second until the end of the phase.
     const samples: number[] = [];
     let failed = 0;
     let firstError: string | null = null;
-    const inflight: Promise<unknown>[] = [];
-    loops.push(
-      (async () => {
-        for (let i = 0; running; i++) {
-          const wait = stallStart + (i * 1000) / run.rate - performance.now();
-          if (wait > 0) await sleep(wait);
-          if (!running) break;
-          inflight.push(
-            timed(run.ingest).then(
-              (d) => samples.push(d),
-              (error: unknown) => {
-                failed++;
-                firstError ??= describeError(error);
-              },
-            ),
-          );
-        }
-      })(),
-    );
+    loop(async () => {
+      for (let i = 0; running; i++) {
+        const wait = stallStart + (i * 1000) / run.rate - performance.now();
+        if (wait > 0) await sleep(wait);
+        if (!running) break;
+        inflight.push(
+          timed(run.ingest).then(
+            (d) => samples.push(d),
+            (error: unknown) => {
+              failed++;
+              firstError ??= describeError(error);
+            },
+          ),
+        );
+      }
+    });
     // The lag, every 100 ms on its own connection.
-    loops.push(
-      (async () => {
-        while (running) {
-          const lag = await outboxLagSeconds(run.worker);
-          const t = at();
-          m.maxLagSeconds = Math.max(m.maxLagSeconds, lag);
-          if (m.lagOverAt === null && lag > run.thresholdSeconds) m.lagOverAt = t;
-          else if (m.lagOverAt !== null && m.lagUnderHalfAt === null && lag <= run.thresholdSeconds / 2) m.lagUnderHalfAt = t;
-          await sleep(100);
-        }
-      })(),
-    );
-    // The worker's check on the worker's schedule: one at a time, every checkSeconds.
-    let checking = false;
-    let checkError: unknown = null;
+    loop(async () => {
+      while (running) {
+        await readLag();
+        await sleep(100);
+      }
+    });
+    // The worker's check on the worker's schedule: one at a time, every checkSeconds. The paused moment is when the
+    // queues have stopped fetching; the resumed one is when they start fetching again, before any of them has.
+    const watched = {
+      get paused() {
+        return work.paused;
+      },
+      get names() {
+        return work.names;
+      },
+      pause: async () => {
+        await work.pause();
+        m.pausedAt ??= at();
+      },
+      resume: async () => {
+        m.resumedAt ??= at();
+        await work.resume();
+      },
+    };
     pressureTimer = setInterval(() => {
       if (checking || !running) return;
       checking = true;
-      void checkBackPressure({ work, readLagSeconds: () => outboxLagSeconds(run.worker), thresholdSeconds: run.thresholdSeconds, log: run.log })
-        .then(
-          () => {
-            const t = at();
-            if (work.paused && m.pausedAt === null) m.pausedAt = t;
-            if (!work.paused && m.pausedAt !== null && m.resumedAt === null) m.resumedAt = t;
-          },
-          (error: unknown) => {
-            checkError ??= error;
-          },
-        )
+      void checkBackPressure({ work: watched, readLagSeconds: readLag, thresholdSeconds: run.thresholdSeconds, log: run.log })
+        .catch((error: unknown) => {
+          phaseError ??= error;
+        })
         .finally(() => {
           checking = false;
         });
     }, checkMs);
     const until = async (done: () => boolean, deadline: number) => {
-      while (!done() && at() < deadline && checkError === null) await sleep(50);
-      if (checkError !== null) throw checkError;
+      while (!done() && at() < deadline && phaseError === null) await sleep(50);
+      if (phaseError !== null) throw phaseError;
     };
 
     // Wait for the pause, giving up three checks after the lag should have passed the threshold.
@@ -486,17 +517,16 @@ export async function measureBackPressure(run: BackPressureRun): Promise<BackPre
     await waitFor([interactiveTag], 15_000);
     const holdLeft = sentAt + BACK_PRESSURE_HOLD_MS - performance.now();
     if (holdLeft > 0) await sleep(holdLeft);
+    if (phaseError !== null) throw phaseError;
     const interactiveRan = ran.has(interactiveTag) && work.paused;
     const heldCount = held.filter((t) => !ran.has(t)).length;
 
     // The relay catches up and keeps up until the end; the check then resumes the queues.
     run.log('back-pressure: relay running again');
     const releasedAt = at();
-    loops.push(
-      (async () => {
-        while (running) if ((await run.claim()).length === 0) await sleep(10);
-      })(),
-    );
+    loop(async () => {
+      while (running) if ((await run.claim()).length === 0) await sleep(10);
+    });
     await until(() => m.resumedAt !== null, releasedAt + 3 * checkMs + 5000);
     const resumedPerf = m.resumedAt === null ? null : stallStart + m.resumedAt;
     if (resumedPerf !== null) await waitFor(held, 15_000);
@@ -507,6 +537,7 @@ export async function measureBackPressure(run: BackPressureRun): Promise<BackPre
     await Promise.all(loops);
     await Promise.all(inflight);
     while (checking) await sleep(10);
+    if (phaseError !== null) throw phaseError;
     // What the commands still in flight emitted, so the outbox is empty again.
     while ((await run.claim()).length > 0);
     return {
@@ -521,9 +552,12 @@ export async function measureBackPressure(run: BackPressureRun): Promise<BackPre
       commands: { count: samples.length, failed, firstError, p95: percentile(samples, 95) },
     };
   } finally {
+    // On a failure too: nothing of the phase still runs when the caller ends the pools and drops the database.
     running = false;
     if (pressureTimer) clearInterval(pressureTimer);
     await Promise.allSettled(loops);
+    await Promise.allSettled(inflight);
+    while (checking) await sleep(10);
     await boss.stop({ graceful: false });
   }
 }
