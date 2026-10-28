@@ -1501,7 +1501,15 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
     // A nested command that declares no writes counts as the caller's.
     const undeclaredNested = defineCommand({ name: `t1710.nested_${suffix}`, input: z.object({}), risk: 'R1', access: 'system', handler: async (ctx) => raise(ctx, `nested-${suffix}`) }) as CommandDef<unknown, unknown>;
     const viaNested = probe('via_nested', [], async (ctx) => ctx.run(undeclaredNested.name, {}));
-    worker.register({ commands: [undeclared, empty, declared, delegates, undeclaredNested, viaNested] });
+    // A nested command that declares none and writes nothing: its audit row is the runtime's, not the caller's.
+    const readOnlyNested = defineCommand({ name: `t1710.reads_${suffix}`, input: z.object({}), risk: 'R0', access: 'system', handler: async () => ({ read: true }) }) as CommandDef<unknown, unknown>;
+    const viaReadOnly = probe('via_read_only', [], async (ctx) => ctx.run(readOnlyNested.name, {}));
+    // A write beside an event in Promise.all cannot be told from the event's rows, so the command fails.
+    const beside = probe('beside', [], async (ctx) => {
+      await Promise.all([ctx.emit('t1710.beside', { n: 1 }), raise(ctx, `beside-${suffix}`)]);
+      return { ok: true };
+    });
+    worker.register({ commands: [undeclared, empty, declared, delegates, undeclaredNested, viaNested, readOnlyNested, viaReadOnly, beside] });
     const as = { actor: SYSTEM, orgId: orgA };
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
@@ -1509,11 +1517,14 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
         await expect(worker.execute(command.name, {}, as), command.name).rejects.toMatchObject({ code: 'INTERNAL' });
         expect(logged.mock.calls.flat().map(String).join('\n')).toContain(`command ${command.name}: wrote crove_kernel.inbox_item, which it does not declare`);
       }
+      await expect(worker.execute(beside.name, {}, as)).rejects.toMatchObject({ code: 'INTERNAL' });
+      expect(logged.mock.calls.flat().map(String).join('\n')).toContain(`command ${beside.name}: its writes cannot be checked`);
     } finally {
       logged.mockRestore();
     }
     await expect(worker.execute(declared.name, {}, as)).resolves.toEqual({ ok: true });
     await expect(worker.execute(delegates.name, {}, as)).resolves.toEqual({ ok: true });
+    await expect(worker.execute(viaReadOnly.name, {}, as)).resolves.toEqual({ read: true });
     // Nothing the refused commands wrote stayed.
     const kept = await withAdmin(async (c) => (await c.query(`SELECT dedupe_key FROM crove_kernel.inbox_item WHERE org_id = $1 AND dedupe_key LIKE $2 ORDER BY 1`, [orgA, `t1710:%${suffix}`])).rows);
     expect(kept).toEqual([{ dedupe_key: `t1710:declared-${suffix}` }]);

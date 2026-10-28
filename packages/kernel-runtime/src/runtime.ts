@@ -1,6 +1,6 @@
 // The single write path. Every state change is a typed command executed through Runtime.execute(),
 // inside one transaction that enters the tenant context checked by RLS, and writes audit + outbox.
-import { sql, type RawBuilder, type Transaction } from 'kysely';
+import { sql, type KyselyPlugin, type RawBuilder, type Transaction } from 'kysely';
 import { v7 as uuidv7 } from 'uuid';
 import type { z } from 'zod';
 import { contextTaint, singleCell, type CellResolver, type Database, type Db, type MemberRole } from '@crove/db';
@@ -832,6 +832,28 @@ function snapshotQuery(def: QueryDef<any, any>): QueryDef<unknown, unknown> {
   return Object.freeze(copy) as unknown as QueryDef<unknown, unknown>;
 }
 
+// The declared-writes check a command runs under (#1710): its own when it declares its writes, otherwise its caller's.
+interface WriteScope {
+  // Runs work whose writes are not the handler's (the runtime's rows, a nested command that declares its own writes)
+  // and sets them aside.
+  aside<T>(work: () => Promise<T>): Promise<T>;
+  // The statements the scope's handlers issued through their ctx.trx, but plain SELECTs.
+  readonly statements: { n: number };
+}
+
+// Counts the statements a handler issues through its ctx.trx (raw SQL too), but plain SELECTs, at the time each one
+// is compiled to run (Kysely compiles a query when it executes it).
+function countWrites(statements: { n: number }): KyselyPlugin {
+  return {
+    transformQuery: ({ node }) => {
+      // A SELECT with a WITH clause may hold a data-modifying statement, so it counts.
+      if (node.kind !== 'SelectQueryNode' || node.with !== undefined) statements.n += 1;
+      return node;
+    },
+    transformResult: async ({ result }) => result,
+  };
+}
+
 // The rows inserted, updated and deleted so far in this transaction, per crove_* table (#1710). The counts need
 // track_counts, which is on by default; with it off they would read zero, so the runtime refuses to go on.
 async function tableWriteCounts(trx: Transaction<Database>): Promise<Map<string, number>> {
@@ -1313,7 +1335,8 @@ export class Runtime {
     input: unknown,
     // cleanRoot: the proposal command, declared free of contact and payment writes, this command runs under (as
     // itself or nested at any depth below it), if any (P04, #1697).
-    base: { orgId: string; actor: Actor; entered: Entered; proposalId: string | null; cleanRoot?: string },
+    // writeScope: the declared-writes check of the nearest caller that declares its writes (#1710), if any.
+    base: { orgId: string; actor: Actor; entered: Entered; proposalId: string | null; cleanRoot?: string; writeScope?: WriteScope },
   ): Promise<O> {
     const commandId = uuidv7();
     const cleanRoot = base.cleanRoot ?? (def.access === 'proposal' && this.#contactOrPayment.get(def.name) === false ? def.name : undefined);
@@ -1350,28 +1373,49 @@ export class Runtime {
     // does not declare, the rows the runtime writes for it (ctx.emit, ctx.activity, ctx.numbering) and those of nested
     // commands that declare their own writes aside. A nested command that declares none counts as this command's. The
     // check is per table: a column left out of a declared table is not seen.
-    const writeCheck = def.writes === undefined ? null : { declared: new Set(def.writes.map((w) => w.table)), start: await tableWriteCounts(trx), aside: new Map<string, number>(), unmeasured: false };
-    // Runs work whose writes are not this handler's, and sets them aside.
-    const aside = async <T>(work: () => Promise<T>): Promise<T> => {
-      if (writeCheck === null) return work();
-      const before = await tableWriteCounts(trx);
-      const setAside = async () => {
-        for (const [table, n] of await tableWriteCounts(trx)) writeCheck.aside.set(table, (writeCheck.aside.get(table) ?? 0) + n - (before.get(table) ?? 0));
-      };
-      let value: T;
-      try {
-        value = await work();
-      } catch (error) {
-        // A failed tryRun rolled back to its savepoint, so the counts can still be read; after a failed ctx.run the
-        // transaction is aborted, and the command cannot be checked (it fails at the end if it still answers).
-        await setAside().catch(() => {
-          writeCheck.unmeasured = true;
-        });
-        throw error;
-      }
-      await setAside();
-      return value;
-    };
+    // A nested command that declares none runs in its caller's scope: its handler's writes count as the caller's, its
+    // runtime rows (audit row, events) are set aside there. A write through a definer the handler calls, or by a
+    // trigger its statements fire, is counted like the statement itself: the command declares that table too.
+    const writeCheck =
+      def.writes === undefined
+        ? null
+        : { declared: new Set(def.writes.map((w) => w.table)), start: await tableWriteCounts(trx), aside: new Map<string, number>(), unmeasured: false };
+    const scope: WriteScope | null =
+      writeCheck === null
+        ? (base.writeScope ?? null)
+        : {
+            statements: { n: 0 },
+            // Runs work whose writes are not this handler's, and sets them aside. The counts are the whole
+            // transaction's, so a statement the handler issues meanwhile (beside a ctx.emit in Promise.all) would be set
+            // aside with them: the command then cannot be checked, and fails.
+            aside: async <T>(work: () => Promise<T>): Promise<T> => {
+              const statements = (scope as WriteScope).statements;
+              // Read before the first await: a statement the handler starts beside this one is counted from here on.
+              const issued = statements.n;
+              const before = await tableWriteCounts(trx);
+              const setAside = async () => {
+                const after = await tableWriteCounts(trx);
+                if (statements.n !== issued) writeCheck.unmeasured = true;
+                for (const [table, n] of after) writeCheck.aside.set(table, (writeCheck.aside.get(table) ?? 0) + n - (before.get(table) ?? 0));
+              };
+              let value: T;
+              try {
+                value = await work();
+              } catch (error) {
+                // A failed tryRun rolled back to its savepoint, so the counts can still be read; after a failed ctx.run
+                // the transaction is aborted, and the command cannot be checked (it fails at the end if it answers).
+                await setAside().catch(() => {
+                  writeCheck.unmeasured = true;
+                });
+                throw error;
+              }
+              await setAside();
+              return value;
+            },
+          };
+    const aside = <T>(work: () => Promise<T>): Promise<T> => (scope === null ? work() : scope.aside(work));
+    // The handler's own statements, counted for the scope through its ctx.trx.
+    const handlerTrx = scope === null ? trx : trx.withPlugin(countWrites(scope.statements));
     // Whether the writes of a nested command are its own to declare (it declares writes) or this command's.
     const ownsWrites = (name: string): boolean => this.#commands.get(name)?.writes !== undefined;
     // Set once the handler settled: from then on the runtime writes this command's rows, and nothing the handler
@@ -1382,6 +1426,8 @@ export class Runtime {
     };
     const ctx: CommandContext = {
       ...this.queryContext(trx, base.orgId, base.actor, base.entered),
+      // The handler's statements go through handlerTrx, so the write check can tell them from the runtime's (#1710).
+      trx: handlerTrx,
       commandId,
       proposalId: base.proposalId,
       now: new Date(),
@@ -1564,7 +1610,12 @@ export class Runtime {
       this.requireStepUp(nested.def, base.actor);
       // An R3 command already confirmed the session live for this execution.
       if (def.risk !== 'R3') await this.requireLiveSession(nested.def, base.actor);
-      return this.runInTx<R>(trx, nested.def, nested.input, { ...base, proposalId, ...(cleanRoot !== undefined ? { cleanRoot } : {}) });
+      return this.runInTx<R>(trx, nested.def, nested.input, {
+        ...base,
+        proposalId,
+        ...(cleanRoot !== undefined ? { cleanRoot } : {}),
+        ...(scope !== null ? { writeScope: scope } : {}),
+      });
     };
     let output: O;
     try {
@@ -1581,7 +1632,11 @@ export class Runtime {
     // them, and a tryRun's rollback could undo them, so the command fails instead and commits nothing.
     if (await settleRunning()) throw new Error(`command ${def.name}: the handler returned while a nested command was still running`);
     if (writeCheck !== null) {
-      if (writeCheck.unmeasured) throw new Error(`command ${def.name}: its writes cannot be checked after a nested command failed (#1710)`);
+      if (writeCheck.unmeasured) {
+        throw new Error(
+          `command ${def.name}: its writes cannot be checked (a nested command failed, or the handler wrote while the runtime wrote for it: run ctx.emit, ctx.activity, ctx.numbering and nested commands one at a time) (#1710)`,
+        );
+      }
       const undeclared = [...(await tableWriteCounts(trx))]
         .filter(([table, n]) => n - (writeCheck.start.get(table) ?? 0) - (writeCheck.aside.get(table) ?? 0) > 0 && !writeCheck.declared.has(table))
         .map(([table]) => table)
@@ -1592,8 +1647,10 @@ export class Runtime {
     // until commit. Written only now, after every nested command ran, and in (command, code) order, so two commands of
     // one actor never wait on each other's tally rows while either still waits for a lock its nested commands take.
     const byKey = (a: CaughtRefusal, b: CaughtRefusal) => compareText(a.command, b.command) || compareText(a.code, b.code);
+    // In a caller's scope (no declaration of its own), the rows the runtime writes for this command are set aside there.
+    const late = writeCheck === null ? aside : <T>(work: () => Promise<T>) => work();
     for (const refusal of [...caught].sort(byKey)) {
-      await this.writeNestedRefusalAudit(trx, base, refusal);
+      await late(() => this.writeNestedRefusalAudit(trx, base, refusal));
     }
     // R3 rows record the assurance used: aal, session_id and the MFA timestamp (ADR-0028 section 5). The runtime's
     // keys come last, so a command's ctx.audit facts never replace them.
@@ -1602,17 +1659,19 @@ export class Runtime {
       auditDetail || assurance
         ? { ...auditDetail, ...actorDetail(base.actor), ...assurance }
         : undefined;
-    await this.writeAudit(trx, {
-      orgId: base.orgId,
-      actor: base.actor,
-      command: def.name,
-      commandId,
-      outcome: 'ok',
-      input: stableStringify(input),
-      target: def.target?.(input) ?? null,
-      proposalId: base.proposalId,
-      ...(detail ? { detail } : {}),
-    });
+    await late(() =>
+      this.writeAudit(trx, {
+        orgId: base.orgId,
+        actor: base.actor,
+        command: def.name,
+        commandId,
+        outcome: 'ok',
+        input: stableStringify(input),
+        target: def.target?.(input) ?? null,
+        proposalId: base.proposalId,
+        ...(detail ? { detail } : {}),
+      }),
+    );
     return output;
   }
 
