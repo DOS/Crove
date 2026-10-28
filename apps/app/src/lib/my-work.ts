@@ -1,16 +1,31 @@
-// "Việc của tôi" (My work, issue #1673, notes plan docs/plan/notes.md §3.10): the member's own to-dos, grouped by the
-// due day in each to-do's time zone (the kernel works the group out), in the member's own order. The pure parts of the
-// screen live here: the groups, the keyboard shortcuts and where a move puts a to-do.
-import { DEFAULT_TIME_ZONE, TODO_DUE_GROUPS, isTimeZone, type TodoDueGroup, type TodoSummary } from '@crove/kernel-contract';
+// "Việc của tôi" (My work, issues #1673 and #1674, notes plan docs/plan/notes.md §3.10): the member's own to-dos and
+// the open tasks of the positions they hold, grouped by the due day (the kernel works the group out), the to-dos in the
+// member's own order. The pure parts of the screen live here: the groups, the keyboard shortcuts, where a move puts a
+// to-do and the text a hand-over proposes.
+import { DEFAULT_TIME_ZONE, TODO_DUE_GROUPS, isTimeZone, type MyWorkTask, type TodoDueGroup, type TodoStep, type TodoSummary } from '@crove/kernel-contract';
 
 export interface TodoGroup {
   id: TodoDueGroup;
   items: TodoSummary[];
+  // The team tasks of the group (#1674), after the to-dos, soonest first as the kernel sends them.
+  tasks: MyWorkTask[];
 }
 
-/** The open to-dos in the groups of My work, in group order and, within a group, in the list's own order. */
-export function groupTodos(todos: readonly TodoSummary[]): TodoGroup[] {
-  return TODO_DUE_GROUPS.map((id) => ({ id, items: todos.filter((t) => (t.group ?? 'none') === id) })).filter((g) => g.items.length > 0);
+/** The open to-dos and tasks in the groups of My work, in group order and, within a group, in the list's own order. */
+export function groupTodos(todos: readonly TodoSummary[], tasks: readonly MyWorkTask[] = []): TodoGroup[] {
+  return TODO_DUE_GROUPS.map((id) => ({ id, items: todos.filter((t) => (t.group ?? 'none') === id), tasks: tasks.filter((t) => t.group === id) })).filter(
+    (g) => g.items.length > 0 || g.tasks.length > 0,
+  );
+}
+
+/**
+ * The description a hand-over proposes (#1674): the to-do's details, then its steps as a list. The member reads and may
+ * edit it in the confirm dialog before the team sees it. Cut to the description's limit.
+ */
+export function handOverDescription(todo: { details: string; checklist: readonly TodoStep[] }, max = 10_000): string {
+  const steps = todo.checklist.map((s) => `- [${s.done ? 'x' : ' '}] ${s.text}`).join('\n');
+  const text = [todo.details.trim(), steps].filter((part) => part !== '').join('\n\n');
+  return text.slice(0, max);
 }
 
 /** The browser's time zone, which a new to-do's due day is read in; Vietnam's when the browser names none we know. */

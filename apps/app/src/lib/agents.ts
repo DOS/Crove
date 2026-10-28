@@ -113,6 +113,11 @@ export const parseTasksSearch = (search: Record<string, unknown>): TasksSearch =
 // The Social post a task is about (#1193): the content agent's tasks point at their post by their source ref, and the
 // task page links to it. Anything else, or an id that is not a UUID, is none.
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** Whether a task was handed over from a member's own to-do (#1674); the to-do stays private, so no id is shown. */
+export function fromTodo(sourceRef: unknown): boolean {
+  return typeof sourceRef === 'object' && sourceRef !== null && (sourceRef as { type?: unknown }).type === 'notes.todo';
+}
+
 export function socialPostOf(sourceRef: unknown): string | null {
   if (typeof sourceRef !== 'object' || sourceRef === null) return null;
   const { type, id } = sourceRef as { type?: unknown; id?: unknown };

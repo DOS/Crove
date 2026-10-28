@@ -208,9 +208,13 @@ import {
   zNoteSummary,
   zNoteUpdate,
   zNoteWritten,
+  zMyWork,
+  zMyWorkInput,
   zTodo,
   zTodoCount,
   zTodoCreate,
+  zTodoHandOver,
+  zTodoHandedOver,
   zTodoList,
   zTodoRef,
   zTodoReorder,
@@ -463,6 +467,10 @@ export const contract = {
       reorder: oc.input(zTodoReorder).output(zTodoWritten),
       delete: oc.input(zTodoRef).output(zTodoWritten),
       restore: oc.input(zTodoRef).output(zTodoWritten),
+      // Hands an open to-do over to a position as a team task (#1674), with the text the member confirmed.
+      handOver: oc.input(zTodoHandOver).output(zTodoHandedOver),
+      // My work: my open to-dos and the open tasks of the positions I hold (#1674).
+      myWork: oc.input(zMyWorkInput).output(zMyWork),
       // How many to-dos each member has, for an owner or admin before removing one; no text.
       counts: oc.input(z.strictObject({})).output(z.array(zTodoCount)),
     },

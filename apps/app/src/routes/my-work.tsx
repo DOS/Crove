@@ -1,16 +1,21 @@
-// "Việc của tôi" (My work, issue #1673, notes plan docs/plan/notes.md §3.10 and step N4): the member's own to-dos,
-// which nobody else in the org reads (ADR-0037). Open ones sit in the groups Quá hạn, Hôm nay, 7 ngày tới, Sau đó and
-// Không hạn, by the due day in each to-do's time zone, in the member's own order; done ones and the trash have their own
-// tabs. Quick add at the top saves on Enter; N, J, K, X and E work the list from the keyboard (DESIGN.md §5.2).
+// "Việc của tôi" (My work, issues #1673 and #1674, notes plan docs/plan/notes.md §3.10, steps N4 and N5): the member's
+// own to-dos, which nobody else in the org reads (ADR-0037), and the open tasks of the positions they hold, marked
+// "Việc nhóm". Open ones sit in the groups Quá hạn, Hôm nay, 7 ngày tới, Sau đó and Không hạn, by the due day, the
+// to-dos in the member's own order; done ones and the trash have their own tabs. Quick add at the top saves on Enter;
+// N, J, K, X and E work the to-dos from the keyboard (DESIGN.md §5.2). A to-do can be handed over to a position as a
+// team task, after the member confirms the text the team will read.
 import { useMutation, useQuery } from '@tanstack/react-query';
+import { Link, useParams } from '@tanstack/react-router';
 import { useEffect, useMemo, useRef, useState, type FormEvent, type RefObject } from 'react';
 import { useTranslations } from 'use-intl';
-import type { Todo, TodoListView, TodoStep, TodoSummary } from '@crove/kernel-contract';
+import type { MyWorkTask, Todo, TodoListView, TodoStep, TodoSummary } from '@crove/kernel-contract';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Checkbox } from '@crove/ui/components/checkbox';
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@crove/ui/components/dialog';
 import { Input } from '@crove/ui/components/input';
+import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Tabs, TabsList, TabsTrigger } from '@crove/ui/components/tabs';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
@@ -20,9 +25,10 @@ import { Empty, ErrorText, ListSkeleton, PageHeader, Spinner } from '../componen
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { SAFETY_POLL_MS, pollEvery, useStreamLive } from '../lib/stream-hook.ts';
-import { browserTimeZone, groupTodos, moveTarget, myWorkShortcut, stepSelection, type MyWorkAction } from '../lib/my-work.ts';
+import { browserTimeZone, groupTodos, handOverDescription, moveTarget, myWorkShortcut, stepSelection, type MyWorkAction } from '../lib/my-work.ts';
 
 const refresh = () => void queryClient.invalidateQueries({ queryKey: orpc.notes.todos.key() });
+type Chart = Awaited<ReturnType<typeof orpc.chart.get.call>>;
 // The most to-dos one list shows; a longer list says so.
 const LIST_LIMIT = 500;
 
@@ -36,6 +42,116 @@ function DueChip({ todo }: { todo: TodoSummary }) {
       {todo.overdue && <span className="sr-only">{t('overdue')}: </span>}
       {label}
     </Badge>
+  );
+}
+
+// Hands a to-do over to a position as a team task (#1674). The dialog shows the title and description the team will
+// read, proposed from the to-do and editable; nothing goes to the task but what the member confirms here. It hands over
+// the to-do as saved, so it waits while the editor holds unsaved changes (`disabled`), and it says when the task is due.
+function HandOverDialog({ todo, disabled, onDone }: { todo: Todo; disabled: boolean; onDone: () => void }) {
+  const t = useTranslations('myWork');
+  const common = useTranslations('common');
+  const f = useFormat();
+  const chart = useQuery(orpc.chart.get.queryOptions());
+  const positions = (chart.data?.positions ?? []).filter((p) => p.status !== 'archived');
+  const [open, setOpen] = useState(false);
+  const [positionId, setPositionId] = useState('');
+  const [title, setTitle] = useState(todo.title);
+  const [description, setDescription] = useState(() => handOverDescription(todo));
+  const handOver = useMutation({
+    mutationFn: (v: { positionId: string; title: string; description: string }) =>
+      client.notes.todos.handOver({ todoId: todo.id, revision: todo.revision, positionId: v.positionId, title: v.title.trim(), description: v.description }),
+    onSuccess: () => {
+      refresh();
+      void queryClient.invalidateQueries({ queryKey: orpc.tasks.key() });
+      setOpen(false);
+      onDone();
+    },
+  });
+  // The dialog renders in a portal but sits inside the editor's form in React's tree, so its submit stops here and
+  // never saves the editor (the editor ignores keys from outside its own form).
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (positionId && title.trim() && !handOver.isPending) handOver.mutate({ positionId, title, description });
+  };
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <Button type="button" variant="outline" disabled={disabled} title={disabled ? t('handOverSaveFirst') : undefined} onClick={() => setOpen(true)} data-testid="todo-hand-over">
+        {t('handOver')}
+      </Button>
+      <DialogContent closeLabel={common('close')} className="sm:max-w-lg">
+        <form onSubmit={submit} className="grid gap-4">
+          <DialogHeader>
+            <DialogTitle>{t('handOverTitle')}</DialogTitle>
+            <DialogDescription>{t('handOverHint')}</DialogDescription>
+          </DialogHeader>
+          <label className="block text-xs">
+            <span className="text-subtle-foreground">{t('handOverPosition')}</span>
+            <NativeSelect required className="mt-1 w-full" value={positionId} onChange={(e) => setPositionId(e.target.value)} data-testid="hand-over-position">
+              <NativeSelectOption value="">{t('handOverPick')}</NativeSelectOption>
+              {positions.map((p) => (
+                <NativeSelectOption key={p.id} value={p.id}>
+                  {p.holder?.type === 'agent' ? t('handOverAgentHeld', { position: p.title }) : p.title}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+          </label>
+          <label className="block text-xs">
+            <span className="text-subtle-foreground">{t('handOverTaskTitle')}</span>
+            <Input required maxLength={300} value={title} onChange={(e) => setTitle(e.target.value)} className="mt-1" />
+          </label>
+          <label className="block text-xs">
+            <span className="text-subtle-foreground">{t('handOverDescription')}</span>
+            <Textarea rows={6} maxLength={10000} value={description} onChange={(e) => setDescription(e.target.value)} className="mt-1" />
+          </label>
+          <p className="text-xs text-subtle-foreground" data-testid="hand-over-due">
+            {todo.dueOn === null ? t('handOverNoDue') : t('handOverDue', { due: todo.dueTime ? t('dueAt', { day: f.date(todo.dueOn), time: todo.dueTime }) : f.date(todo.dueOn) })}
+          </p>
+          {chart.data && positions.length === 0 && <p className="text-xs text-subtle-foreground">{t('handOverNoPositions')}</p>}
+          {handOver.error && <ErrorText>{errorMessage(handOver.error)}</ErrorText>}
+          <DialogFooter>
+            <DialogClose render={<Button type="button" variant="outline" />}>{common('cancel')}</DialogClose>
+            <Button type="submit" disabled={!positionId || !title.trim() || handOver.isPending}>
+              {handOver.isPending ? <Spinner /> : null}
+              {t('handOverConfirm')}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function positionTitle(chart: Chart | undefined, id: string | null, root: string, unknown: string): string {
+  if (id === null) return root;
+  return chart?.positions.find((p) => p.id === id)?.title ?? unknown;
+}
+
+// A team task of a position the member holds (#1674): read here, worked on the task's own page.
+function TaskRow({ task, slug, chart }: { task: MyWorkTask; slug: string; chart: Chart | undefined }) {
+  const t = useTranslations('myWork');
+  const tt = useTranslations('tasks');
+  const f = useFormat();
+  return (
+    <li data-testid="my-work-task" className="flex flex-wrap items-center gap-3 px-4 py-2">
+      <Badge variant="secondary">{t('teamTask')}</Badge>
+      <Link to="/o/$slug/tasks/$id" params={{ slug, id: task.id }} className="min-w-0 flex-1 truncate text-sm text-link hover:underline">
+        {task.title}
+      </Link>
+      {task.tainted && (
+        <Badge variant="warning" title={tt('taintedHint')}>
+          {tt('tainted')}
+        </Badge>
+      )}
+      <span className="text-xs text-subtle-foreground">{positionTitle(chart, task.positionId, tt('rootAssignee'), tt('unknownPosition'))}</span>
+      {task.due && (
+        <Badge variant={task.overdue ? 'destructive' : 'outline'}>
+          {task.overdue && <span className="sr-only">{t('overdue')}: </span>}
+          {f.dateTime(task.due)}
+        </Badge>
+      )}
+    </li>
   );
 }
 
@@ -56,6 +172,15 @@ function TodoEditor({ todo, onClose }: { todo: Todo; onClose: () => void }) {
   const [remindTouched, setRemindTouched] = useState(false);
   const titleRef = useRef<HTMLInputElement>(null);
   useEffect(() => titleRef.current?.focus(), []);
+  // A change not saved yet: the hand-over waits for it, so it never hands over a to-do other than the one shown.
+  const dirty =
+    title !== todo.title ||
+    details !== todo.details ||
+    JSON.stringify(steps) !== JSON.stringify(todo.checklist) ||
+    dueOn !== (todo.dueOn ?? '') ||
+    dueTime !== (todo.dueTime ?? '') ||
+    remind !== (todo.remindAt !== null || todo.dueOn === null) ||
+    newStep.trim() !== '';
   // The values of one save are its variables, so an edit made while it runs does not change what it sends.
   const save = useMutation({
     mutationFn: (v: { title: string; details: string; steps: TodoStep[]; dueOn: string; dueTime: string; remind: boolean; remindTouched: boolean }) =>
@@ -95,7 +220,7 @@ function TodoEditor({ todo, onClose }: { todo: Todo; onClose: () => void }) {
   };
   return (
     <div className="mt-2 border-t pt-3" data-testid="todo-editor">
-      <form onSubmit={submit} className="space-y-3" onKeyDown={(e) => e.key === 'Escape' && onClose()}>
+      <form onSubmit={submit} className="space-y-3" onKeyDown={(e) => e.key === 'Escape' && e.currentTarget.contains(e.target as Node) && onClose()}>
         <label className="block text-xs">
           <span className="text-subtle-foreground">{t('fieldTitle')}</span>
           <Input ref={titleRef} required maxLength={300} value={title} onChange={(e) => setTitle(e.target.value)} className="mt-1" />
@@ -185,10 +310,12 @@ function TodoEditor({ todo, onClose }: { todo: Todo; onClose: () => void }) {
           <Button type="button" variant="outline" onClick={onClose}>
             {t('cancel')}
           </Button>
+          {todo.status === 'open' && todo.deletedAt === null && <HandOverDialog todo={todo} disabled={dirty} onDone={onClose} />}
           <Button type="button" variant="destructive" className="ml-auto" disabled={remove.isPending} onClick={() => remove.mutate()}>
             {t('delete')}
           </Button>
         </div>
+        {dirty && todo.status === 'open' && <p className="text-xs text-subtle-foreground">{t('handOverSaveFirst')}</p>}
         {save.error && <ErrorText>{errorMessage(save.error)}</ErrorText>}
         {remove.error && <ErrorText>{errorMessage(remove.error)}</ErrorText>}
       </form>
@@ -237,6 +364,7 @@ function QuickAdd({ inputRef }: { inputRef: RefObject<HTMLInputElement | null> }
 }
 
 export function MyWorkPage() {
+  const { slug } = useParams({ strict: false }) as { slug: string };
   const t = useTranslations('myWork');
   const f = useFormat();
   const [view, setView] = useState<TodoListView>('open');
@@ -245,10 +373,15 @@ export function MyWorkPage() {
   const quickAdd = useRef<HTMLInputElement>(null);
   const live = useStreamLive();
   // Read again every minute while the stream is down, and every few minutes anyway: the groups move with the clock
-  // (midnight, a due time passing), which sends no hint.
-  const list = useQuery({ ...orpc.notes.todos.list.queryOptions({ input: { view, limit: LIST_LIMIT } }), refetchInterval: pollEvery(live, 60_000, SAFETY_POLL_MS) });
-  const todos = useMemo(() => list.data ?? [], [list.data]);
-  const groups = useMemo(() => (view === 'open' ? groupTodos(todos) : []), [view, todos]);
+  // (midnight, a due time passing), which sends no hint. The open view also brings the tasks of my positions.
+  const refetchInterval = pollEvery(live, 60_000, SAFETY_POLL_MS);
+  const work = useQuery({ ...orpc.notes.todos.myWork.queryOptions({ input: { timeZone: browserTimeZone() } }), refetchInterval, enabled: view === 'open' });
+  const closed = useQuery({ ...orpc.notes.todos.list.queryOptions({ input: { view, limit: LIST_LIMIT } }), refetchInterval, enabled: view !== 'open' });
+  const list = view === 'open' ? work : closed;
+  const chart = useQuery({ ...orpc.chart.get.queryOptions(), enabled: (work.data?.tasks.length ?? 0) > 0 });
+  const todos = useMemo(() => (view === 'open' ? (work.data?.todos ?? []) : (closed.data ?? [])), [view, work.data, closed.data]);
+  const tasks = useMemo(() => (view === 'open' ? (work.data?.tasks ?? []) : []), [view, work.data]);
+  const groups = useMemo(() => (view === 'open' ? groupTodos(todos, tasks) : []), [view, todos, tasks]);
   // The order J and K walk: as the screen shows the rows.
   const order = useMemo(() => (view === 'open' ? groups.flatMap((g) => g.items.map((i) => i.id)) : todos.map((i) => i.id)), [view, groups, todos]);
 
@@ -306,13 +439,16 @@ export function MyWorkPage() {
         aria-current={selected === todo.id ? 'true' : undefined}
         className={cn('flex flex-wrap items-center gap-3 px-4 py-2', selected === todo.id && 'bg-primary/5 ring-1 ring-primary/40 ring-inset')}
       >
-        {view === 'open' || view === 'done' ? (
+        {(view === 'open' || view === 'done') && (todo.status === 'open' || todo.status === 'done') ? (
           <Checkbox
             checked={todo.status === 'done'}
             aria-label={todo.status === 'done' ? t('reopenTodo', { title: todo.title }) : t('completeTodo', { title: todo.title })}
             disabled={act.isPending}
             onCheckedChange={(checked) => act.mutate({ what: checked === true ? 'complete' : 'reopen', todoId: todo.id })}
           />
+        ) : view === 'open' || view === 'done' ? (
+          // A handed-over to-do has no checkbox; the space keeps its title in line with the others.
+          <span aria-hidden="true" className="size-4 shrink-0" />
         ) : null}
         <button
           type="button"
@@ -331,6 +467,12 @@ export function MyWorkPage() {
           </span>
         )}
         <DueChip todo={todo} />
+        {/* Handed over (#1674): the work is now the team's task, opened from here. */}
+        {todo.status === 'handed_over' && todo.taskId && (
+          <Link to="/o/$slug/tasks/$id" params={{ slug, id: todo.taskId }} data-testid="todo-handed-over" className="text-xs text-link hover:underline">
+            <Badge variant="secondary">{t('handedOver')}</Badge> {t('openTask')}
+          </Link>
+        )}
         {view === 'done' && todo.doneAt && <span className="text-xs text-subtle-foreground">{t('doneOn', { at: f.dateTime(todo.doneAt) })}</span>}
         {view === 'open' && (
           <span className="flex gap-1">
@@ -379,16 +521,21 @@ export function MyWorkPage() {
         <ListSkeleton />
       ) : list.error ? (
         <ErrorText>{errorMessage(list.error)}</ErrorText>
-      ) : todos.length === 0 ? (
+      ) : todos.length === 0 && tasks.length === 0 ? (
         <Empty title={t(view === 'open' ? 'empty' : view === 'done' ? 'emptyDone' : 'emptyTrash')} hint={view === 'open' ? t('emptyHint') : undefined} />
       ) : view === 'open' ? (
         groups.map((g) => (
           <section key={g.id} aria-labelledby={`todo-group-${g.id}`} data-testid={`todo-group-${g.id}`}>
             <h2 id={`todo-group-${g.id}`} className={cn('mb-1 text-sm font-medium', g.id === 'overdue' ? 'text-destructive' : 'text-foreground')}>
-              {t(`groups.${g.id}`)} <span className="text-subtle-foreground">({g.items.length})</span>
+              {t(`groups.${g.id}`)} <span className="text-subtle-foreground">({g.items.length + g.tasks.length})</span>
             </h2>
             <Card className="block p-0">
-              <ul className="divide-y">{g.items.map((todo) => row(todo, g.items))}</ul>
+              <ul className="divide-y">
+                {g.items.map((todo) => row(todo, g.items))}
+                {g.tasks.map((task) => (
+                  <TaskRow key={task.id} task={task} slug={slug} chart={chart.data} />
+                ))}
+              </ul>
             </Card>
           </section>
         ))
@@ -398,6 +545,14 @@ export function MyWorkPage() {
         </Card>
       )}
       {todos.length >= LIST_LIMIT && <p className="text-xs text-subtle-foreground">{t('truncated', { count: String(LIST_LIMIT) })}</p>}
+      {view === 'open' && work.data?.tasksTruncated && (
+        <p className="text-xs text-subtle-foreground">
+          {t('tasksTruncated')}{' '}
+          <Link to="/o/$slug/tasks" params={{ slug }} search={{ filter: 'mine' }} className="text-link underline">
+            {t('openTasks')}
+          </Link>
+        </p>
+      )}
       {act.error && <ErrorText>{errorMessage(act.error)}</ErrorText>}
       <p className="text-xs text-subtle-foreground">{t('shortcuts')}</p>
     </div>
