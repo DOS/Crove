@@ -1,6 +1,6 @@
 # Runbook: pilot readiness
 
-Before a consenting design partner puts real client data into a Crove deployment, every item below holds and the owner records the sign-off in issue #308. This checklist replaces the External-tenant gate for a partner under a signed pilot agreement only (backlog review 2026-10-17, decision D2 and M1-8); the full gate (GA gate) still applies before public self-serve sign-up.
+Before a consenting design partner puts real client data into a Ludy deployment, every item below holds and the owner records the sign-off in issue #308. This checklist replaces the External-tenant gate for a partner under a signed pilot agreement only (backlog review 2026-10-17, decision D2 and M1-8); the full gate (GA gate) still applies before public self-serve sign-up.
 
 ## The preflight
 
@@ -19,7 +19,7 @@ Each line is `PASS`, `FAIL` or `MANUAL`. Exit codes: 0 every automatic check pas
 
 The sign-up probe does not trust what the instance says about itself (`/api/config` reports the policy, `/settings` reports `disable_signup`). It sends `POST <auth URL>/signup` for a random address at the reserved domain `pilot-check.invalid` (RFC 2606: it never resolves, no allowlist holds it and no invite names it), with no password:
 
-- `403 signup_not_allowed`: Crove's proxy refused it under `invite_only` or `allowlist`. `PASS`. Nothing was created or mailed; the request used one slot of the email budget of the address `pilot-check` runs from (section 5), for an hour.
+- `403 signup_not_allowed`: Ludy's proxy refused it under `invite_only` or `allowlist`. `PASS`. Nothing was created or mailed; the request used one slot of the email budget of the address `pilot-check` runs from (section 5), for an hour.
 - `signup_disabled`: the running Supabase Auth refuses every sign-up (`AUTH_DISABLE_SIGNUP=true`). `PASS`.
 - Supabase Auth's own refusal of the body (400 or 422 with an error code, `validation_failed` on the pinned version): the request passed every sign-up gate, so anyone can create an account. `FAIL`. Supabase Auth refuses a sign-up without a password before it creates or mails anything (`e2e/tests/auth-signup-parity.spec.ts` checks this against the pinned image), so the probe leaves nothing behind here either.
 - An accepted sign-up (2xx, which the pinned version never answers to this body): `FAIL`, naming the address; delete that account (step 4 of "Closed sign-up" in section 5).
@@ -27,7 +27,7 @@ The sign-up probe does not trust what the instance says about itself (`/api/conf
 
 ## 1. TLS on every public endpoint; every secret changed from the defaults
 
-**TLS.** Compose publishes Crove on loopback only; a TLS reverse proxy (Caddy, nginx, a cloud load balancer) serves it to others. Set `PUBLIC_URL` to the https URL and `TRUSTED_PROXY_HOPS` to the number of proxies in front. The pilot's server setup, with a ready Caddy configuration in `tools/deploy/caddy/`: [provision-pilot.md](provision-pilot.md).
+**TLS.** Compose publishes Ludy on loopback only; a TLS reverse proxy (Caddy, nginx, a cloud load balancer) serves it to others. Set `PUBLIC_URL` to the https URL and `TRUSTED_PROXY_HOPS` to the number of proxies in front. The pilot's server setup, with a ready Caddy configuration in `tools/deploy/caddy/`: [provision-pilot.md](provision-pilot.md).
 
 - Checked by `pilot:check`: `PUBLIC_URL` is https and not a loopback host; `PUBLIC_AUTH_URL`, when set, is https; with `STORAGE=s3` and presigned transfers (the default), the bucket endpoint browsers reach (`S3_PUBLIC_ENDPOINT`, else `S3_ENDPOINT`) is https; `TRUSTED_PROXY_HOPS` is 1 to 5 (the kernel serves plain http, so a pilot always has a proxy in front).
 - With `--url`: the certificate is valid for the host, and plain http does not serve the app.

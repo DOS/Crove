@@ -1,16 +1,16 @@
 # Runbook: rotate the context key
 
-The context key signs the request context (plan §4.5 item 5, External-tenant gate T11). `enter_context` and `enter_system_context` seal `crove.ctx` with HMAC-SHA256 under this key, and every `ctx_*` helper, and so every RLS policy and definer, refuses a context whose seal does not verify. Anyone who holds the key and can run SQL as a Crove login role can forge a context for any org. This runbook replaces the key.
+The context key signs the request context (plan §4.5 item 5, External-tenant gate T11). `enter_context` and `enter_system_context` seal `crove.ctx` with HMAC-SHA256 under this key, and every `ctx_*` helper, and so every RLS policy and definer, refuses a context whose seal does not verify. Anyone who holds the key and can run SQL as a `crove_*` login role can forge a context for any org. This runbook replaces the key.
 
 ## Where the key lives
 
 - One row in `crove_kernel.context_key` (`id = 1`), stored as the HMAC inner and outer padded keys (`k_ipad`, `k_opad`). Created by `20261015170000_crove_kernel_sealed_context.sql`.
-- Owned by the migration runner (the role of `ADMIN_DATABASE_URL`, which also owns the definers). No Crove role has a grant on it, and RLS is on without a policy.
+- Owned by the migration runner (the role of `ADMIN_DATABASE_URL`, which also owns the definers). No `crove_*` role has a grant on it, and RLS is on without a policy.
 - It is ordinary table data, so it **travels with every copy of the database**:
   - `pg_dump` run as the owner or a superuser includes it (the owner bypasses RLS on its own table).
   - Point-in-time recovery: base backups and archived WAL hold every key the database ever had.
   - Physical replicas (streaming or a promoted standby) carry the same key.
-  - Logical replication copies it only if a publication includes it (for example `FOR ALL TABLES`). Crove defines no publication.
+  - Logical replication copies it only if a publication includes it (for example `FOR ALL TABLES`). Ludy defines no publication.
 
 ## When to rotate
 
@@ -18,13 +18,13 @@ The context key signs the request context (plan §4.5 item 5, External-tenant ga
 - After every restore, in place or into a new project (plan §7.9): an in-place PITR brings back an older key.
 - A copy of production was restored or promoted into another environment (staging, a test project, a new self-host): rotate **in the copy**, so the copy and production no longer share a key.
 - Someone who could read the key (superuser, database owner, the migration runner's password) loses that access.
-- On a schedule, if your policy asks for one. Nothing in Crove expires the key.
+- On a schedule, if your policy asks for one. Nothing in Ludy expires the key.
 
 Rotating does not change what the superuser, the database owner or a holder of a dump can do: they can bypass RLS anyway (accepted residual of T11). It ends the use of a leaked key against the live database.
 
 ## Steps
 
-1. Connect as the migration runner (the `ADMIN_DATABASE_URL` role) or a superuser. The Crove login roles (`crove_app`, `crove_worker`) cannot rotate: they have no EXECUTE on the function and no access to the table.
+1. Connect as the migration runner (the `ADMIN_DATABASE_URL` role) or a superuser. The login roles (`crove_app`, `crove_worker`) cannot rotate: they have no EXECUTE on the function and no access to the table.
 2. Rotate:
 
    ```sql

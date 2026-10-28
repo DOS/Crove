@@ -25,7 +25,7 @@ The comparison on `created_xact_start` holds only while the new cluster's clock 
 
 ## After a logical restore, before reopening writes
 
-1. Connect as the migration runner or a superuser (Crove login roles see only one org).
+1. Connect as the migration runner or a superuser (the `crove_*` login roles see only one org).
 2. Check that no restored stamp lies in the future of the new cluster:
 
    ```sql

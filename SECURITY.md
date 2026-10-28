@@ -15,7 +15,7 @@ Please include the affected component and commit, the impact, steps to reproduce
 | `main` | Yes |
 | Anything else (old commits, forks, unreleased branches) | No |
 
-Crove has no stable releases yet. Fixes land on `main`.
+Ludy has no stable releases yet. Fixes land on `main`.
 
 ## Response expectations
 
@@ -28,4 +28,4 @@ These are good-faith targets for a project with a small team, not a contractual 
 
 ## Scope
 
-In scope: the code in this repository, including tenant isolation, authentication and authorization, the approval and audit paths, the file parsing sandbox and the build and CI configuration. Out of scope: vulnerabilities in third-party dependencies with no Crove-specific impact (report those upstream), social engineering and physical attacks, and denial of service by volume.
+In scope: the code in this repository, including tenant isolation, authentication and authorization, the approval and audit paths, the file parsing sandbox and the build and CI configuration. Out of scope: vulnerabilities in third-party dependencies with no Ludy-specific impact (report those upstream), social engineering and physical attacks, and denial of service by volume.

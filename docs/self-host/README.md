@@ -1,8 +1,8 @@
-# Self-hosting Crove
+# Self-hosting Ludy
 
-How to run your own Crove on one server, from a checkout of this repository: the requirements, the settings, TLS,
+How to run your own Ludy on one server, from a checkout of this repository: the requirements, the settings, TLS,
 mail, file storage, who may sign up, the AI endpoint, backups, upgrades and the preflight check. Everything here is
-the open-source stack (`docker compose`); no outside Crove service is involved.
+the open-source stack (`docker compose`); no outside Ludy service is involved.
 
 For a first look on your own machine, the README's quick start (`docker compose up`, then http://localhost:8080) is
 enough. This guide is for an instance other people use.
@@ -11,7 +11,7 @@ enough. This guide is for an instance other people use.
 
 | | One firm, up to about 20 client companies |
 |---|---|
-| CPU, memory | 4 vCPU, 8 GB. PostgreSQL, Supabase Auth, the Crove kernel and `crove-extract` (the file parsing sandbox, up to 1 GB on its own) |
+| CPU, memory | 4 vCPU, 8 GB. PostgreSQL, Supabase Auth, the Ludy kernel and `crove-extract` (the file parsing sandbox, up to 1 GB on its own) |
 | Disk | 40 GB SSD with files in an S3 bucket, more with local files (`STORAGE=local`): the database, Docker images, logs and local backup runs |
 | OS | any current Linux with Docker Engine 24 or newer and the compose plugin v2.24 or newer (`docker compose version`) |
 | Network | a domain name pointing at the server, ports 80 and 443 open (TLS); every other port stays closed |
@@ -92,7 +92,7 @@ client address in `X-Forwarded-For`, set `TRUSTED_PROXY_HOPS` to the number of p
 
 ## 5. Mail (SMTP)
 
-Supabase Auth sends the confirmation and password-reset emails, and Crove sends member invites, through the same
+Supabase Auth sends the confirmation and password-reset emails, and Ludy sends member invites, through the same
 server:
 
 | Setting | Value |
@@ -156,7 +156,7 @@ tools/deploy/deploy.sh smoke https://<your domain>    # the deploy smoke test: h
 ```
 
 The first start builds the images (several minutes), creates the database, applies every migration (`migrate`), lets
-Supabase Auth create its tables and grants Crove read access to them (`auth-grants`). Then open `PUBLIC_URL`, create
+Supabase Auth create its tables and grants Ludy read access to them (`auth-grants`). Then open `PUBLIC_URL`, create
 your account, confirm the email, turn on two-factor sign-in under Settings, and create your organization.
 
 **The preflight.** From a checkout that holds the deployment's `.env` (the server's own checkout works, with Node 26

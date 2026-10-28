@@ -1,6 +1,6 @@
-# Contributing to Crove
+# Contributing to Ludy
 
-Crove is the open-source Business OS (AGPL-3.0-only). Thank you for your interest.
+Ludy is the open-source Business OS (AGPL-3.0-only). Thank you for your interest.
 
 ## Outside contributions are not accepted yet
 

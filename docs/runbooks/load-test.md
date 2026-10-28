@@ -1,6 +1,6 @@
 # Runbook: the Phase 1 load test
 
-Plan §13, Phase 1 exit criterion 7 asks for a load test with 100k parties in one org. §4.5 item 1 and §7.2 ask for the same run, to re-check the context guard and the seal with real lock counts and to time list queries over 100k rows. Issue #998 built it. It runs on its own throwaway database and needs no running Crove.
+Plan §13, Phase 1 exit criterion 7 asks for a load test with 100k parties in one org. §4.5 item 1 and §7.2 ask for the same run, to re-check the context guard and the seal with real lock counts and to time list queries over 100k rows. Issue #998 built it. It runs on its own throwaway database and needs no running Ludy.
 
 ## Running it
 

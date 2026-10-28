@@ -1,6 +1,6 @@
 # Runbook: backups and restore
 
-How a Crove instance that runs the `docker compose` stack on one server (the pilot setup, backlog item M1-7) is backed up every night, how it is restored, and how the restore is tested. Issues #307 and #351.
+How a Ludy instance that runs the `docker compose` stack on one server (the pilot setup, backlog item M1-7) is backed up every night, how it is restored, and how the restore is tested. Issues #307 and #351.
 
 | Target | Value | Why |
 |---|---|---|
@@ -13,7 +13,7 @@ These targets are for the pilot. Plan §7.9 sets tighter ones for Crove Cloud (p
 
 | State | Where | In the backup | Notes |
 |---|---|---|---|
-| The database: every Crove schema, Supabase Auth's `auth` schema (users, password hashes, sessions, MFA factors), the `crove_jobs` queue (pg-boss), the migration ledger `crove_meta.schema_migrations` | `db-data` volume | `db.dump`, a `pg_dump --format=custom` of the whole database, made as the superuser so row level security hides nothing | The ledger stamps travel as they are; see [After a restore](#after-a-restore). |
+| The database: every `crove_*` schema, Supabase Auth's `auth` schema (users, password hashes, sessions, MFA factors), the `crove_jobs` queue (pg-boss), the migration ledger `crove_meta.schema_migrations` | `db-data` volume | `db.dump`, a `pg_dump --format=custom` of the whole database, made as the superuser so row level security hides nothing | The ledger stamps travel as they are; see [After a restore](#after-a-restore). |
 | Roles (`crove_app`, `crove_worker`, `crove_prober`, `supabase_auth_admin`, the definer roles), their memberships and settings | the cluster | `roles.sql` (`pg_dumpall --roles-only --no-role-passwords`) | No password hashes: `migrate` sets the passwords from `.env` after a restore. |
 | The context key (`crove_kernel.context_key`) | a table | **No.** Its rows are left out (`--exclude-table-data`) | Every restore must make a new key anyway ([context-key-rotation.md](context-key-rotation.md)); `restore.sh` does. A stolen backup therefore holds no key that works against the live database. |
 | Files: uploaded invoices, inbound mail not yet filed, org exports | the `files` volume (`STORAGE=local`) or the bucket (`STORAGE=s3`, versioned) | `files/`: every blob, the current version of each object; not `staging/` (abandoned uploads) or temporary files | Org files are content addressed (`org/<org_id>/<sha256>`), and every file row records the blob's sha256, so the backup checks each one. |
@@ -67,7 +67,7 @@ A run fails, and is kept as `<run id>.partial` until the next one deletes it, wh
 
    ```ini
    [Unit]
-   Description=Crove nightly backup
+   Description=Ludy nightly backup
    After=docker.service
 
    [Service]
@@ -78,7 +78,7 @@ A run fails, and is kept as `<run id>.partial` until the next one deletes it, wh
 
    ```ini
    [Unit]
-   Description=Run the Crove backup every night
+   Description=Run the Ludy backup every night
 
    [Timer]
    OnCalendar=*-*-* 02:00:00
@@ -106,7 +106,7 @@ A backup that never runs (the timer disabled, the server off) sends no alert of 
 
 ## Restore
 
-`tools/backup/restore.sh <run>` restores a run onto the compose stack named by the current directory's `.env`, `COMPOSE_PROJECT_NAME` and `COMPOSE_FILE`, and checks it. `<run>` is a run directory, `s3:<run id>` or `s3:latest` (the newest complete run in `BACKUP_S3_*`). It refuses a database that already holds Crove: restore into empty volumes only. It also refuses when its own `STORAGE` (or, with `s3`, `S3_BUCKET`) differs from what the target compose project resolves (`docker compose config`): the blobs would otherwise go where the target does not read them, for a scratch stack possibly the production bucket, bringing back erased blobs.
+`tools/backup/restore.sh <run>` restores a run onto the compose stack named by the current directory's `.env`, `COMPOSE_PROJECT_NAME` and `COMPOSE_FILE`, and checks it. `<run>` is a run directory, `s3:<run id>` or `s3:latest` (the newest complete run in `BACKUP_S3_*`). It refuses a database that already holds Ludy: restore into empty volumes only. It also refuses when its own `STORAGE` (or, with `s3`, `S3_BUCKET`) differs from what the target compose project resolves (`docker compose config`): the blobs would otherwise go where the target does not read them, for a scratch stack possibly the production bucket, bringing back erased blobs.
 
 It runs these steps and stops at the first failure with `[restore] FAILED: <reason>`:
 

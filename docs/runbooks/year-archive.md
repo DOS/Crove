@@ -1,6 +1,6 @@
 # Runbook: fiscal year archive packages
 
-Accounting Law 88/2015, Art. 41 keeps accounting records and the documents behind them for at least 10 years after the fiscal year (plan §7.9 "Legal retention"). Once every month of a year is locked, an owner asks Crove for the year's package; the worker builds it once and keeps it (issue #922). The fiscal year is the calendar year.
+Accounting Law 88/2015, Art. 41 keeps accounting records and the documents behind them for at least 10 years after the fiscal year (plan §7.9 "Legal retention"). Once every month of a year is locked, an owner asks Ludy for the year's package; the worker builds it once and keeps it (issue #922). The fiscal year is the calendar year.
 
 ## What a package holds
 
@@ -14,7 +14,7 @@ Every part is stored once under `archive/<org_id>/<year>/<sha256>` (content addr
 | `gtgt-<period>.xlsx` | The VAT working of every month, or every quarter when the org files quarterly |
 | `01gtgt-<period>.xml` | The 01/GTGT declaration of the same periods, when the org has a tax code |
 
-The manifest (JSON, format `crove-year-archive-v1`, stored under the same prefix) lists every part and the original file of every document booked in the year by its storage key, version and sha256. The originals stay where they are (`org/<org_id>/`); Crove never deletes them. The manifest names the `finance.archive.build` command that asked for it; the `finance.archive.record` audit row names the manifest's key, version and sha256, and is the build's record.
+The manifest (JSON, format `crove-year-archive-v1`, stored under the same prefix) lists every part and the original file of every document booked in the year by its storage key, version and sha256. The originals stay where they are (`org/<org_id>/`); Ludy never deletes them. The manifest names the `finance.archive.build` command that asked for it; the `finance.archive.record` audit row names the manifest's key, version and sha256, and is the build's record.
 
 ## How it runs
 
@@ -43,7 +43,7 @@ The worker retries three times (60 seconds apart, with backoff), then logs `[yea
 `verify` reads the manifest and every part and original at its recorded version, and reports each one by name:
 
 - `missing`: nothing is stored under the key or version. Restore it from the backup or the bucket's versions.
-- `changed`: the bytes no longer hash to the manifest's sha256. Treat as an incident (docs/runbooks/incidents.md): the store was written outside Crove.
+- `changed`: the bytes no longer hash to the manifest's sha256. Treat as an incident (docs/runbooks/incidents.md): the store was written outside Ludy.
 - `manifest_changed`: the manifest itself, or a key in it outside the package's prefix or the org's files. Same as `changed`.
 
 Never rebuild a year to clear a failed verification: the record is written once, and a second build would not replace it.
