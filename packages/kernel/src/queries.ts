@@ -492,8 +492,8 @@ export const streamCheck = defineQuery({
   handler: async (ctx) => {
     // shared_notes is note_read's rule for a shared note of another author (20261103130000_crove_notes_core.sql):
     // owners, admins and members whose scope is the whole org, as the policy reads tenant_member in this context. A
-    // migration that changes note_read changes this too: stream-notes-audience.db.test.ts compares the two for every
-    // role and scope kind and fails when they drift apart.
+    // migration that changes note_read changes this too: stream-notes-audience.db.test.ts compares the two for each
+    // role and for a member limited to one entity, and fails when they drift apart.
     const { rows } = await sql<{ scope: string[] | null; shared_notes: boolean | null }>`
       SELECT crove_kernel.ctx_le_scope() AS scope,
              '*' = ANY (crove_kernel.ctx_le_scope()::text[]) AND EXISTS (

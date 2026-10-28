@@ -214,13 +214,13 @@ describe('StreamHub', () => {
     offA2();
     offA2();
     expect(hub.size).toBe(2);
-    source.emit(`${ORG_B} proposal ${id}`);
+    source.emit(`${ORG_B} file ${id}`);
     source.emit(`${ORG_A} nonsense ${id}`);
     // An entity-scoped type without its entity reaches nobody (#1703).
     source.emit(`${ORG_A} document ${id}`);
     expect(a1.hints).toHaveLength(1);
     expect(a2.hints).toHaveLength(1);
-    expect(b.hints).toEqual([{ type: 'proposal', id }]);
+    expect(b.hints).toEqual([{ type: 'file', id }]);
   });
 
   it("passes a hint's legal entity on, for each stream to filter by its own scope (#1692)", () => {

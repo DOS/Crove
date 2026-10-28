@@ -330,7 +330,7 @@ suite('invariant: the hints of to-dos and notes reach only the members who may r
   });
 
   // kernel.stream.check repeats note_read's rule for another author's shared note (packages/kernel/src/queries.ts): this
-  // fails when the two drift apart for any role or scope kind (#1703).
+  // fails when the two drift apart for any role, or for a member limited to one entity (#1703).
   it("grants sharedNotes to exactly the actors whose context reads another member's shared note", async () => {
     const byAuthor = await note('author', 'org');
     const byMember = await note('member', 'org');
