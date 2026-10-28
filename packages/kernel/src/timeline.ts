@@ -3,7 +3,8 @@
 // of the records its approval produced (the document and journal entry in its result, which is where a later reversal
 // leaves its "voided" and "reversed" entries), and of every record a command of the proposal named as its target. So
 // received, read, proposed, edited, approved or rejected, recorded and reversed all show. Every member who can open
-// the proposal can read it.
+// the proposal can read it, minus the rows of records of legal entities outside the member's scope (activity's
+// le_scope policy, #1716).
 import { sql } from 'kysely';
 import { z } from 'zod';
 import { zId, type TimelineEntry } from '@crove/kernel-contract';
