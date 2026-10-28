@@ -85,6 +85,8 @@ import {
   INVITE_STATUSES,
   INPUT_VAT_CHECK_OUTCOMES,
   MEMBER_ROLES,
+  NOTE_LINK_TARGET_TYPES,
+  NOTE_VISIBILITIES,
   NUMBER_RESETS,
   PARTY_KINDS,
   PARTY_SOURCE_TRUSTS,
@@ -108,7 +110,7 @@ import {
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
-const SCHEMAS = ['crove_kernel', 'crove_finance', 'crove_social', 'crove_crm'];
+const SCHEMAS = ['crove_kernel', 'crove_finance', 'crove_social', 'crove_crm', 'crove_notes'];
 const suite = ADMIN ? describe : describe.skip;
 
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
@@ -138,6 +140,8 @@ const UNIONS = unions({
   'crove_crm.booking.status': BOOKING_STATUSES,
   'crove_crm.event_type.assignment': EVENT_TYPE_ASSIGNMENTS,
   'crove_crm.event_type.location_kind': EVENT_TYPE_LOCATION_KINDS,
+  'crove_notes.link.target_type': NOTE_LINK_TARGET_TYPES,
+  'crove_notes.note.visibility': NOTE_VISIBILITIES,
   'crove_kernel.agent.max_risk': AGENT_RISKS,
   'crove_kernel.agent.runtime': AGENT_RUNTIMES,
   'crove_kernel.agent.status': AGENT_STATUSES,

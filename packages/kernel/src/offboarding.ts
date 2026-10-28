@@ -72,6 +72,12 @@ export const EXPORT_TABLES = {
   'crm.event_type': { from: 'crove_crm.event_type', omit: [] },
   // Visitors' bookings (#1318); the request token's hash is the visitor's credential and stays out.
   'crm.booking': { from: 'crove_crm.booking', omit: ['request_token_sha256'] },
+  // Notes (#1671, ADR-0037 §6): the shared notes and their links, which the system context's row policies let the
+  // snapshot read, without their folded search words; private notes stay out, and private_count records how many
+  // each author had (crove_notes.private_counts(), a definer that answers counts only).
+  'notes.note': { from: 'crove_notes.note', omit: ['search'] },
+  'notes.link': { from: 'crove_notes.link', omit: [] },
+  'notes.private_count': { from: 'crove_notes.private_counts()', omit: [] },
   'social.post': { from: 'crove_social.post', omit: ['search_text'] },
   'social.post_variant': { from: 'crove_social.post_variant', omit: ['search_text'] },
   'social.post_approval': { from: 'crove_social.post_approval', omit: [] },

@@ -192,6 +192,23 @@ import { zBookEntity, zLegalEntity, zLegalEntityInput } from './legal-entity.ts'
 import { zMemberRoles, zRoleAssignInput } from './roles.ts';
 import { zCalendarEventAdd, zCalendarEventCancel, zCalendarEventView, zCalendarRange, zCalendarSlot, zCalendarSlotsQuery, zMyCalendar, zWorkingHours } from './calendar.ts';
 import { zBookingCancel, zBookingItem, zBookingListQuery, zBookingMove, zBookingSuggestInput, zBookingSuggestion, zEventType, zEventTypeInput, zEventTypeSetActive, zEventTypeUpdate } from './crm.ts';
+import {
+  zNote,
+  zNoteCreate,
+  zNoteLinkAdd,
+  zNoteLinkRemove,
+  zNoteLinkTarget,
+  zNoteLinkWritten,
+  zNoteList,
+  zNotePrivateCount,
+  zNoteRecordPanelView,
+  zNoteRef,
+  zNoteSearch,
+  zNoteSetVisibility,
+  zNoteSummary,
+  zNoteUpdate,
+  zNoteWritten,
+} from './notes.ts';
 import { zOpeningBalanceImport, zOpeningBalancePreview } from './opening-balance.ts';
 import { MISSING_INVOICE_REMINDER_DAY_MAX, zMissingInvoiceStatus, zPortalReconciliation } from './portal-list.ts';
 import { zPortalCaptcha, zPortalListResult, zPortalLoginInput, zPortalSession, zPortalXmlResult } from './portal-sync.ts';
@@ -406,6 +423,26 @@ export const contract = {
       create: oc.input(z.strictObject({})).output(z.object({ token: z.string() })),
       revoke: oc.input(z.strictObject({})).output(z.object({ revoked: z.boolean() })),
     },
+  },
+  // Members' notes (#1671, ADR-0037), when the deployment runs the notes module: private to their author or shared with
+  // the org; the database's row policies decide what each caller reads. Viewers read none.
+  notes: {
+    list: oc.input(zNoteList).output(z.array(zNoteSummary)),
+    get: oc.input(zNoteRef).output(zNote),
+    search: oc.input(zNoteSearch).output(z.array(zNoteSummary)),
+    panel: oc.input(zNoteLinkTarget).output(zNoteRecordPanelView),
+    create: oc.input(zNoteCreate).output(zNoteWritten),
+    update: oc.input(zNoteUpdate).output(zNoteWritten),
+    setVisibility: oc.input(zNoteSetVisibility).output(zNoteWritten),
+    pin: oc.input(zNoteRef).output(zNoteWritten),
+    unpin: oc.input(zNoteRef).output(zNoteWritten),
+    archive: oc.input(zNoteRef).output(zNoteWritten),
+    restore: oc.input(zNoteRef).output(zNoteWritten),
+    delete: oc.input(zNoteRef).output(zNoteWritten),
+    linkAdd: oc.input(zNoteLinkAdd).output(zNoteLinkWritten),
+    linkRemove: oc.input(zNoteLinkRemove).output(zNoteLinkWritten),
+    // How many private notes each member has, for an owner or admin before removing one; no text.
+    privateCounts: oc.input(z.strictObject({})).output(z.array(zNotePrivateCount)),
   },
   // Crove Social (Social plan §3.3), when the deployment runs the social module.
   social: {

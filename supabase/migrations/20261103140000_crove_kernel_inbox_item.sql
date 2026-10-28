@@ -36,8 +36,8 @@ CREATE POLICY inbox_item_raise ON crove_kernel.inbox_item AS RESTRICTIVE FOR INS
 
 -- ---------------------------------------------------------------------------
 -- The org purge deletes a closing org's Inbox items with its notices. Copied verbatim from
--- 20261103010000_crove_kernel_record_le.sql (the newest definition on main), with only crove_kernel.inbox_item added to
--- v_kernel_first.
+-- 20261103140000_crove_kernel_org_purge_notes.sql (the newest definition on main), with only crove_kernel.inbox_item
+-- added to v_kernel_first.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION crove_kernel.org_purge(p_min_days integer)
 RETURNS TABLE (outcome text, counts jsonb, blob_keys text[])
@@ -63,6 +63,7 @@ DECLARE
   v_keys text[];
   -- Rows of these tables are deleted whole, in this order (children before the rows they reference).
   v_kernel_first text[] := ARRAY[
+    'crove_notes.link', 'crove_notes.note',
     'crove_kernel.activity', 'crove_kernel.agent_wakeup', 'crove_kernel.extraction',
     'crove_kernel.inbound_message', 'crove_kernel.notification', 'crove_kernel.notification_mute', 'crove_kernel.inbox_item',
     'crove_kernel.mail_event', 'crove_kernel.mail_suppression', 'crove_kernel.mail_message',

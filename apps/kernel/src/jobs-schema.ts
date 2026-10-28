@@ -55,6 +55,9 @@ export const QUEUES = {
   crmBookingRemind: 'crm-booking-remind',
   // Created by the period balance migration (20261101160000).
   periodBalanceVerify: 'finance-period-balance-verify',
+  // Created by the notes core migration (20261103130000).
+  notesMemberPurge: 'notes-member-purge',
+  notesTrash: 'notes-trash',
   // Created by the dead letter migration (20261103130000): every other queue's dead letters (#1720, dead-letter.ts).
   deadLetter: 'kernel-job.dlq',
 } as const;
@@ -120,6 +123,8 @@ const QUEUE_EGRESS: { readonly [Q in QueueName]: JobEgress } = {
   [QUEUES.crmBooking]: 'none',
   [QUEUES.crmBookingRemind]: 'none',
   [QUEUES.periodBalanceVerify]: 'none',
+  [QUEUES.notesMemberPurge]: 'none',
+  [QUEUES.notesTrash]: 'none',
   [QUEUES.deadLetter]: 'none',
 };
 
