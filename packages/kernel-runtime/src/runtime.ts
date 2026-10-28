@@ -146,9 +146,9 @@ export interface CommandDef<I = unknown, O = unknown> {
   // declares it: it locks the pending proposal and writes the revision the reviser computes. The runtime checks this
   // declaration on the calling definition, never a command name, and registers at most one editor, run by users.
   proposalEditor?: true;
-  // Agents that may run it (absent: none). A command that declares writes of a `contact` or `payment` column never
-  // declares it (P04: an agent's change of a contact point, payee or bank account is reviewed, so it asks for a
-  // proposal instead); register() refuses the pair.
+  // Agents that may run it (absent: none). A command that declares it declares its writes too (#1710), and a command
+  // that declares writes of a `contact` or `payment` column never declares it (P04: an agent's change of a contact
+  // point, payee or bank account is reviewed, so it asks for a proposal instead); register() refuses both.
   agent?: AgentAccess;
   // What it writes (plan §4.7 "Derived risk", #1697): one entry per table its statements write, directly, through a
   // definer it calls or a trigger they fire, with the columns they set (database defaults and the columns triggers
@@ -159,7 +159,7 @@ export interface CommandDef<I = unknown, O = unknown> {
   // (RuntimeOptions.manifests), a table no manifest has or classes that are not its manifest's (#1710). An empty list
   // says the command writes no table (only the runtime's rows for it). An agent's proposal of the command is
   // flagged P04 when a declared column is `contact` or `payment`, and also when the command declares no writes at all
-  // (nothing says it writes none), unless it declares agent approvers the old way (noContactOrPayment, below). A
+  // (nothing says it writes none). A
   // proposal command whose declared writes have no such column may run, as a nested command at any depth, only commands
   // that declare none either: the runtime refuses any other at execution, so a nested write cannot escape P04. Events it
   // emits are not writes: a command that handles them runs on its own, under its own declaration (a proposal command
@@ -168,8 +168,8 @@ export interface CommandDef<I = unknown, O = unknown> {
   // access 'proposal' only, R1 or R2 only (ADR-0029 section 6): the role keys of positions whose agents may approve
   // a proposal of this command, within their max_risk and only when the proposal's outcome names none of P03 to
   // P07 and the agent is neither an author nor in its causal chain. Absent: humans only. R3 is always human. The
-  // command declares its writes, none of them a `contact` or `payment` column (P04), or, until every such command
-  // declares them (the old form the invariant suite still registers), noContactOrPayment: true.
+  // command declares its writes, none of them a `contact` or `payment` column (P04); the old noContactOrPayment form,
+  // which said so without declaring them, is gone (#1710).
   agentApprovers?: AgentApprovers;
   // access 'proposal' only: the kind its proposals carry (the Inbox renders a proposal by its kind), within the
   // command's module. Absent: the command's name. A proposal an agent asks for always takes its kind from here,
@@ -181,9 +181,6 @@ export interface CommandDef<I = unknown, O = unknown> {
 // Who may approve a proposal of a command besides humans (ADR-0029 section 6).
 export interface AgentApprovers {
   roles: readonly string[];
-  // The old form of "the command writes no contact or payment field" (P04), for a command that declares no writes.
-  // With writes declared it may be left out; given, it must be true and the writes must bear it out.
-  noContactOrPayment?: true;
 }
 
 // One table a command writes (CommandDef.writes): the shape of TableWrite in @crove/kernel-contract.
@@ -211,7 +208,7 @@ export interface CommandInfo {
   // The kind of its proposals: the declared proposalKind, or the command's name.
   proposalKind: string;
   // Whether an agent's proposal of it is flagged P04: it declares a write of a `contact` or `payment` column, or it
-  // declares no writes (and no agent approvers of the old form), so nothing says it writes none.
+  // declares no writes, so nothing says it writes none.
   contactOrPayment: boolean;
 }
 
@@ -705,10 +702,13 @@ function manifestTableClasses(manifests: readonly ManifestTables[]): Map<string,
   const out = new Map<string, Readonly<Record<string, string>>>();
   for (const tables of manifests) {
     for (const [schema, byTable] of Object.entries(tables)) {
-      for (const [table, classes] of Object.entries(byTable)) {
+      for (const [table, given] of Object.entries(byTable)) {
         const name = `${schema}.${table}`;
         if (!WRITE_TABLE.test(name)) throw new Error(`manifests: ${name} is not <schema>.<table> of a crove_* schema`);
         if (out.has(name)) throw new Error(`manifests: ${name} is in two manifests`);
+        // A frozen copy of the own enumerable classes, read once: a later change of the manifest object, or a getter in
+        // it, never reaches the check (#1710).
+        const classes: Readonly<Record<string, string>> = Object.freeze(Object.fromEntries(Object.entries(given)));
         for (const [column, cls] of Object.entries(classes)) {
           if (!WRITE_COLUMN.test(column) || !(WRITE_DATA_CLASSES as readonly string[]).includes(cls)) {
             throw new Error(`manifests: ${name}.${column} has the unknown class ${String(cls)} or is not a column name`);
@@ -833,6 +833,10 @@ export class Runtime {
       }
       // The contact and payment columns it declares it writes (P04), or null when it declares no writes.
       const contactOrPayment = c.writes === undefined ? null : checkedWrites(c.name, c.writes, this.manifestTables);
+      // An agent runs it without review, so what it writes is declared and checked against P04 (#1710).
+      if (c.agent !== undefined && contactOrPayment === null) {
+        throw new Error(`command ${c.name}: an agent may run it, so it declares its writes (P04)`);
+      }
       if (contactOrPayment && contactOrPayment.length > 0 && c.agent !== undefined) {
         throw new Error(`command ${c.name}: writes ${contactOrPayment.join(', ')}, so no agent may run it (P04: an agent asks for a proposal instead)`);
       }
@@ -840,13 +844,15 @@ export class Runtime {
         if (c.access !== 'proposal' || (c.risk !== 'R1' && c.risk !== 'R2')) {
           throw new Error(`command ${c.name}: agent approvers are declared only on an R1 or R2 proposal command (access 'proposal')`);
         }
-        const { roles, noContactOrPayment } = c.agentApprovers;
-        const declared = contactOrPayment === null ? noContactOrPayment === true : noContactOrPayment === undefined || noContactOrPayment === true;
-        if (!Array.isArray(roles) || roles.length === 0 || roles.some((r) => typeof r !== 'string' || r.length === 0) || !declared) {
-          throw new Error(`command ${c.name}: agent approvers name at least one role key, and the command declares its writes or noContactOrPayment: true (P04)`);
+        const { roles } = c.agentApprovers;
+        if (!Array.isArray(roles) || roles.length === 0 || roles.some((r) => typeof r !== 'string' || r.length === 0) || contactOrPayment === null) {
+          throw new Error(`command ${c.name}: agent approvers name at least one role key, and the command declares its writes (P04; the old noContactOrPayment form is gone)`);
         }
-        if (contactOrPayment && contactOrPayment.length > 0) {
+        if (contactOrPayment.length > 0) {
           throw new Error(`command ${c.name}: writes ${contactOrPayment.join(', ')}, so only humans approve its proposals (P04): it may not declare agent approvers`);
+        }
+        if (Object.hasOwn(c.agentApprovers, 'noContactOrPayment')) {
+          throw new Error(`command ${c.name}: agent approvers no longer take noContactOrPayment (#1710): the declared writes say what the command writes`);
         }
       }
       if (c.proposalKind !== undefined) {
@@ -863,7 +869,7 @@ export class Runtime {
         if (editor) throw new Error(`command ${c.name}: ${editor.name} is already the proposal editor`);
       }
       this.commands.set(c.name, c as CommandDef<unknown, unknown>);
-      this.contactOrPayment.set(c.name, contactOrPayment === null ? c.agentApprovers?.noContactOrPayment !== true : contactOrPayment.length > 0);
+      this.contactOrPayment.set(c.name, contactOrPayment === null || contactOrPayment.length > 0);
       this.installedModules.add(moduleOf(c.name));
       if (c.revises) this.revisers.set(c.revises, [...(this.revisers.get(c.revises) ?? []), c.name]);
     }

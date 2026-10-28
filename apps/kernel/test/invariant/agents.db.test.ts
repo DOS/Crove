@@ -13,7 +13,7 @@ import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { agentCommands, createOrg, decideApproval, eligibleApprovers, kernelCommands, kernelManifest, kernelQueries, runAgentWake, upsertIdentity } from '@crove/kernel';
 import { tableWrite } from '@crove/kernel-contract';
-import { Runtime, defineCommand, type Actor, type AgentActor, type AgentRuntime, type CommandDef, type CommandWrite, type Risk } from '@crove/kernel-runtime';
+import { Runtime, defineCommand, type Actor, type AgentActor, type AgentApprovers, type AgentRuntime, type CommandDef, type CommandWrite, type Risk } from '@crove/kernel-runtime';
 import { financeCommands, financeManifest, financeQueries } from '@crove/mod-finance';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
@@ -1340,17 +1340,8 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
     expect(() => new Runtime(db).register({ commands: [def({ roles: [TEMPLATE] })] })).toThrow(/noContactOrPayment/);
     expect(() => new Runtime(db).register({ commands: [def({ roles: [], noContactOrPayment: true })] })).toThrow(/noContactOrPayment/);
     expect(() => new Runtime(db).register({ commands: [def({ roles: [TEMPLATE], noContactOrPayment: true }, 'R3')] })).toThrow(/R1 or R2/);
-    // The old form alone, with no declared writes: accepted as free of contact and payment writes until #1710's second
-    // step removes it, refused from then on (the command must declare its writes). This holds on both sides.
-    let registered: Runtime | null = null;
-    let refusal: unknown = null;
-    try {
-      registered = new Runtime(db).register({ commands: [def({ roles: [TEMPLATE], noContactOrPayment: true })] });
-    } catch (error) {
-      refusal = error;
-    }
-    if (registered) expect(registered.commandInfo('t260.reg')?.contactOrPayment).toBe(false);
-    else expect(String(refusal)).toMatch(/noContactOrPayment/);
+    // The old form alone, with no declared writes, is gone (#1710): the command must declare its writes.
+    expect(() => new Runtime(db).register({ commands: [def({ roles: [TEMPLATE], noContactOrPayment: true })] })).toThrow(/declares its writes/);
   });
 
   // #1697: P04 derived from the manifests' column classes. A proposal command declares the tables and columns it
@@ -1461,12 +1452,17 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
     for (const write of [CONTACT_1697, PAYMENT_1697]) {
       expect(register({ access: [], agent: { roles: 'any' }, writes: [write] })).toThrow(/no agent may run it/);
       expect(register({ agentApprovers: { roles: [TEMPLATE] }, writes: [INTERNAL_1697, write] })).toThrow(/only humans approve/);
-      expect(register({ agentApprovers: { roles: [TEMPLATE], noContactOrPayment: true }, writes: [write] })).toThrow(/only humans approve/);
+      expect(register({ agentApprovers: { roles: [TEMPLATE], noContactOrPayment: true } as AgentApprovers, writes: [write] })).toThrow(/only humans approve/);
     }
-    // Agent approvers without the old noContactOrPayment need declared writes.
-    expect(register({ agentApprovers: { roles: [TEMPLATE] } })).toThrow(/noContactOrPayment/);
-    expect(register({ agentApprovers: { roles: [TEMPLATE], noContactOrPayment: false as unknown as true }, writes: [INTERNAL_1697] })).toThrow(/noContactOrPayment/);
+    // Agent approvers need declared writes, and no longer take the old noContactOrPayment beside them (#1710).
+    expect(register({ agentApprovers: { roles: [TEMPLATE] } })).toThrow(/declares its writes/);
+    for (const old of [true, false]) {
+      expect(register({ agentApprovers: { roles: [TEMPLATE], noContactOrPayment: old } as AgentApprovers, writes: [INTERNAL_1697] })).toThrow(/noContactOrPayment/);
+    }
     expect(register({ agentApprovers: { roles: [TEMPLATE] }, writes: [INTERNAL_1697] })).not.toThrow();
+    // A command an agent may run declares its writes (#1710); an empty list says it writes no table.
+    expect(register({ access: [], agent: { roles: 'any' } })).toThrow(/an agent may run it, so it declares its writes/);
+    expect(register({ access: [], agent: { roles: 'any' }, writes: [] })).not.toThrow();
     expect(register({ access: [], agent: { roles: 'any' }, writes: [INTERNAL_1697] })).not.toThrow();
     expect(register({ writes: [CONTACT_1697, PAYMENT_1697, INTERNAL_1697] })).not.toThrow();
   });
