@@ -264,7 +264,13 @@ ADMIN_DATABASE_URL=postgres://... pnpm ops:kill-switch relay:kernel.org.export_r
 
 It takes effect at once, with no restart; a relay switch from the next relay pass (a batch already being relayed still goes out). A relay switch holds only events not yet relayed: jobs already queued for that type still run (stop those with the module or the worker, below). `status` shows how many events an engaged relay switch holds: 0 after a while usually means a mistyped type.
 
-Keep a relay hold short and narrow. Every relay pass walks past the held events first, so a large held backlog (a type orgs produce in bulk, such as `kernel.file.ingested`) slows the relay for every other type. Never hold `kernel.session.revoked`: it carries the forced sign-outs, which would wait in every org until released. Holding `kernel.proposal.created` or a notification type delays agents' review tasks and people's notices the same way. While one is engaged the held events still count in the prober's outbox age (§2, "Outbox lag"), so that alert keeps firing as a reminder to release it; the worker's back-pressure ignores them, so agents and bulk mail keep running. The flood query in §2 (back-pressure) lists the waiting events by org and type, held ones included. To rehearse it (Phase 1 exit criterion 8), engage `ai` on a staging deployment and check two things: an agent wake-up is refused, and a new PDF in the Inbox shows "AI đang tạm dừng". Then release it.
+Keep a relay hold short and narrow. Every relay pass walks past the held events first, so a large held backlog (a type orgs produce in bulk, such as `kernel.file.ingested`) slows the relay for every other type. Three types carry security steps, and the script refuses to engage them without `--force`:
+- `kernel.session.revoked` carries the forced sign-out in Supabase Auth, which would wait in every org until released.
+- `kernel.member.removed` and `kernel.member.role_changed` are the only path that revokes a removed or demoted member's Social review and report links and stops their CRM booking feed. While held, those links and feeds keep working.
+
+Hold them only when relaying them is itself the incident, and release them first. Holding `kernel.proposal.created` or a notification type delays agents' review tasks and people's notices.
+
+While a relay switch is engaged the held events still count in the prober's outbox age (§2, "Outbox lag"), so that alert keeps firing as a reminder to release it; the worker's back-pressure ignores them, so agents and bulk mail keep running. The flood query in §2 (back-pressure) lists the waiting events by org and type, held ones included. To rehearse it (Phase 1 exit criterion 8), engage `ai` on a staging deployment and check two things: an agent wake-up is refused, and a new PDF in the Inbox shows "AI đang tạm dừng". Then release it.
 
 **Other deployment-wide levers**, applied with `docker compose up -d` after editing `.env`:
 

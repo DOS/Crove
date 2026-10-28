@@ -180,14 +180,16 @@ suite('a kill switch per relay type on PostgreSQL (#1696)', () => {
       return rows;
     });
     expect(matrix).toEqual([{ fn: 'crove_kernel.outbox_claim(integer)', role: 'crove_worker' }]);
+    // Every change is kept, with who and why; a key of this test's own, so the other tests' changes do not count.
+    const key = 'relay:test.relay.history';
+    await set(key, true);
+    await set(key, false);
     const history = await admin(
-      async (c) => (await c.query(`SELECT key, engaged, reason, changed_by FROM crove_kernel.global_kill_switch WHERE key = $1 ORDER BY changed_at, id`, [`relay:${HELD}`])).rows,
+      async (c) => (await c.query(`SELECT key, engaged, reason, changed_by FROM crove_kernel.global_kill_switch WHERE key = $1 ORDER BY changed_at, id`, [key])).rows,
     );
     expect(history).toEqual([
-      { key: `relay:${HELD}`, engaged: true, reason: 'diễn tập', changed_by: 'ops' },
-      { key: `relay:${HELD}`, engaged: false, reason: 'diễn tập', changed_by: 'ops' },
-      { key: `relay:${HELD}`, engaged: true, reason: 'diễn tập', changed_by: 'ops' },
-      { key: `relay:${HELD}`, engaged: false, reason: 'diễn tập', changed_by: 'ops' },
+      { key, engaged: true, reason: 'diễn tập', changed_by: 'ops' },
+      { key, engaged: false, reason: 'diễn tập', changed_by: 'ops' },
     ]);
     await expect(admin((c) => c.query(`DELETE FROM crove_kernel.global_kill_switch WHERE key LIKE 'relay:%'`))).rejects.toThrow();
   });

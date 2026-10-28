@@ -19,6 +19,11 @@ const KEYS = ['ai', 'mail'];
 // The shape the table's CHECK constraint accepts (20261103110000_crove_kernel_relay_kill_switch.sql).
 const RELAY_KEY = /^relay:[a-z0-9_]+(\.[a-z0-9_]+)+$/;
 
+// Event types whose relay is a security step, so holding them keeps access open in every org: the forced sign-out
+// in Supabase Auth (kernel.session.revoked), and the revocation of a removed or demoted member's Social review and
+// report links and CRM booking feed (kernel.member.removed, kernel.member.role_changed). Engaging one needs --force.
+export const GUARDED_RELAY_TYPES = ['kernel.session.revoked', 'kernel.member.removed', 'kernel.member.role_changed'];
+
 export function isKey(key) {
   return KEYS.includes(key) || (typeof key === 'string' && key.length <= 200 && RELAY_KEY.test(key));
 }
@@ -27,11 +32,17 @@ export function parseArgs(argv) {
   const [first, second, ...rest] = argv;
   if (first === 'status' && second === undefined) return { action: 'status' };
   if (!isKey(first) || !['on', 'off'].includes(second)) {
-    throw new Error('usage: kill-switch status | kill-switch <ai|mail|relay:<event type>> <on|off> --by <name> [--reason <text>]');
+    throw new Error('usage: kill-switch status | kill-switch <ai|mail|relay:<event type>> <on|off> --by <name> [--reason <text>] [--force]');
   }
   const flags = {};
+  let force = false;
   for (let i = 0; i < rest.length; i += 2) {
     const name = rest[i];
+    if (name === '--force') {
+      force = true;
+      i -= 1;
+      continue;
+    }
     const value = rest[i + 1];
     if ((name !== '--by' && name !== '--reason') || value === undefined) throw new Error(`unknown or empty option: ${name}`);
     flags[name.slice(2)] = value;
@@ -41,6 +52,10 @@ export function parseArgs(argv) {
   const reason = flags.reason?.trim() || null;
   if (reason && reason.length > 500) throw new Error('--reason is at most 500 characters');
   if (second === 'on' && !reason) throw new Error('--reason is required to engage a switch');
+  // Releasing is always allowed; only holding a security step needs the operator to say so.
+  if (second === 'on' && !force && first.startsWith('relay:') && GUARDED_RELAY_TYPES.includes(first.slice(6))) {
+    throw new Error(`${first} holds a security step (sign-outs or a removed member's links) in every org; add --force to engage it anyway`);
+  }
   return { action: 'set', key: first, engaged: second === 'on', by, reason };
 }
 

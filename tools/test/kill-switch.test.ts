@@ -1,6 +1,6 @@
 // The operator's kill-switch script (#886): what it accepts before it touches the database.
 import { describe, expect, it } from 'vitest';
-import { parseArgs } from '../ops/kill-switch.mjs';
+import { GUARDED_RELAY_TYPES, parseArgs } from '../ops/kill-switch.mjs';
 
 describe('ops kill-switch arguments', () => {
   it('reads status and a change with who and why', () => {
@@ -18,6 +18,21 @@ describe('ops kill-switch arguments', () => {
       reason: 'export crashes',
     });
     expect(parseArgs(['relay:social.post.submitted', 'off', '--by', 'Trực ca'])).toMatchObject({ key: 'relay:social.post.submitted', engaged: false });
+  });
+
+  it('engages a relay switch that holds a security step only with --force, and releases it without', () => {
+    for (const type of GUARDED_RELAY_TYPES) {
+      expect(() => parseArgs([`relay:${type}`, 'on', '--reason', 'r', '--by', 'x']), type).toThrow(/--force/);
+      const forced = { action: 'set', key: `relay:${type}`, engaged: true, by: 'x', reason: 'r' };
+      expect(parseArgs([`relay:${type}`, 'on', '--force', '--reason', 'r', '--by', 'x'])).toEqual(forced);
+      expect(parseArgs([`relay:${type}`, 'on', '--reason', 'r', '--by', 'x', '--force'])).toEqual(forced);
+      expect(parseArgs([`relay:${type}`, 'off', '--by', 'x'])).toMatchObject({ engaged: false });
+    }
+    expect(GUARDED_RELAY_TYPES).toEqual(['kernel.session.revoked', 'kernel.member.removed', 'kernel.member.role_changed']);
+    // --force changes nothing else: it takes no value and still needs who and why.
+    expect(parseArgs(['relay:kernel.org.export_requested', 'on', '--force', '--reason', 'r', '--by', 'x'])).toMatchObject({ engaged: true });
+    expect(() => parseArgs(['relay:kernel.session.revoked', 'on', '--force', '--by', 'x'])).toThrow(/--reason/);
+    expect(() => parseArgs(['relay:kernel.session.revoked', 'on', '--force'])).toThrow(/--by/);
   });
 
   it('refuses a relay key that is not an event type', () => {
