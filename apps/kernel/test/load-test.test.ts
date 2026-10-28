@@ -1,7 +1,40 @@
 // The Phase 1 load test's arguments, percentiles and verdicts (issue #998). The run itself is
 // load-test.db.test.ts.
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_LOAD_ARGS, formatReport, guardCostUs, judge, parseLoadArgs, percentile, sampleLocks, type LoadResult } from '../load/load-test.ts';
+import {
+  BACK_PRESSURE_QUEUES,
+  INTERACTIVE_QUEUE,
+  DEFAULT_LOAD_ARGS,
+  formatReport,
+  guardCostUs,
+  judge,
+  judgeBackPressure,
+  parseLoadArgs,
+  percentile,
+  sampleLocks,
+  type BackPressureResult,
+  type LoadResult,
+} from '../load/load-test.ts';
+
+// Back-pressure that engaged: the lag passed 30 s at 30.2 s, the queues paused at the next 10 s check (40 s) and
+// resumed at the check after the relay caught up.
+const engaged = (over: Partial<BackPressureResult> = {}): BackPressureResult => ({
+  thresholdSeconds: 30,
+  checkSeconds: 10,
+  queues: [...BACK_PRESSURE_QUEUES],
+  lagOverAt: 30_200,
+  pausedAt: 40_100,
+  lagUnderHalfAt: 44_300,
+  resumedAt: 50_060,
+  maxLagSeconds: 44.1,
+  sent: 4,
+  held: 4,
+  ranAfterResume: 4,
+  interactiveRan: true,
+  commands: { count: 3000, failed: 0, firstError: null, p95: 19 },
+  ...over,
+});
 
 const result = (over: Partial<LoadResult['outbox']> = {}, p95 = 20, failed = 0): LoadResult => ({
   parties: 100_000,
@@ -9,6 +42,7 @@ const result = (over: Partial<LoadResult['outbox']> = {}, p95 = 20, failed = 0):
   queries: [{ name: 'finance.search', count: 30, p95: 80 }],
   outbox: { rate: 60, produced: 1800, relayed: 1800, lagP95: 15, lagMax: 70, backlog: 1800, drainSeconds: 0.1, eventsPerSecond: 18_000, ...over },
   locks: { samples: 40, p50: 60, p95: 100, max: 200 },
+  backPressure: engaged(),
 });
 
 describe('load test', () => {
@@ -16,6 +50,9 @@ describe('load test', () => {
     expect(parseLoadArgs([], { CROVE_TEST_ADMIN_URL: 'postgres://x' })).toEqual({ adminUrl: 'postgres://x', ...DEFAULT_LOAD_ARGS });
     expect(DEFAULT_LOAD_ARGS.parties).toBe(100_000);
     expect(parseLoadArgs(['--admin-url', 'postgres://y', '--parties', '500', '--rate', '80', '--keep'])).toMatchObject({ adminUrl: 'postgres://y', parties: 500, rate: 80, keep: true });
+    // The worker's back-pressure threshold and check interval by default (OUTBOX_LAG_PAUSE_SECONDS, BACK_PRESSURE_CHECK_MS).
+    expect(DEFAULT_LOAD_ARGS).toMatchObject({ pauseSeconds: 30, checkSeconds: 10 });
+    expect(parseLoadArgs(['--admin-url', 'x', '--pause-seconds', '2', '--check-seconds', '1'])).toMatchObject({ pauseSeconds: 2, checkSeconds: 1 });
     expect(() => parseLoadArgs([])).toThrow(/admin-url/);
     expect(() => parseLoadArgs(['--admin-url', 'x', '--parties', '0'])).toThrow(/whole number/);
     expect(() => parseLoadArgs(['--admin-url', 'x', '--bogus', '1'])).toThrow(/unknown flag/);
@@ -30,13 +67,46 @@ describe('load test', () => {
     expect(percentile([], 95)).toBeNull();
   });
 
-  it('passes the plan targets, fails a slow or failing command, a lagging outbox or a slow relay, and leaves back-pressure open', () => {
-    expect(judge(result()).map((v) => v.ok)).toEqual([true, true, true, null]);
+  it('passes the plan targets, and fails a slow or failing command, a lagging outbox or a slow relay', () => {
+    expect(judge(result()).map((v) => v.ok)).toEqual([true, true, true, true, true, true]);
     expect(judge(result({}, 150))[0]?.ok).toBe(false);
     expect(judge(result({}, 20, 1))[0]?.ok).toBe(false);
     expect(judge(result({ lagP95: 2000 }))[1]?.ok).toBe(false);
     expect(judge(result({ lagP95: null }))[1]?.ok).toBe(false);
     expect(judge(result({ eventsPerSecond: 49 }))[2]?.ok).toBe(false);
+  });
+
+  it('fails back-pressure that never engages, holds no job, is slow to pause or resume, or stops interactive work', () => {
+    const ok = (over: Partial<BackPressureResult>) => judgeBackPressure(engaged(over)).map((v) => v.ok);
+    expect(ok({})).toEqual([true, true, true]);
+    // A no-op check: the lag passes the threshold and nothing pauses, so nothing resumes and the jobs run at once.
+    expect(ok({ pausedAt: null, resumedAt: null, held: 0, ranAfterResume: 0, interactiveRan: false })).toEqual([false, false, false]);
+    // Paused but a queue kept fetching: its job ran during the pause.
+    expect(ok({ held: 3, ranAfterResume: 3 })).toEqual([false, false, true]);
+    // Within one check plus 1 s, and no more.
+    expect(ok({ pausedAt: 30_200 + 11_000 })[0]).toBe(true);
+    expect(ok({ pausedAt: 30_200 + 11_001 })[0]).toBe(false);
+    expect(ok({ resumedAt: 44_300 + 11_001 })[1]).toBe(false);
+    expect(ok({ resumedAt: null, ranAfterResume: 0 })).toEqual([true, false, true]);
+    // A pause or resume recorded before the crossing it answers is a measurement error, never a pass.
+    expect(ok({ pausedAt: 30_100 })[0]).toBe(false);
+    expect(ok({ resumedAt: 44_200 })[1]).toBe(false);
+    // Interactive work: the interactive queue's job, and the commands meanwhile.
+    expect(ok({ interactiveRan: false })[2]).toBe(false);
+    expect(ok({ commands: { count: 10, failed: 1, firstError: 'X: boom', p95: 19 } })[2]).toBe(false);
+    expect(ok({ commands: { count: 10, failed: 0, firstError: null, p95: 150 } })[2]).toBe(false);
+    expect(ok({ commands: { count: 0, failed: 0, firstError: null, p95: null } })[2]).toBe(false);
+  });
+
+  it('measures the queues the worker pauses, and an interactive one it leaves running', () => {
+    // The load test works its own copy of the list; the worker registers its pausable queues with background.add.
+    const worker = readFileSync(new URL('../src/worker.ts', import.meta.url), 'utf8');
+    const names: Record<string, string> = { 'kernel-agent-dispatch': 'QUEUES.agentDispatch', 'kernel-mail-bulk': 'MAIL_BULK_QUEUE', 'kernel-archive-write': 'QUEUES.archiveWrite', 'kernel-retention-purge': 'QUEUES.retention' };
+    expect(BACK_PRESSURE_QUEUES.map((q) => names[q])).toEqual(Object.values(names));
+    for (const ref of Object.values(names)) expect(worker).toContain(`background.add(${ref},`);
+    expect(INTERACTIVE_QUEUE).toBe('kernel-notify');
+    expect(worker).toMatch(/boss\.work<[^>]*>\(QUEUES\.notify,/);
+    expect(worker).not.toContain('background.add(QUEUES.notify');
   });
 
   it('prints every measure, the first failure and a verdict per target', () => {
@@ -46,7 +116,15 @@ describe('load test', () => {
     expect(text).toContain('first failure: X: boom');
     expect(text).toContain('finance.search');
     expect(text).toMatch(/FAIL {2}p95 kernel.party.update/);
-    expect(text).toMatch(/N\/A {3}back-pressure/);
+    expect(text).toMatch(/PASS {2}back-pressure pause: 9\.9 s after the lag passed 30 s; 4\/4 held \(target within 10 s \+ 1 s/);
+    expect(text).toMatch(/PASS {2}back-pressure resume: 5\.8 s after the lag fell to 15 s; 4\/4 ran/);
+    expect(text).toContain('lag passed 30 s at 30.2 s, queues paused at 40.1 s (9.9 s later), max lag 44.1 s');
+    expect(text).toContain('lag back to 15 s at 44.3 s, queues resumed at 50.1 s (5.8 s later)');
+    const never = { ...r, backPressure: engaged({ pausedAt: null, resumedAt: null, held: 0, ranAfterResume: 0 }) };
+    const neverText = formatReport(never, judge(never));
+    expect(neverText).toMatch(/FAIL {2}back-pressure pause: never paused; 0\/4 held/);
+    expect(neverText).toContain('queues paused: never, max lag');
+    expect(neverText).toContain('4 sent after the wait for a pause, 0 held');
   });
 
   it('reports the locks held while the commands ran and the context guard cost they imply (T10)', () => {

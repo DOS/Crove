@@ -505,6 +505,9 @@ importers:
       '@crove/mod-finance':
         specifier: workspace:*
         version: link:../../modules/finance
+      '@crove/mod-notes':
+        specifier: workspace:*
+        version: link:../../modules/notes
       '@crove/mod-social':
         specifier: workspace:*
         version: link:../../modules/social
@@ -661,6 +664,24 @@ importers:
       fast-check:
         specifier: 'catalog:'
         version: 4.10.2
+
+  modules/notes:
+    dependencies:
+      '@crove/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@crove/kernel-contract':
+        specifier: workspace:*
+        version: link:../../packages/kernel-contract
+      '@crove/kernel-runtime':
+        specifier: workspace:*
+        version: link:../../packages/kernel-runtime
+      kysely:
+        specifier: 'catalog:'
+        version: 0.29.6
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.7
 
   modules/social:
     dependencies:

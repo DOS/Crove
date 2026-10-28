@@ -94,9 +94,16 @@ const CRM_SCREENS = {
   nav: [{ app: 'crm', group: 'crm', path: 'bookings', label: 'bookings' }],
 } as const satisfies ModuleScreens;
 
+// Notes and personal to-dos (#1671): the notes screen and its menu item come with the module's screens (step N2's UI).
+const NOTES_SCREENS = {
+  routes: [],
+  nav: [],
+} as const satisfies ModuleScreens;
+
 export const MODULE_SCREENS = {
   kernel: KERNEL_SCREENS,
   finance: FINANCE_SCREENS,
   social: SOCIAL_SCREENS,
   crm: CRM_SCREENS,
+  notes: NOTES_SCREENS,
 } as const;

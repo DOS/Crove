@@ -113,6 +113,16 @@ describe('extraction through crove-extract', () => {
       expect(executed[0]?.input, file.filename).toMatchObject({ status: 'failed', error: AI_STOPPED_MESSAGE, proposal: null });
     }
     expect(read).toEqual([]);
+    // A deployment with no AI model says AI is stopped too, not that it has no model (#1718).
+    for (const file of [
+      { filename: 'hd.pdf', content_type: 'application/pdf', aiStopped: true },
+      { filename: 'hd.png', content_type: 'image/png', aiStopped: true },
+    ]) {
+      const { deps, executed, asked } = harness(async () => ({ ok: true, kind: 'pdf_text', text: 'x'.repeat(100), pages: 1 }), file);
+      await extractAndPropose(deps, ORG, FILE);
+      expect(asked, file.filename).toEqual([]);
+      expect(executed[0]?.input, file.filename).toMatchObject({ status: 'failed', error: AI_STOPPED_MESSAGE, proposal: null });
+    }
     const xml = harness(async () => ({ ok: false, code: 'invalid', message: 'x' }), { filename: 'hd.xml', content_type: 'application/xml', aiStopped: true });
     await extractAndPropose(xml.deps, ORG, FILE);
     expect(xml.asked).toEqual(['einvoice_xml']);

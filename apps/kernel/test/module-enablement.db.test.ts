@@ -157,6 +157,11 @@ suite('module enablement on PostgreSQL (plan Decision 12, ADR-0031)', () => {
     expect(all.commands.map((c) => c.name)).toContain('crm.event_type.create');
     const crmOnly = moduleDefinitions(configFor('crm'));
     expect([...new Set([...crmOnly.commands, ...crmOnly.queries].map((d) => d.name.split('.')[0]))].sort()).toEqual(['crm', 'kernel']);
+    // And the notes module (#1671).
+    expect(all.commands.map((c) => c.name)).toContain('notes.note.create');
+    const notesOnly = moduleDefinitions(configFor('notes'));
+    expect([...new Set([...notesOnly.commands, ...notesOnly.queries].map((d) => d.name.split('.')[0]))].sort()).toEqual(['kernel', 'notes']);
+    expect(names.filter((name) => name.startsWith('notes.'))).toEqual([]);
   });
 
   it('answers COMMAND_NOT_FOUND for a disabled module and not_installed for a lookup into it', async () => {
@@ -225,6 +230,10 @@ suite('module enablement on PostgreSQL (plan Decision 12, ADR-0031)', () => {
       }
       // Nor are the crm module's (#1314).
       for (const [path, input] of [['crm/eventTypes/list', {}], ['crm/eventTypes/setActive', { eventTypeId: randomUUID(), active: false }]] as const) {
+        expect((await rpc(path, input)).status, path).toBe(404);
+      }
+      // Nor are the notes module's (#1671): nothing of it loads.
+      for (const [path, input] of [['notes/list', { view: 'mine' }], ['notes/create', { title: 'Ghi chú' }], ['notes/privateCounts', {}]] as const) {
         expect((await rpc(path, input)).status, path).toBe(404);
       }
 

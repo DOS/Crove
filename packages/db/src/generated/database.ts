@@ -3,8 +3,8 @@
 
 import type { ColumnType, Generated } from 'kysely';
 
-/** Every table of crove_kernel, crove_finance, crove_social, crove_crm that crove_tenant may read. */
-export type Database = CroveFinanceSchema & CroveKernelSchema & CroveSocialSchema & CroveCrmSchema;
+/** Every table of crove_kernel, crove_finance, crove_social, crove_crm, crove_notes that crove_tenant may read. */
+export type Database = CroveFinanceSchema & CroveKernelSchema & CroveSocialSchema & CroveCrmSchema & CroveNotesSchema;
 
 /**
  * The insert or update type of a column crove_tenant may not insert or update: no value but undefined, which
@@ -94,6 +94,11 @@ export interface CroveKernelSchema {
   'crove_kernel.tenant': KernelTenantTable;
   'crove_kernel.tenant_member': KernelTenantMemberTable;
   'crove_kernel.usage_deferral': KernelUsageDeferralTable;
+}
+
+export interface CroveNotesSchema {
+  'crove_notes.link': NotesLinkTable;
+  'crove_notes.note': NotesNoteTable;
 }
 
 export interface CroveSocialSchema {
@@ -607,6 +612,7 @@ export interface KernelActivityTable {
   actor_id: ColumnType<string | null, string | null, NotGranted>;
   occurred_at: ColumnType<Date, Date | string | undefined, NotGranted>;
   agent_id: ColumnType<string | null, string | null, NotGranted>;
+  legal_entity_id: ColumnType<string | null, string | null, NotGranted>;
 }
 
 /** crove_kernel.agent */
@@ -1264,6 +1270,38 @@ export interface KernelUsageDeferralTable {
   retry_at: ColumnType<Date, Date | string, NotGranted>;
   notified: ColumnType<boolean, boolean | undefined, NotGranted>;
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+}
+
+/** crove_notes.link */
+export interface NotesLinkTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  note_id: ColumnType<string, string, NotGranted>;
+  target_type: ColumnType<string, string, NotGranted>;
+  target_id: ColumnType<string, string, NotGranted>;
+  party_id: ColumnType<string | null, string | null, NotGranted>;
+  file_id: ColumnType<string | null, string | null, NotGranted>;
+  created_by: ColumnType<string, string, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+}
+
+/** crove_notes.note */
+export interface NotesNoteTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  author_user_id: ColumnType<string, string, NotGranted>;
+  visibility: Generated<string>;
+  title: string;
+  body: Generated<string>;
+  tags: Generated<string[]>;
+  pinned: Generated<boolean>;
+  tainted: ColumnType<boolean, boolean | undefined, NotGranted>;
+  search: ColumnType<string, string | undefined, NotGranted>;
+  revision: Generated<number>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  archived_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  deleted_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
 }
 
 /** crove_social.account_snapshot */
