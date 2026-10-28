@@ -1,7 +1,8 @@
 // A kill switch per relay type (#1696, plan §4.12) on PostgreSQL 17: while the operator's 'relay:<event type>' switch
 // is engaged, the relay's claim (crove_kernel.outbox_claim, what the worker's relay calls) leaves that type's outbox
 // rows pending and claims every other type, and the back-pressure lag does not age them; releasing the switch drains
-// them, in order. Set CROVE_TEST_ADMIN_URL to a superuser URL; each run makes its own database.
+// them, in order. The claim marks a held row once and then passes it without touching it (#1713), so a large held
+// backlog does not slow every relay pass. Set CROVE_TEST_ADMIN_URL to a superuser URL; each run makes its own database.
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -152,6 +153,122 @@ suite('a kill switch per relay type on PostgreSQL (#1696)', () => {
       ai: false,
       mail: false,
     });
+  });
+
+  // A held backlog of `n` events of one type, an hour old, emitted in one statement; returns their ids in queue order.
+  const addMany = async (type: string, n: number) => {
+    const before = new Set(await pending());
+    await admin((c) =>
+      c.query(
+        `WITH e AS (INSERT INTO crove_kernel.outbox_event (org_id, type, payload, created_at)
+                    SELECT $1, $2, jsonb_build_object('i', g), now() - interval '1 hour' FROM generate_series(1, $3) g
+                    RETURNING org_id, id)
+         INSERT INTO crove_kernel.outbox_pending (org_id, event_id) SELECT org_id, id FROM e`,
+        [orgId, type, n],
+      ),
+    );
+    return (await pending()).filter((id) => !before.has(id));
+  };
+  // What a statement touched, from this transaction's own table statistics: the outbox_event probes (one per pending
+  // row whose type is looked up) and the outbox_pending rows read and updated.
+  const touched = async <T>(c: pg.Client, run: () => Promise<T>) => {
+    const stats = async () =>
+      Object.fromEntries(
+        (
+          await c.query<{ relname: string; scans: string; rows: string; updated: string }>(
+            `SELECT relname, (coalesce(seq_scan, 0) + coalesce(idx_scan, 0))::text AS scans,
+                    (coalesce(seq_tup_read, 0) + coalesce(idx_tup_fetch, 0))::text AS rows, n_tup_upd::text AS updated
+             FROM pg_stat_xact_user_tables WHERE schemaname = 'crove_kernel' AND relname IN ('outbox_event', 'outbox_pending')`,
+          )
+        ).rows.map((r) => [r.relname, { scans: Number(r.scans), rows: Number(r.rows), updated: Number(r.updated) }]),
+      ) as Record<'outbox_event' | 'outbox_pending', { scans: number; rows: number; updated: number }>;
+    await c.query('BEGIN');
+    try {
+      const start = await stats();
+      const result = await run();
+      const end = await stats();
+      await c.query('COMMIT');
+      const diff = (t: 'outbox_event' | 'outbox_pending') => ({
+        scans: end[t].scans - start[t].scans,
+        rows: end[t].rows - start[t].rows,
+        updated: end[t].updated - start[t].updated,
+      });
+      return { result, event: diff('outbox_event'), pending: diff('outbox_pending') };
+    } catch (error) {
+      await c.query('ROLLBACK');
+      throw error;
+    }
+  };
+  const asWorker = <T>(fn: (c: pg.Client) => Promise<T>) => connect(login('crove_worker', 'test-worker-pw'), fn);
+  const claimIn = (c: pg.Client, limit = 100) =>
+    c.query<{ event_id: string; type: string }>('SELECT event_id, type FROM crove_kernel.outbox_claim($1)', [limit]).then((r) => r.rows);
+
+  it('passes a large held backlog without walking it on every claim (#1713)', async () => {
+    await drain();
+    const BACKLOG = 2000;
+    await set(`relay:${HELD}`, true);
+    const held = await addMany(HELD, BACKLOG);
+    expect(held).toHaveLength(BACKLOG);
+
+    // The first claim meets every held row once: one event probe and one mark each, and claims none of them.
+    const first = await asWorker((c) => touched(c, () => claimIn(c)));
+    expect(first.result).toEqual([]);
+    expect(first.event.scans).toBeGreaterThanOrEqual(BACKLOG);
+    expect(first.pending.updated).toBe(BACKLOG);
+    expect(await pending()).toEqual(held);
+
+    // From then on a claim reaches newer rows of other types, and a newer held row, without touching the marked backlog.
+    const others = [await add(OTHER), await add(OTHER), await add(OTHER)];
+    const lateHeld = await add(HELD);
+    const next = await asWorker((c) => touched(c, () => claimIn(c)));
+    expect(next.result).toEqual(others.map((event_id) => ({ event_id, type: OTHER })));
+    expect(next.event.scans).toBeLessThan(20);
+    expect(next.pending.rows).toBeLessThan(20);
+    expect(next.pending.updated).toBe(1);
+    // An empty pass touches no held row either.
+    const idle = await asWorker((c) => touched(c, () => claimIn(c)));
+    expect(idle.result).toEqual([]);
+    expect(idle.event.scans).toBeLessThan(5);
+    expect(idle.pending.rows).toBeLessThan(5);
+    expect(idle.pending.updated).toBe(0);
+
+    // The back-pressure lag passes the marked backlog too, and does not age it.
+    const other = await add(OTHER, '10 minutes');
+    const lag = await asWorker((c) => touched(c, async () => (await c.query<{ lag: number }>('SELECT crove_kernel.outbox_lag_seconds() AS lag')).rows[0]?.lag));
+    expect(lag.result).toBeGreaterThanOrEqual(600);
+    expect(lag.result).toBeLessThan(3600);
+    expect(lag.event.scans).toBeLessThan(5);
+    expect(lag.pending.rows).toBeLessThan(5);
+    expect(await claim()).toEqual([{ event_id: other, type: OTHER }]);
+    expect(await outboxLagSeconds(workerDb)).toBe(0);
+    // The prober and the operator's status still count every held row.
+    expect(await admin(async (c) => (await c.query<{ n: number }>('SELECT outbox_pending AS n FROM crove_kernel.health()')).rows[0]?.n)).toBe(BACKLOG + 1);
+    expect(await pending()).toEqual([...held, lateHeld]);
+
+    // Released while another type stays held: the marks of the released type stop counting at once (the lag ages them
+    // before any claim), and the backlog drains in its order, the other held type's row staying pending.
+    const KEEP = 'test.relay.keep';
+    await set(`relay:${KEEP}`, true);
+    const kept = await add(KEEP);
+    await set(`relay:${HELD}`, false);
+    expect(await outboxLagSeconds(workerDb)).toBeGreaterThanOrEqual(3600);
+    const drained: string[] = [];
+    for (let i = 0; i < 100; i++) {
+      const rows = await claim();
+      if (rows.length === 0) break;
+      expect(rows.every((r) => r.type === HELD)).toBe(true);
+      drained.push(...rows.map((r) => r.event_id));
+    }
+    expect(drained).toEqual([...held, lateHeld]);
+    expect(await pending()).toEqual([kept]);
+    expect(await outboxLagSeconds(workerDb)).toBe(0);
+
+    // Held, marked, and held again after a release with nothing else held: the claim ignores marks when nothing is held.
+    const again = await addMany(KEEP, 5);
+    expect(await claim()).toEqual([]);
+    await set(`relay:${KEEP}`, false);
+    expect(await claim()).toEqual([kept, ...again].map((event_id) => ({ event_id, type: KEEP })));
+    expect(await pending()).toEqual([]);
   });
 
   it('accepts only an event type as a relay key, flipped by the database owner alone, with its history kept', async () => {
