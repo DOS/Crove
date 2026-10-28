@@ -47,11 +47,6 @@ function CustomerRow({
           {customer.address && <p className="text-xs text-subtle-foreground">{customer.address}</p>}
           {contact && <p className="text-xs text-subtle-foreground">{contact}</p>}
           <PartyDuplicates party={customer} canManage={canManage} ns="customers" />
-          {notesInstalled() && (
-            <Button variant="link" size="sm" className="h-auto px-0 text-xs" onClick={() => setNotesOpen((o) => !o)} aria-expanded={notesOpen} aria-label={tn('panel.toggleOf', { name: customer.name })}>
-              {tn('panel.title')}
-            </Button>
-          )}
         </TableCell>
         <TableCell className="px-4 py-3 font-mono text-xs text-muted-foreground">{customer.taxCode ?? ''}</TableCell>
         <TableCell className={`${NUM} text-muted-foreground`}>{f.number(customer.invoiceCount)}</TableCell>
@@ -62,6 +57,12 @@ function CustomerRow({
             {!editing && (
               <Button variant="ghost" size="sm" onClick={() => setEditing(true)} aria-label={t('editOf', { name: customer.name })}>
                 {t('edit')}
+              </Button>
+            )}
+            {/* The party's notes (#1671), beside its other actions. */}
+            {notesInstalled() && (
+              <Button variant="ghost" size="sm" onClick={() => setNotesOpen((o) => !o)} aria-expanded={notesOpen} aria-label={tn('panel.toggleOf', { name: customer.name })}>
+                {tn('panel.title')}
               </Button>
             )}
           </TableCell>

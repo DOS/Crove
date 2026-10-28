@@ -101,11 +101,6 @@ function VendorRow({
           <p className="font-medium text-foreground">{vendor.name}</p>
           {(vendor.email || vendor.phone) && <p className="text-xs text-subtle-foreground">{[vendor.phone, vendor.email].filter(Boolean).join(' · ')}</p>}
           <PartyDuplicates party={vendor} canManage={canManage} ns="vendors" />
-          {notesInstalled() && (
-            <Button variant="link" size="sm" className="h-auto px-0 text-xs" onClick={() => setNotesOpen((o) => !o)} aria-expanded={notesOpen} aria-label={tn('panel.toggleOf', { name: vendor.name })}>
-              {tn('panel.title')}
-            </Button>
-          )}
         </TableCell>
         <TableCell className="px-4 py-3 font-mono text-xs text-muted-foreground">{vendor.taxCode}</TableCell>
         <TableCell className="px-4 py-3 text-subtle-foreground">{vendor.address}</TableCell>
@@ -118,6 +113,12 @@ function VendorRow({
             {!editing && (
               <Button variant="ghost" size="sm" onClick={() => setEditing(true)} aria-label={t('editOf', { name: vendor.name })}>
                 {t('edit')}
+              </Button>
+            )}
+            {/* The party's notes (#1671), beside its other actions. */}
+            {notesInstalled() && (
+              <Button variant="ghost" size="sm" onClick={() => setNotesOpen((o) => !o)} aria-expanded={notesOpen} aria-label={tn('panel.toggleOf', { name: vendor.name })}>
+                {tn('panel.title')}
               </Button>
             )}
           </TableCell>
