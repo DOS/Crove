@@ -63,8 +63,8 @@ test('enter a bank debit note, approve it and find it numbered in the books', as
     await page.getByRole('navigation').getByRole('link', { name: 'Kế toán', exact: true }).click();
     await page.getByRole('navigation').getByRole('link', { name: 'Thu chi' }).click();
     for (const [button, file, sheet] of [
-      ['Xuất phiếu thu cho MISA', `crove-misa-phieu-thu-${slug}.xlsx`, 'Phiếu thu'],
-      ['Xuất phiếu chi cho MISA', `crove-misa-phieu-chi-${slug}.xlsx`, 'Phiếu chi'],
+      ['Xuất phiếu thu cho MISA', `ludy-misa-phieu-thu-${slug}.xlsx`, 'Phiếu thu'],
+      ['Xuất phiếu chi cho MISA', `ludy-misa-phieu-chi-${slug}.xlsx`, 'Phiếu chi'],
     ] as const) {
       const download = page.waitForEvent('download');
       await page.getByRole('button', { name: button }).click();

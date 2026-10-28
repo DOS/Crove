@@ -354,7 +354,7 @@ suite('sales e-invoices (#313)', () => {
 
     const response = await app.request('/api/export/misa/sales.xlsx', { headers: { authorization: `Bearer ${await tokenFor(viewer)}`, 'x-crove-org': org.slug } });
     expect(response.status).toBe(200);
-    expect(response.headers.get('content-disposition')).toContain('crove-misa-ban-hang-');
+    expect(response.headers.get('content-disposition')).toContain('ludy-misa-ban-hang-');
     const bytes = new Uint8Array(await response.arrayBuffer());
     expect(String.fromCharCode(bytes[0] ?? 0, bytes[1] ?? 0)).toBe('PK');
     const audits = await admin(

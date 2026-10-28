@@ -25,7 +25,7 @@ test('import opening balances from the Excel template', async ({ page }) => {
     const download = page.waitForEvent('download');
     await page.getByRole('button', { name: 'Tải file mẫu' }).click();
     const file = await download;
-    expect(file.suggestedFilename()).toBe(`crove-mau-so-du-dau-ky-${slug}.xlsx`);
+    expect(file.suggestedFilename()).toBe(`ludy-mau-so-du-dau-ky-${slug}.xlsx`);
     return file.path();
   });
 

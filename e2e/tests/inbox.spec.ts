@@ -130,7 +130,7 @@ test('sign up, upload an e-invoice, approve it, then find it in the lists, the e
     const download = page.waitForEvent('download');
     await page.getByRole('button', { name: 'Xuất Excel' }).click();
     const file = await download;
-    expect(file.suggestedFilename()).toBe(`crove-but-toan-${slug}.xlsx`);
+    expect(file.suggestedFilename()).toBe(`ludy-but-toan-${slug}.xlsx`);
 
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.readFile(await file.path());
@@ -171,7 +171,7 @@ test('sign up, upload an e-invoice, approve it, then find it in the lists, the e
     const download = page.waitForEvent('download');
     await page.getByRole('button', { name: 'Xuất Excel' }).click();
     const file = await download;
-    expect(file.suggestedFilename()).toBe(`crove-gtgt-2026-09-${slug}.xlsx`);
+    expect(file.suggestedFilename()).toBe(`ludy-gtgt-2026-09-${slug}.xlsx`);
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.readFile(await file.path());
     const sheet = workbook.getWorksheet('Mua vào');
@@ -212,7 +212,7 @@ test('sign up, upload an e-invoice, approve it, then find it in the lists, the e
     const download = page.waitForEvent('download');
     await page.getByRole('button', { name: 'Xuất Excel' }).click();
     const file = await download;
-    expect(file.suggestedFilename()).toBe(`crove-so-sach-2026-09-${slug}.xlsx`);
+    expect(file.suggestedFilename()).toBe(`ludy-so-sach-2026-09-${slug}.xlsx`);
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.readFile(await file.path());
     expect(workbook.worksheets.map((s) => s.name)).toEqual(['Cân đối phát sinh', 'Sổ cái', 'Phải thu', 'Phải trả']);
