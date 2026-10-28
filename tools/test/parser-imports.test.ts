@@ -181,7 +181,7 @@ describe('parsers stay in crove-extract', () => {
 
   it("the kernel image's production dependency tree holds no parsing library but saxes, which the image build removes", () => {
     const { packages, parsers } = productionTree(join(ROOT, 'apps/kernel'));
-    // exceljs depends on saxes, its XML reader, and loads it only to read a workbook (patches/exceljs@4.4.0.patch).
+    // exceljs depends on saxes, its XML reader, and loads it only to read a workbook (patches/exceljs.patch).
     // The workspace keeps it for the tests that read exports back; the kernel image build removes it (#1719).
     expect(parsers.map((chain) => chain.split(' > ').slice(-2).join(' > '))).toEqual(['exceljs > saxes']);
     const dockerfile = readFileSync(join(ROOT, 'Dockerfile'), 'utf8');
@@ -203,7 +203,8 @@ describe('parsers stay in crove-extract', () => {
     expect([...list.matchAll(/'([^']+)'/g)].map((m) => m[1])).toEqual(PARSER_PACKAGES);
   });
 
-  it('the finance exports write workbooks with saxes unresolvable, and reading one fails', () => {
+  // Node's module hooks and --input-type; the nightly Bun canary runs this file with Bun as process.execPath.
+  it.skipIf('bun' in process.versions)('the finance exports write workbooks with saxes unresolvable, and reading one fails', () => {
     // What the kernel image does once saxes is removed: a resolve hook refuses it, as a missing package would.
     const exportUrl = pathToFileURL(join(ROOT, 'modules/finance/src/export.ts')).href;
     const financeManifest = join(ROOT, 'modules/finance/package.json');

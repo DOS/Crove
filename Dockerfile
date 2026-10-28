@@ -17,7 +17,7 @@ RUN pnpm install --frozen-lockfile --filter "@crove/app..." \
 # The kernel with production dependencies only. --filter-prod follows dependencies, never devDependencies, when
 # it selects workspace projects: with --filter, crove-extract (a devDependency the database tests start) would be
 # selected too and its parsers installed. Neither they nor the source of the other apps reach the image.
-# exceljs depends on saxes, an XML reader it loads only to read a workbook (patches/exceljs@4.4.0.patch makes that
+# exceljs depends on saxes, an XML reader it loads only to read a workbook (patches/exceljs.patch makes that
 # load lazy); the kernel only writes workbooks, so saxes, its xmlchars and every link to them are removed, as is
 # exceljs's dist (browser and ES5 builds, which bundle or load saxes; Node loads lib/). The image check fails if
 # any XML reader is left (apps/kernel/test/container/image-check.mjs, #1719).

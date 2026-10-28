@@ -110,4 +110,4 @@ packageExtensions:
       typescript: 6.0.3
 
 patchedDependencies:
-  exceljs@4.4.0: patches/exceljs@4.4.0.patch
+  exceljs@4.4.0: patches/exceljs.patch
