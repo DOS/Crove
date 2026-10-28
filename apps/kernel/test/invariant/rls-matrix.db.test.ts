@@ -55,10 +55,12 @@ const PENDING_TABLES = new Set<string>([
 // Tables whose rows belong to one member (ADR-0037, notes plan §3.6 and step N1): unlike saved_view and notification,
 // the system context reads only what the value's predicate selects (over alias t) and writes none of its org's rows,
 // since the worker reaches them only through named definers. For the system actor, the read control expects that
-// count instead of every org A row, and the own-org insert and update controls become two checks: the system's own
-// write changes nothing, and the member context's same write succeeds, so the row and the assignment are well
-// formed. Every cross-org case stays as it is for every actor. Private-row behavior is tested in
-// notes-private.db.test.ts (N2), not here. Sorted, one table per line.
+// count instead of every org A row (the factories seed a private row beside each probed one, so a system read of a
+// private row fails it), and the own-org insert and update controls become two checks: the system's own write
+// changes nothing, and the member context's same write succeeds, so the row and the assignment are well formed. The
+// system deletes none of its org's rows either. Every cross-org case stays as it is for every actor. The rest of the
+// private-row behavior (other members, owners, viewers, agents) is tested in notes-private.db.test.ts (N2), not
+// here. Sorted, one table per line.
 const AUTHOR_ONLY = new Map<string, string>([
   // A link reads through its parent: the system context sees the links of shared notes (the factory's parent).
   ['crove_notes.link', "EXISTS (SELECT 1 FROM crove_notes.note n WHERE n.org_id = t.org_id AND n.id = t.note_id AND n.visibility = 'org')"],
@@ -238,8 +240,17 @@ const fixedAssetRow = (o: { id: string; owner: string }) => ({
   months: 36,
   created_by: o.owner,
 });
-// A shared note of the org's owner (ADR-0037).
-const notesNoteRow = (o: { id: string; owner: string }) => ({ org_id: o.id, id: randomUUID(), author_user_id: o.owner, visibility: 'org', title: 'RLS matrix note' });
+// A note of the org's owner (ADR-0037), shared ('org') or private, and a link from a note to the org's party.
+const notesNoteRow = (o: { id: string; owner: string }, visibility: 'org' | 'private') => ({ org_id: o.id, id: randomUUID(), author_user_id: o.owner, visibility, title: 'RLS matrix note' });
+const notesLinkRow = (o: { id: string; owner: string; party: string }, noteId: string) => ({
+  org_id: o.id,
+  id: randomUUID(),
+  note_id: noteId,
+  target_type: 'kernel.party',
+  target_id: o.party,
+  party_id: o.party,
+  created_by: o.owner,
+});
 const journalEntry = (org: string, id: string): Row => ({
   table: 'crove_finance.journal_entry',
   values: { org_id: org, id, entry_date: '2026-10-01', description: 'rls matrix', source_type: 'rls.matrix', source_id: randomUUID() },
@@ -787,18 +798,26 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   },
   // Notes and personal to-dos (ADR-0037, notes plan §3.4), in AUTHOR_ONLY. The matrix seeds as the superuser with no
   // context, so each factory names its author or owner: the org's owner, the user every member-context actor enters
-  // as. A link to a shared note of the same author, about the org's party.
+  // as. Each also seeds a private row beside the one it probes, so the system context's read count (AUTHOR_ONLY) fails
+  // if the system reads a private row. A link to a shared note (its setup: a link to a private note), so the system
+  // keeps a link to read; it links notes only, since `todo` arrives after `link` (N4 after N2).
   'crove_notes.link': {
     make: (o) => {
-      const note = notesNoteRow(o);
+      const shared = notesNoteRow(o, 'org');
+      const hidden = notesNoteRow(o, 'private');
       return {
-        setup: [{ table: 'crove_notes.note', values: note }],
-        row: { org_id: o.id, id: randomUUID(), note_id: note.id, target_type: 'kernel.party', target_id: o.party, party_id: o.party, created_by: o.owner },
+        setup: [
+          { table: 'crove_notes.note', values: shared },
+          { table: 'crove_notes.note', values: hidden },
+          { table: 'crove_notes.link', values: notesLinkRow(o, hidden.id) },
+        ],
+        row: notesLinkRow(o, shared.id),
       };
     },
   },
-  // A shared note, so the system context keeps a row to read.
-  'crove_notes.note': { make: (o) => ({ row: notesNoteRow(o) }) },
+  // A shared note, so the system context keeps a row to read, beside a private one (its setup).
+  'crove_notes.note': { make: (o) => ({ setup: [{ table: 'crove_notes.note', values: notesNoteRow(o, 'private') }], row: notesNoteRow(o, 'org') }) },
+  // Private by nature: the system context reads none.
   'crove_notes.todo': {
     make: (o) => ({ row: { org_id: o.id, id: randomUUID(), owner_user_id: o.owner, title: 'RLS matrix to-do', time_zone: 'Asia/Ho_Chi_Minh', sort_key: 'a0' } }),
   },
@@ -1724,9 +1743,22 @@ suite('generated cross-org RLS matrix on PostgreSQL (T8)', () => {
           };
           let controlActor = actor;
           if (actor.system && AUTHOR_ONLY.has(table)) {
-            // AUTHOR_ONLY: the system context writes no row of its own org either (with its parents, if any).
-            const own = await probe(actor, insertOwn);
-            expect(own, `${actor.name} inserting into ${table} for its own org: only definers write it (AUTHOR_ONLY)`).toMatchObject({ ok: false, code: '42501' });
+            // AUTHOR_ONLY: the system context writes no row of its own org either. Its parents are committed first as
+            // the database owner, so the refusal is the target row's own policy, not a parent's; removed afterwards.
+            const built = factory.make(orgs.A);
+            const setupRows = built.setup ?? [];
+            await adminTx(setupRows);
+            try {
+              const own = await probe(actor, (c) => {
+                const q = insertSql({ table, values: built.row });
+                return c.query(q.text, q.values);
+              });
+              expect(own, `${actor.name} inserting into ${table} for its own org: only definers write it (AUTHOR_ONLY)`).toMatchObject({ ok: false, code: '42501' });
+            } finally {
+              for (const row of [...setupRows].reverse()) {
+                await admin.query(`DELETE FROM ${row.table} WHERE org_id = $1 AND id = $2`, [row.values.org_id, row.values.id]);
+              }
+            }
             controlActor = member;
           }
           // Control: the same factory's row for the actor's own org is accepted, so the refusal above is about the org.
@@ -1804,6 +1836,13 @@ suite('generated cross-org RLS matrix on PostgreSQL (T8)', () => {
             // Delete every row without reading a column: only rows the actor already sees may go.
             const swept = await sweep(actor, table, `DELETE FROM ${table}`, []);
             if (swept) expect(swept.changed, `${where}: rows deleted without a WHERE clause`).toBeLessThanOrEqual(swept.visible);
+          }
+          if (actor.system && AUTHOR_ONLY.has(table) && can(table, actor.role, 'DELETE')) {
+            // AUTHOR_ONLY: the system context deletes none of its own org's rows either (the trash, member purge and
+            // org purge go through definers or the table owner): refused, or no row it may delete.
+            const mine = await probe(actor, (c) => c.query(`DELETE FROM ${table} WHERE org_id = $1`, [orgs.A.id]));
+            if (!mine.ok) expect(mine, `${where} (own rows): only definers delete it (AUTHOR_ONLY)`).toMatchObject({ code: '42501' });
+            else expect(mine.rowCount, `${where}: own rows deleted (AUTHOR_ONLY)`).toBe(0);
           }
           // TRUNCATE ignores RLS, so it must be refused outright.
           expectDenied(await probe(actor, (c) => c.query(`TRUNCATE ${table} CASCADE`)), PRIVILEGE_DENIED, `${actor.name} truncating ${table}`);
