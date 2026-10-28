@@ -7,7 +7,7 @@ How a Ludy instance that runs the `docker compose` stack on one server (the pilo
 | RPO (data that may be lost) | 24 h | One backup a night. The files bucket's versioning keeps files written since then; the database changes of the last day can be lost. |
 | RTO (time to serve again) | 4 h | Restoring the backup takes minutes (see [the drill](#the-restore-drill)); the rest is a new server, DNS and the checks after a restore. |
 
-These targets are for the pilot. Plan §7.9 sets tighter ones for Crove Cloud (point-in-time recovery, a WORM stream); they need managed PostgreSQL or WAL archiving and are not part of this setup.
+These targets are for the pilot. Plan §7.9 sets tighter ones for Ludy Cloud (point-in-time recovery, a WORM stream); they need managed PostgreSQL or WAL archiving and are not part of this setup.
 
 ## What holds state, and what the backup takes
 
@@ -106,7 +106,7 @@ A backup that never runs (the timer disabled, the server off) sends no alert of 
 
 ## Restore
 
-`tools/backup/restore.sh <run>` restores a run onto the compose stack named by the current directory's `.env`, `COMPOSE_PROJECT_NAME` and `COMPOSE_FILE`, and checks it. `<run>` is a run directory, `s3:<run id>` or `s3:latest` (the newest complete run in `BACKUP_S3_*`). It refuses a database that already holds Ludy: restore into empty volumes only. It also refuses when its own `STORAGE` (or, with `s3`, `S3_BUCKET`) differs from what the target compose project resolves (`docker compose config`): the blobs would otherwise go where the target does not read them, for a scratch stack possibly the production bucket, bringing back erased blobs.
+`tools/backup/restore.sh <run>` restores a run onto the compose stack named by the current directory's `.env`, `COMPOSE_PROJECT_NAME` and `COMPOSE_FILE`, and checks it. `<run>` is a run directory, `s3:<run id>` or `s3:latest` (the newest complete run in `BACKUP_S3_*`). It refuses a database that already holds Ludy data (`the target database already holds Crove`): restore into empty volumes only. It also refuses when its own `STORAGE` (or, with `s3`, `S3_BUCKET`) differs from what the target compose project resolves (`docker compose config`): the blobs would otherwise go where the target does not read them, for a scratch stack possibly the production bucket, bringing back erased blobs.
 
 It runs these steps and stops at the first failure with `[restore] FAILED: <reason>`:
 

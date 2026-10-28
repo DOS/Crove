@@ -123,7 +123,7 @@ docker compose exec db psql -U postgres -c "SELECT pid, application_name, state,
 
 **Alert.** `dead_letters`: `N job(s) failed after their last retry in the last W s (limit 0): see the worker log`. The limit is `PROBER_MAX_DEAD_LETTERS` (default 0: every failed job alerts once); the window is `PROBER_DEAD_LETTER_WINDOW_SECONDS` (default: the probe interval plus 60 s).
 
-Some jobs never end up here, because they record their own failure instead: a document that could not be read is marked failed in the app with a message for the user (section 6), mail for an unknown address is dropped (`[inbound] ... dropped: <code>`), and a few jobs log an `ALERT` line only: `[signout] ALERT ... revoked in Ludy only` and `[org-export] ALERT export of org ... failed after N attempts`. Search the log for `ALERT` too.
+Some jobs never end up here, because they record their own failure instead: a document that could not be read is marked failed in the app with a message for the user (section 6), mail for an unknown address is dropped (`[inbound] ... dropped: <code>`), and a few jobs log an `ALERT` line only: `[signout] ALERT ... revoked in Crove only` and `[org-export] ALERT export of org ... failed after N attempts`. Search the log for `ALERT` too.
 
 A failed `kernel-archive-write` or `kernel-archive-verify` job belongs to the WORM archive of audit events and journal entries. A `kernel-archive-verify` failure with `ARCHIVE_MISMATCH` in its error is a possible tampering, SEV1: follow [worm-archive.md](worm-archive.md), not the retry below.
 

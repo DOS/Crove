@@ -5,7 +5,7 @@ The credential key seals the tokens of connected channels (Facebook Page, Instag
 ## Where the key lives
 
 - **Never in the database.** A dump, a backup, a replica or a point-in-time restore holds only ciphertext. This is the difference from the context key (`context-key-rotation.md`), which is table data.
-- `CREDENTIAL_KEY`: 32 bytes as base64 (`openssl rand -base64 32`) or 64 hex characters. Crove Cloud keeps it in its secret manager (later: wrapped with KMS).
+- `CREDENTIAL_KEY`: 32 bytes as base64 (`openssl rand -base64 32`) or 64 hex characters. Ludy Cloud keeps it in its secret manager (later: wrapped with KMS).
 - Else `CREDENTIAL_KEY_FILE`: a file holding the key. When the file is missing, the process creates it with a fresh key (mode 0600). `docker compose` uses `/data/keys/credential.key` on the `keys` volume.
 - The API seals with it and the worker opens with it, so **both must have the same key**. With api and worker in separate containers, set `CREDENTIAL_KEY` (or share the file) in both; a key file created by each container on its own gives two different keys.
 - Each envelope records the id of the key that sealed it (`k1-` and 16 hex characters, derived from the key). The id reveals nothing about the key.

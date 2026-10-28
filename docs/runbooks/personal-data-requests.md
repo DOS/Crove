@@ -1,6 +1,6 @@
 # Runbook: a person's request about their personal data
 
-How an owner of an org answers a person who asks to see or to erase the data the org keeps about them, under the personal data protection law (Law 91/2025 and Decree 356/2025; issue #923, plan §7.9). The org is the controller and Crove Cloud is its processor; the org answers the person, and Ludy gives it the tools. **The deadlines and the identity check below are to be confirmed by the lawyer (#62)** before the first external tenant.
+How an owner of an org answers a person who asks to see or to erase the data the org keeps about them, under the personal data protection law (Law 91/2025 and Decree 356/2025; issue #923, plan §7.9). The org is the controller and Ludy Cloud is its processor; the org answers the person, and Ludy gives it the tools. **The deadlines and the identity check below are to be confirmed by the lawyer (#62)** before the first external tenant.
 
 ## 1. Receive and log the request
 
