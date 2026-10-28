@@ -338,6 +338,17 @@ jobs:
         run: |
           docker run --rm --read-only -v "$PWD/apps/kernel/test/container:/c:ro" --entrypoint node "$IMAGE" /c/image-check.mjs /app
 
+      # Control run (#1719): with an XML reader planted in pnpm's hidden hoisting directory, the check must fail
+      # and name it, so a check that stopped looking cannot pass.
+      - name: The check fails on a planted XML reader
+        run: |
+          if docker run --rm -v "$PWD/apps/kernel/test/container:/c:ro" --entrypoint sh "$IMAGE" -c \
+            'mkdir -p /app/node_modules/.pnpm/node_modules/saxes && node /c/image-check.mjs /app' > planted.txt 2>&1; then
+            cat planted.txt; echo "::error::the image check passed with saxes planted in the image"; exit 1
+          fi
+          cat planted.txt
+          grep -q 'parser package in the image: /app/node_modules/.pnpm/node_modules/saxes' planted.txt
+
       - name: The entry point starts and stops at the missing configuration
         run: |
           # Without DATABASE_URL the migrate role exits after every module of main.ts has loaded.
