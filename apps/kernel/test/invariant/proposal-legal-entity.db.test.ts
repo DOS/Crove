@@ -1,7 +1,7 @@
 // Proposals per legal entity and agents' position scopes (#1538, plan §4.6, owner decision 2026-10-29, option (b)) on
 // PostgreSQL 17, as the real login roles: the API role (crove_app) for users, the worker role (crove_worker) for system
 // and agent actors.
-//   - Positions written before 20261104000000 get the scope '{*}'; a new position gets the org's default entity
+//   - Positions written before 20261104010000 get the scope '{*}'; a new position gets the org's default entity
 //     unless its owner names '{*}' or entities of the org; anything else is refused.
 //   - A member limited to one entity sees and asks for only that entity's proposals in the Inbox.
 //   - An agent sees only the proposals of its position's entities, gets review tasks for those only, records and has
@@ -25,7 +25,7 @@ import { financeCommands, financeQueries } from '@crove/mod-finance';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
-const THIS_VERSION = '20261104000000';
+const THIS_VERSION = '20261104010000';
 const TEMPLATE = 'finance.chief_accountant';
 const SYSTEM = { type: 'system' as const, component: 'kernel.agent' };
 const suite = ADMIN ? describe : describe.skip;
