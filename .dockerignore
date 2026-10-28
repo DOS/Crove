@@ -23,6 +23,12 @@ supabase/tests
 **/test
 **/*.test.ts
 **/*.test.tsx
+**/*.test.mts
+**/*.test.cts
+**/*.test.js
+**/*.test.jsx
+**/*.test.mjs
+**/*.test.cjs
 e2e
 tools
 !tools/install-git-hooks.mjs

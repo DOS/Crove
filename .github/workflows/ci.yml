@@ -344,11 +344,12 @@ jobs:
       # entry holds (which only the per-entry walk reads), a package of a scope on the list, parser code in a .cjs
       # file of an excepted package outside its excepted files, parser code in the workspace's own code, a
       # WebAssembly module under another name and one inlined in base64, a pinned file gone and one changed (#1770),
-      # a test file and the end-to-end suite. Each runs in a fresh container of the image.
+      # a test file, a test directory, the end-to-end suite and tooling. Each runs in a fresh container of the image.
       - name: The check fails on each planted parser
         run: |
+          # As root: /app itself is root's (the image's WORKDIR), so the node user cannot plant at its top level.
           planted() {
-            if docker run --rm -v "$PWD/apps/kernel/test/container:/c:ro" --entrypoint sh "$IMAGE" -c \
+            if docker run --rm --user 0 -v "$PWD/apps/kernel/test/container:/c:ro" --entrypoint sh "$IMAGE" -c \
               "$1 && node /c/image-check.mjs /app" > planted.txt 2>&1; then
               cat planted.txt; echo "::error::the image check passed after: $1"; exit 1
             fi
@@ -381,6 +382,10 @@ jobs:
             'a test file is in the image: /app/packages/db/src/planted\.test\.ts'
           planted 'mkdir /app/e2e' \
             'the end-to-end suite is in the image: /app/e2e'
+          planted 'mkdir /app/packages/db/test' \
+            'a test directory is in the image: /app/packages/db/test'
+          planted 'mkdir -p /app/tools/ci' \
+            'tooling is in the image: /app/tools/ci'
 
       - name: The entry point starts and stops at the missing configuration
         run: |
