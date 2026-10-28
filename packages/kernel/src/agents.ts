@@ -27,6 +27,7 @@ import {
 import { decideAgentApproval, eligibleApprovers, type ActorRef } from './approval.ts';
 import { refuseWhileReextracting } from './extraction.ts';
 import { kernelManifest } from './manifest.ts';
+import { preparedEntity } from './proposal-resubmit.ts';
 import { memberProfiles } from './profiles.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
@@ -57,6 +58,9 @@ const zScope = z.enum(['org', 'module', 'agent']);
 // A non-negative amount with up to 6 decimals, as a decimal string (never a JS number for money).
 const zAmount = z.string().regex(/^\d{1,12}(\.\d{1,6})?$/);
 const zFence = z.union([z.string().regex(/^\d{1,18}$/), z.number().int().nonnegative()]).transform((v) => String(v));
+// The legal entities a position's agent works in (#1538): every entity ('*' alone) or some of the org's, by id. A new
+// position whose owner names none gets the org's default entity (the database trigger position_le_scope).
+const zLeScope = z.union([z.tuple([z.literal('*')]), z.array(zId).min(1).max(50)]);
 
 function requireUser(ctx: CommandContext): string {
   if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
@@ -74,6 +78,23 @@ async function lockPosition(trx: Trx, orgId: string, id: string) {
   const position = await trx.selectFrom('crove_kernel.position').selectAll().where('org_id', '=', orgId).where('id', '=', id).forUpdate().executeTakeFirst();
   if (!position) throw new DomainError('POSITION_NOT_FOUND', 404, 'Không tìm thấy vị trí này');
   return position;
+}
+
+// A scope the owner names: '*' alone, or entities of the org, each once (the database checks it again,
+// POSITION_SCOPE_INVALID). Ids in the text form le_scope compares.
+async function checkLeScope(trx: Trx, orgId: string, scope: readonly string[]): Promise<string[]> {
+  if (scope.length === 1 && scope[0] === '*') return ['*'];
+  const ids = [...new Set(scope.map((id) => id.toLowerCase()))];
+  const found = await trx.selectFrom('crove_kernel.legal_entity').select('id').where('org_id', '=', orgId).where('id', 'in', ids).execute();
+  if (ids.length !== scope.length || found.length !== ids.length) {
+    throw new DomainError('POSITION_SCOPE_INVALID', 422, 'Phạm vi pháp nhân của vị trí phải là mọi pháp nhân hoặc các pháp nhân của tổ chức này');
+  }
+  return ids;
+}
+
+// Whether a position's scope covers a legal entity.
+export function scopeCovers(scope: readonly string[], entityId: string): boolean {
+  return scope.includes('*') || scope.includes(entityId.toLowerCase());
 }
 
 async function lockAgent(trx: Trx, orgId: string, id: string) {
@@ -185,6 +206,7 @@ export const createPosition = defineCommand({
     roleKey: zRoleKey,
     reportsTo: zId.nullable().optional(),
     jobDescription: zJobDescription.optional(),
+    leScope: zLeScope.optional(),
   }),
   risk: 'R3',
   sideEffect: 'internal',
@@ -201,10 +223,11 @@ export const createPosition = defineCommand({
         role_key: input.roleKey,
         reports_to: input.reportsTo ?? null,
         job_description: JSON.stringify(input.jobDescription ?? {}),
+        ...(input.leScope ? { le_scope: await checkLeScope(ctx.trx, ctx.orgId, input.leScope) } : {}),
       })
-      .returning('id')
+      .returning(['id', 'le_scope'])
       .executeTakeFirstOrThrow();
-    ctx.audit({ position: position.id, role_key: input.roleKey, reports_to: input.reportsTo ?? null });
+    ctx.audit({ position: position.id, role_key: input.roleKey, reports_to: input.reportsTo ?? null, le_scope: position.le_scope });
     await ctx.activity('kernel.position', position.id, 'position.created', `Tạo vị trí ${input.title}`);
     await ctx.emit('kernel.position.created', { positionId: position.id });
     return { positionId: position.id };
@@ -220,6 +243,7 @@ export const updatePosition = defineCommand({
     reportsTo: zId.nullable().optional(),
     jobDescription: zJobDescription.optional(),
     status: z.enum(['active', 'paused', 'archived']).optional(),
+    leScope: zLeScope.optional(),
   }),
   risk: 'R3',
   sideEffect: 'internal',
@@ -234,9 +258,11 @@ export const updatePosition = defineCommand({
     if (input.reportsTo !== undefined) set.reports_to = input.reportsTo;
     if (input.jobDescription !== undefined) set.job_description = JSON.stringify(input.jobDescription);
     if (input.status !== undefined) set.status = input.status;
+    // An agent's run keeps the scope it entered with until it ends (RUN_MINUTES); its next run takes the new one.
+    if (input.leScope !== undefined) set.le_scope = await checkLeScope(ctx.trx, ctx.orgId, input.leScope);
     ctx.audit({
       position: input.id,
-      previous: { title: before.title, role_key: before.role_key, reports_to: before.reports_to, status: before.status },
+      previous: { title: before.title, role_key: before.role_key, reports_to: before.reports_to, status: before.status, le_scope: before.le_scope },
       changed: Object.keys(set),
     });
     if (Object.keys(set).length === 0) return { positionId: input.id };
@@ -331,7 +357,12 @@ export const assignPosition = defineCommand({
 // deployment does not enable the template's module (CROVE_MODULES, ADR-0031): its program and role keys are not here.
 export const installAgentTemplate = defineCommand({
   name: 'kernel.agent.template.install',
-  input: z.object({ templateKey: z.string().min(1).max(100), reportsTo: zId.nullable().optional(), displayName: z.string().trim().min(1).max(200).optional() }),
+  input: z.object({
+    templateKey: z.string().min(1).max(100),
+    reportsTo: zId.nullable().optional(),
+    displayName: z.string().trim().min(1).max(200).optional(),
+    leScope: zLeScope.optional(),
+  }),
   risk: 'R3',
   sideEffect: 'internal',
   access: OWNER,
@@ -365,10 +396,11 @@ export const installAgentTemplate = defineCommand({
         reports_to: input.reportsTo ?? null,
         holder_agent_id: agent.id,
         job_description: JSON.stringify(template.job_description),
+        ...(input.leScope ? { le_scope: await checkLeScope(ctx.trx, ctx.orgId, input.leScope) } : {}),
       })
-      .returning('id')
+      .returning(['id', 'le_scope'])
       .executeTakeFirstOrThrow();
-    ctx.audit({ template: template.key, agent: agent.id, position: position.id, max_risk: template.max_risk });
+    ctx.audit({ template: template.key, agent: agent.id, position: position.id, max_risk: template.max_risk, le_scope: position.le_scope });
     await ctx.activity('kernel.agent', agent.id, 'agent.installed', `Thêm tác tử AI ${template.title}`);
     await ctx.emit('kernel.agent.installed', { agentId: agent.id, positionId: position.id, templateKey: template.key });
     return { agentId: agent.id, positionId: position.id };
@@ -940,7 +972,7 @@ export const dispatchAgentEvent = defineCommand({
     const proposal = await ctx.trx
       .selectFrom('crove_kernel.proposal as p')
       .leftJoin('crove_kernel.extraction as e', (j) => j.onRef('e.org_id', '=', 'p.org_id').onRef('e.id', '=', 'p.extraction_id'))
-      .select(['p.id', 'p.title', 'p.status', 'p.extraction_id', 'p.requested_by_agent', 'p.tainted as proposal_tainted', 'e.tainted'])
+      .select(['p.id', 'p.title', 'p.status', 'p.extraction_id', 'p.requested_by_agent', 'p.tainted as proposal_tainted', 'p.legal_entity_id', 'e.tainted'])
       .where('p.org_id', '=', ctx.orgId)
       .where('p.id', '=', proposalId.data.proposalId)
       .executeTakeFirst();
@@ -951,15 +983,19 @@ export const dispatchAgentEvent = defineCommand({
       .selectFrom('crove_kernel.agent as a')
       .innerJoin('crove_kernel.agent_template as t', 't.key', 'a.template_key')
       .innerJoin('crove_kernel.position as p', (j) => j.onRef('p.org_id', '=', 'a.org_id').onRef('p.holder_agent_id', '=', 'a.id'))
-      .select(['p.id as position_id', 't.module', 'a.id as agent_id'])
+      .select(['p.id as position_id', 't.module', 'a.id as agent_id', 'p.le_scope'])
       .where('a.org_id', '=', ctx.orgId)
       .where('a.status', '=', 'active')
       .where('p.status', '=', 'active')
       .where(sql<boolean>`t.subscribes @> ARRAY[${event.type}]::text[]`)
       .execute();
     let created = 0;
-    // The agent that asked for the proposal never reviews it (its own causal chain, ADR-0029 section 6).
-    for (const seat of seats.filter((s) => ctx.installed(s.module) && s.agent_id !== proposal.requested_by_agent)) {
+    // The agent that asked for the proposal never reviews it (its own causal chain, ADR-0029 section 6), and an agent
+    // whose position's scope leaves out the proposal's legal entity gets no task (#1538): it could not read the
+    // proposal, and the task's title would name it.
+    for (const seat of seats.filter(
+      (s) => ctx.installed(s.module) && s.agent_id !== proposal.requested_by_agent && scopeCovers(s.le_scope, proposal.legal_entity_id),
+    )) {
       const task = await ctx.trx
         .insertInto('crove_kernel.task')
         .values({
@@ -1656,8 +1692,8 @@ export const createAgentProposal = defineCommand({
     const { agentId, runId, taskId, preparer, draft } = event.data;
     const bound = await emittedBy(ctx.trx, ctx.orgId, event, 'kernel.task.propose', { type: 'kernel.task', id: taskId }, { preparer, proposal_command: draft.command });
     const { rows } = bound
-      ? await sql<{ run_tainted: boolean; run_status: string; task_tainted: boolean; agent_name: string; stopped: boolean }>`
-          SELECT r.tainted AS run_tainted, r.status AS run_status, t.tainted AS task_tainted, a.display_name AS agent_name,
+      ? await sql<{ run_tainted: boolean; run_status: string; task_tainted: boolean; agent_name: string; stopped: boolean; le_scope: string[] }>`
+          SELECT r.tainted AS run_tainted, r.status AS run_status, t.tainted AS task_tainted, a.display_name AS agent_name, p.le_scope,
                  EXISTS (SELECT 1 FROM crove_kernel.kill_switch k
                          WHERE k.org_id = r.org_id AND (k.released_at IS NULL OR k.engaged_at > ${event.createdAt}::timestamptz)
                            AND (k.scope = 'org' OR (k.scope = 'module' AND k.target IN (r.module, p.module))
@@ -1690,6 +1726,16 @@ export const createAgentProposal = defineCommand({
     }
     // The Inbox renders a proposal by its kind and title: the command's kind, and a title from the agent's name (set
     // by an owner) and that kind, never text the agent's run supplied.
+    // The legal entity it belongs to (#1538): the one the agent's preparer named in the payload, else the org's
+    // default. Within its position's scope, as its run saw (the preparer ran under le_scope): checked again here, as
+    // the system writes it.
+    const entity =
+      preparedEntity(draft) ??
+      (await ctx.trx.selectFrom('crove_kernel.legal_entity').select('id').where('org_id', '=', ctx.orgId).where('is_default', '=', true).executeTakeFirst())?.id;
+    if (!entity || !scopeCovers(facts.le_scope, entity)) {
+      ctx.audit({ event: event.id, created: false, reason: 'out_of_scope' });
+      return { proposalId: null, reason: 'out_of_scope' as const };
+    }
     const kind = info.proposalKind;
     const title = `Tác tử AI ${facts.agent_name} đề xuất: ${kind}`.slice(0, 300);
     const tainted = facts.run_tainted || facts.task_tainted;
@@ -1718,6 +1764,7 @@ export const createAgentProposal = defineCommand({
         request_event_id: event.id,
         tainted,
         policy_flags: flags,
+        legal_entity_id: entity,
       })
       .onConflict((oc) => oc.columns(['org_id', 'request_event_id']).where('request_event_id', 'is not', null).doNothing())
       .returning('id')

@@ -5670,6 +5670,7 @@ export const en = {
       POSITION_NOT_FOUND: 'Position not found',
       POSITION_ARCHIVED: 'This position is archived',
       POSITION_CYCLE: 'The org chart cannot have a reporting loop',
+      POSITION_SCOPE_INVALID: 'A position works in every legal entity or in legal entities of this organization',
       AGENT_NOT_FOUND: 'AI agent not found',
       AGENT_NOT_ACTIVE: 'This AI agent is not active',
       AGENT_ROLE_MISMATCH: "The role of the position does not match the template of the AI agent",

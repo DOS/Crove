@@ -5670,6 +5670,7 @@ export const vi = {
       POSITION_NOT_FOUND: 'Không tìm thấy vị trí này',
       POSITION_ARCHIVED: 'Vị trí này đã ngừng sử dụng',
       POSITION_CYCLE: 'Sơ đồ tổ chức không được có vòng báo cáo',
+      POSITION_SCOPE_INVALID: 'Vị trí làm việc ở mọi pháp nhân hoặc ở các pháp nhân của tổ chức này',
       AGENT_NOT_FOUND: 'Không tìm thấy tác tử AI này',
       AGENT_NOT_ACTIVE: 'Tác tử AI này không hoạt động',
       AGENT_ROLE_MISMATCH: 'Vai trò của vị trí không khớp với mẫu của tác tử AI',

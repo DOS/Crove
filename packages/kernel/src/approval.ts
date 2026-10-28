@@ -312,6 +312,7 @@ export interface AgentProposalInput {
   policy_flags: string[] | null;
   requested_by_agent: string | null;
   source_task_id: string | null;
+  legal_entity_id: string;
 }
 
 // Decides whether an agent, in one of its runs, may approve the proposal's current revision. Every fact is read from
@@ -321,7 +322,8 @@ export interface AgentProposalInput {
 //   (NULL: every proposal not created from an agent's request) is never approved by an agent;
 // - the command, as registered now, writes no contact or payment column (P04, CommandInfo.contactOrPayment, #1697);
 // - the agent is active, holds an active position whose role key is its template's and one of the command's agent
-//   approvers, and the command's risk is within its max_risk (the lower of the agent's and the template's, P02);
+//   approvers, whose legal-entity scope covers the proposal's entity (#1538), and the command's risk is within its
+//   max_risk (the lower of the agent's and the template's, P02);
 // - the run is the agent's, untainted (P03), and live: running, or succeeded after recording the approval; a run
 //   cancelled by a kill switch or a stop, failed or expired decides nothing (P01). No kill switch covers the org, the
 //   module or the agent (P01), and with options.stoppedSince (when the approval was recorded) none covering them was
@@ -351,14 +353,17 @@ export async function decideAgentApproval(
   if (flagged) return { reason: 'human_required', rule: flagged };
   if (proposal.tainted) return { reason: 'human_required', rule: 'P03' };
 
-  const { rows: seats } = await sql<{ position_id: string; role_key: string; module: string; agent_risk: Risk; template_risk: Risk }>`
-    SELECT p.id AS position_id, p.role_key, p.module, a.max_risk AS agent_risk, t.max_risk AS template_risk
+  const { rows: seats } = await sql<{ position_id: string; role_key: string; module: string; agent_risk: Risk; template_risk: Risk; le_scope: string[] }>`
+    SELECT p.id AS position_id, p.role_key, p.module, a.max_risk AS agent_risk, t.max_risk AS template_risk, p.le_scope
     FROM crove_kernel.agent a
     JOIN crove_kernel.agent_template t ON t.key = a.template_key
     JOIN crove_kernel.position p ON p.org_id = a.org_id AND p.holder_agent_id = a.id AND p.status = 'active' AND p.role_key = t.role_key
     WHERE a.org_id = ${orgId}::uuid AND a.id = ${approver.agentId}::uuid AND a.status = 'active'`.execute(trx);
   const seat = seats[0];
   if (!seat || !info.agentApprovers.includes(seat.role_key)) return { reason: 'not_eligible', rule: 'P12' };
+  // The proposal's legal entity is in the position's scope (#1538). The agent's own read already passed le_scope; this
+  // holds when the worker decides again as the system, after the owner narrowed the scope.
+  if (!seat.le_scope.includes('*') && !seat.le_scope.includes(proposal.legal_entity_id.toLowerCase())) return { reason: 'not_eligible', rule: 'P12' };
   // The command as registered now, whatever flags the proposal carries (#1697): one that may write a contact or payment
   // column is a human's to approve. Agent approvers are refused on such a command at registration, so this is a
   // second wall, after P12 so a command no agent may approve is still refused as P12.

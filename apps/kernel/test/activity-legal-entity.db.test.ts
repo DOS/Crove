@@ -1,7 +1,8 @@
 // The activity timeline per legal entity (#1716) on PostgreSQL 17: an activity row about a record of one legal entity
 // (a voucher, a journal entry, a purchase document ...) takes that record's entity, the rows written before the
 // migration included, and a member limited to another entity reads none of them, in the proposal timeline or in the
-// database, while the org-level rows (the proposal's own, a party's, the org's settings) stay visible to every member.
+// database, while the org-level rows (a party's, the org's settings) stay visible to every member. A proposal's rows
+// take the proposal's entity (#1538).
 // Set CROVE_TEST_ADMIN_URL to a superuser URL; each run makes its own database.
 import { randomUUID } from 'node:crypto';
 import { copyFileSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
@@ -197,11 +198,12 @@ suite('activity per legal entity on PostgreSQL (#1716)', () => {
   it("gives the rows of an entity's records that entity, the rows written before the migration included, and leaves the others org-level", async () => {
     expect(await entityOf('finance.journal_voucher', legacy.voucherId)).toEqual([branch]);
     expect(await entityOf('finance.journal_voucher', fresh.voucherId)).toEqual([branch]);
-    // A proposal's rows stay org-level until proposals are scoped (#1538).
+    // A proposal's rows take the proposal's entity since proposals are scoped (#1538), the rows written before
+    // 20261103220000 included.
     for (const p of [legacy, fresh]) {
       const rows = await entityOf('kernel.proposal', p.proposalId);
       expect(rows.length).toBeGreaterThan(0);
-      expect(rows.every((e) => e === null)).toBe(true);
+      expect(rows.every((e) => e === branch)).toBe(true);
     }
   });
 
@@ -221,11 +223,9 @@ suite('activity per legal entity on PostgreSQL (#1716)', () => {
     const kinds = async (userId: string) => (await timeline(userId, fresh.proposalId)).items.map((i) => i.kind);
     expect(await kinds(owner)).toContain('journal_entry.reversed');
     expect(await kinds(accountantB)).toContain('journal_entry.reversed');
-    const seenByA = await timeline(accountantA, fresh.proposalId);
-    expect(seenByA.items.map((i) => i.kind)).not.toContain('journal_entry.reversed');
-    expect(seenByA.items.filter((i) => i.recordType.startsWith('finance.'))).toEqual([]);
-    // The proposal's own rows are org-level, so A still sees what happened to the proposal.
-    expect(seenByA.items.map((i) => i.kind)).toEqual(expect.arrayContaining(['proposal.created', 'proposal.approved']));
+    expect(await kinds(accountantB)).toEqual(expect.arrayContaining(['proposal.created', 'proposal.approved']));
+    // The proposal is the branch's (#1538): a member limited to entity A opens neither it nor its timeline.
+    await expect(timeline(accountantA, fresh.proposalId)).rejects.toMatchObject({ code: 'NOT_FOUND' });
   });
 
   it('keeps a member limited to entity A out of every row of entity B in the database, and shows it the org-level rows', async () => {

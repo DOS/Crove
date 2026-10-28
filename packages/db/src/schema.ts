@@ -221,7 +221,9 @@ export const PROPOSAL_STATUSES = ['pending', 'approved', 'executed', 'rejected',
 export type ProposalStatus = (typeof PROPOSAL_STATUSES)[number];
 
 // eligible_approvers is set on every new proposal; NULL only on proposals decided before the approval policy existed.
-export type ProposalTable = Refine<G.KernelProposalTable, { status: Generated<ProposalStatus> }>;
+// legal_entity_id: filled by the trigger b_legal_entity (the extraction's, the writer's or the default entity), never
+// changed (#1538).
+export type ProposalTable = Refine<G.KernelProposalTable, { status: Generated<ProposalStatus>; legal_entity_id: LegalEntityColumn }, 'legal_entity_id'>;
 export type NotificationTable = Refine<G.KernelNotificationTable, { legal_entity_id: LegalEntityColumn }, 'legal_entity_id'>;
 
 // ADR-0029 Phase 1 (issue #79): agents in an org chart shared with humans. See the migration

@@ -61,7 +61,7 @@ import { numberingCommands } from './numbering.ts';
 import { roleCommands } from './roles.ts';
 import { calendarCommands } from './calendar.ts';
 import { proposalReminderCommands } from './proposal-reminders.ts';
-import { PROPOSAL_PREPARERS, REQUESTABLE, resubmitProposal, zPreparedProposal } from './proposal-resubmit.ts';
+import { PROPOSAL_PREPARERS, REQUESTABLE, preparedEntity, resubmitProposal, zPreparedProposal } from './proposal-resubmit.ts';
 import { usageCommands } from './usage-limits.ts';
 import { userStatusCommands } from './user-status.ts';
 import { taxCalendarCommands } from './tax-calendar.ts';
@@ -451,6 +451,7 @@ export const requestProposal = defineCommand({
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới tạo được đề xuất');
     const draft = zPreparedProposal.parse(await ctx.run(PROPOSAL_PREPARERS[input.command], input.input));
     if (draft.command !== input.command) throw new DomainError('INTERNAL', 500, 'Lỗi hệ thống');
+    const entity = preparedEntity(draft);
     const proposal = await ctx.trx
       .insertInto('crove_kernel.proposal')
       .values({
@@ -464,6 +465,8 @@ export const requestProposal = defineCommand({
         authors: JSON.stringify([actorRef(ctx.actor)]),
         // Kept so the requester can ask for it again if it expires (#876); the preparer then checks it all anew.
         request_input: JSON.stringify(input.input),
+        // The entity it belongs to (#1538): a member limited to other entities neither sees nor decides it.
+        ...(entity ? { legal_entity_id: entity } : {}),
       })
       .returning('id')
       .executeTakeFirstOrThrow();

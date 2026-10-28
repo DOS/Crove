@@ -23,7 +23,6 @@ const ORG_LEVEL = new Map<string, string>([
   ['kernel.org', "the org's own settings"],
   ['kernel.party', 'parties are org-wide until #1538 (record_le links them)'],
   ['kernel.position', 'the org chart is org-wide'],
-  ['kernel.proposal', 'a stamp, not a scope, until #1538: agents have an empty le_scope'],
   ['kernel.tenant', "the org's own settings"],
   ['kernel.user', "a member's sessions"],
 ]);

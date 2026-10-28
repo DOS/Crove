@@ -83,8 +83,6 @@ const NULLABLE_ENTITY_SCOPED = new Map<string, (o: OrgFixture) => Values>([
 ]);
 // Tables with a nullable legal_entity_id that is not such a scope, and why. Sorted, one table per line.
 const NULLABLE_ENTITY_UNSCOPED = new Map<string, string>([
-  // A stamp, not yet a scope, until the owner decides #1538: agents' positions have an empty le_scope.
-  ['crove_kernel.proposal', 'stamp until #1538'],
   // The entity an assignment is limited to; role_assignment_scope lets every member read the org-wide ones.
   ['crove_kernel.role_assignment', 'the scope of an assignment'],
 ]);
