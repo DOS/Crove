@@ -85,7 +85,8 @@ CREATE TABLE IF NOT EXISTS crove_notes.todo (
   CONSTRAINT todo_handed_over_task CHECK (status <> 'handed_over' OR task_id IS NOT NULL),
   -- The note it came from may go to the trash and away; the to-do stays.
   CONSTRAINT todo_source_note_fk FOREIGN KEY (org_id, source_note_id) REFERENCES crove_notes.note (org_id, id) ON DELETE SET NULL (source_note_id),
-  CONSTRAINT todo_task_fk FOREIGN KEY (org_id, task_id) REFERENCES crove_kernel.task (org_id, id) ON DELETE SET NULL (task_id)
+  -- A handed-over to-do keeps its task (todo_handed_over_task); only the org purge removes tasks, after the to-dos.
+  CONSTRAINT todo_task_fk FOREIGN KEY (org_id, task_id) REFERENCES crove_kernel.task (org_id, id)
 );
 -- A member's list by status and due day; the trash sweep; search; the foreign keys (G3).
 CREATE INDEX IF NOT EXISTS todo_owner_idx ON crove_notes.todo (org_id, owner_user_id, status, due_on);
@@ -118,16 +119,21 @@ CREATE TRIGGER b_search BEFORE INSERT OR UPDATE OF title, details, checklist ON 
 DROP POLICY IF EXISTS todo_read ON crove_notes.todo;
 CREATE POLICY todo_read ON crove_notes.todo AS RESTRICTIVE FOR SELECT TO crove_tenant
   USING (owner_user_id = (SELECT crove_kernel.ctx_user_id()));
--- A to-do made from a note names one the writer can read (the note's own policies apply to the subquery).
+-- A to-do made from a note names one the writer can read, and a to-do handed over a task the writer can read (their
+-- own policies apply to the subqueries), so the foreign keys, which see every row, tell nobody whether another
+-- member's note or a task of another legal entity exists.
 DROP POLICY IF EXISTS todo_insert ON crove_notes.todo;
 CREATE POLICY todo_insert ON crove_notes.todo AS RESTRICTIVE FOR INSERT TO crove_tenant
   WITH CHECK (
     owner_user_id = (SELECT crove_kernel.ctx_user_id())
-    AND (source_note_id IS NULL OR EXISTS (SELECT 1 FROM crove_notes.note n WHERE n.org_id = todo.org_id AND n.id = todo.source_note_id)));
+    AND (source_note_id IS NULL OR EXISTS (SELECT 1 FROM crove_notes.note n WHERE n.org_id = todo.org_id AND n.id = todo.source_note_id))
+    AND (task_id IS NULL OR EXISTS (SELECT 1 FROM crove_kernel.task k WHERE k.org_id = todo.org_id AND k.id = todo.task_id)));
 DROP POLICY IF EXISTS todo_update ON crove_notes.todo;
 CREATE POLICY todo_update ON crove_notes.todo AS RESTRICTIVE FOR UPDATE TO crove_tenant
   USING (owner_user_id = (SELECT crove_kernel.ctx_user_id()))
-  WITH CHECK (owner_user_id = (SELECT crove_kernel.ctx_user_id()));
+  WITH CHECK (
+    owner_user_id = (SELECT crove_kernel.ctx_user_id())
+    AND (task_id IS NULL OR EXISTS (SELECT 1 FROM crove_kernel.task k WHERE k.org_id = todo.org_id AND k.id = todo.task_id)));
 
 -- Stream hints (#69): the id of a changed to-do reaches the org's open apps, which refetch through these policies, so
 -- only its owner's app sees a change.

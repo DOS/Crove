@@ -19,9 +19,12 @@ import { TimeInput } from '../components/time-input.tsx';
 import { Empty, ErrorText, ListSkeleton, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
+import { SAFETY_POLL_MS, pollEvery, useStreamLive } from '../lib/stream-hook.ts';
 import { browserTimeZone, groupTodos, moveTarget, myWorkShortcut, stepSelection, type MyWorkAction } from '../lib/my-work.ts';
 
 const refresh = () => void queryClient.invalidateQueries({ queryKey: orpc.notes.todos.key() });
+// The most to-dos one list shows; a longer list says so.
+const LIST_LIMIT = 500;
 
 function DueChip({ todo }: { todo: TodoSummary }) {
   const t = useTranslations('myWork');
@@ -178,8 +181,9 @@ function QuickAdd({ inputRef }: { inputRef: RefObject<HTMLInputElement | null> }
   const [title, setTitle] = useState('');
   const create = useMutation({
     mutationFn: (value: string) => client.notes.todos.create({ title: value, timeZone: browserTimeZone() }),
-    onSuccess: () => {
-      setTitle('');
+    // Only what was sent is cleared: a title typed meanwhile stays.
+    onSuccess: (_, sent) => {
+      setTitle((current) => (current.trim() === sent ? '' : current));
       refresh();
     },
   });
@@ -211,7 +215,10 @@ export function MyWorkPage() {
   const [selected, setSelected] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const quickAdd = useRef<HTMLInputElement>(null);
-  const list = useQuery(orpc.notes.todos.list.queryOptions({ input: { view } }));
+  const live = useStreamLive();
+  // Read again every minute while the stream is down, and every few minutes anyway: the groups move with the clock
+  // (midnight, a due time passing), which sends no hint.
+  const list = useQuery({ ...orpc.notes.todos.list.queryOptions({ input: { view, limit: LIST_LIMIT } }), refetchInterval: pollEvery(live, 60_000, SAFETY_POLL_MS) });
   const todos = useMemo(() => list.data ?? [], [list.data]);
   const groups = useMemo(() => (view === 'open' ? groupTodos(todos) : []), [view, todos]);
   // The order J and K walk: as the screen shows the rows.
@@ -358,6 +365,7 @@ export function MyWorkPage() {
           <ul className="divide-y">{todos.map((todo) => row(todo, todos))}</ul>
         </Card>
       )}
+      {todos.length >= LIST_LIMIT && <p className="text-xs text-subtle-foreground">{t('truncated', { count: String(LIST_LIMIT) })}</p>}
       {act.error && <ErrorText>{errorMessage(act.error)}</ErrorText>}
       <p className="text-xs text-subtle-foreground">{t('shortcuts')}</p>
     </div>

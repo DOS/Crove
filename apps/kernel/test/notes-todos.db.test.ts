@@ -2,7 +2,7 @@
 // adds, edits, completes, reorders and deletes their to-dos; another member, an owner and an admin read none of them
 // and change none; a to-do due today in its own time zone lists under Hôm nay; checklist steps save; the audit rows
 // keep markers, not text; the system empties the trash and a former member's to-dos;
-// the org export carries only how many each member had. Set CROVE_TEST_ADMIN_URL to a superuser URL; the run makes its
+// owners and admins get only how many each member has. Set CROVE_TEST_ADMIN_URL to a superuser URL; the run makes its
 // own database.
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';

@@ -2409,6 +2409,7 @@ export const en = {
     save: 'Save',
     cancel: 'Cancel',
     delete: 'Move to the trash',
+    truncated: 'Showing only the first {count} to-dos.',
     shortcuts: 'Shortcuts: N new to-do, J and K next or previous, X done, E edit.',
   },
   social: {

@@ -32,6 +32,8 @@ suite('personal to-dos on PostgreSQL (#1673, ADR-0037)', () => {
   const users = { owner: '', admin: '', mine: '', member: '', viewer: '', limited: '' };
   // The member's open to-do with a checklist, and one in the trash.
   const todos = { open: randomUUID(), trashed: randomUUID() };
+  // A private note of the to-do's owner and one of another member, for to-dos made from a note.
+  const notes = { own: randomUUID(), theirs: randomUUID() };
   let agent = { agentId: '', runId: '' };
   const asUser = (userId: string) => ({ type: 'user' as const, userId, aal: 'aal1' as const });
   const asMfa = (userId: string) => ({ type: 'user' as const, userId, aal: 'aal2' as const, sessionId: randomUUID(), mfaAt: Math.floor(Date.now() / 1000) });
@@ -139,6 +141,13 @@ suite('personal to-dos on PostgreSQL (#1673, ADR-0037)', () => {
            ($1, $3, $4, 'Việc đã bỏ', NULL, '[]'::jsonb, NULL, 'k', now() - interval '40 days')`,
         [orgId, todos.open, todos.trashed, users.mine, SECRET],
       );
+      await c.query(`INSERT INTO crove_notes.note (org_id, id, author_user_id, title) VALUES ($1, $2, $3, 'Của tôi'), ($1, $4, $5, 'Của người khác')`, [
+        orgId,
+        notes.own,
+        users.mine,
+        notes.theirs,
+        users.member,
+      ]);
     });
     const installed = await api.runtime.execute<{ agentId: string; positionId: string }>(
       'kernel.agent.template.install',
@@ -207,6 +216,15 @@ suite('personal to-dos on PostgreSQL (#1673, ADR-0037)', () => {
     });
   });
 
+  it("lets no to-do name another member's private note, so the foreign key tells nothing of it", async () => {
+    const fromNote = (noteId: string) =>
+      outcome(run(owner, (c) => c.query(`INSERT INTO crove_notes.todo (org_id, owner_user_id, title, sort_key, source_note_id) VALUES ($1, $2, 'Từ ghi chú', 'a', $3)`, [orgId, users.mine, noteId])));
+    expect(await fromNote(notes.theirs)).toMatchObject({ ok: false, code: '42501' });
+    // A note that does not exist is refused the same way, before the foreign key is checked.
+    expect(await fromNote(randomUUID())).toMatchObject({ ok: false, code: '42501' });
+    expect(await fromNote(notes.own)).toMatchObject({ ok: true });
+  });
+
   it('reaches nothing through a forged context', async () => {
     const forged = await outcome(
       run(member('another member, forging the owner', () => users.member), async (c) => {
@@ -251,10 +269,11 @@ suite('personal to-dos on PostgreSQL (#1673, ADR-0037)', () => {
   });
 
   // Last: it removes the owner from the org.
-  it("removes a former member's to-dos only once they are no longer a member", async () => {
+  it("removes a former member's to-dos and private notes only once they are no longer a member", async () => {
     const purge = () => run(system, async (c) => (await c.query<{ n: string }>('SELECT crove_notes.member_items_purge($1::uuid) AS n', [users.mine])).rows[0]?.n);
     expect(await purge()).toBe('0');
     await admin((c) => c.query('DELETE FROM crove_kernel.tenant_member WHERE org_id = $1 AND user_id = $2', [orgId, users.mine]));
-    expect(await purge()).toBe('2');
+    // Their two to-dos and their private note.
+    expect(await purge()).toBe('3');
   });
 });

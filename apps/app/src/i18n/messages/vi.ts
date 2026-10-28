@@ -2408,6 +2408,7 @@ export const vi = {
     save: 'Lưu',
     cancel: 'Hủy',
     delete: 'Chuyển vào thùng rác',
+    truncated: 'Chỉ hiển thị {count} việc đầu tiên.',
     shortcuts: 'Phím tắt: N thêm việc, J và K chọn việc sau hoặc trước, X đánh dấu xong, E sửa.',
   },
   social: {
