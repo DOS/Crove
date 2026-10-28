@@ -11,7 +11,7 @@ export const kernelManifest = defineModule({
   dependsOn: [],
   tables: {
     crove_kernel: {
-      activity: columns(['org_id', 'id', 'record_type', 'record_id', 'kind', 'summary', 'actor_id', 'occurred_at', 'agent_id']),
+      activity: columns(['org_id', 'id', 'record_type', 'record_id', 'kind', 'summary', 'actor_id', 'occurred_at', 'agent_id', 'legal_entity_id']),
       agent: columns(['org_id', 'id', 'template_key', 'display_name', 'runtime', 'model_alias', 'status', 'max_risk', 'daily_run_cap', 'created_by', 'created_at', 'updated_at']),
       agent_template: columns(['key', 'module', 'title', 'role_key', 'max_risk', 'job_description', 'subscribes', 'daily_run_cap']),
       agent_wakeup: columns(['org_id', 'id', 'agent_id', 'status', 'reasons', 'request_count', 'tainted', 'request_depth', 'run_id', 'created_at', 'updated_at']),

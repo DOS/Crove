@@ -150,6 +150,12 @@ async function addLink(ctx: CommandContext, row: Pick<SummaryRow, 'id' | 'visibi
 
 const written = (row: Pick<SummaryRow, 'id' | 'revision'>): NoteWritten => ({ noteId: row.id, revision: row.revision });
 
+// The record a link names, as the audit row keeps it: for a shared note, its type and id; for a private one, only that
+// it is private. Audit rows are append-only, exported whole to the owner and kept after the member's notes are purged,
+// so they may say which note was linked and when, never which record a private note is about (ADR-0037 §3).
+const linkTargetFact = (visibility: NoteVisibility, targetType: string, targetId: string) =>
+  visibility === 'org' ? { targetType, targetId } : { target: 'private' as const };
+
 // A link added or removed changes the note as others see it; touching the note sends its stream hint (#69), so open
 // apps read the note and the record's panel again.
 async function touch(ctx: CommandContext, noteId: string): Promise<void> {
@@ -185,7 +191,7 @@ export const noteCreate = defineCommand({
       visibility: row.visibility,
       title: auditValue(NOTE, 'title', input.title),
       tags: auditValue(NOTE, 'tags', input.tags.length > 0 ? input.tags : null),
-      ...(input.link ? { linkId, targetType: input.link.targetType, targetId: input.link.targetId } : {}),
+      ...(input.link ? { linkId, ...linkTargetFact(row.visibility, input.link.targetType, input.link.targetId) } : {}),
     });
     return written(row);
   },
@@ -288,7 +294,7 @@ export const linkAdd = defineCommand({
     assertNotInTrash(note);
     const linkId = await addLink(ctx, note, userId, input.targetType, input.targetId);
     await touch(ctx, input.noteId);
-    ctx.audit({ noteId: input.noteId, linkId, targetType: input.targetType, targetId: input.targetId });
+    ctx.audit({ noteId: input.noteId, linkId, ...linkTargetFact(note.visibility, input.targetType, input.targetId) });
     return { noteId: input.noteId, linkId };
   },
 });
@@ -308,10 +314,10 @@ export const linkRemove = defineCommand({
       .where('id', '=', input.linkId)
       .executeTakeFirst();
     if (!link) throw new DomainError('NOTE_LINK_NOT_FOUND', 404, 'Không tìm thấy liên kết này');
-    await loadForChange(ctx, link.note_id, (row) => assertAuthor(row, userId));
+    const note = await loadForChange(ctx, link.note_id, (row) => assertAuthor(row, userId));
     await ctx.trx.deleteFrom('crove_notes.link').where('org_id', '=', ctx.orgId).where('id', '=', input.linkId).execute();
     await touch(ctx, link.note_id);
-    ctx.audit({ noteId: link.note_id, linkId: input.linkId, targetType: link.target_type, targetId: link.target_id });
+    ctx.audit({ noteId: link.note_id, linkId: input.linkId, ...linkTargetFact(note.visibility, link.target_type, link.target_id) });
     return { noteId: link.note_id, linkId: input.linkId };
   },
 });
