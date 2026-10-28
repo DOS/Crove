@@ -1,6 +1,6 @@
 # Crove Social: reference research
 
-> 2026-10-16. Input to the [Social plan](social.md). Three read-only research passes: Postiz (upstream and the archived DOS/Crove-Post fork), other open-source and commercial schedulers, and the platforms' official publishing docs. Nothing from these repos was run. [U] marks a claim not verified against a primary source.
+> 2026-10-16. Input to the [Social plan](social.md). Three read-only research passes: Postiz (upstream and the archived DOS/Ludy-Post fork), other open-source and commercial schedulers, and the platforms' official publishing docs. Nothing from these repos was run. [U] marks a claim not verified against a primary source.
 
 ## 1. License policy for references
 
@@ -8,7 +8,7 @@ Crove's CLA lets the project owner relicense contributions, including under comm
 
 ## 2. Postiz (gitroomhq/postiz-app, AGPL-3.0, about 37k stars)
 
-- **Fork state.** DOS/Crove-Post (archived, branch `dev`) is 185 commits ahead and 73 behind upstream `main`, merge base 2026-10-09 (v2.25.1). Fork delta: a DOS.Me broker for Reddit token refresh, billing UI, Crove branding.
+- **Fork state.** DOS/Ludy-Post (archived, branch `dev`) is 185 commits ahead and 73 behind upstream `main`, merge base 2026-10-09 (v2.25.1). Fork delta: a DOS.Me broker for Reddit token refresh, billing UI, Crove branding.
 - **Stack.** NestJS 11 API and orchestrator, Next.js 16 frontend, Prisma 6 on Postgres 17, Redis, and since 2026-01-05 (PR #1157) Temporal instead of BullMQ. Self-host is 8 containers (Temporal, a second Postgres, Elasticsearch, admin and UI).
 - **Providers.** About 36: X, LinkedIn (member and page), Facebook, Instagram (two logins), Threads, TikTok (two), YouTube, Pinterest, Reddit, Bluesky, Mastodon, Telegram, Discord, Slack, GMB, WordPress, Medium, Dev.to, Hashnode, Lemmy, Nostr, VK and others. No Zalo.
 - **Provider interface.** `generateAuthUrl`, `authenticate`, `refreshToken`, `post`, optional `postPending` + `checkPostStatus` (`pending | ready | completed`) + `finalizePost` for two-phase platforms, `comment`, `analytics`, `postAnalytics`, `maxLength`, `checkValidity`, flags such as `isBetweenSteps` (pick a page after OAuth) and `refreshCron`. Errors are classified as `RefreshToken`, `Disconnect`, `BadBody` (not retryable), `PublishedWithError`, `NotEnoughScopes`.
@@ -55,7 +55,7 @@ Socioboard is dormant; Fediverse-only schedulers have no traction.
 
 ## 5. Schema comparison (read first-hand, 2026-10-16)
 
-Read directly from the sources, not from summaries: Postiz `libraries/nestjs-libraries/src/database/prisma/schema.prisma` (DOS/Crove-Post `dev` @ `aa4172c`), OpenPost `apps/server/internal/models/models.go` and `publication_review.go` (@ `e0be2de`), BrightBean Studio `apps/composer`, `apps/approvals`, `apps/calendar`, `apps/publisher` models (@ `9a52a8b`). Design only, no code taken (§1).
+Read directly from the sources, not from summaries: Postiz `libraries/nestjs-libraries/src/database/prisma/schema.prisma` (DOS/Ludy-Post `dev` @ `aa4172c`), OpenPost `apps/server/internal/models/models.go` and `publication_review.go` (@ `e0be2de`), BrightBean Studio `apps/composer`, `apps/approvals`, `apps/calendar`, `apps/publisher` models (@ `9a52a8b`). Design only, no code taken (§1).
 
 ### 5.1 Channel accounts and tokens (S2, merged)
 

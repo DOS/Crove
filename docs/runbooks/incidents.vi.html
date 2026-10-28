@@ -47,10 +47,10 @@ footer{margin-top:48px;color:var(--muted);font-size:14px}
 
 <p class="eyebrow">Ludy · vận hành · 20/10/2026</p>
 <h1>Khi Ludy gặp sự cố: những gì bạn cần biết</h1>
-<p class="lead">Bản tóm tắt cho chủ dự án của sổ tay xử lý sự cố (runbook, tức là hướng dẫn từng bước cho người vận hành máy chủ) và trang trạng thái mới, issue <a href="https://github.com/DOS/Crove/issues/678">#678 (Sổ tay sự cố và trang trạng thái)</a>. Bản tiếng Anh đầy đủ, có từng lệnh, nằm ở <a href="https://github.com/DOS/Crove/blob/main/docs/runbooks/incidents.md">docs/runbooks/incidents.md</a>.</p>
+<p class="lead">Bản tóm tắt cho chủ dự án của sổ tay xử lý sự cố (runbook, tức là hướng dẫn từng bước cho người vận hành máy chủ) và trang trạng thái mới, issue <a href="https://github.com/DOS/Ludy/issues/678">#678 (Sổ tay sự cố và trang trạng thái)</a>. Bản tiếng Anh đầy đủ, có từng lệnh, nằm ở <a href="https://github.com/DOS/Ludy/blob/main/docs/runbooks/incidents.md">docs/runbooks/incidents.md</a>.</p>
 
 <h2>1. Anh sẽ được báo thế nào</h2>
-<p>Có ba lớp báo tự động, đã mô tả trong <a href="https://github.com/DOS/Crove/blob/main/docs/runbooks/alerts.md">alerts.md</a>:</p>
+<p>Có ba lớp báo tự động, đã mô tả trong <a href="https://github.com/DOS/Ludy/blob/main/docs/runbooks/alerts.md">alerts.md</a>:</p>
 <ul>
 <li><b>Bộ kiểm tra (prober)</b>: một tiến trình nhỏ chạy cùng máy chủ, cứ 5 phút xem việc nền có chạy không, và gửi tin vào Telegram của bạn khi có sự cố, khi sự cố còn kéo dài và khi đã hết.</li>
 <li><b>Kiểm tra từ bên ngoài</b> (uptime check): một dịch vụ khác gọi vào địa chỉ của Ludy 5 phút một lần, báo khi cả trang web hoặc cả máy chủ không trả lời.</li>
@@ -83,7 +83,7 @@ footer{margin-top:48px;color:var(--muted);font-size:14px}
 
 <h2>4. Việc cần bạn và luật sư</h2>
 <div class="callout warn">
-<p><b>Thông báo lộ dữ liệu trong 72 giờ.</b> Luật Bảo vệ dữ liệu cá nhân (Luật 91/2025/QH15 và Nghị định 356/2025/NĐ-CP) yêu cầu thông báo khi lộ dữ liệu. Kế hoạch ghi rằng thời hạn 72 giờ cần được luật sư xác nhận lại theo Nghị định 356, và cơ quan nhận thông báo, mẫu thông báo cũng do luật sư quyết. Sổ tay hiện chỉ ghi các bước kỹ thuật: chặn, giữ bằng chứng, báo bạn, tìm phạm vi; phần thông báo để luật sư soạn, thuộc issue <a href="https://github.com/DOS/Crove/issues/62">#62 (PDPL: hồ sơ pháp lý trước khi có khách hàng bên ngoài)</a>.</p>
+<p><b>Thông báo lộ dữ liệu trong 72 giờ.</b> Luật Bảo vệ dữ liệu cá nhân (Luật 91/2025/QH15 và Nghị định 356/2025/NĐ-CP) yêu cầu thông báo khi lộ dữ liệu. Kế hoạch ghi rằng thời hạn 72 giờ cần được luật sư xác nhận lại theo Nghị định 356, và cơ quan nhận thông báo, mẫu thông báo cũng do luật sư quyết. Sổ tay hiện chỉ ghi các bước kỹ thuật: chặn, giữ bằng chứng, báo bạn, tìm phạm vi; phần thông báo để luật sư soạn, thuộc issue <a href="https://github.com/DOS/Ludy/issues/62">#62 (PDPL: hồ sơ pháp lý trước khi có khách hàng bên ngoài)</a>.</p>
 <p><b>Người phải làm:</b> bạn (tìm luật sư), rồi luật sư. Không cần làm trước khi chạy thử với một đối tác đã đồng ý; bắt buộc trước khách hàng bên ngoài đầu tiên.</p>
 </div>
 

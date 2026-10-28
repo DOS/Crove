@@ -194,7 +194,7 @@ function once(url: URL, target: { address: string; family: number }, options: Eg
         ...(isIP(host) === 0 ? { servername: host } : {}),
         headers: {
           accept: options.accept ?? '*/*',
-          'user-agent': options.userAgent ?? 'Crove/1.0 (+https://github.com/DOS/Crove)',
+          'user-agent': options.userAgent ?? 'Ludy/1.0 (+https://github.com/DOS/Ludy)',
           ...sent.headers,
           // Never compressed, and the body's own length: neither is the caller's to change.
           'accept-encoding': 'identity',

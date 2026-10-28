@@ -2,9 +2,9 @@
 
 - Status: accepted
 - Date: 2026-10-23
-- Deciders: owner (JOY), decision of 2026-10-23 on [#325](https://github.com/DOS/Crove/issues/325) answering O1 to O3 of the spike; the engineering choices below by the Claude Code session that built it
+- Deciders: owner (JOY), decision of 2026-10-23 on [#325](https://github.com/DOS/Ludy/issues/325) answering O1 to O3 of the spike; the engineering choices below by the Claude Code session that built it
 - Builds on: the spike [tax-portal-invoice-sync.md](../research/tax-portal-invoice-sync.md) (design A of section 4, option 2 of section 6), the portal list import of #465, ADR-0025 (credential vault, `external_call`, per-adapter allowlist), ADR-0013 (evidence storage), ADR-0027 (open-source core)
-- Issue: [#325](https://github.com/DOS/Crove/issues/325)
+- Issue: [#325](https://github.com/DOS/Ludy/issues/325)
 
 ## Context and problem statement
 

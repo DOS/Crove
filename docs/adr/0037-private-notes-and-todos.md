@@ -1,10 +1,10 @@
 # 0037. Private notes and to-dos: who may read them, and what offboarding, purge and personal-data requests do
 
-- Status: Accepted (owner, 2026-10-28, decisions N-2 to N-6 as recommended; [notes.md](../plan/notes.md#6-owner-decisions), PR [#1659](https://github.com/DOS/Crove/pull/1659)). Proposed 2026-10-27.
+- Status: Accepted (owner, 2026-10-28, decisions N-2 to N-6 as recommended; [notes.md](../plan/notes.md#6-owner-decisions), PR [#1659](https://github.com/DOS/Ludy/pull/1659)). Proposed 2026-10-27.
 - Date: 2026-10-28
 - Deciders: owner (JOY)
 - Builds on: plan §4.5 (context and RLS), §4.10 (audit), §7.9 (PDPL, deletion map, offboarding); ADR-0029 (agents, tasks) and its write allowlist (#285); ADR-0031 (module enablement); the data classes (#1599) and audit markers (#1626); the personal-data registry (#923); the org purge (#1024) and export (#38)
-- Issue: [#1649](https://github.com/DOS/Crove/issues/1649), epic [#1648](https://github.com/DOS/Crove/issues/1648)
+- Issue: [#1649](https://github.com/DOS/Ludy/issues/1649), epic [#1648](https://github.com/DOS/Ludy/issues/1648)
 
 ## Context and problem statement
 

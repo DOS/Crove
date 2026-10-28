@@ -20,7 +20,7 @@ The people using it:
 
 ### 1.1 Names
 
-The owner renamed the product on 2026-10-28 ([#1682](https://github.com/DOS/Crove/issues/1682)); what users see follows it ([#1683](https://github.com/DOS/Crove/issues/1683)).
+The owner renamed the product on 2026-10-28 ([#1682](https://github.com/DOS/Ludy/issues/1682)); what users see follows it ([#1683](https://github.com/DOS/Ludy/issues/1683)).
 
 - **Ludy** is the suite, the Business OS. It is the default of `BRAND_NAME`; a deployment that sets its own name shows that name everywhere instead, and no screen names both.
 - **Vy** is the AI assistant. Copy names Vy wherever the AI is the one acting: Vy reads, proposes, suggests, drafts and rewrites. The first mention on a screen says what Vy is ("Vy, the AI assistant", "trợ lý AI Vy"). App messages write `{assistant}`, never the name itself (`apps/app/src/i18n/brand.ts`).
