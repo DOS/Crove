@@ -22,7 +22,7 @@
 //   matched value is always masked: the repository is public, and a CI log must not repeat what it found.
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readFileSync } from 'node:fs';
-import { isAbsolute, relative } from 'node:path';
+import { isAbsolute, normalize, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 // Province and city codes of the CCCD's first three digits (Circular 07/2016/TT-BCA, unchanged by the 2025 merger of
@@ -50,10 +50,11 @@ const FIXTURE_PATH = /(^|\/)(test|tests|__tests__|fixtures|__fixtures__|testdata
 // a `document` entry names them. Their content is compressed or binary (CSV and TSV are read too), and a real export,
 // a backup or a photo of an ID card is how real data would reach the repository. UI images (PNG, SVG, WebP, GIF) are
 // not on the list.
-export const DOCUMENT = /\.(pdf|xps|rtf|docx?|docm|dotx|dotm|xlsx?|xlsm|xlsb|xlt|xltx|xltm|ods|odt|odp|odg|pptx?|pptm|ppsx|ppsm|potx|csv|tsv|numbers|pages|key|dbf|mdb|accdb|sqlite3?|db|msg|zip|7z|rar|gz|tgz|tar|bz2|xz|jpe?g|heic|heif|tiff?)$/i;
-// Where a document may live without an entry: a fixtures or testdata directory, by its exact name. Not the looser
+export const DOCUMENT = /\.(pdf|xps|rtf|docx?|docm|dot|dotx|dotm|xlsx?|xlsm|xlsb|xlt|xltx|xltm|xla|xlam|ods|ots|odt|ott|odp|odg|pptx?|pptm|pps|ppsx|ppsm|potx|csv|tsv|numbers|pages|key|dbf|mdb|accdb|sqlite3?|db|bak|msg|pst|ost|zip|7z|rar|gz|tgz|tar|bz2|xz|zst|jpe?g|heic|heif|tiff?|bmp)$/i;
+// Where a document may live without an entry: a fixtures or testdata directory, by its exact name, inside another
+// directory (a package's test/fixtures/, not a top-level fixtures/ an export could be dropped into). Not the looser
 // FIXTURE_PATH of the tax-code search, which also takes a test or seed directory and any name with "fixture" or "seed".
-const DOCUMENT_FIXTURE_DIR = /(^|\/)(fixtures|__fixtures__|testdata)\//;
+const DOCUMENT_FIXTURE_DIR = /\/(fixtures|__fixtures__|testdata)\//;
 // Files that are not text are skipped: a NUL byte in the first 8 KiB, unless the file starts with a UTF-16 byte order
 // mark (an Excel "Unicode text" export, for one), which is decoded and scanned.
 const BINARY_PROBE = 8192;
@@ -317,13 +318,13 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
     const rel = relative(process.cwd(), a);
     return rel.startsWith('..') || isAbsolute(rel) ? a : rel;
   };
-  const paths = args.length > 0 ? args.map((a) => (isAbsolute(a) ? inside(a) : a)) : trackedPaths();
+  const paths = args.length > 0 ? args.map((a) => (isAbsolute(a) ? inside(a) : normalize(a))) : trackedPaths();
   const { findings, skipped } = scanFiles(paths, readText, allowlist);
   // Paths only, so a skipped file that should have been scanned is visible in the log.
   for (const path of skipped) console.log(`pii-scan: skipped ${commandData(path)} (binary, symlink or missing)`);
   for (const f of findings) {
     if (f.kind === 'document') {
-      console.error(`::error file=${commandProperty(f.path)}::an office or data file outside a fixture directory, whose content this scan cannot read: move it under a fixtures directory if it is synthetic test data, or add a reasoned document entry naming it to tools/ci/pii-scan-allowlist.json`);
+      console.error(`::error file=${commandProperty(f.path)}::an office, data, archive, database, key or photo file outside a fixtures directory, whose content this scan cannot read: move it under a fixtures directory if it is synthetic test data, or add a reasoned document entry naming it to tools/ci/pii-scan-allowlist.json`);
       continue;
     }
     console.error(`::error file=${commandProperty(f.path)},line=${f.line}::line ${f.line} holds what looks like personal data (${f.kind} ${mask(f.kind, f.value)}); use a synthetic value (an address at example.com, a number that fails the check), or add a reasoned entry to tools/ci/pii-scan-allowlist.json`);

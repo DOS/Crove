@@ -303,16 +303,18 @@ describe('G5 PII scan (#1628)', () => {
       'docs/Fixtures/a.pdf': null,
       'backup/khach-hang.zip': null,
       'scans/cccd.jpg': null,
+      'fixtures/real.xlsx': null,
     };
     const { findings, unused } = scanFiles(Object.keys(texts), (p: string) => texts[p] ?? null, [allowed]);
     expect(findings.map((f: { path: string; kind: string; line: number }) => [f.path, f.kind, f.line])).toEqual(
       [
         'exports/so-cai-2026.xlsx', 'reports/ledger.CSV', 'docs/manual.pdf', 'apps/kernel/test/khach-hang.xlsx', 'test/a.xlsx', 'seed/a.xlsx',
         'exports/so-cai-seed.xlsx', 'exports/fixture-export.xlsx', 'docs/Fixtures/a.pdf', 'backup/khach-hang.zip', 'scans/cccd.jpg',
+        'fixtures/real.xlsx',
       ].map((path) => [path, 'document', 1]),
     );
     expect(unused).toEqual([]);
-    for (const name of ['a.pdf', 'a.doc', 'a.docx', 'a.dotx', 'a.xls', 'a.xlsx', 'a.xlsm', 'a.xltx', 'a.ods', 'a.odt', 'a.pptx', 'a.pptm', 'a.ppsx', 'a.csv', 'a.tsv', 'a.rtf', 'a.numbers', 'a.dbf', 'a.mdb', 'a.sqlite', 'a.zip', 'a.xlsx.gz', 'a.7z', 'a.jpg', 'a.HEIC', 'a.tiff']) expect(DOCUMENT.test(name), name).toBe(true);
+    for (const name of ['a.pdf', 'a.doc', 'a.docx', 'a.dotx', 'a.xls', 'a.xlsx', 'a.xlsm', 'a.xltx', 'a.ods', 'a.odt', 'a.pptx', 'a.pptm', 'a.ppsx', 'a.csv', 'a.tsv', 'a.rtf', 'a.numbers', 'a.dbf', 'a.mdb', 'a.sqlite', 'a.zip', 'a.xlsx.gz', 'a.7z', 'a.jpg', 'a.HEIC', 'a.tiff', 'a.dot', 'a.xlam', 'a.pps', 'a.ott', 'a.bak', 'a.pst', 'a.zst', 'a.bmp']) expect(DOCUMENT.test(name), name).toBe(true);
     for (const name of ['a.md', 'a.ts', 'a.pdf.md', 'csv.ts', 'icon.png', 'logo.svg', 'a.webp', 'a.woff2', 'a.json']) expect(DOCUMENT.test(name), name).toBe(false);
     // A document entry names exact files: no directory prefix, no values, never everything.
     expect(allowlistErrors([

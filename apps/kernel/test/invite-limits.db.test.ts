@@ -363,7 +363,7 @@ suite('invite mail limits on PostgreSQL (#185)', () => {
     const owner = await person('owner');
     const orgId = await orgOf(owner);
 
-    // a.b+x@gmail.com is the inbox ab@gmail.com: the org's first invite of it passes, a repeat under another
+    // a_.b…+x@gmail.com is the inbox a_b…@gmail.com: the org's first invite of it passes, a repeat under another
     // spelling is refused by the cap.
     const first = await invite(tight, orgId, owner.id, `a_.b${r}+x@gmail.com`);
     expect(first).toMatchObject({ email: `a_.b${r}+x@gmail.com` });
