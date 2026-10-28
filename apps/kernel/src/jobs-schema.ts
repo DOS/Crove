@@ -54,7 +54,7 @@ export const QUEUES = {
   crmBookingRemind: 'crm-booking-remind',
   // Created by the period balance migration (20261101160000).
   periodBalanceVerify: 'finance-period-balance-verify',
-  // Created by the notes core migration (20261103110000).
+  // Created by the notes core migration (20261103120000).
   notesMemberPurge: 'notes-member-purge',
   notesTrash: 'notes-trash',
 } as const;

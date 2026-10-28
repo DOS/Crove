@@ -84,9 +84,9 @@ function userOf(actor: QueryContext['actor']): string {
 
 const notFound = () => new DomainError('NOTE_NOT_FOUND', 404, 'Không tìm thấy ghi chú này');
 
-// The note as the caller may read it (row policies), locked for a change when `lock` is set.
-async function load(ctx: Pick<QueryContext, 'trx' | 'orgId'>, noteId: string, lock: boolean): Promise<SummaryRow> {
-  let q = ctx.trx.selectFrom('crove_notes.note').select(SUMMARY).where('org_id', '=', ctx.orgId).where('id', '=', noteId);
+// The note as the caller may read it (row policies), with its body, locked for a change when `lock` is set.
+async function load(ctx: Pick<QueryContext, 'trx' | 'orgId'>, noteId: string, lock: boolean): Promise<SummaryRow & { body: string }> {
+  let q = ctx.trx.selectFrom('crove_notes.note').select([...SUMMARY, 'body']).where('org_id', '=', ctx.orgId).where('id', '=', noteId);
   if (lock) q = q.forUpdate();
   const row = await q.executeTakeFirst();
   if (!row) throw notFound();
@@ -95,7 +95,7 @@ async function load(ctx: Pick<QueryContext, 'trx' | 'orgId'>, noteId: string, lo
 
 // The note for a change: checked against what the caller may read, then locked. FOR UPDATE also applies the update
 // policy, which hides a shared note from a plain member, so the check comes first and names the refusal.
-async function loadForChange(ctx: CommandContext, noteId: string, check: (row: SummaryRow) => void): Promise<SummaryRow> {
+async function loadForChange(ctx: CommandContext, noteId: string, check: (row: SummaryRow) => void): Promise<SummaryRow & { body: string }> {
   check(await load(ctx, noteId, false));
   return load(ctx, noteId, true);
 }
@@ -205,10 +205,9 @@ export const noteUpdate = defineCommand({
     if (before.revision !== input.revision) {
       throw new DomainError('NOTE_REVISION_CONFLICT', 409, 'Ghi chú vừa được sửa ở nơi khác; hãy tải lại trước khi lưu', { revision: before.revision });
     }
-    const current = await ctx.trx.selectFrom('crove_notes.note').select('body').where('org_id', '=', ctx.orgId).where('id', '=', input.noteId).executeTakeFirstOrThrow();
     const changed = [
       ...(before.title !== input.title ? ['title'] : []),
-      ...(current.body !== input.body ? ['body'] : []),
+      ...(before.body !== input.body ? ['body'] : []),
       ...(before.tags.join('\u0000') !== input.tags.join('\u0000') ? ['tags'] : []),
     ];
     const row = await ctx.trx
