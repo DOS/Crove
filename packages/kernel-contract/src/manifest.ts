@@ -1,10 +1,11 @@
-// A module's manifest (plan §5.2, #1588, #1599, #1630, #1652, #1656): the module, the database tables it owns, per
-// schema, with every column of each table and its data class, the permissions it owns, its screens in the app with
+// A module's manifest (plan §5.2, #1588, #1599, #1630, #1652, #1656, #1651): the module, the modules it imports, the
+// database tables it owns, per schema, with every column of each table and its data class, the permissions it owns, its screens in the app with
 // their menu items, and its entities. A database test (apps/kernel/test/manifest.db.test.ts) checks the manifests
 // against the catalog after the migrations: every table of a crove_* schema belongs to exactly one manifest, every
 // column of it is classified, every table and column a manifest names exists, every permission a role grants or
 // something checks is declared, with the roles that grant it, and every entity matches its table and numbering series.
-// apps/app/test/module-screens.test.ts checks the screens against the app's router.
+// apps/app/test/module-screens.test.ts checks the screens against the app's router, and `pnpm depcruise`
+// (.dependency-cruiser.mjs) checks every import against `dependsOn`.
 import type { BuiltinRoleKey } from './roles.ts';
 
 // What a column holds (plan §5.2, §4.7, §4.10):
@@ -123,6 +124,10 @@ export interface EntityDeclaration {
 
 export interface ModuleManifest extends ModuleScreens {
   readonly id: string;
+  // The modules this one imports, by id (plan §5.1, §5.2 `dependsOn`): a DAG, sorted. dependency-cruiser's rules are
+  // generated from it (tools/depcruise-rules.mjs), so an import of a module not listed here, or one that closes a
+  // cycle, fails `pnpm depcruise`.
+  readonly dependsOn: readonly string[];
   // Schema name -> table name (sorted) -> every column of the table with its class.
   readonly tables: Readonly<Record<string, Readonly<Record<string, TableColumns>>>>;
   // The permissions the module owns, sorted by key; empty when it owns none.

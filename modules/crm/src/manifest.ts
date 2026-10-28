@@ -5,6 +5,7 @@ import { MODULE_SCREENS, columns, defineModule } from '@crove/kernel-contract';
 
 export const crmManifest = defineModule({
   id: 'crm',
+  dependsOn: ['kernel'],
   tables: {
     crove_crm: {
       booking: columns(['org_id', 'id', 'event_type_id', 'starts_at', 'ends_at', 'status', 'refusal', 'calendar_event_id', 'party_id', 'time_zone', 'request_token_sha256', 'created_at', 'decided_at', 'revision', 'manage_request_id', 'manage_action', 'manage_starts_at', 'manage_requested_at', 'manage_outcome', 'cancelled_at', 'hold_event_ids'], { visitor_name: 'pii', email: 'contact', phone: 'contact', note: 'pii' }),

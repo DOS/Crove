@@ -22,6 +22,7 @@ const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.
 // control-plane-reads invariant), so their owner is declared here, beside the module manifests.
 const CONTROL_PLANE: ModuleManifest = {
   id: 'control-plane',
+  dependsOn: [],
   tables: {
     crove_kernel: {
       auth_email_send: columns(['id', 'client_hash', 'target_hash', 'reserved_at']),

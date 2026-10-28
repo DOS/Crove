@@ -16,6 +16,7 @@
     "typecheck": "pnpm -r typecheck && tsc --noEmit -p tools/tsconfig.json",
     "lint": "oxlint --deny-warnings apps/kernel apps/extract apps/app packages modules e2e && node tools/ui-colors.mjs",
     "knip": "knip --no-progress",
+    "depcruise": "depcruise --config .dependency-cruiser.mjs --output-type err-long apps packages modules e2e",
     "test": "vitest run --project unit",
     "test:db": "vitest run --project db",
     "test:e2e": "pnpm --filter @crove/e2e test",
@@ -36,6 +37,7 @@
   },
   "devDependencies": {
     "@types/node": "catalog:",
+    "dependency-cruiser": "catalog:",
     "kanel": "catalog:",
     "kanel-kysely": "catalog:",
     "knip": "catalog:",

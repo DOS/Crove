@@ -6,6 +6,7 @@ import { MODULE_SCREENS, columns, defineModule } from '@crove/kernel-contract';
 
 export const financeManifest = defineModule({
   id: 'finance',
+  dependsOn: ['kernel'],
   tables: {
     crove_finance: {
       account: columns(['code', 'name', 'parent_code', 'standard']),
