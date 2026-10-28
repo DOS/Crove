@@ -319,6 +319,7 @@ export interface AgentProposalInput {
 // - the command is a proposal command declaring agent approvers, below R3 (R3 is always human: P05, P12);
 // - the outcome names none of P03 to P07, and the content is not tainted; a proposal whose flags no writer assessed
 //   (NULL: every proposal not created from an agent's request) is never approved by an agent;
+// - the command, as registered now, writes no contact or payment column (P04, CommandInfo.contactOrPayment, #1697);
 // - the agent is active, holds an active position whose role key is its template's and one of the command's agent
 //   approvers, and the command's risk is within its max_risk (the lower of the agent's and the template's, P02);
 // - the run is the agent's, untainted (P03), and live: running, or succeeded after recording the approval; a run
@@ -349,6 +350,10 @@ export async function decideAgentApproval(
   const flagged = HUMAN_REVIEW_RULES.find((rule) => flags.includes(rule));
   if (flagged) return { reason: 'human_required', rule: flagged };
   if (proposal.tainted) return { reason: 'human_required', rule: 'P03' };
+  // The command as registered now, whatever flags the proposal carries (#1697): one that may write a contact or payment
+  // column is a human's to approve. Agent approvers are refused on such a command at registration, so this is a
+  // second wall.
+  if (info.contactOrPayment) return { reason: 'human_required', rule: 'P04' };
 
   const { rows: seats } = await sql<{ position_id: string; role_key: string; module: string; agent_risk: Risk; template_risk: Risk }>`
     SELECT p.id AS position_id, p.role_key, p.module, a.max_risk AS agent_risk, t.max_risk AS template_risk
