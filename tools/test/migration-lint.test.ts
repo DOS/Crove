@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { changedMigrations, format, formatWaiver, functionsCreated, lintMigration, moduleOf, parseAllowlist, plan } from '../ci/migration-lint.mjs';
+import { changedMigrations, format, formatWaiver, functionsCreated, lex, lintMigration, moduleOf, parseAllowlist, plan } from '../ci/migration-lint.mjs';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const FILE = 'supabase/migrations/20261101000000_crove_social_sample.sql';
@@ -227,6 +227,25 @@ describe('migration lint: the schema of the module', () => {
 });
 
 describe('migration lint: the lexer', () => {
+  it('reads strings and quoted identifiers as PostgreSQL decodes them (#1709 review)', () => {
+    type Token = { t: string; v: string; body?: string; line: number };
+    const values = (sql: string) => lex(sql).map((t: Token) => (t.t === 'string' ? `s:${t.body}` : `${t.t}:${t.v}`));
+    expect(values(String.raw`E'a\'b''c\\d\n\101\x5f\u0041\U00000042\q'`)).toEqual(["s:a'b'c\\d\nA_ABq"]);
+    expect(values(String.raw`U&'d\0061t\+000061' U&'x\\y''z' U&"a""b\005f"`)).toEqual(['s:data', "s:x\\y'z", 'qident:a"b_']);
+    // UESCAPE after the literal, past comments, as any string form.
+    expect(values(`U&"lock!005ftimeout" /* c */ UESCAPE '!' x`)).toEqual(['qident:lock_timeout', 'word:x']);
+    expect(values(`U&'a!0062' -- c\n UESCAPE $q$!$q$`)).toEqual(['s:ab']);
+    expect(values(`U&'a!0062' UESCAPE E'!'`)).toEqual(['s:ab']);
+    // Pieces after whitespace that holds a newline are one literal; on one line they are two tokens.
+    const joined = lex("SELECT 'a'\n  -- note\n  'b''c'\n  'd';\nSELECT E'e'\n'\\x66';");
+    expect(joined.map((t: Token) => (t.t === 'string' ? `s:${t.body}` : t.v))).toEqual(['select', "s:ab'cd", ';', 'select', 's:ef', ';']);
+    expect(joined[4]!.line).toBe(5);
+    // Only a plain quote continues a literal: E'...' after a newline is a token of its own.
+    expect(values("'a'\nE'b'")).toEqual(['s:a', 's:b']);
+    expect(values("'a' 'b'")).toEqual(['s:a', 's:b']);
+    expect(values(`$$a$$\n'b'`)).toEqual(['s:a', 's:b']);
+  });
+
   it('ignores comments, strings, quoted identifiers and function bodies', () => {
     expect(rules([
       '/* BEGIN; TRUNCATE x; /* nested */ DROP SCHEMA y; */',

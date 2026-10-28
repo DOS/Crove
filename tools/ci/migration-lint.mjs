@@ -108,12 +108,15 @@ function decodeU(raw, quote, escape) {
   return raw.replace(pattern, (all, u6, u4) => (all === quote + quote ? quote : u6 === undefined && u4 === undefined ? escape : codePoint(parseInt(u6 ?? u4, 16))));
 }
 
+// After a literal's closing quote: whitespace holding a newline (with comments), then the next piece's quote. Each
+// comment runs to its line's end, so the pattern cannot backtrack.
+const QUOTE_CONTINUE = /[ \t\f]*(?:--[^\n\r]*)?[\n\r](?:[ \t\n\r\f\v]|--[^\n\r]*[\n\r])*'/y;
+
 const codePoint = (cp) => (cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : '\ufffd');
 
 // Tokens: { t: 'word' | 'qident' | 'string' | 'punct' | 'other', v, line, body? }. A word's v is lowercased; a
-// quoted identifier keeps its case, with U& escapes decoded. A string's body is its value (E and U& escapes decoded),
-// with bodyLine the line it starts on. Line
-// comments are pushed to `comments` as { line, text, alone } when it is given; `alone` is true when no code comes
+// quoted identifier keeps its case, with U& escapes decoded. A string's body is its value (E and U& escapes decoded,
+// continued pieces joined), with bodyLine the line it starts on. Line comments are pushed to `comments` as { line, text, alone } when it is given; `alone` is true when no code comes
 // before the comment on its line (`afterCode`: the first line starts after code, as a DO body does after its $).
 export function lex(sql, firstLine = 1, comments = undefined, afterCode = false) {
   const tokens = [];
@@ -144,36 +147,41 @@ export function lex(sql, firstLine = 1, comments = undefined, afterCode = false)
         else k++;
       }
       advance(k);
-    } else if ((c === 'u' || c === 'U') && next === '&' && (sql[i + 2] === "'" || sql[i + 2] === '"')) {
-      // U&'...' or U&"...", with an optional UESCAPE '<c>' after it.
-      const quote = sql[i + 2];
+    } else if ((c === 'u' || c === 'U') && next === '&' && sql[i + 2] === '"') {
+      // U&"...": decoded after the loop, once the UESCAPE that may follow it is known.
       let k = i + 3;
       while (k < n) {
-        if (sql[k] === quote && sql[k + 1] === quote) k += 2;
-        else if (sql[k] === quote) break;
+        if (sql[k] === '"' && sql[k + 1] === '"') k += 2;
+        else if (sql[k] === '"') break;
         else k++;
       }
-      const raw = sql.slice(i + 3, k);
-      const uescape = /^\s*uescape\s*'([^'])'/i.exec(sql.slice(k + 1, k + 64));
-      const end = k + 1 + (uescape?.[0].length ?? 0);
-      const value = decodeU(raw, quote, uescape?.[1] ?? '\\');
-      const tokenLine = line;
-      if (quote === "'") tokens.push({ t: 'string', v: sql.slice(i, end), body: value, line: tokenLine, bodyLine: tokenLine });
-      else tokens.push({ t: 'qident', v: value, line: tokenLine });
-      advance(end);
-    } else if (c === "'" || ((c === 'e' || c === 'E') && next === "'")) {
-      const escapes = c !== "'";
-      const start = escapes ? i + 2 : i + 1;
-      let k = start;
-      while (k < n) {
-        if (escapes && sql[k] === '\\') k += 2;
-        else if (sql[k] === "'" && sql[k + 1] === "'") k += 2;
-        else if (sql[k] === "'") break;
-        else k++;
+      tokens.push({ t: 'qident', v: sql.slice(i + 3, k), uraw: sql.slice(i + 3, k), quote: '"', line });
+      advance(k + 1);
+    } else if (c === "'" || ((c === 'e' || c === 'E') && next === "'") || ((c === 'u' || c === 'U') && next === '&' && sql[i + 2] === "'")) {
+      // '...', E'...' or U&'...', continued by every further '...' after whitespace that holds a newline, which
+      // PostgreSQL joins into one literal ('SET LOCAL lock_'<newline>'timeout = 0' is one string).
+      const mode = c === "'" ? 'plain' : next === '&' ? 'u' : 'e';
+      let open = mode === 'plain' ? i : mode === 'e' ? i + 1 : i + 2;
+      const pieces = [];
+      let k;
+      for (;;) {
+        k = open + 1;
+        while (k < n) {
+          if (mode === 'e' && sql[k] === '\\') k += 2;
+          else if (sql[k] === "'" && sql[k + 1] === "'") k += 2;
+          else if (sql[k] === "'") break;
+          else k++;
+        }
+        pieces.push(sql.slice(open + 1, k));
+        QUOTE_CONTINUE.lastIndex = k + 1;
+        if (k >= n || !QUOTE_CONTINUE.test(sql)) break;
+        open = QUOTE_CONTINUE.lastIndex - 1;
       }
+      const raw = pieces.join('');
       const tokenLine = line;
-      const body = escapes ? decodeE(sql.slice(start, k)) : sql.slice(start, k).replaceAll("''", "'");
-      tokens.push({ t: 'string', v: sql.slice(i, k + 1), body, line: tokenLine, bodyLine: tokenLine });
+      const token = { t: 'string', v: sql.slice(i, k + 1), body: mode === 'e' ? decodeE(raw) : raw.replaceAll("''", "'"), line: tokenLine, bodyLine: tokenLine };
+      if (mode === 'u') Object.assign(token, { body: raw, uraw: raw, quote: "'" });
+      tokens.push(token);
       advance(k + 1);
     } else if (c === '"') {
       let k = i + 1;
@@ -208,6 +216,22 @@ export function lex(sql, firstLine = 1, comments = undefined, afterCode = false)
       advance(i + 1);
     }
     if (tokens.length > before) codeLine = line;
+  }
+  // U& escapes, with the escape character of a UESCAPE after the literal (PostgreSQL finds it past comments and
+  // takes any string form), or backslash.
+  for (let k = 0; k < tokens.length; k++) {
+    const token = tokens[k];
+    if (token.uraw === undefined) continue;
+    let escape = '\\';
+    if (isWord(tokens[k + 1], 'uescape') && tokens[k + 2]?.t === 'string') {
+      escape = tokens[k + 2].body;
+      tokens.splice(k + 1, 2);
+    }
+    const value = decodeU(token.uraw, token.quote, escape.length === 1 ? escape : '\\');
+    if (token.t === 'string') token.body = value;
+    else token.v = value;
+    delete token.uraw;
+    delete token.quote;
   }
   return tokens;
 }

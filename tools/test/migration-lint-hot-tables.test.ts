@@ -162,6 +162,13 @@ describe('migration lint: hot-table-retry', () => {
       'a later EXECUTE of an E string': before(String.raw`EXECUTE E'SET LOCAL lock\x5ftimeout = 0';`),
       'a later quoted set_config': before(`PERFORM "set_config"(chr(108) || 'ock_timeout', '0', true);`),
       'a later qualified quoted set_config': before(`PERFORM pg_catalog."set_config"(chr(108) || 'ock_timeout', '0', true);`),
+      // UESCAPE past a comment or as another string form, and pieces PostgreSQL joins (second review probes).
+      'UESCAPE after a block comment': before(`SET LOCAL U&"lock!005ftimeout" /* c */ UESCAPE '!' = 0;`),
+      'UESCAPE after a line comment': before(`SET LOCAL U&"lock!005ftimeout" -- c\n UESCAPE '!' = 0;`),
+      'UESCAPE as an E string': before(`SET LOCAL U&"lock!005ftimeout" UESCAPE E'!' = 0;`),
+      'UESCAPE dollar quoted': before(`SET LOCAL U&"lock!005ftimeout" UESCAPE $q$!$q$ = 0;`),
+      'a U& statement with UESCAPE': base.replace(`${statement};`, `EXECUTE U&'SET LOCAL lock!005ftimeout = 0; ${statement}' /**/ UESCAPE '!';`),
+      'pieces joined across a newline': base.replace(`${statement};`, `EXECUTE 'SET LOCAL lock_'\n  -- the rest\n  'timeout = 0; ${statement}';`),
       'a reset in an E string statement': base.replace(`${statement};`, String.raw`EXECUTE E'SET LOCAL lock\x5ftimeout = 0; ${statement}';`),
       'a reset in the statement itself': base.replace(`${statement};`, `EXECUTE 'SET LOCAL lock_timeout = 0; ${statement}';`),
       'the timeout in an IF': base.replace(setting, `IF false THEN ${setting} END IF;`),
