@@ -26,6 +26,7 @@ suite("a former member's purge and their re-add (#1722, #1757)", () => {
   let appUrl = '';
   let workerUrl = '';
   let pool: pg.Pool | undefined;
+  let app: Runtime;
   let orgId = '';
   // Each removed 31 days ago with a private note and a to-do, then invited back: readded comes back while a purge
   // waits, gone while a purge runs.
@@ -74,12 +75,26 @@ suite("a former member's purge and their re-add (#1722, #1757)", () => {
     const result = c.query<{ n: string }>('SELECT crove_notes.member_items_purge($1::uuid) AS n', [userId]).then((r) => Number(r.rows[0]?.n));
     return { c, result };
   }
-  // An invite accepted as the API does it (kernel.member.invite.accept), left open for the test to commit.
-  async function startAccept(userId: string, token: string) {
-    const c = await connect(appUrl);
-    await c.query('BEGIN');
-    const result = c.query('SELECT crove_kernel.invite_accept($1::uuid, $2, false)', [userId, token]);
-    return { c, result };
+  // An invite accepted through the command the API runs (kernel.member.invite.accept, with its audit row), which
+  // commits on its own.
+  const accept = (userId: string, token: string) => app.executeOrgless('kernel.member.invite.accept', { token }, { actor: asUser(userId) });
+  // Waits until n transactions of this database wait for an advisory lock (the membership lock).
+  async function lockWaiters(n: number): Promise<void> {
+    const until = Date.now() + 10_000;
+    for (;;) {
+      const waiting = await admin(
+        async (c) =>
+          (
+            await c.query<{ n: string }>(
+              `SELECT pg_catalog.count(*) AS n FROM pg_catalog.pg_locks l JOIN pg_catalog.pg_database d ON d.oid = l.database
+               WHERE l.locktype = 'advisory' AND NOT l.granted AND d.datname = pg_catalog.current_database()`,
+            )
+          ).rows[0]?.n,
+      );
+      if (Number(waiting) >= n) return;
+      if (Date.now() > until) throw new Error(`${waiting} transactions wait for the membership lock, not ${n}`);
+      await new Promise((r) => setTimeout(r, 25));
+    }
   }
 
   beforeAll(async () => {
@@ -102,7 +117,7 @@ suite("a former member's purge and their re-add (#1722, #1757)", () => {
     workerUrl = login('crove_worker', 'test-worker-pw');
     pool = createPool({ connectionString: appUrl, max: 4 });
     const db = createDb(pool);
-    const app = new Runtime(db).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
+    app = new Runtime(db).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
     for (const key of Object.keys(users) as Array<keyof typeof users>) {
       users[key] = await upsertIdentity(db, { issuer: 'notes-purge-readd', subject: key, email: `${key}@notes-purge-readd.test`, name: null });
     }
@@ -139,20 +154,27 @@ suite("a former member's purge and their re-add (#1722, #1757)", () => {
 
   it('keeps the notes of a member re-added while the purge waits', async () => {
     expect(await items(users.readded)).toBe(2);
-    const accept = await startAccept(users.readded, tokens.readded);
-    // The re-add has inserted the membership and holds the lock, not yet committed.
-    await accept.result;
-    const purge = await startPurge(users.readded);
+    // A gate holds the membership lock so the two can be lined up: the re-add asks for it first, the purge second.
+    // Lock waiters are served in order, so the re-add commits its membership before the purge gets the lock.
+    const gate = await connect(adminUrl);
+    let purge: Awaited<ReturnType<typeof startPurge>> | undefined;
     try {
-      // The purge waits for the lock, before its membership check.
-      expect(await stillWaiting(purge.result)).toBe(true);
-      await accept.c.query('COMMIT');
-      // It then sees the member and removes nothing.
+      await gate.query('BEGIN');
+      await gate.query('SELECT crove_kernel.membership_lock($1::uuid, $2::uuid)', [orgId, users.readded]);
+      const readd = accept(users.readded, tokens.readded);
+      void readd.catch(() => {});
+      await lockWaiters(1);
+      purge = await startPurge(users.readded);
+      void purge.result.catch(() => {});
+      await lockWaiters(2);
+      await gate.query('COMMIT');
+      await readd;
+      // The purge got the lock after the re-add committed: it sees the member and removes nothing.
       expect(await purge.result).toBe(0);
       await purge.c.query('COMMIT');
     } finally {
-      await accept.c.end();
-      await purge.c.end();
+      await gate.end();
+      await purge?.c.end();
     }
     expect(await isMember(users.readded)).toBe(true);
     expect(await items(users.readded)).toBe(2);
@@ -161,18 +183,18 @@ suite("a former member's purge and their re-add (#1722, #1757)", () => {
   it('makes a re-add wait for a purge already running, then join after it', async () => {
     expect(await items(users.gone)).toBe(2);
     const purge = await startPurge(users.gone);
-    // The purge has removed the note and the to-do and holds the lock, not yet committed.
-    expect(await purge.result).toBe(2);
-    const accept = await startAccept(users.gone, tokens.gone);
     try {
-      // invite_accept takes the same lock before its insert: it waits for the purge to end.
-      expect(await stillWaiting(accept.result)).toBe(true);
+      // The purge has removed the note and the to-do and holds the lock, not yet committed.
+      expect(await purge.result).toBe(2);
+      // kernel.member.invite.accept (invite_accept) takes the same lock before its insert: it waits for the purge.
+      const readd = accept(users.gone, tokens.gone);
+      void readd.catch(() => {});
+      expect(await stillWaiting(readd)).toBe(true);
+      await lockWaiters(1);
       await purge.c.query('COMMIT');
-      await accept.result;
-      await accept.c.query('COMMIT');
+      await readd;
     } finally {
       await purge.c.end();
-      await accept.c.end();
     }
     expect(await isMember(users.gone)).toBe(true);
     expect(await items(users.gone)).toBe(0);
