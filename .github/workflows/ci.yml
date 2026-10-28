@@ -179,9 +179,11 @@ jobs:
 
   # The marketing site (#1629; DESIGN.md §7, §8, §10): its production image, built and started as it ships, then axe
   # (WCAG 2.2 AA, landmarks and headings) on / and /en in both themes at 360px and on a desktop, no sideways scroll, and
-  # no Vietnamese on the English page but the allowed example names. The image build downloads the fonts.
+  # no Vietnamese on the English page but the allowed example names. Then its performance budget (#1655, DESIGN.md
+  # §6.3): LCP, CLS and INP on a throttled phone and a desktop, fonts, raster images and client scripts, with the
+  # planted faults the budget must catch. The image build downloads the fonts.
   web:
-    name: Marketing site (image, axe, language)
+    name: Marketing site (image, axe, language, performance)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -214,6 +216,12 @@ jobs:
         env:
           WEB_BASE_URL: http://127.0.0.1:3000
         run: pnpm --filter @crove/web test:a11y
+
+      # After the axe run and with one worker, so nothing else competes for the CPU it measures.
+      - name: Performance budget
+        env:
+          WEB_BASE_URL: http://127.0.0.1:3000
+        run: pnpm --filter @crove/web test:perf
 
       - name: Server log
         if: failure()
