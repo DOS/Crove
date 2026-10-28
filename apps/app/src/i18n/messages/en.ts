@@ -1671,6 +1671,26 @@ export const en = {
     listShortcuts: 'Shortcuts: J or N next proposal · K or P previous one · Enter opens the selected one',
     addressCopied: 'Address copied',
     copyRefused: 'The browser refused to copy. Select the address on screen and copy it by hand.',
+    failedJobs: {
+      title: 'Background work that failed ({count, number})',
+      hint: 'Each of these failed on its last try, and {brand} stopped trying. Part of the work may have been done before it failed: check the result where it shows. If one keeps coming back, tell whoever runs your {brand} server and give them the job number.',
+      item: '{work}: failed after {count, plural, one {# attempt} other {# attempts}}',
+      meta: '{when} · job {job}',
+      work: {
+        extract: 'Reading a document',
+        portalList: 'Importing a tax portal list',
+        yearArchive: 'Building a year archive',
+        mail: 'Sending an email',
+        socialPublish: 'Publishing a post',
+        social: 'A Social task',
+        notify: 'Sending a notification',
+        booking: 'A booking',
+        agent: "An AI assistant's task",
+        other: 'A background job ({queue})',
+      },
+      dismiss: 'Dismiss',
+      more: '{count, number} more not shown',
+    },
     socialAttention: {
       title: 'Social needs you ({count, number})',
       noText: 'Post without text',
@@ -5846,8 +5866,13 @@ export const en = {
         text: "Read an incoming email's text",
       },
       inbox: {
+        dismiss: 'Dismiss an Inbox item',
         get: 'Read a Document inbox item',
         list: 'List the Document inbox',
+        raised: 'List the Inbox items the system raised',
+      },
+      job: {
+        dead_letter: 'Raise the Inbox item of a failed background job',
       },
       legal_entity: {
         create: 'Add a legal entity',

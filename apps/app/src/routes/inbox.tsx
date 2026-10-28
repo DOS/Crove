@@ -88,6 +88,59 @@ function OpenBankLines({ slug }: { slug: string }) {
   );
 }
 
+// The kind of work a failed job did, by the queue it ran on (apps/kernel/src/jobs-schema.ts), for the line that names it.
+type FailedWork = 'extract' | 'portalList' | 'yearArchive' | 'mail' | 'socialPublish' | 'social' | 'notify' | 'booking' | 'agent' | 'other';
+function failedWork(queue: string): FailedWork {
+  if (queue === 'finance-file-extract') return 'extract';
+  if (queue === 'finance-portal-list') return 'portalList';
+  if (queue === 'finance-year-archive') return 'yearArchive';
+  if (queue.startsWith('kernel-mail-')) return 'mail';
+  if (queue.startsWith('social-publish-')) return 'socialPublish';
+  if (queue === 'kernel-notify' || queue === 'social-notify' || queue === 'social-push') return 'notify';
+  if (queue.startsWith('social-')) return 'social';
+  if (queue.startsWith('crm-booking')) return 'booking';
+  if (queue.startsWith('kernel-agent-')) return 'agent';
+  return 'other';
+}
+
+// Background work of the org that failed after its last retry (#1720), for owners and admins (the list is empty for
+// others): each stays until someone dismisses it. It names the kind of work, when and the job's number, never what
+// the job carried; the operator finds the rest by that number.
+function FailedJobs() {
+  const t = useTranslations('inbox.failedJobs');
+  const f = useFormat();
+  const live = useStreamLive();
+  const raised = useQuery({ ...orpc.inbox.raised.queryOptions({ input: {} }), refetchInterval: pollEvery(live, 60_000, SAFETY_POLL_MS) });
+  const dismiss = useMutation(
+    orpc.inbox.dismiss.mutationOptions({
+      onSuccess: () => void queryClient.invalidateQueries({ queryKey: orpc.inbox.raised.key() }),
+      onError: (error) => toast(errorMessage(error), 'error'),
+    }),
+  );
+  const data = raised.data;
+  if (!data || data.total === 0) return null;
+  return (
+    <Card className="mt-6 block p-4">
+      <p className="text-sm font-medium text-foreground">{t('title', { count: data.total })}</p>
+      <p className="mt-1 text-xs text-muted-foreground">{t('hint')}</p>
+      <ul className="mt-2 divide-y text-sm">
+        {data.items.map((item) => (
+          <li key={item.id} className="flex items-start justify-between gap-3 py-2">
+            <div className="min-w-0">
+              <p className="text-foreground">{t('item', { work: t(`work.${failedWork(item.queue)}`, { queue: item.queue }), count: item.retries + 1 })}</p>
+              <p className="text-xs text-subtle-foreground">{t('meta', { when: f.dateTime(item.raisedAt), job: item.jobId.slice(0, 8) })}</p>
+            </div>
+            <Button variant="outline" size="sm" disabled={dismiss.isPending} onClick={() => dismiss.mutate({ id: item.id })}>
+              {t('dismiss')}
+            </Button>
+          </li>
+        ))}
+      </ul>
+      {data.total > data.items.length && <p className="mt-2 text-xs text-muted-foreground">{t('more', { count: data.total - data.items.length })}</p>}
+    </Card>
+  );
+}
+
 // The name a proposal goes by in the list, its checkbox and the bulk report: the customer of a sale (#313; its seller is
 // the org itself), the seller of a purchase, else its title.
 // Social posts waiting for the viewer's review (#749), where Social runs: each opens its post, where it is decided.
@@ -443,6 +496,7 @@ export function InboxPage() {
       )}
 
       <IntakePanel intake={intake} />
+      {(org.data?.role === 'owner' || org.data?.role === 'admin') && <FailedJobs />}
       {config.modules.includes('finance') && <OpenBankLines slug={slug} />}
       {config.modules.includes('social') && <SocialAttention slug={slug} />}
       {config.modules.includes('social') && <SocialReviews slug={slug} />}

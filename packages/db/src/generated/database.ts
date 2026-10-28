@@ -65,6 +65,7 @@ export interface CroveKernelSchema {
   'crove_kernel.file_upload': KernelFileUploadTable;
   'crove_kernel.idempotency_key': KernelIdempotencyKeyTable;
   'crove_kernel.inbound_message': KernelInboundMessageTable;
+  'crove_kernel.inbox_item': KernelInboxItemTable;
   'crove_kernel.kill_switch': KernelKillSwitchTable;
   'crove_kernel.legal_entity': KernelLegalEntityTable;
   'crove_kernel.mail_event': KernelMailEventTable;
@@ -856,6 +857,18 @@ export interface KernelInboundMessageTable {
   attachment_count: Generated<number>;
   received_at: ColumnType<Date, Date | string | undefined, Date | string>;
   body_text: string | null;
+}
+
+/** crove_kernel.inbox_item */
+export interface KernelInboxItemTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  kind: ColumnType<string, string, NotGranted>;
+  dedupe_key: ColumnType<string, string, NotGranted>;
+  detail: ColumnType<unknown, string | undefined, NotGranted>;
+  raised_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  dismissed_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  dismissed_by: string | null;
 }
 
 /** crove_kernel.kill_switch */

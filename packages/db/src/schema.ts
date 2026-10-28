@@ -101,6 +101,12 @@ export type TaxProfileTable = Refine<
 export const RECORD_LE_TYPES = ['kernel.party'] as const;
 export type RecordLeTable = Refine<G.KernelRecordLeTable, { record_type: ColumnType<(typeof RECORD_LE_TYPES)[number], (typeof RECORD_LE_TYPES)[number], never> }>;
 
+// Inbox items the system raises (#1720): a job that failed its last retry, in its own org. Only a system context
+// inserts them; tenant roles update the dismissal columns only.
+export const INBOX_ITEM_KINDS = ['kernel.job.dead_lettered'] as const;
+export type InboxItemKind = (typeof INBOX_ITEM_KINDS)[number];
+export type InboxItemTable = Refine<G.KernelInboxItemTable, { kind: ColumnType<InboxItemKind, InboxItemKind, never> }>;
+
 export type TaxObligationDoneTable = Refine<G.KernelTaxObligationDoneTable, { obligation: (typeof TAX_OBLIGATION_CODES)[number] }>;
 
 // Gapless numbering (ADR-0021 section 2, #1401): the reset policy of a document type's series in a legal entity.
@@ -722,6 +728,7 @@ type Refined = Tables<{
   'crove_kernel.file': FileTable;
   'crove_kernel.extraction': ExtractionTable;
   'crove_kernel.notification': NotificationTable;
+  'crove_kernel.inbox_item': InboxItemTable;
   'crove_kernel.record_le': RecordLeTable;
   'crove_kernel.proposal': ProposalTable;
   'crove_kernel.agent_template': AgentTemplateTable;
