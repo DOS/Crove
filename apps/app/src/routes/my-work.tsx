@@ -87,7 +87,7 @@ function TodoEditor({ todo, onClose }: { todo: Todo; onClose: () => void }) {
     if (title.trim()) save.mutate({ title, details, steps, dueOn, dueTime });
   };
   return (
-    <Card className="block p-4" data-testid="todo-editor">
+    <div className="mt-2 border-t pt-3" data-testid="todo-editor">
       <form onSubmit={submit} className="space-y-3" onKeyDown={(e) => e.key === 'Escape' && onClose()}>
         <label className="block text-xs">
           <span className="text-subtle-foreground">{t('fieldTitle')}</span>
@@ -165,7 +165,7 @@ function TodoEditor({ todo, onClose }: { todo: Todo; onClose: () => void }) {
         {save.error && <ErrorText>{errorMessage(save.error)}</ErrorText>}
         {remove.error && <ErrorText>{errorMessage(remove.error)}</ErrorText>}
       </form>
-    </Card>
+    </div>
   );
 }
 
