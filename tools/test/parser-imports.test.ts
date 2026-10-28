@@ -1,9 +1,10 @@
 // Dependency rule (External-tenant gate T12): PDF, XML and MIME parsers run only in crove-extract (apps/extract),
 // which also holds the e-invoice parser. The API, the worker and the modules and packages they load must not
 // import a parser, must not depend on one, and the kernel image's production dependency tree must not contain one.
+import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
@@ -23,11 +24,23 @@ const PARSER_PACKAGES = [
   'mailparser',
   'xml2js',
   'sax',
+  'saxes',
+  'sax-wasm',
+  'xml-js',
+  'xml2json',
+  'xmldoc',
+  'txml',
+  'ltx',
+  'node-expat',
+  'xmlbuilder2',
+  'htmlparser2',
+  '@rgrove/parse-xml',
   'xmldom',
   '@xmldom/xmldom',
   'xml-crypto',
   'libxmljs',
   'libxmljs2',
+  'libxml2-wasm',
 ];
 const PARSER_NAME = new RegExp(`^(${PARSER_PACKAGES.map((p) => p.replace(/[/.]/g, '\\$&')).join('|')})$`);
 // Any string literal naming a parser package (or a path inside one) counts, whatever loads it: `import ... from`,
@@ -140,13 +153,15 @@ describe('parsers stay in crove-extract', () => {
       "const where = require.resolve('postal-mime');",
       "const xml2js = createRequire(import.meta.url)('xml2js');",
       "const load = createRequire(import.meta.url);\nconst parser = load('mailparser');",
+      // exceljs's XML reader (#1719).
+      "import { SaxesParser } from 'saxes';",
     ]) {
       expect(PARSER_IMPORT.test(line), line).toBe(true);
     }
     for (const line of [
       "import { z } from 'zod';",
-      // exceljs's XML reader and look-alike names are not on the list.
-      "import 'saxes';",
+      // Look-alike names are not on the list.
+      "import 'saxes-plus';",
       "require('fast-xml-parser-plus');",
       "import { x } from 'my-unpdf';",
       '// fast-xml-parser runs only in crove-extract.',
@@ -163,9 +178,15 @@ describe('parsers stay in crove-extract', () => {
     }
   });
 
-  it("the kernel image's production dependency tree holds no parsing library", () => {
+  it("the kernel image's production dependency tree holds no parsing library but saxes, which the image build removes", () => {
     const { packages, parsers } = productionTree(join(ROOT, 'apps/kernel'));
-    expect(parsers).toEqual([]);
+    // exceljs depends on saxes, its XML reader, and loads it only to read a workbook (patches/exceljs@4.4.0.patch).
+    // The workspace keeps it for the tests that read exports back; the kernel image build removes it (#1719).
+    expect(parsers.map((chain) => chain.split(' > ').slice(-2).join(' > '))).toEqual(['exceljs > saxes']);
+    const dockerfile = readFileSync(join(ROOT, 'Dockerfile'), 'utf8');
+    for (const pruned of ['node_modules/.pnpm/saxes@*', 'node_modules/.pnpm/node_modules/saxes', 'node_modules/.pnpm/exceljs@*/node_modules/saxes']) {
+      expect(dockerfile, pruned).toContain(pruned);
+    }
     const names = new Set(packages.values());
     // The walk covers the workspace packages and the libraries they load (a broken walk finds nothing).
     for (const name of ['@crove/kernel-server', '@crove/mod-finance', '@crove/l10n-vn', '@crove/extract-contract', 'pg', 'hono', 'exceljs']) {
@@ -173,6 +194,45 @@ describe('parsers stay in crove-extract', () => {
     }
     // crove-extract itself is a devDependency (the database tests start it); it is never in the kernel image.
     expect(names.has('@crove/extract')).toBe(false);
+  });
+
+  it('the image check looks for the same parser packages', () => {
+    const check = readFileSync(join(ROOT, 'apps/kernel/test/container/image-check.mjs'), 'utf8');
+    const list = /const PARSERS = \[([^\]]*)\];/.exec(check)?.[1] ?? '';
+    expect([...list.matchAll(/'([^']+)'/g)].map((m) => m[1])).toEqual(PARSER_PACKAGES);
+  });
+
+  it('the finance exports write workbooks with saxes unresolvable, and reading one fails', () => {
+    // What the kernel image does once saxes is removed: a resolve hook refuses it, as a missing package would.
+    const exportUrl = pathToFileURL(join(ROOT, 'modules/finance/src/export.ts')).href;
+    const financeManifest = join(ROOT, 'modules/finance/package.json');
+    const script = `
+      import { createRequire, registerHooks } from 'node:module';
+      registerHooks({
+        resolve(specifier, context, next) {
+          if (specifier === 'saxes' || specifier.startsWith('saxes/')) {
+            throw Object.assign(new Error("Cannot find module '" + specifier + "'"), { code: 'MODULE_NOT_FOUND' });
+          }
+          return next(specifier, context);
+        },
+      });
+      const { buildJournalWorkbook } = await import(${JSON.stringify(exportUrl)});
+      const line = (lineNo, accountCode, debit, credit) => ({ lineNo, accountCode, accountName: accountCode, debit, credit });
+      const bytes = await buildJournalWorkbook([{
+        id: 'e1', entryDate: '2026-10-01', description: 'no saxes', sourceType: 'manual', sourceId: 'e1',
+        lines: [line(1, '6422', '1234567890123456.7891', '0'), line(2, '331', '0', '1234567890123456.7891')],
+        reverses: null, reversedBy: null, pendingReversalId: null, document: null,
+      }], 'no saxes');
+      const ExcelJS = createRequire(${JSON.stringify(financeManifest)})('exceljs');
+      let read = 'read';
+      try { await new ExcelJS.Workbook().xlsx.load(bytes); } catch (error) { read = error.code + ' ' + error.message; }
+      console.log(JSON.stringify({ written: bytes.length, zip: bytes[0] === 0x50 && bytes[1] === 0x4b, read }));
+    `;
+    const out = execFileSync(process.execPath, ['--input-type=module', '--eval', script], { cwd: ROOT, encoding: 'utf8' });
+    const result = JSON.parse(out.trim().split('\n').pop() ?? '{}') as { written: number; zip: boolean; read: string };
+    expect(result.zip).toBe(true);
+    expect(result.written).toBeGreaterThan(1000);
+    expect(result.read).toMatch(/^MODULE_NOT_FOUND Cannot find module 'saxes'/);
   });
 
   it('crove-extract does hold the parsers, so the walk would find them', () => {

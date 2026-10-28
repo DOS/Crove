@@ -338,6 +338,9 @@ catalogs:
 
 packageExtensionsChecksum: sha256-A6LwFSh/yhHYALTgYOl4ziesnQJ2yeAJ4QK9Pv6bRH8=
 
+patchedDependencies:
+  exceljs@4.4.0: 10bc5d35989275045763026014c9c980e3805971fd23069daf066764cbdbbb9b
+
 importers:
 
   .:
@@ -599,7 +602,7 @@ importers:
         version: 10.6.0
       exceljs:
         specifier: 'catalog:'
-        version: 4.4.0
+        version: 4.4.0(patch_hash=10bc5d35989275045763026014c9c980e3805971fd23069daf066764cbdbbb9b)
 
   modules/crm:
     dependencies:
@@ -647,7 +650,7 @@ importers:
         version: link:../../packages/l10n-vn
       exceljs:
         specifier: 'catalog:'
-        version: 4.4.0
+        version: 4.4.0(patch_hash=10bc5d35989275045763026014c9c980e3805971fd23069daf066764cbdbbb9b)
       kysely:
         specifier: 'catalog:'
         version: 0.29.6
@@ -5434,7 +5437,7 @@ snapshots:
 
   eventsource-parser@3.1.1: {}
 
-  exceljs@4.4.0:
+  exceljs@4.4.0(patch_hash=10bc5d35989275045763026014c9c980e3805971fd23069daf066764cbdbbb9b):
     dependencies:
       archiver: 5.3.2
       dayjs: 1.11.23
