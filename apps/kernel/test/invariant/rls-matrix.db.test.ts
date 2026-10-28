@@ -9,6 +9,8 @@
 // crove_kernel.legal_entity itself (by id), must carry the RESTRICTIVE le_scope policy, and a member of org A whose
 // assignments limit it to one entity reads, inserts, updates and deletes none of another entity's rows. A nullable
 // legal_entity_id (role_assignment: the entity an assignment is limited to) is a scope, not an owner, and is left out.
+// Author-only tables (ADR-0037, AUTHOR_ONLY below) keep every cross-org case; only the system context's own-org
+// controls change there, since the system reads part of them and writes none.
 // Part of the invariant suite: CI runs this file from the base branch on protected-path PRs (AGENTS.md).
 // Set CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -46,7 +48,24 @@ const MACHINERY = new Set([
 // until the table exists, neither its factory nor its MACHINERY entry is stale. Remove an entry once its table is on
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
-  // 'crove_schema.table_name',
+  'crove_notes.link',
+  'crove_notes.note',
+  'crove_notes.todo',
+]);
+// Tables whose rows belong to one member (ADR-0037, notes plan §3.6 and step N1): unlike saved_view and notification,
+// the system context reads only what the value's predicate selects (over alias t) and writes none of its org's rows,
+// since the worker reaches them only through named definers. For the system actor, the read control expects that
+// count instead of every org A row, and the own-org insert and update controls become two checks: the system's own
+// write changes nothing, and the member context's same write succeeds, so the row and the assignment are well
+// formed. Every cross-org case stays as it is for every actor. Private-row behavior is tested in
+// notes-private.db.test.ts (N2), not here. Sorted, one table per line.
+const AUTHOR_ONLY = new Map<string, string>([
+  // A link reads through its parent: the system context sees the links of shared notes (the factory's parent).
+  ['crove_notes.link', "EXISTS (SELECT 1 FROM crove_notes.note n WHERE n.org_id = t.org_id AND n.id = t.note_id AND n.visibility = 'org')"],
+  // The system context reads shared notes (the factory's rows), for the export.
+  ['crove_notes.note', "t.visibility = 'org'"],
+  // A to-do is its owner's alone, the system context's included.
+  ['crove_notes.todo', 'false'],
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 // The RESTRICTIVE legal-entity policy (20261030001000, 20261102140000), as pg_get_expr prints it for column c.
@@ -219,6 +238,8 @@ const fixedAssetRow = (o: { id: string; owner: string }) => ({
   months: 36,
   created_by: o.owner,
 });
+// A shared note of the org's owner (ADR-0037).
+const notesNoteRow = (o: { id: string; owner: string }) => ({ org_id: o.id, id: randomUUID(), author_user_id: o.owner, visibility: 'org', title: 'RLS matrix note' });
 const journalEntry = (org: string, id: string): Row => ({
   table: 'crove_finance.journal_entry',
   values: { org_id: org, id, entry_date: '2026-10-01', description: 'rls matrix', source_type: 'rls.matrix', source_id: randomUUID() },
@@ -764,6 +785,23 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   'crove_kernel.usage_deferral': {
     make: (o) => ({ row: { org_id: o.id, id: randomUUID(), metric: 'extraction_pages', subject_type: 'file', subject_id: randomUUID(), retry_at: '2099-01-01T00:00:00Z' } }),
   },
+  // Notes and personal to-dos (ADR-0037, notes plan §3.4), in AUTHOR_ONLY. The matrix seeds as the superuser with no
+  // context, so each factory names its author or owner: the org's owner, the user every member-context actor enters
+  // as. A link to a shared note of the same author, about the org's party.
+  'crove_notes.link': {
+    make: (o) => {
+      const note = notesNoteRow(o);
+      return {
+        setup: [{ table: 'crove_notes.note', values: note }],
+        row: { org_id: o.id, id: randomUUID(), note_id: note.id, target_type: 'kernel.party', target_id: o.party, party_id: o.party, created_by: o.owner },
+      };
+    },
+  },
+  // A shared note, so the system context keeps a row to read.
+  'crove_notes.note': { make: (o) => ({ row: notesNoteRow(o) }) },
+  'crove_notes.todo': {
+    make: (o) => ({ row: { org_id: o.id, id: randomUUID(), owner_user_id: o.owner, title: 'RLS matrix to-do', time_zone: 'Asia/Ho_Chi_Minh', sort_key: 'a0' } }),
+  },
   // A channel's daily count of followers (#645), recorded by the worker: one per channel and day.
   'crove_social.account_snapshot': {
     make: (o) => {
@@ -1264,9 +1302,13 @@ suite('generated cross-org RLS matrix on PostgreSQL (T8)', () => {
     client: pg.Client;
     // The org whose context the actor runs in, or null for no context.
     org: 'A' | null;
+    // The system context of its org (no user, no agent), to which AUTHOR_ONLY's exceptions apply.
+    system?: true;
     enter: (c: pg.Client) => Promise<void>;
   }
   const actors: Actor[] = [];
+  // The member of org A, whose own-org controls stand in for the system context's on AUTHOR_ONLY tables.
+  let member: Actor;
   // A member of org A limited by its external_accountant assignment to one legal entity, a branch with no rows: it
   // must see, write and change none of the rows the factories seed (all in org A's default entity).
   let scoped: Actor;
@@ -1450,21 +1492,23 @@ suite('generated cross-org RLS matrix on PostgreSQL (T8)', () => {
     const worker = await connect(loginUrl('crove_worker', 'test-worker-pw'));
     const definer = await connect(adminUrl);
     const none = async () => {};
-    actors.push(
-      {
-        name: 'crove_app as a member of org A',
-        role: 'crove_app',
-        client: app,
-        org: 'A',
-        enter: async (c) => {
-          await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [orgs.A.owner, orgs.A.id]);
-        },
+    member = {
+      name: 'crove_app as a member of org A',
+      role: 'crove_app',
+      client: app,
+      org: 'A',
+      enter: async (c) => {
+        await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [orgs.A.owner, orgs.A.id]);
       },
+    };
+    actors.push(
+      member,
       {
         name: 'crove_worker in the system context of org A',
         role: 'crove_worker',
         client: worker,
         org: 'A',
+        system: true,
         enter: async (c) => {
           await c.query('SELECT crove_kernel.enter_system_context($1::uuid)', [orgs.A.id]);
         },
@@ -1532,6 +1576,10 @@ suite('generated cross-org RLS matrix on PostgreSQL (T8)', () => {
     );
     const pending = [...PENDING_TABLES];
     expect(pending, 'PENDING_TABLES is kept sorted, one table per line').toEqual([...pending].sort());
+    const authorOnly = [...AUTHOR_ONLY.keys()];
+    expect(authorOnly.filter((t) => !names.includes(t) && !PENDING_TABLES.has(t)), 'AUTHOR_ONLY lists tables that no longer have org_id').toEqual([]);
+    expect(authorOnly.filter((t) => !ROW_FACTORIES[t]), 'AUTHOR_ONLY lists tables with no row factory').toEqual([]);
+    expect(authorOnly, 'AUTHOR_ONLY is kept sorted, one table per line').toEqual([...authorOnly].sort());
   });
 
   it('limits the scoped member to its branch', async () => {
@@ -1621,6 +1669,11 @@ suite('generated cross-org RLS matrix on PostgreSQL (T8)', () => {
         const count = (org: OrgFixture) => seeded.find((s) => s.org === org.id)?.n ?? 0;
         expect(count(orgs.B), `${table} has no org B rows to probe`).toBeGreaterThan(0);
         expect(count(orgs.A), `${table} has no org A rows to probe`).toBeGreaterThan(0);
+        // On an AUTHOR_ONLY table, the org A rows the system context reads.
+        const systemReads = AUTHOR_ONLY.get(table);
+        const systemCount = systemReads === undefined
+          ? undefined
+          : (await admin.query<{ n: number }>(`SELECT count(*)::int AS n FROM ${table} t WHERE t.org_id = $1 AND (${systemReads})`, [orgs.A.id])).rows[0]?.n;
         for (const actor of actors) {
           const where = `${actor.name} reading ${table}`;
           const outcome = await probe(actor, (c) => c.query(`SELECT org_id::text AS org FROM ${table}`));
@@ -1634,7 +1687,11 @@ suite('generated cross-org RLS matrix on PostgreSQL (T8)', () => {
           } else {
             expect(rows.filter((r) => r.org !== orgs.A.id), `${where}: rows of other orgs`).toEqual([]);
             // Control: the same query sees the actor's own rows, so the empty result for org B is the org filter.
-            expect(rows.length, `${where}: its own org's rows`).toBe(count(orgs.A));
+            if (actor.system && systemCount !== undefined) {
+              expect(rows.length, `${where}: its own org's rows that the system context reads (AUTHOR_ONLY)`).toBe(systemCount);
+            } else {
+              expect(rows.length, `${where}: its own org's rows`).toBe(count(orgs.A));
+            }
           }
           // Asking for org B by name changes nothing.
           const byOrg = expectRows(await probe(actor, (c) => c.query(`SELECT org_id::text AS org FROM ${table} WHERE org_id = $1`, [orgs.B.id])), where);
@@ -1656,8 +1713,7 @@ suite('generated cross-org RLS matrix on PostgreSQL (T8)', () => {
           }
           expectDenied(outcome, factory.insertDenied ?? RLS_DENIED, where);
           if (actor.org === null || factory.noInsertControl) continue;
-          // Control: the same factory's row for the actor's own org is accepted, so the refusal above is about the org.
-          const control = await probe(actor, async (c) => {
+          const insertOwn = async (c: pg.Client) => {
             const built = factory.make(orgs.A);
             for (const row of built.setup ?? []) {
               const s = insertSql(row);
@@ -1665,8 +1721,18 @@ suite('generated cross-org RLS matrix on PostgreSQL (T8)', () => {
             }
             const q = insertSql({ table, values: built.row });
             return c.query(q.text, q.values);
-          });
-          expect(expectRows(control, `${actor.name} inserting into ${table} for its own org (control)`).rowCount).toBe(1);
+          };
+          let controlActor = actor;
+          if (actor.system && AUTHOR_ONLY.has(table)) {
+            // AUTHOR_ONLY: the system context writes no row of its own org either (with its parents, if any).
+            const own = await probe(actor, insertOwn);
+            expect(own, `${actor.name} inserting into ${table} for its own org: only definers write it (AUTHOR_ONLY)`).toMatchObject({ ok: false, code: '42501' });
+            controlActor = member;
+          }
+          // Control: the same factory's row for the actor's own org is accepted, so the refusal above is about the org.
+          // On an AUTHOR_ONLY table the member context runs it for the system context.
+          const control = await probe(controlActor, insertOwn);
+          expect(expectRows(control, `${controlActor.name} inserting into ${table} for its own org (control for ${actor.name})`).rowCount).toBe(1);
         }
       });
 
@@ -1698,12 +1764,30 @@ suite('generated cross-org RLS matrix on PostgreSQL (T8)', () => {
             expectDenied(moved, PRIVILEGE_DENIED, `${where} (moving org A rows to org B)`);
           } else if (actor.org === null) {
             expect(expectRows(moved, `${where} (moving org A rows to org B)`).rowCount, `${where}: rows moved without a context`).toBe(0);
+          } else if (actor.system && AUTHOR_ONLY.has(table)) {
+            // AUTHOR_ONLY: the system context may update none of its org's rows, so the move is refused by row-level
+            // security or finds no row to change; the member context's move must be refused (it updates its own).
+            if (!moved.ok) expectDenied(moved, RLS_DENIED, `${where} (moving org A rows to org B)`);
+            else expect(moved.rowCount, `${where}: rows moved to org B`).toBe(0);
+            const memberMoved = await probe(member, (c) => c.query(`UPDATE ${table} SET org_id = $1 WHERE org_id = $2`, [orgs.B.id, orgs.A.id]));
+            expectDenied(memberMoved, RLS_DENIED, `${member.name} updating ${table} (moving org A rows to org B, for ${actor.name})`);
           } else {
             expectDenied(moved, RLS_DENIED, `${where} (moving org A rows to org B)`);
           }
           if (actor.org === null) continue;
+          const updateOwn = (c: pg.Client) => c.query(`UPDATE ${table} SET ${set} WHERE org_id = $1${filter}`, [orgs.A.id]);
+          if (actor.system && AUTHOR_ONLY.has(table)) {
+            // AUTHOR_ONLY: the system context changes none of its own org's rows (refused, or no row to change), and
+            // the member context's same update stands in for its control.
+            const mine = await probe(actor, updateOwn);
+            if (!mine.ok) expect(mine, `${where} (own rows): only definers write it (AUTHOR_ONLY)`).toMatchObject({ code: '42501' });
+            else expect(mine.rowCount, `${where}: own rows updated (AUTHOR_ONLY)`).toBe(0);
+            const control = await probe(member, updateOwn);
+            expect(expectRows(control, `${member.name} updating ${table} (own rows, control for ${actor.name})`).rowCount, `${where}: own rows updated by the member`).toBeGreaterThan(0);
+            continue;
+          }
           // Control: the same update on its own rows runs, so the zero above is the org filter.
-          const own = await probe(actor, (c) => c.query(`UPDATE ${table} SET ${set} WHERE org_id = $1${filter}`, [orgs.A.id]));
+          const own = await probe(actor, updateOwn);
           expect(expectRows(own, `${where} (own rows, control)`).rowCount, `${where}: own rows updated`).toBeGreaterThan(0);
         }
       });
