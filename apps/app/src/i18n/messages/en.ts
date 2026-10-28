@@ -2558,7 +2558,7 @@ export const en = {
     handOverDue: 'The team task is due {due}',
     handOverNoDue: 'The team task has no due date.',
     tasksTruncated: 'Only the newest team tasks of your positions show here; older ones may be missing.',
-    openTasks: 'See all my team tasks',
+    openTasks: 'See my team tasks',
   },
   social: {
     title: 'Social',

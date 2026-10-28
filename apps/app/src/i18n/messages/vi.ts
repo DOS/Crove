@@ -2557,7 +2557,7 @@ export const vi = {
     handOverDue: 'Hạn của việc nhóm: {due}',
     handOverNoDue: 'Việc nhóm không có hạn.',
     tasksTruncated: 'Chỉ hiện các việc nhóm mới nhất của vị trí bạn giữ; việc cũ hơn có thể không có ở đây.',
-    openTasks: 'Xem tất cả việc nhóm của tôi',
+    openTasks: 'Xem việc nhóm của tôi',
   },
   social: {
     title: 'Mạng xã hội',
