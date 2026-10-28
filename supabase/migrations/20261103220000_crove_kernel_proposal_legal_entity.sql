@@ -30,9 +30,15 @@
 --   - Its stream hints carry the entity (#1692), so the API drops a hint for a stream whose scope leaves it out.
 --   - Its activity rows (proposal.created, approved, rejected, ...) take its entity (#1716, trigger b_legal_entity on
 --     crove_kernel.activity), so the proposal timeline is scoped too; existing rows are backfilled.
---   - Rows written before b_legal_entity existed were rewritten by 20261103010000. A NULL left since (a writer limited
---     to some entities naming an extraction it cannot see) takes its extraction's entity, else the org's default
---     entity, here; b_legal_entity is disabled around that UPDATE only (it refuses any change of the column).
+--   - The backfill. Until now a proposal not read from a file was stamped with the org's default entity whatever it
+--     was for (kernel.proposal.request named none), so a branch's voucher waiting for approval would vanish from the
+--     Inbox of the branch's own accountant once le_scope is on. Before the policy, every proposal is stamped again:
+--     one read from a file with its extraction's entity (as b_legal_entity does); any other with the entity its payload
+--     names (legalEntityId, the entity a voucher, closing or depreciation posts into, when it is one of the org's), a
+--     reversal (finance.journal.reverse) with its entry's, else it keeps its stamp, else (NULL, a writer limited to
+--     some entities naming an extraction it could not see) the org's default entity. Only rows whose stamp changes are
+--     written; b_legal_entity, which refuses any change of the column, is disabled around that UPDATE only. A rerun
+--     changes nothing.
 --
 -- Not in this file (the issue thread): the party policy on record_le links and party_link_for_tax_code's answer for a
 -- person's party, and entity-scoped approval eligibility (P12 per entity).
@@ -41,7 +47,12 @@ SET LOCAL lock_timeout = '2s';
 -- ---------------------------------------------------------------------------
 -- crove_kernel.position: the backfill, then the check
 -- ---------------------------------------------------------------------------
-UPDATE crove_kernel.position SET le_scope = ARRAY['*']::text[] WHERE le_scope = '{}'::text[];
+-- Once only: before this file's trigger exists. After it, '{}' is a scope an owner's command never writes, and a rerun
+-- must not widen it.
+UPDATE crove_kernel.position SET le_scope = ARRAY['*']::text[]
+WHERE le_scope = '{}'::text[]
+  AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_trigger t
+                  WHERE t.tgrelid = 'crove_kernel.position'::regclass AND t.tgname = 'position_le_scope');
 
 -- BEFORE INSERT OR UPDATE OF le_scope. SECURITY INVOKER: the entities are read as the writer, so a writer names only
 -- entities it can see (an owner, and the system context, see every entity of their org).
@@ -94,19 +105,38 @@ ALTER TABLE crove_kernel.position ENABLE ALWAYS TRIGGER position_le_scope;
 -- ---------------------------------------------------------------------------
 -- crove_kernel.proposal: NOT NULL, the policy and the stream hint
 -- ---------------------------------------------------------------------------
+-- The backfill's rule (see the header), dropped below. Reads as its caller, the migration runner.
+CREATE OR REPLACE FUNCTION crove_kernel.proposal_entity_backfill(p_org_id uuid, p_extraction_id uuid, p_command text, p_payload jsonb, p_current uuid)
+RETURNS uuid LANGUAGE sql STABLE SET search_path = pg_catalog, pg_temp AS $$
+  SELECT CASE
+    WHEN p_extraction_id IS NOT NULL THEN
+      coalesce((SELECT x.legal_entity_id FROM crove_kernel.extraction x WHERE x.org_id = p_org_id AND x.id = p_extraction_id),
+               p_current, crove_kernel.org_default_legal_entity(p_org_id))
+    ELSE coalesce(
+      (SELECT e.id FROM crove_kernel.legal_entity e
+       WHERE e.org_id = p_org_id AND e.id::text = pg_catalog.lower(p_payload ->> 'legalEntityId')),
+      -- A reversal belongs to the entity of the entry it reverses (a read of the finance books).
+      (SELECT j.legal_entity_id FROM crove_finance.journal_entry j
+       WHERE p_command = 'finance.journal.reverse' AND j.org_id = p_org_id AND j.id::text = pg_catalog.lower(p_payload ->> 'entryId')),
+      p_current, crove_kernel.org_default_legal_entity(p_org_id))
+  END
+$$;
+REVOKE ALL ON FUNCTION crove_kernel.proposal_entity_backfill(uuid, uuid, text, jsonb, uuid) FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant;
 DO $$
 BEGIN
-  IF EXISTS (SELECT 1 FROM crove_kernel.proposal WHERE legal_entity_id IS NULL) THEN
-    -- See the header. The UPDATE runs as the migration runner, the table's owner, which RLS does not filter.
+  IF EXISTS (SELECT 1 FROM crove_kernel.proposal p
+             WHERE p.legal_entity_id IS DISTINCT FROM
+                   crove_kernel.proposal_entity_backfill(p.org_id, p.extraction_id, p.command, p.payload, p.legal_entity_id)) THEN
+    -- The UPDATE runs as the migration runner, the table's owner, which RLS does not filter.
     ALTER TABLE crove_kernel.proposal DISABLE TRIGGER b_legal_entity;
     UPDATE crove_kernel.proposal p
-    SET legal_entity_id = coalesce(
-      (SELECT x.legal_entity_id FROM crove_kernel.extraction x WHERE x.org_id = p.org_id AND x.id = p.extraction_id),
-      crove_kernel.org_default_legal_entity(p.org_id))
-    WHERE p.legal_entity_id IS NULL;
+    SET legal_entity_id = crove_kernel.proposal_entity_backfill(p.org_id, p.extraction_id, p.command, p.payload, p.legal_entity_id)
+    WHERE p.legal_entity_id IS DISTINCT FROM
+          crove_kernel.proposal_entity_backfill(p.org_id, p.extraction_id, p.command, p.payload, p.legal_entity_id);
     ALTER TABLE crove_kernel.proposal ENABLE ALWAYS TRIGGER b_legal_entity;
   END IF;
 END $$;
+DROP FUNCTION IF EXISTS crove_kernel.proposal_entity_backfill(uuid, uuid, text, jsonb, uuid);
 ALTER TABLE crove_kernel.proposal ALTER COLUMN legal_entity_id SET NOT NULL;
 
 DROP POLICY IF EXISTS le_scope ON crove_kernel.proposal;

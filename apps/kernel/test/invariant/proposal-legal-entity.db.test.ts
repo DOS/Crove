@@ -66,6 +66,7 @@ suite('proposals per legal entity and agent position scopes on PostgreSQL (#1538
   let branch = '';
   let legacyPosition = '';
   let legacyProposal = '';
+  let legacyBranchProposal = '';
 
   const asUser = (userId: string) => ({ type: 'user' as const, userId, aal: 'aal1' as const });
   const asMfa = (userId: string) => ({ type: 'user' as const, userId, aal: 'aal2' as const, sessionId: randomUUID(), mfaAt: Math.floor(Date.now() / 1000) });
@@ -213,7 +214,17 @@ suite('proposals per legal entity and agent position scopes on PostgreSQL (#1538
         )
       ).rows[0]?.id as string;
       await c.query('ALTER TABLE crove_kernel.proposal ENABLE ALWAYS TRIGGER b_legal_entity');
+      // A branch's voucher asked for before the migration: its payload names the branch, its stamp the default entity.
+      legacyBranchProposal = (
+        await c.query<{ id: string }>(
+          `INSERT INTO crove_kernel.proposal (org_id, kind, command, title, payload, eligible_approvers, authors)
+           VALUES ($1, 't1538', 't1538.prop', 'Chi nhánh cũ', $3, ARRAY[$2::uuid], '[]') RETURNING id`,
+          [orgId, owner, JSON.stringify({ legalEntityId: branch.toUpperCase() })],
+        )
+      ).rows[0]?.id as string;
     });
+    const stampedBefore = await admin(async (c) => (await c.query<{ e: string }>('SELECT legal_entity_id AS e FROM crove_kernel.proposal WHERE id = $1', [legacyBranchProposal])).rows[0]?.e);
+    expect(stampedBefore).toBe(defaultEntity);
     expect(await scopeOf(legacyPosition)).toEqual([]);
 
     await migrate({ adminUrl, dir: MIGRATIONS });
@@ -232,10 +243,15 @@ suite('proposals per legal entity and agent position scopes on PostgreSQL (#1538
     await root.end();
   });
 
-  it('gives positions written before the migration every entity, and a proposal left without one the default entity', async () => {
+  it("gives positions written before the migration every entity, a proposal the entity its payload names, and one left without any the default entity", async () => {
     expect(await scopeOf(legacyPosition)).toEqual(['*']);
-    const entity = await admin(async (c) => (await c.query<{ e: string }>('SELECT legal_entity_id AS e FROM crove_kernel.proposal WHERE id = $1', [legacyProposal])).rows[0]?.e);
-    expect(entity).toBe(defaultEntity);
+    const entityOf = (id: string) => admin(async (c) => (await c.query<{ e: string }>('SELECT legal_entity_id AS e FROM crove_kernel.proposal WHERE id = $1', [id])).rows[0]?.e);
+    expect(await entityOf(legacyProposal)).toBe(defaultEntity);
+    expect(await entityOf(legacyBranchProposal)).toBe(branch);
+    // The branch's accountant still sees its branch's proposal written before the migration.
+    const seen = (await app.query<Array<{ id: string }>>('kernel.inbox.list', {}, { actor: asUser(accountantB), orgId })).map((p) => p.id);
+    expect(seen).toContain(legacyBranchProposal);
+    expect(seen).not.toContain(legacyProposal);
     await expect(admin((c) => c.query('UPDATE crove_kernel.proposal SET legal_entity_id = $2 WHERE id = $1', [legacyProposal, branch]))).rejects.toThrow(/LEGAL_ENTITY_IMMUTABLE/);
   });
 

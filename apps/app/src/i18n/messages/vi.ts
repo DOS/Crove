@@ -5359,6 +5359,7 @@ export const vi = {
       LEGAL_ENTITY_REQUIRED: 'Hãy chọn pháp nhân trước khi xem hoặc ghi sổ',
       LEGAL_ENTITY_NOT_ALLOWED: 'Bạn không có quyền với sổ sách của pháp nhân này',
       SOURCE_LEGAL_ENTITY: 'Chứng từ này đã ghi sổ ở một pháp nhân khác; không ghi lại sang pháp nhân khác được',
+      LEGAL_ENTITY_MISMATCH: 'Đề xuất ghi vào một pháp nhân khác pháp nhân của nó',
       AMOUNT_BELOW_DONG: 'Hóa đơn có số tiền lẻ dưới một đồng, mà sổ VND không ghi số lẻ, nên chưa ghi sổ được. Kế toán cần quyết định cách làm tròn; trong lúc chờ, có thể từ chối đề xuất và xin người bán hóa đơn điều chỉnh',
       PERIOD_LOCKED: 'Sổ đã khóa đến tháng của bút toán này nên không ghi được; chủ sở hữu hoặc kế toán trưởng có thể mở khóa tháng đó nếu cần sửa',
       POSTING_DATE_NOT_ALLOWED: 'Không dùng được ngày ghi sổ này: chỉ hóa đơn mua vào thuộc tháng đã khóa sổ mới được ghi sổ muộn, vào một ngày từ ngày hóa đơn trở đi',

@@ -39,10 +39,18 @@ export const zPreparedProposal = z.object({
 // The legal entity of a prepared proposal (#1538): the one its preparer names, else its payload's legalEntityId (the
 // entity a voucher posts into, resolved by the preparer as the requester), else none, and the database gives it the
 // org's default entity (b_legal_entity). A member or agent limited to other entities is refused that one by le_scope.
+// A preparer naming one entity and a payload naming another is refused: the proposal would be read in one entity and
+// posted into the other.
 export function preparedEntity(draft: { legalEntityId?: string | undefined; payload: Record<string, unknown> }): string | undefined {
-  if (draft.legalEntityId) return draft.legalEntityId;
   const named = zId.safeParse(draft.payload.legalEntityId);
-  return named.success ? named.data : undefined;
+  const inPayload = named.success ? named.data.toLowerCase() : undefined;
+  if (draft.legalEntityId) {
+    if (inPayload && inPayload !== draft.legalEntityId.toLowerCase()) {
+      throw new DomainError('LEGAL_ENTITY_MISMATCH', 422, 'Đề xuất ghi vào một pháp nhân khác pháp nhân của nó');
+    }
+    return draft.legalEntityId.toLowerCase();
+  }
+  return inPayload;
 }
 
 const isRequestable = (command: string): command is RequestableCommand => Object.hasOwn(PROPOSAL_PREPARERS, command);

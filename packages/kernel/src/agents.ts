@@ -258,7 +258,7 @@ export const updatePosition = defineCommand({
     if (input.reportsTo !== undefined) set.reports_to = input.reportsTo;
     if (input.jobDescription !== undefined) set.job_description = JSON.stringify(input.jobDescription);
     if (input.status !== undefined) set.status = input.status;
-    // An agent's run keeps the scope it entered with until it ends (RUN_MINUTES); its next run takes the new one.
+    // enter_agent_context reads the scope on every entry, so the agent's next command already works in the new one.
     if (input.leScope !== undefined) set.le_scope = await checkLeScope(ctx.trx, ctx.orgId, input.leScope);
     ctx.audit({
       position: input.id,
@@ -1000,7 +1000,9 @@ export const dispatchAgentEvent = defineCommand({
         .insertInto('crove_kernel.task')
         .values({
           org_id: ctx.orgId,
-          title: `Rà soát đề xuất: ${proposal.title}`.slice(0, 300),
+          // Not the proposal's title: tasks are read org-wide, and the title of a proposal of one legal entity names
+          // its content (#1538). The task opens the proposal, which le_scope guards.
+          title: 'Rà soát đề xuất chờ duyệt',
           kind: 'proposal_review',
           assignee_position_id: seat.position_id,
           source: 'event',
@@ -1505,7 +1507,8 @@ export const budgetList = defineQuery({
 // What a preparer builds. Only the command and the payload travel: the proposal's kind comes from the command and its
 // title from the kernel (#435), so nothing the agent's run supplies is rendered as the proposal's label. A preparer
 // may still return a kind and a title (the human path uses them); they are dropped here.
-const zPrepared = z.object({ command: z.string().min(1).max(200), payload: z.record(z.string(), z.unknown()) });
+// legalEntityId: the entity the preparer named (preparedEntity), carried to the worker that creates the proposal.
+const zPrepared = z.object({ command: z.string().min(1).max(200), payload: z.record(z.string(), z.unknown()), legalEntityId: zId.optional() });
 const zProposalRequested = z.object({ agentId: zId, runId: zId, taskId: zId, preparer: z.string().min(1).max(200), draft: zPrepared });
 const zProposalApproved = z.object({ agentId: zId, runId: zId, taskId: zId, proposalId: zId, revision: z.number().int().positive() });
 
@@ -1550,7 +1553,7 @@ export const proposeFromTask = defineCommand({
       runId: agent.runId,
       taskId: task.id,
       preparer: input.preparer,
-      draft: { command: draft.data.command, payload: draft.data.payload },
+      draft: { command: draft.data.command, payload: draft.data.payload, ...(preparedEntity(draft.data) ? { legalEntityId: preparedEntity(draft.data) } : {}) },
     } satisfies z.infer<typeof zProposalRequested>);
     await ctx.trx
       .updateTable('crove_kernel.task')

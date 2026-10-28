@@ -139,8 +139,8 @@ suite('agent positions, tasks and wake-ups on PostgreSQL (ADR-0029 Phase 1)', ()
     }));
     // A redelivered event adds nothing; two tasks share one pending wake-up.
     expect(state.tasks).toEqual([
-      { title: 'Rà soát đề xuất: Hóa đơn 1', kind: 'proposal_review', tainted: false, status: 'todo' },
-      { title: 'Rà soát đề xuất: Hóa đơn 2', kind: 'proposal_review', tainted: false, status: 'todo' },
+      { title: 'Rà soát đề xuất chờ duyệt', kind: 'proposal_review', tainted: false, status: 'todo' },
+      { title: 'Rà soát đề xuất chờ duyệt', kind: 'proposal_review', tainted: false, status: 'todo' },
     ]);
     expect(state.wakeups).toEqual([{ status: 'pending', request_count: 2 }]);
 
@@ -162,8 +162,8 @@ suite('agent positions, tasks and wake-ups on PostgreSQL (ADR-0029 Phase 1)', ()
     ]);
     // No human holds a position up the chart, so the approval goes to the owner (the root: no position).
     expect(after.escalations).toEqual([
-      { title: 'Duyệt đề xuất: Hóa đơn 1', assignee_position_id: null, request_depth: 1, created_by_type: 'agent', created_by_id: agentId },
-      { title: 'Duyệt đề xuất: Hóa đơn 2', assignee_position_id: null, request_depth: 1, created_by_type: 'agent', created_by_id: agentId },
+      { title: 'Duyệt đề xuất đã rà soát', assignee_position_id: null, request_depth: 1, created_by_type: 'agent', created_by_id: agentId },
+      { title: 'Duyệt đề xuất đã rà soát', assignee_position_id: null, request_depth: 1, created_by_type: 'agent', created_by_id: agentId },
     ]);
     expect(after.comments[0]).toEqual({ body: reviewText({ id: first.proposalId, title: 'Hóa đơn 1', status: 'pending', checks }), author_type: 'agent', author_id: agentId });
     expect(after.run).toEqual([{ status: 'succeeded' }]);

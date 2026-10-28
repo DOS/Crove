@@ -5359,6 +5359,7 @@ export const en = {
       LEGAL_ENTITY_REQUIRED: 'Choose a legal entity before viewing or posting to the books.',
       LEGAL_ENTITY_NOT_ALLOWED: "You don't have access to this legal entity's books.",
       SOURCE_LEGAL_ENTITY: 'This document was posted in another legal entity and cannot be posted again in a different one.',
+      LEGAL_ENTITY_MISMATCH: 'This proposal would be recorded in a different legal entity from its own',
       AMOUNT_BELOW_DONG: 'The invoice has amounts below one dong, and VND books hold no fractions, so it cannot be posted yet. An accountant must decide how to round them; meanwhile you can reject the proposal and ask the seller for an adjusted invoice.',
       PERIOD_LOCKED: "The books are locked through this entry's month, so it cannot be posted. An owner or the chief accountant can unlock that month to make a correction.",
       POSTING_DATE_NOT_ALLOWED: 'This posting date cannot be used: only a purchase invoice whose own month is locked is posted later, on a date from its invoice date on.',
