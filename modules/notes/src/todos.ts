@@ -255,11 +255,13 @@ export const todoUpdate = defineCommand({
     const beforeDueAt = before.due_at === null ? null : new Date(before.due_at).getTime();
     const dueMoved = before.due_on !== next.due_on || beforeDueAt !== (next.due_at?.getTime() ?? null) || before.time_zone !== next.time_zone;
     const beforeRemind = before.remind_at === null ? null : new Date(before.remind_at);
-    // Without a reminder in the input it stays, unless it was the automatic one of the old due day and time: it moves
-    // with them.
-    const wasAuto = beforeRemind?.getTime() === todoAutoReminder({ dueOn: before.due_on, dueAt: beforeDueAt === null ? null : new Date(beforeDueAt), timeZone: before.time_zone })?.getTime();
-    const remind =
-      input.reminder !== undefined ? remindAt(input.reminder, next, ctx.now) : dueMoved && beforeRemind !== null && wasAuto ? remindAt('auto', next, ctx.now) : beforeRemind;
+    // Without a reminder in the input it stays, unless it was the automatic one of the old due day and time, or there
+    // was none for want of a due day: it then follows the new ones.
+    const wasAuto =
+      beforeRemind === null
+        ? before.due_on === null
+        : beforeRemind.getTime() === todoAutoReminder({ dueOn: before.due_on, dueAt: beforeDueAt === null ? null : new Date(beforeDueAt), timeZone: before.time_zone })?.getTime();
+    const remind = input.reminder !== undefined ? remindAt(input.reminder, next, ctx.now) : dueMoved && wasAuto ? remindAt('auto', next, ctx.now) : beforeRemind;
     const changed = [
       ...(before.title !== input.title ? ['title'] : []),
       ...(before.details !== details ? ['details'] : []),

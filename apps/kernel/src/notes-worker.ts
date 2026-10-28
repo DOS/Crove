@@ -67,14 +67,14 @@ export async function sweepNotesTrash(deps: { runtime: Runtime; workerDb: Db }, 
 // that reminder rather than sending it twice. The claim returns ids, owners and times, never text; logs carry ids and
 // codes only.
 export async function sweepNotesReminders(deps: { runtime: Runtime; workerDb: Db }): Promise<number> {
-  const { rows } = await sql<{ org_id: string; id: string; owner_user_id: string; remind_at: Date }>`
-    SELECT org_id, id, owner_user_id, remind_at FROM crove_notes.todo_reminders_claim(${REMIND_SWEEP_LIMIT}::int)`.execute(deps.workerDb);
+  const { rows } = await sql<{ org_id: string; id: string; remind_at: Date }>`
+    SELECT org_id, id, remind_at FROM crove_notes.todo_reminders_claim(${REMIND_SWEEP_LIMIT}::int)`.execute(deps.workerDb);
   let sent = 0;
   for (const row of rows) {
     try {
       const done = await deps.runtime.execute<{ sent: number }>(
         'notes.todo.remind',
-        { todoId: row.id, ownerUserId: row.owner_user_id, remindAt: new Date(row.remind_at).toISOString() },
+        { todoId: row.id, remindAt: new Date(row.remind_at).toISOString() },
         { actor: ACTOR, orgId: row.org_id },
       );
       sent += done.sent;

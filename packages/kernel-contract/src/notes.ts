@@ -150,7 +150,8 @@ export const zTodoCreate = z
   .refine(dueTimeNeedsDay, DUE_TIME_NEEDS_DAY);
 export type TodoCreateInput = z.input<typeof zTodoCreate>;
 // The owner's edit, against the revision they read (TODO_REVISION_CONFLICT when it moved on). Without `reminder` the
-// reminder stays as it was, unless it was the automatic one and the due day or time moved: it then follows them.
+// reminder stays as it was, unless it was the automatic one, or there was none for want of a due day, and the due day
+// or time moved: it then follows them.
 export const zTodoUpdate = z
   .strictObject({
     todoId: zId,

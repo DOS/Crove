@@ -1,7 +1,7 @@
 // To-do reminders on PostgreSQL 17 (issue #1675, ADR-0037 §2, notes plan §3.8): the reminder claim is the worker
 // login's alone, outside every context, and returns ids, owners and times, never a title, detail or step; it claims a
 // reminder once and never one of a done, cancelled or deleted to-do; the notification notes.todo.remind writes goes to
-// the to-do's owner alone and holds none of its text. Part of the invariant suite; it imports package code under test,
+// the to-do's owner alone, only while the to-do still waits for that reminder, and holds none of its text. Part of the invariant suite; it imports package code under test,
 // never helpers from outside test/invariant/. Set CROVE_TEST_ADMIN_URL to a superuser URL; each run makes its own
 // database.
 import { randomUUID } from 'node:crypto';
@@ -144,6 +144,16 @@ suite('to-do reminders on PostgreSQL (#1675, ADR-0037)', () => {
     }
     const sent = await admin((c) => c.query<{ n: number }>(`SELECT count(*)::int AS n FROM crove_notes.todo WHERE org_id = $1 AND reminded_at IS NOT NULL`, [orgId]));
     expect(sent.rows[0]?.n).toBe(0);
+    // The check notes.todo.remind makes is the worker's, in the org's system context only, and answers an owner or null.
+    const check = 'SELECT crove_notes.todo_reminder_owner($1::uuid, now()) AS owner';
+    const noContext: [string, string, (c: pg.Client) => Promise<unknown>] = ['the worker login, no context', workerUrl, async () => {}];
+    for (const [name, url, enter] of [...callers.filter(([n]) => n !== 'the system context'), noContext]) {
+      expect(await outcome(inContext(url, enter, (c) => c.query(check, [todos.open]))), name).toMatchObject({ ok: false, code: '42501' });
+    }
+    const answer = await inContext(workerUrl, (c) => c.query('SELECT crove_kernel.enter_system_context($1::uuid)', [orgId]), (c) => c.query(check, [todos.open]));
+    expect(answer.fields.map((f) => f.name)).toEqual(['owner']);
+    // Not claimed yet, so not a reminder to send.
+    expect(answer.rows).toEqual([{ owner: null }]);
   });
 
   it('claims a due reminder once, with ids and times only, and never one of a done, cancelled or deleted to-do', async () => {
@@ -166,10 +176,13 @@ suite('to-do reminders on PostgreSQL (#1675, ADR-0037)', () => {
 
     // The reminder: one notification for the owner, about the to-do's id, with none of its text.
     const remindAt = (ours[0] as { remind_at: Date }).remind_at.toISOString();
-    const input = { todoId: todos.open, ownerUserId: users.mine, remindAt };
+    const input = { todoId: todos.open, remindAt };
     expect(await worker.execute('notes.todo.remind', input, { actor: { type: 'system', component: 'notes' }, orgId })).toEqual({ sent: 1 });
-    // Replayed, it writes nothing.
-    expect(await worker.execute('notes.todo.remind', input, { actor: { type: 'system', component: 'notes' }, orgId })).toEqual({ sent: 0 });
+    // Replayed, it writes nothing; nor for another time, a to-do it did not claim or one of another org.
+    const remind = (i: { todoId: string; remindAt: string }, org = orgId) => worker.execute('notes.todo.remind', i, { actor: { type: 'system', component: 'notes' }, orgId: org });
+    expect(await remind(input)).toEqual({ sent: 0 });
+    expect(await remind({ todoId: todos.open, remindAt: new Date(Date.parse(remindAt) + 60_000).toISOString() })).toEqual({ sent: 0 });
+    for (const todoId of [todos.done, todos.cancelled, todos.trashed, todos.ahead, randomUUID()]) expect(await remind({ todoId, remindAt }), todoId).toEqual({ sent: 0 });
     const rows = await admin(async (c) => (await c.query(`SELECT * FROM crove_kernel.notification WHERE org_id = $1 AND kind = 'notes.todo_due'`, [orgId])).rows);
     expect(rows.map((r: { user_id: string; subject_type: string; subject_id: string; detail: unknown }) => [r.user_id, r.subject_type, r.subject_id, r.detail])).toEqual([
       [users.mine, 'notes.todo', todos.open, {}],

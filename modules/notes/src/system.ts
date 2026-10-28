@@ -83,22 +83,30 @@ async function memberEntity(ctx: CommandContext, userId: string): Promise<string
 
 // One reminder the worker claimed: a notification for the to-do's owner, once per to-do and reminder time (a replayed
 // job writes nothing), with the to-do's id as its subject and no text (notes.md §3.6: "Bạn có 1 việc đến hạn"; the app
-// shows the title only when the owner opens it). The owner gets nothing once they left the org or turned the kind off.
+// shows the title only when the owner opens it). The owner comes from crove_notes.todo_reminder_owner, never from the
+// input, and only while the to-do still waits for this reminder: one completed, deleted or given another time after the
+// claim sends nothing. The owner gets nothing either once they left the org or turned the kind off.
 export const todoRemind = defineCommand({
   name: 'notes.todo.remind',
-  input: z.strictObject({ todoId: zId, ownerUserId: zId, remindAt: z.iso.datetime({ offset: true }) }),
+  input: z.strictObject({ todoId: zId, remindAt: z.iso.datetime({ offset: true }) }),
   risk: 'R1',
   sideEffect: 'internal',
   access: 'system',
   handler: async (ctx, input): Promise<{ sent: number }> => {
     assertSystem(ctx);
     const remindAt = new Date(input.remindAt).toISOString();
+    const { rows } = await sql<{ owner: string | null }>`SELECT crove_notes.todo_reminder_owner(${input.todoId}::uuid, ${remindAt}::timestamptz) AS owner`.execute(ctx.trx);
+    const owner = rows[0]?.owner ?? null;
+    if (owner === null) {
+      ctx.audit({ todoId: input.todoId, remindAt, sent: 0, current: false });
+      return { sent: 0 };
+    }
     const sent = await notifyMembers(ctx, {
       kind: TODO_DUE,
-      users: [input.ownerUserId],
+      users: [owner],
       key: `todo_due:${input.todoId}:${remindAt}`,
       subject: { type: 'notes.todo', id: input.todoId },
-      legalEntityId: await memberEntity(ctx, input.ownerUserId),
+      legalEntityId: await memberEntity(ctx, owner),
     });
     ctx.audit({ todoId: input.todoId, remindAt, sent });
     return { sent };
