@@ -1,51 +1,116 @@
--- Crove kernel (issue #1799, from the review of #1788): the open tasks a chart or role change would strand, and where
--- they go. Idempotent; applied files stay untouched.
+-- Crove kernel (issue #1799, from the review of #1788): the open tasks a chart or role change would strand go up the
+-- chart. Idempotent; applied files stay untouched.
 --
 -- Since #1788 an agent hands a task of a legal entity only to a position whose holder reads it, but the check runs when
 -- the task is written. A later change can leave an open task with a holder who cannot read it, so it is listed by
 -- nobody but the owners: kernel.position.assign (another holder, or none), kernel.position.update (a narrower le_scope
 -- for an agent's seat), kernel.member.role.assign and .revoke (a person's first entity assignment, or the org-wide one
 -- revoked), kernel.member.change_role (an owner or admin made member or viewer) and kernel.member.remove (the seat left
--- vacant). Each of those commands, after its change, re-routes those tasks (packages/kernel/src/task-reroute.ts).
+-- vacant). Each of those commands, after its change, calls crove_kernel.task_reroute (packages/kernel/src/task-reroute.ts).
 --
--- crove_kernel.task_stranded(positions)  SECURITY DEFINER. The open tasks (todo, in_progress, waiting, in_review) of
---     those positions whose legal entity the position's holder no longer reads (position_reads_legal_entity, as
---     #1788's checks read it), each with its target: the entity-aware escalation target of #1788
---     (task_escalation_target, the nearest active position up the chart held by a person who reads the entity), NULL
---     for the owners at the root. Org-level tasks (no entity) are never stranded. Only in a user context of an owner of
---     the org, the role of every command that calls it: the helpers it uses are the worker's alone (#1788's EXECUTE
---     matrix, unchanged), and the definer reads them as their owner. It answers task ids and positions of the org of
---     the sealed context, which an owner reads anyway, and writes nothing: the command moves each task as the owner. The
---     owner check reads the role the context was sealed with (enter_context, at the start of the command), so an owner
---     who demotes themself still re-routes.
---     EXECUTE for crove_app only.
+-- crove_kernel.task_stranded(org, positions)  The open tasks (todo, in_progress, waiting, in_review) of those positions
+--     whose legal entity the position's holder no longer reads (position_reads_legal_entity, as #1788's checks read it),
+--     each with its target: the entity-aware escalation target of #1788 (task_escalation_target, the nearest active
+--     position up the chart held by a person who reads the entity), NULL for the owners at the root. Org-level tasks
+--     (no entity) are never stranded. A helper of task_reroute: no EXECUTE for any login role.
+-- crove_kernel.task_reroute(positions)  SECURITY DEFINER, EXECUTE for crove_app only. Moves those tasks, set-based, in
+--     the caller's transaction, and answers each move:
+--       - first it locks every target seat and its holder's membership (FOR SHARE, seats in id order, then members in
+--         user order) and reads the answer again, until no target is left unlocked: a concurrent kernel.position.assign
+--         or role change of a target waits, then sees the moved task and moves it in turn;
+--       - then one UPDATE moves them (the target, or no seat; an agent's lease ends, an in-progress task is todo again)
+--         and one INSERT writes an activity row task.rerouted per task, in the name of the context's user (it takes the
+--         task's entity, b_legal_entity below), so a seat with thousands of open tasks costs two statements;
+--       - a deadlock with another chart or role change (they lock seats and members in different orders) is retried
+--         once from a savepoint, which drops the locks this function took; a second one is raised (the runtime answers
+--         RETRY).
+--     Only in a user context sealed as an owner of the org (the role at the start of the command, so an owner who
+--     demotes themself, another owner staying, still re-routes their seats): every calling command is the owner's. It
+--     reads #1788's worker-only helpers as their owner, so their EXECUTE matrix is unchanged, and writes only tasks and
+--     activity of the sealed context's org, which an owner may write.
 SET LOCAL lock_timeout = '2s';
 
-CREATE OR REPLACE FUNCTION crove_kernel.task_stranded(p_positions uuid[])
+CREATE OR REPLACE FUNCTION crove_kernel.task_stranded(p_org uuid, p_positions uuid[])
 RETURNS TABLE (task_id uuid, from_position_id uuid, legal_entity_id uuid, to_position_id uuid)
-LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
+LANGUAGE sql STABLE SET search_path = pg_catalog, pg_temp AS $$
+  SELECT t.id, t.assignee_position_id, t.legal_entity_id,
+         crove_kernel.task_escalation_target(p_org, t.assignee_position_id, t.legal_entity_id)
+  FROM crove_kernel.task t
+  WHERE t.org_id = p_org
+    AND t.assignee_position_id = ANY (p_positions)
+    AND t.status IN ('todo', 'in_progress', 'waiting', 'in_review')
+    AND t.legal_entity_id IS NOT NULL
+    AND NOT crove_kernel.position_reads_legal_entity(p_org, t.assignee_position_id, t.legal_entity_id)
+$$;
+REVOKE ALL ON FUNCTION crove_kernel.task_stranded(uuid, uuid[]) FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant;
+
+CREATE OR REPLACE FUNCTION crove_kernel.task_reroute(p_positions uuid[])
+RETURNS TABLE (task_id uuid, from_position_id uuid, legal_entity_id uuid, to_position_id uuid)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
   v_org uuid := crove_kernel.ctx_org_id();
+  v_user uuid := crove_kernel.ctx_user_id();
+  v_locked uuid[];
+  v_fresh uuid[];
+  v_tries int := 0;
+  v_ids uuid[];
+  v_from uuid[];
+  v_entities uuid[];
+  v_to uuid[];
 BEGIN
-  -- The role the context was sealed with, at the start of the command: an owner who demotes themself (another owner
-  -- stays) still re-routes their own seats' tasks after the change.
   IF crove_kernel.ctx_actor_type() IS DISTINCT FROM 'user' OR (crove_kernel.ctx_verified() ->> 'role') IS DISTINCT FROM 'owner' THEN
-    RAISE EXCEPTION 'TASK_STRANDED_OWNER_ONLY' USING ERRCODE = '42501';
+    RAISE EXCEPTION 'TASK_REROUTE_OWNER_ONLY' USING ERRCODE = '42501';
   END IF;
-  RETURN QUERY
-    SELECT t.id, t.assignee_position_id, t.legal_entity_id,
-           crove_kernel.task_escalation_target(v_org, t.assignee_position_id, t.legal_entity_id)
-    FROM crove_kernel.task t
-    WHERE t.org_id = v_org
-      AND t.assignee_position_id = ANY (p_positions)
-      AND t.status IN ('todo', 'in_progress', 'waiting', 'in_review')
-      AND t.legal_entity_id IS NOT NULL
-      AND NOT crove_kernel.position_reads_legal_entity(v_org, t.assignee_position_id, t.legal_entity_id)
-    ORDER BY t.id;
+  LOOP
+    BEGIN
+      v_locked := ARRAY[]::uuid[];
+      LOOP
+        SELECT pg_catalog.array_agg(DISTINCT s.to_position_id ORDER BY s.to_position_id) INTO v_fresh
+        FROM crove_kernel.task_stranded(v_org, p_positions) s
+        WHERE s.to_position_id IS NOT NULL AND NOT (s.to_position_id = ANY (v_locked));
+        EXIT WHEN v_fresh IS NULL;
+        PERFORM 1 FROM crove_kernel.position p WHERE p.org_id = v_org AND p.id = ANY (v_fresh) ORDER BY p.id FOR SHARE;
+        PERFORM 1 FROM crove_kernel.tenant_member m
+        WHERE m.org_id = v_org
+          AND m.user_id IN (SELECT p.holder_user_id FROM crove_kernel.position p WHERE p.org_id = v_org AND p.id = ANY (v_fresh))
+        ORDER BY m.user_id FOR SHARE;
+        v_locked := v_locked || v_fresh;
+      END LOOP;
+      WITH s AS (SELECT * FROM crove_kernel.task_stranded(v_org, p_positions)),
+        moved AS (
+          UPDATE crove_kernel.task t
+          SET assignee_position_id = s.to_position_id,
+              status = CASE WHEN t.status = 'in_progress' THEN 'todo' ELSE t.status END,
+              checkout_run_id = NULL,
+              lock_expires_at = NULL
+          FROM s
+          WHERE t.org_id = v_org AND t.id = s.task_id
+          RETURNING t.id, s.from_position_id, t.legal_entity_id, s.to_position_id),
+        noted AS (
+          INSERT INTO crove_kernel.activity (org_id, record_type, record_id, kind, summary, actor_id)
+          SELECT v_org, 'kernel.task', m.id, 'task.rerouted',
+                 CASE WHEN m.to_position_id IS NULL
+                      THEN 'Chuyển việc cho chủ sở hữu vì người giữ vị trí không còn xem được pháp nhân này'
+                      ELSE 'Chuyển việc lên cấp trên vì người giữ vị trí không còn xem được pháp nhân này' END,
+                 v_user
+          FROM moved m)
+      SELECT pg_catalog.array_agg(m.id ORDER BY m.id), pg_catalog.array_agg(m.from_position_id ORDER BY m.id),
+             pg_catalog.array_agg(m.legal_entity_id ORDER BY m.id), pg_catalog.array_agg(m.to_position_id ORDER BY m.id)
+        INTO v_ids, v_from, v_entities, v_to
+      FROM moved m;
+      EXIT;
+    EXCEPTION WHEN deadlock_detected THEN
+      v_tries := v_tries + 1;
+      IF v_tries > 1 THEN
+        RAISE;
+      END IF;
+    END;
+  END LOOP;
+  -- Answered after the block, so a retried attempt never adds rows twice.
+  RETURN QUERY SELECT * FROM pg_catalog.unnest(v_ids, v_from, v_entities, v_to);
 END $$;
-
-REVOKE ALL ON FUNCTION crove_kernel.task_stranded(uuid[]) FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant;
-GRANT EXECUTE ON FUNCTION crove_kernel.task_stranded(uuid[]) TO crove_app;
+REVOKE ALL ON FUNCTION crove_kernel.task_reroute(uuid[]) FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant;
+GRANT EXECUTE ON FUNCTION crove_kernel.task_reroute(uuid[]) TO crove_app;
 
 -- ---------------------------------------------------------------------------
 -- crove_kernel.activity: a task's rows (task.rerouted, the first kernel.task rows) take its entity, so a member limited

@@ -5,7 +5,7 @@
 // command moves each such open task to the entity-aware escalation target of #1788, else to the owners, with an
 // activity row that takes the task's entity, an event the notification dispatch turns into a notice for whoever has it
 // now, and the moves in the command's audit row. Org-level tasks and tasks the holder still reads stay. The database
-// answers which tasks (crove_kernel.task_stranded), for an owner's context only.
+// moves them set-based (crove_kernel.task_reroute), for an owner's context only.
 // Set CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -103,7 +103,7 @@ suite('tasks a chart or role change would strand (#1799)', () => {
           [taskId],
         )
       ).rows,
-      events: (await c.query<{ id: string }>(`SELECT id FROM crove_kernel.outbox_event WHERE type = 'kernel.task.rerouted' AND payload ->> 'taskId' = $1`, [taskId])).rows,
+      events: (await c.query<{ id: string }>(`SELECT id FROM crove_kernel.outbox_event WHERE type = 'kernel.task.rerouted' AND payload -> 'taskIds' ? $1`, [taskId])).rows,
     }));
     for (const e of events) await worker.execute('kernel.notification.dispatch', { eventId: e.id }, { actor: SYSTEM, orgId });
     const notified = await admin(
@@ -182,13 +182,13 @@ suite('tasks a chart or role change would strand (#1799)', () => {
     const audit = await admin(
       async (c) =>
         (
-          await c.query<{ detail: { rerouted_tasks?: unknown } }>(
+          await c.query<{ detail: { rerouted?: unknown } }>(
             `SELECT detail FROM crove_kernel.audit_event WHERE command = 'kernel.position.assign' AND target_id = $1 ORDER BY occurred_at DESC, id DESC LIMIT 1`,
             [clerkSeat],
           )
         ).rows[0]?.detail,
     );
-    expect(audit?.rerouted_tasks).toEqual([{ task: ofDefault, from: clerkSeat, to: leadSeat }]);
+    expect(audit?.rerouted).toEqual({ tasks: 1, to: [{ position: leadSeat, entity: defaultEntity, tasks: 1 }] });
     // It is among the lead's own tasks now.
     const mine = await app.query<{ tasks: Array<{ id: string }> }>('kernel.task.list', { mine: true }, { actor: asUser(lead), orgId });
     expect(mine.tasks.map((t) => t.id)).toContain(ofDefault);
@@ -306,6 +306,52 @@ suite('tasks a chart or role change would strand (#1799)', () => {
     expect((await trail(ofBranch)).notified).toEqual([owner]);
   });
 
+  it('moves thousands of tasks in two statements, with one event and one notice for their new holder', async () => {
+    const lead = await member('batch-lead', 'member', null);
+    const holder = await member('batch-holder', 'member', null);
+    const leadSeat = await seat('Trưởng nhóm', lead, null);
+    const own = await seat('Nhân viên', holder, leadSeat);
+    const many = 2000;
+    await admin((c) =>
+      c.query(
+        `INSERT INTO crove_kernel.task (org_id, title, assignee_position_id, source, source_ref, created_by_type)
+         SELECT $1, 'Việc ' || g, $2, 'human', $3, 'user' FROM generate_series(1, $4::int) g`,
+        [orgId, own, JSON.stringify({ type: 'kernel.legal_entity', id: branch }), many],
+      ),
+    );
+
+    const started = Date.now();
+    await app.execute('kernel.member.role.assign', { userId: holder, roleKey: 'external_accountant', legalEntityId: defaultEntity }, { actor: asMfa(owner), orgId });
+    expect(Date.now() - started).toBeLessThan(10_000);
+
+    const counts = await admin(async (c) => ({
+      left: (await c.query<{ n: number }>('SELECT count(*)::int AS n FROM crove_kernel.task WHERE assignee_position_id = $1', [own])).rows[0]?.n,
+      moved: (await c.query<{ n: number }>('SELECT count(*)::int AS n FROM crove_kernel.task WHERE assignee_position_id = $1', [leadSeat])).rows[0]?.n,
+      activity: (
+        await c.query<{ n: number }>(
+          `SELECT count(*)::int AS n FROM crove_kernel.activity a JOIN crove_kernel.task t ON t.org_id = a.org_id AND t.id = a.record_id
+           WHERE a.record_type = 'kernel.task' AND a.kind = 'task.rerouted' AND t.assignee_position_id = $1 AND a.legal_entity_id = $2`,
+          [leadSeat, branch],
+        )
+      ).rows[0]?.n,
+      events: (
+        await c.query<{ id: string; count: number; ids: number }>(
+          `SELECT id, (payload ->> 'count')::int AS count, jsonb_array_length(payload -> 'taskIds') AS ids FROM crove_kernel.outbox_event
+           WHERE type = 'kernel.task.rerouted' AND payload ->> 'toPositionId' = $1`,
+          [leadSeat],
+        )
+      ).rows,
+    }));
+    expect(counts).toMatchObject({ left: 0, moved: many, activity: many });
+    expect(counts.events).toEqual([expect.objectContaining({ count: many, ids: 200 })]);
+    await worker.execute('kernel.notification.dispatch', { eventId: counts.events[0]?.id }, { actor: SYSTEM, orgId });
+    const notice = await admin(
+      async (c) =>
+        (await c.query<{ user_id: string; detail: Record<string, string> }>(`SELECT user_id, detail FROM crove_kernel.notification WHERE kind = 'kernel.task_rerouted' AND event_id = $1`, [counts.events[0]?.id])).rows,
+    );
+    expect(notice).toEqual([{ user_id: lead, detail: { count: String(many) } }]);
+  });
+
   it('answers which tasks only in an owner context', async () => {
     const someone = await member('someone', 'member', null);
     const url = (user: string, password: string) => {
@@ -320,7 +366,7 @@ suite('tasks a chart or role change would strand (#1799)', () => {
       try {
         await c.query('BEGIN');
         await enter(c);
-        await c.query('SELECT * FROM crove_kernel.task_stranded(ARRAY[]::uuid[])');
+        await c.query('SELECT * FROM crove_kernel.task_reroute(ARRAY[]::uuid[])');
         return 'answered';
       } catch (e) {
         return (e as Error).message;
@@ -331,10 +377,10 @@ suite('tasks a chart or role change would strand (#1799)', () => {
     };
     await expect(ask('crove_app', 'test-app-pw', (c) => c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [owner, orgId]))).resolves.toBe('answered');
     await expect(ask('crove_app', 'test-app-pw', (c) => c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [someone, orgId]))).resolves.toBe(
-      'TASK_STRANDED_OWNER_ONLY',
+      'TASK_REROUTE_OWNER_ONLY',
     );
     await expect(ask('crove_worker', 'test-worker-pw', (c) => c.query('SELECT crove_kernel.enter_system_context($1::uuid)', [orgId]))).resolves.toMatch(
-      /permission denied for function task_stranded/,
+      /permission denied for function task_reroute/,
     );
   });
 });

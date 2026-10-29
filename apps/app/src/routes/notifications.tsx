@@ -39,7 +39,7 @@ function useLine() {
       case 'kernel.file_unreadable':
         return t('text.file_unreadable', { filename: n.detail.filename ?? '' });
       case 'kernel.task_rerouted':
-        return t('text.task_rerouted', { title: n.detail.title ?? '' });
+        return n.detail.count ? t('text.tasks_rerouted', { count: Number(n.detail.count) }) : t('text.task_rerouted', { title: n.detail.title ?? '' });
       case 'finance.bank_attention':
         return t('text.bank_attention', { account: n.detail.bankAccount ?? '', lines: Number(n.detail.lines ?? 0) });
       case 'finance.portal_attention':

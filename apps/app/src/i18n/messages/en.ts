@@ -193,6 +193,7 @@ export const en = {
       approval_waiting: 'Waiting for your approval: {title}',
       file_unreadable: 'Could not read the file {filename}',
       task_rerouted: 'A task moved to you: {title}',
+      tasks_rerouted: '{count, plural, one {# task} other {# tasks}} moved to you',
       bank_attention: 'The statement of account {account} has {lines, plural, one {# line} other {# lines}} to look at',
       portal_attention: 'Tax portal check for {period}: {missing, plural, one {# invoice} other {# invoices}} not in {brand}, {mismatch, plural, other {#}} with a different amount',
       portal_failed: 'Could not read the tax portal list for {period}',

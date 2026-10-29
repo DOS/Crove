@@ -17,6 +17,7 @@ import { zId, zNotificationKind } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext } from '@crove/kernel-runtime';
 import { eligibleApprovers } from './approval.ts';
+import { REROUTED_EVENT_TASKS } from './task-reroute.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 // The newest notifications a read returns, and the unread count it reports at most.
@@ -173,23 +174,25 @@ export const notificationDispatch = defineCommand({
         return { sent };
       }
       case 'kernel.task.rerouted': {
-        const e = z.object({ taskId: zId, toPositionId: zId.nullable() }).safeParse(event.payload);
+        const e = z
+          .object({ toPositionId: zId.nullable(), legalEntityId: zId, count: z.number().int().positive(), taskIds: z.array(zId).min(1).max(REROUTED_EVENT_TASKS) })
+          .safeParse(event.payload);
         if (!e.success) return { sent: 0 };
-        const task = await ctx.trx
+        // The moved tasks still waiting where they went: one moved again since tells its own holder, and a closed one
+        // waits for nobody.
+        const waiting = await ctx.trx
           .selectFrom('crove_kernel.task')
-          .select(['id', 'title', 'status', 'legal_entity_id', 'assignee_position_id'])
+          .select(['id', 'title'])
           .where('org_id', '=', ctx.orgId)
-          .where('id', '=', e.data.taskId)
-          .executeTakeFirst();
-        // Moved again since (the later move tells its own holder), or closed: nothing waits for anyone.
-        if (!task || task.assignee_position_id !== e.data.toPositionId || task.status === 'done' || task.status === 'cancelled') return { sent: 0 };
-        const seat = task.assignee_position_id
-          ? await ctx.trx
-              .selectFrom('crove_kernel.position')
-              .select('holder_user_id')
-              .where('org_id', '=', ctx.orgId)
-              .where('id', '=', task.assignee_position_id)
-              .executeTakeFirst()
+          .where('id', 'in', e.data.taskIds)
+          .where((eb) => (e.data.toPositionId === null ? eb('assignee_position_id', 'is', null) : eb('assignee_position_id', '=', e.data.toPositionId)))
+          .where('status', 'not in', ['done', 'cancelled'])
+          .orderBy('id')
+          .execute();
+        const first = waiting[0];
+        if (!first) return { sent: 0 };
+        const seat = e.data.toPositionId
+          ? await ctx.trx.selectFrom('crove_kernel.position').select('holder_user_id').where('org_id', '=', ctx.orgId).where('id', '=', e.data.toPositionId).executeTakeFirst()
           : undefined;
         const owners = async () =>
           (await ctx.trx.selectFrom('crove_kernel.tenant_member').select('user_id').where('org_id', '=', ctx.orgId).where('role', '=', 'owner').execute()).map(
@@ -199,9 +202,14 @@ export const notificationDispatch = defineCommand({
           kind: TASK_REROUTED,
           users: seat?.holder_user_id ? [seat.holder_user_id] : await owners(),
           key: `task_rerouted:${event.id}`,
-          subject: { type: 'kernel.task', id: task.id },
-          legalEntityId: task.legal_entity_id,
-          detail: { title: task.title.slice(0, 200) },
+          // One task opens itself; several open the task list.
+          subject: waiting.length === 1 && e.data.count === 1 ? { type: 'kernel.task', id: first.id } : null,
+          legalEntityId: e.data.legalEntityId,
+          // The event lists the first ids only: when every listed one still waits, so do the rest it counts.
+          detail:
+            waiting.length === 1 && e.data.count === 1
+              ? { title: first.title.slice(0, 200) }
+              : { count: String(waiting.length === e.data.taskIds.length ? e.data.count : waiting.length) },
           eventId: event.id,
           actor: event.actor,
         });
