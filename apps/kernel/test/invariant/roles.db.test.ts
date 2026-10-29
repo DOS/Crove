@@ -693,6 +693,9 @@ suite('role assignments on PostgreSQL (#1279)', () => {
 
   it('tells the VAT screen it may mark exactly where finance.vat.return_mark lets it mark (#1923)', async () => {
     const o = await org();
+    // chief reads every entity (an org-wide accountant) and files the branch's alone, so its default entity answer
+    // comes from the permission, not from a period it cannot read.
+    await o.assign(asMfa(o.owner), o.chief, 'finance.accountant');
     await o.assign(asMfa(o.owner), o.chief, 'finance.entity_chief_accountant', o.branch);
     const [wide, only] = [await person('wide'), await person('only')];
     await withAdmin((c) => c.query("INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member'), ($1, $3, 'member')", [o.orgId, wide, only]));
@@ -700,8 +703,8 @@ suite('role assignments on PostgreSQL (#1279)', () => {
     // The entity role alone limits its holder to the branch: the default entity is out of their sight.
     await o.assign(asMfa(o.owner), only, 'finance.entity_chief_accountant', o.branch);
     const actors = { owner: o.owner, admin: o.admin, member: o.member, viewer: o.viewer, chief: o.chief, wide, only };
-    // filable as finance.vat.period answers it (a period the member cannot read is a screen without the mark), then
-    // whether the command marks, for the default entity and then the branch. Each mark takes a period of its own.
+    // filable as finance.vat.period answers it (an entity the member cannot read is refused, a screen without the mark),
+    // then whether the command marks, for the default entity and then the branch. Each mark takes a period of its own.
     let n = 0;
     const seen: Record<string, boolean[]> = {};
     for (const [name, userId] of Object.entries(actors)) {
@@ -711,7 +714,10 @@ suite('role assignments on PostgreSQL (#1279)', () => {
         n += 1;
         const filable = await rt.query<{ filable?: boolean }>('finance.vat.period', { period, legalEntityId }, { actor: asUser(userId), orgId: o.orgId }).then(
           (r) => r.filable === true,
-          () => false,
+          (error: unknown) => {
+            expect(error).toMatchObject({ code: 'LEGAL_ENTITY_NOT_ALLOWED', status: 403 });
+            return false;
+          },
         );
         const marked = await o
           .exec(asUser(userId), 'finance.vat.return_mark', { period, done: true, figures: { carriedIn: '0', deductible: '0', carriedOut: '0' }, legalEntityId })
