@@ -1,20 +1,17 @@
 // An audit row that names a proposal names one of its own org, in a state the runtime writes such a row in (issue
-// #1695, plan §4.10; coordinator decision option A) on a real PostgreSQL 17:
+// #1695, plan §4.10; option B, #1706) on a real PostgreSQL 17:
 // - a tenant-role insert naming another org's proposal, or an id that does not exist, is refused, and a row aimed at
 //   another org gets that same refusal whatever the org holds;
-// - a row for the proposal's own command needs the proposal 'approved' (a state only the approving transaction sees),
-//   so a pending, executed, rejected, failed or expired proposal is refused for it;
-// - a row for another command naming an executed, rejected, failed or expired proposal in proposal_id is refused too;
-//   one naming a pending or approved proposal there is written while option A stands (an edit's reviser, a command the
-//   execution runs) and refused once option B lands (#1706), so both answers pass here until then;
-// - the runtime's own flows still pass: uploading, editing (the reviser's row names the pending proposal) and
-//   approving a purchase invoice (the record's row names it approved, and so does the row of
-//   kernel.party.link_for_tax_code, which the record runs for a supplier the org does not know yet). Under option A
-//   every such row names the proposal in proposal_id; under option B only the proposal's own command's row does, and
-//   the rows of the reviser and of the commands the execution runs name it in detail.under_proposal;
+// - audit_event.proposal_id names the proposal only on its own command's row, and needs the proposal 'approved' (a
+//   state only the approving transaction sees): a row for any other command naming it there is refused, whatever its
+//   state, and so is its own command's row naming it pending, executed, rejected, failed or expired;
+// - every other command run under a proposal (an edit's reviser, a command the execution runs) names it in
+//   detail.under_proposal, which needs a proposal of the row's own org that is pending or approved;
+// - the runtime's own flows still pass: uploading, editing (the reviser's row links the pending proposal in its
+//   detail) and approving a purchase invoice (the record's row names it approved in proposal_id, and the row of
+//   kernel.party.link_for_tax_code, which the record runs for a supplier the org does not know yet, links it in its
+//   detail);
 // - staff writes are not checked, as audit_event_stamp.
-// #1706 lands in two steps (AGENTS.md, protected paths): this copy accepts both behaviors, so the change itself runs
-// against it, and the next one asks for option B alone.
 // Set CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
 // Part of the invariant suite: CI runs this file from the base branch on protected-path PRs (AGENTS.md).
 import { randomUUID } from 'node:crypto';
@@ -93,7 +90,7 @@ suite('audit rows naming a proposal on PostgreSQL (#1695)', () => {
 
   // Stands in for kernel.proposal.approve around a command the execution runs: it marks the proposal approved by
   // itself (as the approval does), runs `OTHER` with the proposal's id (the runtime passes it on, as to every command an
-  // execution runs), writes the ok row of the proposal's own command `OWN` and the purchase it posts as its run would
+  // execution runs, and `OTHER`'s row links it in its detail), writes the ok row of the proposal's own command `OWN` and the purchase it posts as its run would
   // (#1816 and #1842: the move to executed needs both) and marks it executed. With approve false it runs `OTHER` with
   // the id as the proposal stands.
   const approveNested = defineCommand({
@@ -114,6 +111,41 @@ suite('audit rows naming a proposal on PostgreSQL (#1695)', () => {
         await ctx.trx.updateTable('crove_kernel.proposal').set({ status: 'executed' }).where('org_id', '=', ctx.orgId).where('id', '=', input.proposalId).execute();
       }
       return {};
+    },
+  });
+  // A handler that writes detail.under_proposal itself through ctx.audit, which the runtime removes (#1870).
+  const forgeLink = defineCommand({
+    sideEffect: 'none',
+    name: 'kernel.test_forge_link',
+    input: z.object({ proposalId: z.uuid() }),
+    risk: 'R1',
+    access: ['owner'],
+    handler: async (ctx, input) => {
+      ctx.audit({ under_proposal: input.proposalId, kept: true });
+      return {};
+    },
+  });
+  // A command that always refuses, and one that tries it under a proposal and goes on: the refusal's row is the
+  // runtime's, and links the proposal in its detail (#1870).
+  const refuseNested = defineCommand({
+    sideEffect: 'none',
+    name: 'kernel.test_refuse_nested',
+    input: z.object({}),
+    risk: 'R1',
+    access: ['owner'],
+    handler: async () => {
+      throw new DomainError('TEST_REFUSED', 409, 'refused');
+    },
+  });
+  const tryUnder = defineCommand({
+    sideEffect: 'none',
+    name: 'kernel.test_try_under',
+    input: z.object({ proposalId: z.uuid() }),
+    risk: 'R1',
+    access: ['owner'],
+    handler: async (ctx, input) => {
+      const tried = await ctx.tryRun('kernel.test_refuse_nested', {}, { proposalId: input.proposalId, recover: () => true });
+      return { status: tried.status };
     },
   });
 
@@ -157,15 +189,26 @@ suite('audit rows naming a proposal on PostgreSQL (#1695)', () => {
     return id;
   }
 
-  // Inserts one audit row naming `proposalId` for `command`, as a login role in a context, and commits it.
-  async function write(login: string, enter: { sql: string; params: unknown[] } | null, orgId: string, command: string, proposalId: string): Promise<void> {
+  // Inserts one audit row naming `proposalId` for `command`, as a login role in a context, and commits it: in
+  // proposal_id, or with link 'detail' in detail.under_proposal (the id as text, so a malformed one can be tried).
+  async function write(
+    login: string,
+    enter: { sql: string; params: unknown[] } | null,
+    orgId: string,
+    command: string,
+    proposalId: string,
+    link: 'column' | 'detail' = 'column',
+  ): Promise<void> {
     await withClient(login, async (c) => {
       await c.query('BEGIN');
       try {
         if (enter) await c.query(enter.sql, enter.params);
         await c.query(
-          `INSERT INTO crove_kernel.audit_event (org_id, actor_type, actor_id, command, command_id, outcome, input_sha256, proposal_id)
-           VALUES ($1, 'user', NULL, $2, gen_random_uuid(), 'ok', repeat('0', 64), $3)`,
+          link === 'column'
+            ? `INSERT INTO crove_kernel.audit_event (org_id, actor_type, actor_id, command, command_id, outcome, input_sha256, proposal_id)
+               VALUES ($1, 'user', NULL, $2, gen_random_uuid(), 'ok', repeat('0', 64), $3::uuid)`
+            : `INSERT INTO crove_kernel.audit_event (org_id, actor_type, actor_id, command, command_id, outcome, input_sha256, detail)
+               VALUES ($1, 'user', NULL, $2, gen_random_uuid(), 'ok', repeat('0', 64), jsonb_build_object('under_proposal', $3::text))`,
           [orgId, command, proposalId],
         );
         await c.query('COMMIT');
@@ -185,12 +228,12 @@ suite('audit rows naming a proposal on PostgreSQL (#1695)', () => {
         return e.code === REFUSED.code && e.message === REFUSED.message && e.detail === undefined ? 'refused' : `other: ${e.code} ${e.message}`;
       },
     );
-  // The rows that name the proposal: in proposal_id, or (option B, #1706) in detail.under_proposal.
+  // The rows that name the proposal, and where: in proposal_id ('column') or in detail.under_proposal ('detail').
   const rowsNaming = (proposalId: string) =>
     admin(async (c) =>
       (
-        await c.query<{ command: string; outcome: string }>(
-          `SELECT command, outcome FROM crove_kernel.audit_event
+        await c.query<{ command: string; outcome: string; link: string }>(
+          `SELECT command, outcome, CASE WHEN proposal_id IS NOT NULL THEN 'column' ELSE 'detail' END AS link FROM crove_kernel.audit_event
            WHERE proposal_id = $1 OR detail ->> 'under_proposal' = $1::text ORDER BY command, occurred_at, id`,
           [proposalId],
         )
@@ -219,7 +262,7 @@ suite('audit rows naming a proposal on PostgreSQL (#1695)', () => {
       return {
         db: target,
         runtime: new Runtime(target, { manifests: TEST_MANIFESTS }).register({
-          commands: [...kernelCommands, ...financeCommands, approveNested],
+          commands: [...kernelCommands, ...financeCommands, approveNested, forgeLink, refuseNested, tryUnder],
           queries: [...kernelQueries({ inboundDomain: 'in.test' }), ...financeQueries],
         }),
       };
@@ -241,23 +284,32 @@ suite('audit rows naming a proposal on PostgreSQL (#1695)', () => {
     const other = await org();
     const foreign = await proposal(other.orgId, other.owner, 'approved');
     for (const command of [OWN, OTHER]) {
-      await expect(outcome(write(appUrl, userContext(o.owner, o.orgId), o.orgId, command, foreign))).resolves.toBe('refused');
-      await expect(outcome(write(appUrl, userContext(o.owner, o.orgId), o.orgId, command, randomUUID()))).resolves.toBe('refused');
+      for (const link of ['column', 'detail'] as const) {
+        await expect(outcome(write(appUrl, userContext(o.owner, o.orgId), o.orgId, command, foreign, link))).resolves.toBe('refused');
+        await expect(outcome(write(appUrl, userContext(o.owner, o.orgId), o.orgId, command, randomUUID(), link))).resolves.toBe('refused');
+      }
+    }
+    // A detail link that is no uuid in its own text is refused, as one naming no proposal.
+    const mine = await proposal(o.orgId, o.owner, 'pending');
+    for (const bad of [mine.toUpperCase(), ` ${mine}`, 'not-a-uuid']) {
+      await expect(outcome(write(appUrl, userContext(o.owner, o.orgId), o.orgId, OTHER, bad, 'detail'))).resolves.toBe('refused');
     }
     // A row aimed at the other org gets the same refusal whatever that org holds, before its policy refuses the row, so
     // the answer tells nothing of its proposals; without a context too.
     const foreignPending = await proposal(other.orgId, other.owner, 'pending');
     for (const id of [foreign, foreignPending, randomUUID()]) {
       for (const command of [OWN, OTHER]) {
-        await expect(outcome(write(appUrl, userContext(o.owner, o.orgId), other.orgId, command, id))).resolves.toBe('refused');
-        await expect(outcome(write(appUrl, null, other.orgId, command, id))).resolves.toBe('refused');
+        for (const link of ['column', 'detail'] as const) {
+          await expect(outcome(write(appUrl, userContext(o.owner, o.orgId), other.orgId, command, id, link))).resolves.toBe('refused');
+          await expect(outcome(write(appUrl, null, other.orgId, command, id, link))).resolves.toBe('refused');
+        }
       }
     }
     expect(await rowsNaming(foreign)).toEqual([]);
     expect(await rowsNaming(foreignPending)).toEqual([]);
   });
 
-  it("needs the proposal approved for its own command's row, and refuses another command's row naming an executed, rejected, failed or expired one", async () => {
+  it("names a proposal in proposal_id only on its own command's row, approved, and links it in detail only while pending or approved", async () => {
     const o = await org();
     const seen: Record<string, Record<string, string>> = {};
     for (const status of STATUSES) {
@@ -265,17 +317,17 @@ suite('audit rows naming a proposal on PostgreSQL (#1695)', () => {
       seen[status] = {
         own: await outcome(write(appUrl, userContext(o.admin, o.orgId), o.orgId, OWN, id)),
         other: await outcome(write(appUrl, userContext(o.admin, o.orgId), o.orgId, OTHER, id)),
+        linked: await outcome(write(appUrl, userContext(o.admin, o.orgId), o.orgId, OTHER, id, 'detail')),
       };
     }
-    // Another command's row naming a pending or approved proposal: written under option A, refused under option B (#1706).
-    const either = expect.stringMatching(/^(written|refused)$/);
+    // Another command's row never names a proposal in proposal_id, a pending one included (option B, #1706).
     expect(seen).toEqual({
-      pending: { own: 'refused', other: either },
-      approved: { own: 'written', other: either },
-      executed: { own: 'refused', other: 'refused' },
-      rejected: { own: 'refused', other: 'refused' },
-      failed: { own: 'refused', other: 'refused' },
-      expired: { own: 'refused', other: 'refused' },
+      pending: { own: 'refused', other: 'refused', linked: 'written' },
+      approved: { own: 'written', other: 'refused', linked: 'written' },
+      executed: { own: 'refused', other: 'refused', linked: 'refused' },
+      rejected: { own: 'refused', other: 'refused', linked: 'refused' },
+      failed: { own: 'refused', other: 'refused', linked: 'refused' },
+      expired: { own: 'refused', other: 'refused', linked: 'refused' },
     });
   });
 
@@ -286,6 +338,7 @@ suite('audit rows naming a proposal on PostgreSQL (#1695)', () => {
     const executed = await proposal(o.orgId, o.owner, 'executed');
     await expect(outcome(write(workerUrl, systemContext(o.orgId), o.orgId, OWN, executed))).resolves.toBe('refused');
     await expect(outcome(write(workerUrl, systemContext(o.orgId), o.orgId, OTHER, executed))).resolves.toBe('refused');
+    await expect(outcome(write(workerUrl, systemContext(o.orgId), o.orgId, OTHER, executed, 'detail'))).resolves.toBe('refused');
     // A member's own transaction that approves the proposal, as kernel.proposal.approve does, may name it.
     const pending = await proposal(o.orgId, o.owner, 'pending');
     await expect(
@@ -344,12 +397,12 @@ suite('audit rows naming a proposal on PostgreSQL (#1695)', () => {
     );
     // The approval runs the record with the approved proposal's id.
     await runtime.execute('kernel.proposal.approve', { id: proposalId, revision, acceptUnverifiedSignature: true }, { actor: asMfa(o.owner), orgId: o.orgId });
-    // The record finds no party with the seller's tax code in the new org, so it runs kernel.party.link_for_tax_code,
-    // whose row names the approved proposal too.
+    // The record finds no party with the seller's tax code in the new org, so it runs kernel.party.link_for_tax_code.
+    // Only the record's row names the proposal in proposal_id; the reviser's and that command's link it in detail.
     expect(await rowsNaming(proposalId)).toEqual([
-      { command: OWN, outcome: 'ok' },
-      { command: 'finance.purchase.revise', outcome: 'ok' },
-      { command: OTHER, outcome: 'ok' },
+      { command: OWN, outcome: 'ok', link: 'column' },
+      { command: 'finance.purchase.revise', outcome: 'ok', link: 'detail' },
+      { command: OTHER, outcome: 'ok', link: 'detail' },
     ]);
     const status = await admin(async (c) => (await c.query<{ status: string }>('SELECT status FROM crove_kernel.proposal WHERE id = $1', [proposalId])).rows[0]?.status);
     expect(status).toBe('executed');
@@ -360,14 +413,44 @@ suite('audit rows naming a proposal on PostgreSQL (#1695)', () => {
     const id = await proposal(o.orgId, o.owner, 'pending');
     await runtime.execute('kernel.test_approve_nested', { proposalId: id, approve: true }, { actor: asUser(o.owner), orgId: o.orgId });
     expect(await rowsNaming(id)).toEqual([
-      { command: OWN, outcome: 'ok' },
-      { command: OTHER, outcome: 'ok' },
+      { command: OWN, outcome: 'ok', link: 'column' },
+      { command: OTHER, outcome: 'ok', link: 'detail' },
     ]);
-    // The same run against the executed proposal writes nothing: its nested row is refused, so the command fails.
+    // The same run against the executed proposal writes nothing: its nested row's link is refused, so the command fails.
     await expect(runtime.execute('kernel.test_approve_nested', { proposalId: id, approve: false }, { actor: asUser(o.owner), orgId: o.orgId })).rejects.toThrow();
     expect(await rowsNaming(id)).toEqual([
-      { command: OWN, outcome: 'ok' },
-      { command: OTHER, outcome: 'ok' },
+      { command: OWN, outcome: 'ok', link: 'column' },
+      { command: OTHER, outcome: 'ok', link: 'detail' },
     ]);
+  });
+
+  it("keeps the link the runtime's own: ctx.audit cannot set it, and a recovered refusal's row carries it in detail (#1870)", async () => {
+    const o = await org();
+    const pending = await proposal(o.orgId, o.owner, 'pending');
+    await runtime.execute('kernel.test_forge_link', { proposalId: pending }, { actor: asUser(o.owner), orgId: o.orgId });
+    await expect(runtime.execute('kernel.test_try_under', { proposalId: pending }, { actor: asUser(o.owner), orgId: o.orgId })).resolves.toEqual({ status: 'refused' });
+    const rows = await admin(
+      async (c) =>
+        (
+          await c.query<{ command: string; outcome: string; proposal_id: string | null; detail: Record<string, unknown> }>(
+            `SELECT command, outcome, proposal_id, detail FROM crove_kernel.audit_event
+             WHERE org_id = $1 AND command IN ('kernel.test_forge_link', 'kernel.test_refuse_nested', 'kernel.test_try_under') ORDER BY command`,
+            [o.orgId],
+          )
+        ).rows,
+    );
+    const [forged, refused, tried] = rows;
+    expect(rows.map((r) => [r.command, r.outcome, r.proposal_id])).toEqual([
+      ['kernel.test_forge_link', 'ok', null],
+      ['kernel.test_refuse_nested', 'failed', null],
+      ['kernel.test_try_under', 'ok', null],
+    ]);
+    // The handler's own fact stays; its link does not.
+    expect(forged?.detail).toMatchObject({ kept: true });
+    expect(forged?.detail).not.toHaveProperty('under_proposal');
+    // The refused nested run links the proposal it ran under, and names the command that tried it.
+    expect(refused?.detail).toMatchObject({ under_proposal: pending, parentCommand: 'kernel.test_try_under' });
+    expect(tried?.detail).not.toHaveProperty('under_proposal');
+    expect(await rowsNaming(pending)).toEqual([{ command: 'kernel.test_refuse_nested', outcome: 'failed', link: 'detail' }]);
   });
 });

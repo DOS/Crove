@@ -158,6 +158,19 @@ suite('audit log for owners and admins on PostgreSQL (#672)', () => {
     expect(commands).toEqual([...commands].sort());
   });
 
+  it("lists with a proposal the rows its edit and execution ran, which name it in detail.under_proposal (#1706)", async () => {
+    const o = await org();
+    const proposal = randomUUID();
+    const [own, nested] = await seed(o.orgId, [
+      { at: '2026-10-01T03:00:00Z', actorId: o.owner, command: 'finance.purchase.record', proposalId: proposal },
+      { at: '2026-10-01T03:00:01Z', actorId: o.owner, command: 'kernel.party.link_for_tax_code', detail: { under_proposal: proposal } },
+      { at: '2026-10-01T03:00:02Z', actorId: o.owner, command: 'kernel.party.link_for_tax_code', detail: { under_proposal: randomUUID() } },
+    ]);
+    expect((await seeded(o, o.owner, { targetId: proposal })).map((i) => i.id)).toEqual([nested, own]);
+    // Upper case finds them too: the filter compares the id's own text.
+    expect((await seeded(o, o.owner, { targetId: proposal.toUpperCase() })).map((i) => i.id)).toEqual([nested, own]);
+  });
+
   it('pages newest first without gaps or repeats, and never shows another org', async () => {
     const o = await org();
     const other = await org();
