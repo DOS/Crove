@@ -283,7 +283,16 @@ function PositionScope({ position, entities, manage }: { position: Position; ent
               {update.isPending ? <Spinner /> : null}
               {t('save')}
             </Button>
-            <Button size="sm" variant="ghost" disabled={update.isPending} onClick={() => setEditing(null)}>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={update.isPending}
+              onClick={() => {
+                // A refused request waiting for a second factor is dropped too, so it is never sent after a cancel.
+                update.reset();
+                setEditing(null);
+              }}
+            >
               {tc('cancel')}
             </Button>
           </div>
@@ -439,7 +448,9 @@ export function PositionNode({ node, ctx }: { node: ChartNode<Position>; ctx: Po
   );
 }
 
-function AddPosition({ positions, entities }: { positions: Position[]; entities: Entity[] }) {
+// entitiesReady: the org's legal entities are known (an owner's create waits for them, so it never sends no scope
+// in an org of several only because the list has not loaded or failed).
+function AddPosition({ positions, entities, entitiesReady }: { positions: Position[]; entities: Entity[]; entitiesReady: boolean }) {
   const t = useTranslations('agents');
   const moduleName = useModuleName();
   const modules = getConfig().modules;
@@ -461,7 +472,7 @@ function AddPosition({ positions, entities }: { positions: Position[]; entities:
   };
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (entities.length > 1 && !scopeReady(leScope)) return;
+    if (!entitiesReady || (entities.length > 1 && !scopeReady(leScope))) return;
     create.mutate(
       { title: title.trim(), module, roleKey: roleKey.trim(), reportsTo: reportsTo || null, ...(entities.length > 1 ? { leScope } : {}), idempotencyKey: key },
       cleared,
@@ -506,7 +517,7 @@ function AddPosition({ positions, entities }: { positions: Position[]; entities:
           </div>
         )}
         <div className="flex items-end gap-2 sm:col-span-2 lg:col-span-5">
-          <Button type="submit" disabled={create.isPending || locked || (entities.length > 1 && !scopeReady(leScope))}>
+          <Button type="submit" disabled={create.isPending || locked || !entitiesReady || (entities.length > 1 && !scopeReady(leScope))}>
             {create.isPending ? <Spinner /> : null}
             {t('addPosition')}
           </Button>
@@ -629,7 +640,7 @@ export function AgentRow({ agent, perms }: { agent: Agent; perms: AgentPermissio
   );
 }
 
-function Templates({ perms, entities }: { perms: AgentPermissions; entities: Entity[] }) {
+function Templates({ perms, entities, entitiesReady }: { perms: AgentPermissions; entities: Entity[]; entitiesReady: boolean }) {
   const t = useTranslations('agents');
   const moduleName = useModuleName();
   const templates = useQuery(orpc.chart.templates.queryOptions());
@@ -671,7 +682,7 @@ function Templates({ perms, entities }: { perms: AgentPermissions; entities: Ent
                   <div>
                     <Button
                       size="sm"
-                      disabled={!tpl.moduleEnabled || install.isPending || (scoped && !scopeReady(leScope))}
+                      disabled={!tpl.moduleEnabled || install.isPending || !entitiesReady || (scoped && !scopeReady(leScope))}
                       onClick={() => install.mutate({ templateKey: tpl.key, ...(scoped ? { leScope } : {}), idempotencyKey: crypto.randomUUID() })}
                     >
                       {t('install')}
@@ -839,6 +850,8 @@ export function AgentsPage() {
   // The org's legal entities, which only owners and admins read (#1763): with one entity the screen shows no scope.
   const legalEntities = useQuery({ ...orpc.legalEntities.list.queryOptions(), enabled: perms.manage });
   const entities: Entity[] = (legalEntities.data?.length ?? 0) > 1 ? (legalEntities.data ?? []) : [];
+  // Until the list is known, an owner's create and install wait: a failed or pending list is not a single entity.
+  const entitiesReady = !perms.manage || legalEntities.data !== undefined;
 
   return (
     <div>
@@ -851,6 +864,11 @@ export function AgentsPage() {
         <>
           <KillSwitches switches={chart.data.killSwitches} agents={chart.data.agents} perms={perms} />
           {perms.manage && <p className="mb-4 text-xs text-muted-foreground">{t('manageHint')}</p>}
+          {perms.manage && legalEntities.error && (
+            <div className="mb-4">
+              <ErrorText>{errorMessage(legalEntities.error)}</ErrorText>
+            </div>
+          )}
           <section>
             <h2 className="mb-3 text-sm font-semibold text-foreground">{t('chart')}</h2>
             <Card className="mb-3 gap-1 p-3">
@@ -866,7 +884,7 @@ export function AgentsPage() {
                 ))}
               </ul>
             )}
-            {perms.manage && <AddPosition positions={chart.data.positions} entities={entities} />}
+            {perms.manage && <AddPosition positions={chart.data.positions} entities={entities} entitiesReady={entitiesReady} />}
           </section>
           <section className="mt-8">
             <h2 className="mb-3 text-sm font-semibold text-foreground">{t('agentsTitle')}</h2>
@@ -881,7 +899,7 @@ export function AgentsPage() {
               </DataTable>
             )}
           </section>
-          <Templates perms={perms} entities={entities} />
+          <Templates perms={perms} entities={entities} entitiesReady={entitiesReady} />
           {perms.budgets && <Budgets agents={chart.data.agents} perms={perms} />}
         </>
       )}
