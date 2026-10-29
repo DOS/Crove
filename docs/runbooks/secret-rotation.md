@@ -115,37 +115,33 @@ The `postgres` password unlocks everything, the context key included ([context-k
 
 ## 2. `INBOUND_SECRET`
 
-The mail worker (`tools/inbound-mail/worker.js` on Cloudflare Email Routing, [provision-pilot.md](provision-pilot.md), "Inbound email") sends `INBOUND_SECRET` with every message, and the kernel accepts exactly one value. Two facts make a rotation safe for mail:
+The mail worker (`tools/inbound-mail/worker.js` on Cloudflare Email Routing, [provision-pilot.md](provision-pilot.md), "Inbound email") sends `INBOUND_SECRET` with every message. During a rotation the kernel also accepts the old value, set as `INBOUND_SECRET_PREVIOUS` (#1214), so the worker and the kernel switch at different times and no message is refused. The secret only guards `POST /api/inbound/email`: messages already accepted are stored and filed by the worker whatever the secret is, and nothing stored is derived from it.
 
-- When the values differ, the kernel answers 401 and the worker throws instead of rejecting the message, so Email Routing does not accept it and the sending server tries again later. Mail is delayed, not lost and not bounced.
-- The secret only guards `POST /api/inbound/email`. Messages already accepted are stored and filed by the worker whatever the secret is, and nothing stored is derived from it.
+The kernel refuses a previous value that is shorter than 32 characters, equal to the new one or a sample value, and one set without `INBOUND_SECRET`. Both values are compared in constant time, and neither is ever logged.
 
-So the only cost is the window between switching the mail worker and the kernel restarting. Switch the mail worker first and restart the kernel right after: the window is then the restart itself (about 10 s on the test stack). Restarting the kernel first would add the time it takes to edit the worker in the dashboard. A rotation with no window needs the kernel to accept the previous value too: issue #1214.
-
-1. Generate the new value into `.env`, without applying it yet:
+1. Keep the old value as the previous one, then generate the new value into `.env`:
 
    ```bash
+   grep '^INBOUND_SECRET=' .env | sed 's/^INBOUND_SECRET=/INBOUND_SECRET_PREVIOUS=/' >> .env   # the old value, as the previous one
    rotate INBOUND_SECRET
-   grep '^INBOUND_SECRET=' .env      # copy the value into the secret store, next to the old one
+   grep -c '^INBOUND_SECRET_PREVIOUS=' .env    # 1: a single line, or remove the extra ones first
+   grep '^INBOUND_SECRET=' .env                # copy the new value into the secret store, next to the old one
    ```
 
-2. Have `docker compose up -d` ready in a terminal on the server.
-3. In the Cloudflare dashboard, **Workers & Pages**, `crove-inbound-mail`, **Settings**, **Variables and Secrets**: edit `INBOUND_SECRET` (type Secret), paste the new value and **Deploy**. With wrangler: `wrangler secret put INBOUND_SECRET`. From this moment the kernel refuses the worker's messages.
-4. At once, on the server:
-
-   ```bash
-   docker compose up -d
-   ```
-
+   If `.env` already had an empty `INBOUND_SECRET_PREVIOUS=` line (copied from `.env.example`), delete it first, so the one line left holds the old value.
+2. Apply it: `docker compose up -d`. The kernel now accepts both values, and the worker still sends the old one.
+3. Check: `curl -s http://127.0.0.1:${PORT:-8080}/readyz` answers `{"ready":true}`. `pnpm pilot:check` lists `INBOUND_SECRET_PREVIOUS is set` as a manual item: that is expected until step 6.
+4. In the Cloudflare dashboard, **Workers & Pages**, `crove-inbound-mail`, **Settings**, **Variables and Secrets**: edit `INBOUND_SECRET` (type Secret), paste the new value and **Deploy**. With wrangler: `wrangler secret put INBOUND_SECRET`. Both values are accepted, so no message is refused, whenever the deploy takes effect.
 5. Check:
-   - `curl -s http://127.0.0.1:${PORT:-8080}/readyz` answers `{"ready":true}`.
    - Send a message with an e-invoice XML attached to an org's "Địa chỉ nhận hóa đơn qua email" (its **Settings**): it shows in that org's **Inbox** within a minute, and `docker compose logs --since 5m crove | grep '\[inbound\]'` shows it.
-   - In the worker's **Logs**, `Crove did not accept the message: 401 UNAUTHENTICATED` appears only during the window; Email Routing's **Activity log** shows the messages of the window delivered once their senders retried (most servers retry within minutes).
-6. Remove the old value from the secret store.
+   - The worker's **Logs** show no `Crove did not accept the message: 401 UNAUTHENTICATED`.
+6. Retire the old value: empty `INBOUND_SECRET_PREVIOUS=` in `.env` (or delete the line), run `docker compose up -d`, and remove the old value from the secret store. From then on the old value gets 401. Do it once step 5 passed: a worker still sending the old value has its messages refused and retried by their senders, but they are delayed until the worker is fixed.
 
-**Going back.** If step 4 fails, put the old value back on the worker (step 3 with the old value): the kernel still runs with it. If the kernel already runs with the new value, fix the worker instead.
+**Going back.** Before step 6, put the old value back on the worker (step 4 with the old value): the kernel still accepts it. After step 6, set it again as `INBOUND_SECRET_PREVIOUS` and restart, or fix the worker.
 
-**Another mail relay.** The same order holds for any relay that calls `/api/inbound/email`, as long as it treats a 401 as a temporary failure, like `worker.js` does. A relay that bounces on 401 loses the mail of the window: stop its inbound route during the switch instead.
+**Without a previous value.** A deployment that cannot restart twice can still rotate in one restart: switch the worker first and run `docker compose up -d` at once with the new `INBOUND_SECRET` and no previous value. The kernel then refuses the worker's messages during the restart (about 10 s on the test stack). The worker throws on a 401 instead of rejecting the message, so Email Routing does not accept it and the sending server tries again later: mail is delayed, not lost and not bounced.
+
+**Another mail relay.** The same order holds for any relay that calls `/api/inbound/email`. With a previous value set, nothing is refused during the switch. Without one, the relay must treat a 401 as a temporary failure, like `worker.js` does; one that bounces on 401 loses the mail of the window, so stop its inbound route during the switch instead.
 
 ## 3. Alert and heartbeat URLs
 

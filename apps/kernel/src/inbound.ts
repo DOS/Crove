@@ -5,7 +5,7 @@
 // (acceptInboundEmail). Resolving the org and kernel.inbound.receive run in the worker (processInboundEmail),
 // the only role that may enter system context (External-tenant gate T5). The worker does not parse the MIME
 // message itself: crove-extract does, and its answer is validated and treated as untrusted (gate T12).
-import { timingSafeEqual } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { sql } from 'kysely';
 import { EXTRACT_LIMIT_RETRIES, type ExtractClient } from '@crove/extract-contract';
 import { ACCEPTED_ARCHIVE_TYPES, ACCEPTED_UPLOAD_TYPES, MAX_EMAIL_ARCHIVES, MAX_UPLOAD_BYTES } from '@crove/kernel-contract';
@@ -17,11 +17,15 @@ export const MAX_EMAIL_BYTES = 40 * 1024 * 1024;
 const TOKEN = /^[0-9a-f]{24}$/;
 const MAX_ADDRESS_LENGTH = 320;
 
-export function secretMatches(header: string | undefined, secret: string): boolean {
-  const presented = header?.startsWith('Bearer ') ? header.slice(7) : '';
-  const a = Buffer.from(presented);
-  const b = Buffer.from(secret);
-  return a.length === b.length && timingSafeEqual(a, b);
+// Whether the Authorization header carries one of the secrets: INBOUND_SECRET and, during a rotation,
+// INBOUND_SECRET_PREVIOUS (#1214). Each is compared in constant time over SHA-256 digests, which have the same length
+// whatever the values, and every secret is compared whatever the earlier ones gave: the time taken tells neither which
+// one matched nor how long either is.
+export function secretMatches(header: string | undefined, secrets: readonly string[]): boolean {
+  const presented = createHash('sha256').update(header?.startsWith('Bearer ') ? header.slice(7) : '').digest();
+  let matched = false;
+  for (const secret of secrets) matched = timingSafeEqual(presented, createHash('sha256').update(secret).digest()) || matched;
+  return matched;
 }
 
 // The org token of <token>[+tag]@domain, or null.

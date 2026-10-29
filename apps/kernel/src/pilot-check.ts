@@ -170,6 +170,13 @@ export function checkEnv(env: Env): CheckResult[] {
     }
   }
   if (value(env, 'INBOUND_DOMAIN')) secrets.push(secretProblem('INBOUND_SECRET', value(env, 'INBOUND_SECRET'), MIN_TOKEN_SECRET_LENGTH));
+  // The previous inbound secret of a rotation (#1214), under the current one's rules, and never the same value. Its
+  // value is never printed.
+  const inboundPrevious = value(env, 'INBOUND_SECRET_PREVIOUS');
+  if (inboundPrevious !== undefined) {
+    secrets.push(secretProblem('INBOUND_SECRET_PREVIOUS', inboundPrevious, MIN_TOKEN_SECRET_LENGTH));
+    if (inboundPrevious === value(env, 'INBOUND_SECRET')) secrets.push('INBOUND_SECRET_PREVIOUS is the same as INBOUND_SECRET');
+  }
   // Optional secrets: only a shipped sample value is wrong.
   for (const name of ['INBOUND_SECRET', 'S3_SECRET_ACCESS_KEY', 'SMTP_PASS', 'AI_API_KEY', 'CREDENTIAL_KEY', 'CREDENTIAL_KEY_PREVIOUS', 'CHANNEL_META_APP_SECRET', 'CHANNEL_ZALO_APP_SECRET', 'CHANNEL_THREADS_APP_SECRET', 'CHANNEL_LINKEDIN_CLIENT_SECRET', 'CHANNEL_LINKEDIN_PAGE_CLIENT_SECRET', 'CHANNEL_GOOGLE_CLIENT_SECRET', 'CHANNEL_TIKTOK_CLIENT_SECRET', 'CHANNEL_X_CLIENT_SECRET', 'CHANNEL_PINTEREST_APP_SECRET', 'MEDIA_PEXELS_API_KEY', 'VAPID_PRIVATE_KEY']) {
     if (name === 'INBOUND_SECRET' && value(env, 'INBOUND_DOMAIN')) continue;
@@ -306,6 +313,17 @@ export function checkEnv(env: Env): CheckResult[] {
             item: 'Alerts',
             status: 'manual' as const,
             message: 'PROBER_HEARTBEAT_URL is unset: nothing pages the owner when the prober itself stops or cannot deliver; set it (docs/runbooks/alerts.md) or accept that',
+          },
+        ]),
+    // A rotation of the inbound secret left half done keeps the old value working (#1214).
+    ...(inboundPrevious === undefined
+      ? []
+      : [
+          {
+            item: 'Secrets',
+            status: 'manual' as const,
+            message:
+              'INBOUND_SECRET_PREVIOUS is set, so the kernel still accepts the old inbound secret: once the mail worker sends the new INBOUND_SECRET, empty it and restart (docs/runbooks/secret-rotation.md, section 2)',
           },
         ]),
     // Envelopes under a key the worker cannot open (#1888): only the worker sees the database's key ids, so it logs them.

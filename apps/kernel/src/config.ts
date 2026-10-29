@@ -423,6 +423,9 @@ const schema = z.object({
   // Inbound email: <token>@INBOUND_DOMAIN, delivered by a mail worker to POST /api/inbound/email.
   INBOUND_DOMAIN: optional,
   INBOUND_SECRET: optional,
+  // During a rotation of INBOUND_SECRET (#1214): the value the mail worker may still send, accepted as well until the
+  // worker sends the new one; then remove it (docs/runbooks/secret-rotation.md, section 2).
+  INBOUND_SECRET_PREVIOUS: optional,
   // Cloudflare Turnstile on the public booking form (#1353, CAL-2, plan docs/plan/calendar.md §3.4): both or neither.
   // With them, the page shows the widget and the kernel checks its token with Cloudflare before recording a request.
   TURNSTILE_SITE_KEY: optional.pipe(z.string().regex(/^[0-9A-Za-z_-]{1,100}$/, 'TURNSTILE_SITE_KEY is a Turnstile site key').optional()),
@@ -467,6 +470,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   if (config.INBOUND_SECRET && config.INBOUND_SECRET.length < 32) {
     throw new Error('INBOUND_SECRET must be at least 32 characters');
+  }
+  // The previous value follows the current one's rules, and is never the current one or a sample value (#1214). The
+  // messages never carry either value.
+  if (config.INBOUND_SECRET_PREVIOUS) {
+    if (!config.INBOUND_SECRET) throw new Error('INBOUND_SECRET_PREVIOUS is set without INBOUND_SECRET');
+    if (config.INBOUND_SECRET_PREVIOUS.length < 32) throw new Error('INBOUND_SECRET_PREVIOUS must be at least 32 characters');
+    if (config.INBOUND_SECRET_PREVIOUS === config.INBOUND_SECRET) throw new Error('INBOUND_SECRET_PREVIOUS must differ from INBOUND_SECRET');
+    if (/change-?me/i.test(config.INBOUND_SECRET_PREVIOUS)) throw new Error('INBOUND_SECRET_PREVIOUS still has a sample value');
   }
   // A widget without the secret could not be checked, and a secret without the widget would refuse every booking.
   if (Boolean(config.TURNSTILE_SITE_KEY) !== Boolean(config.TURNSTILE_SECRET)) {
