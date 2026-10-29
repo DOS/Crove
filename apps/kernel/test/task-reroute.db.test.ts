@@ -96,16 +96,25 @@ suite('tasks a chart or role change would strand (#1799)', () => {
     return url.toString();
   };
 
-  // Polls until a backend of this test's database waits on a lock (of the given pid, or an advisory lock).
-  async function untilWaiting(what: string, where: { pid: number } | 'advisory') {
+  // Polls until a lock is awaited: by the given backend (on the given table, or on a row, if said), or the advisory lock
+  // of the given key (as pg_advisory_xact_lock(hashtextextended(key, 0)) takes it) by a backend of this database.
+  async function untilWaiting(what: string, where: { pid: number; table?: string; row?: true } | { advisory: string }) {
     for (let tries = 0; ; tries++) {
       const { rows } = await admin((c) =>
-        where === 'advisory'
+        'advisory' in where
           ? c.query(
-              `SELECT 1 FROM pg_catalog.pg_locks WHERE locktype = 'advisory' AND NOT granted
-               AND database = (SELECT oid FROM pg_catalog.pg_database WHERE datname = pg_catalog.current_database())`,
+              `SELECT 1 FROM pg_catalog.pg_locks l, (SELECT pg_catalog.hashtextextended($1, 0) AS v) k
+               WHERE l.locktype = 'advisory' AND NOT l.granted AND l.objsubid = 1
+                 AND l.classid = ((k.v >> 32) & 4294967295)::oid AND l.objid = (k.v & 4294967295)::oid
+                 AND l.database = (SELECT oid FROM pg_catalog.pg_database WHERE datname = pg_catalog.current_database())`,
+              [where.advisory],
             )
-          : c.query('SELECT 1 FROM pg_catalog.pg_locks WHERE pid = $1 AND NOT granted', [where.pid]),
+          : c.query(
+              `SELECT 1 FROM pg_catalog.pg_locks WHERE pid = $1 AND NOT granted
+                 AND ($2::regclass IS NULL OR (locktype = 'relation' AND relation = $2::regclass))
+                 AND (NOT $3 OR locktype IN ('transactionid', 'tuple'))`,
+              [where.pid, where.table ?? null, where.row ?? false],
+            ),
       );
       if (rows.length > 0) return;
       if (tries > 400) throw new Error(`${what} never waited`);
@@ -410,7 +419,7 @@ suite('tasks a chart or role change would strand (#1799)', () => {
         await chart.query('BEGIN');
         await chart.query('SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended($1, 0))', [`crove_kernel.chart:${orgId}`]);
         const changing = run();
-        await untilWaiting(name, 'advisory');
+        await untilWaiting(name, { advisory: `crove_kernel.chart:${orgId}` });
         // It waits before taking the seat's or the members' locks.
         await admin((c) => c.query('SELECT 1 FROM crove_kernel.position WHERE org_id = $1 AND id = $2 FOR UPDATE NOWAIT', [orgId, own]));
         await admin((c) => c.query('SELECT 1 FROM crove_kernel.tenant_member WHERE org_id = $1 AND user_id IN ($2, $3) FOR UPDATE NOWAIT', [orgId, owner, next]));
@@ -482,6 +491,76 @@ suite('tasks a chart or role change would strand (#1799)', () => {
     }
     expect(await taskRow(ofBranch)).toEqual({ assignee: leadSeat, status: 'todo' });
     expect((await trail(ofBranch)).activity).toEqual([{ kind: 'task.rerouted', entity: branch }]);
+  });
+
+  // A round's UPDATE skips a task whose target, in its snapshot, is a seat the round has not locked. When that target
+  // then changes to the owners before the round ends, nothing unlocked is left, but the task is still stranded: the
+  // next round moves it (#1902). Two sessions make that interleaving. A SHARE lock on the activity table holds the
+  // round's UPDATE before it takes its snapshot (a statement takes its table locks first) while the chart changes, so
+  // that one task's target is an unlocked seat. A lock on the other task's row then holds the UPDATE after its snapshot
+  // while the chart changes back, so that the skipped task's target is the owners.
+  it('moves a task whose unlocked target changed during the round, in another round (#1902)', async () => {
+    const store = await admin(
+      async (c) =>
+        (
+          await c.query<{ id: string }>(`INSERT INTO crove_kernel.legal_entity (org_id, name, kind, created_by) VALUES ($1, 'Kho', 'branch', $2) RETURNING id`, [
+            orgId,
+            owner,
+          ])
+        ).rows[0]?.id as string,
+    );
+    const lead = await member('settle-lead', 'member', defaultEntity);
+    const between = await member('settle-between', 'member', branch);
+    const holder = await member('settle-holder', 'member', store);
+    const leadSeat = await seat('Giám sát', lead, null);
+    const betweenSeat = await seat('Phó giám sát', between, leadSeat);
+    const own = await seat('Thủ kho', holder, leadSeat);
+    // Its holder reads neither entity: the default entity's task goes to the lead, the branch's to the owners.
+    const ofDefault = await task(defaultEntity, own);
+    const ofBranch = await task(branch, own);
+    const reportsTo = (to: string) => admin((c) => c.query('UPDATE crove_kernel.position SET reports_to = $1 WHERE org_id = $2 AND id = $3', [to, orgId, own]));
+    const gate = new pg.Client({ connectionString: adminUrl });
+    const rowLock = new pg.Client({ connectionString: adminUrl });
+    const rerouter = new pg.Client({ connectionString: appUrl() });
+    for (const c of [gate, rowLock, rerouter]) await c.connect();
+    try {
+      await gate.query('BEGIN');
+      await gate.query('LOCK TABLE crove_kernel.activity IN SHARE MODE');
+      await rowLock.query('BEGIN');
+      await rowLock.query('SELECT 1 FROM crove_kernel.task WHERE org_id = $1 AND id = $2 FOR UPDATE', [orgId, ofDefault]);
+
+      await rerouter.query('BEGIN');
+      await enterUser(rerouter, owner, orgId);
+      const pid = (await rerouter.query<{ pid: number }>('SELECT pg_catalog.pg_backend_pid() AS pid')).rows[0]?.pid as number;
+      const rerouted = rerouter.query<{ task_id: string; to_position_id: string | null }>(
+        'SELECT task_id, to_position_id FROM crove_kernel.task_reroute($1::uuid[])',
+        [[own]],
+      );
+      rerouted.catch(() => {});
+      // The first round locked the lead's seat; its UPDATE waits for the activity table.
+      await untilWaiting('the round', { pid, table: 'crove_kernel.activity' });
+      // The branch's task now goes to the seat between, which the round has not locked.
+      await reportsTo(betweenSeat);
+      await gate.query('ROLLBACK');
+      // The UPDATE took its snapshot, skipped the branch's task and waits for the default entity's task.
+      await untilWaiting("the round's UPDATE", { pid, row: true });
+      // The branch's task goes to the owners again: no stranded task has an unlocked target.
+      await reportsTo(leadSeat);
+      await rowLock.query('ROLLBACK');
+      const expected = [
+        { task_id: ofDefault, to_position_id: leadSeat },
+        { task_id: ofBranch, to_position_id: null },
+      ].sort((a, b) => (a.task_id < b.task_id ? -1 : 1));
+      expect((await rerouted).rows).toEqual(expected);
+      await rerouter.query('COMMIT');
+    } finally {
+      for (const c of [gate, rowLock, rerouter]) {
+        await c.query('ROLLBACK').catch(() => {});
+        await c.end();
+      }
+    }
+    expect(await taskRow(ofDefault)).toEqual({ assignee: leadSeat, status: 'todo' });
+    expect(await taskRow(ofBranch)).toEqual({ assignee: null, status: 'todo' });
   });
 
   it('answers which tasks only in an owner context', async () => {
