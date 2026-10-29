@@ -29,6 +29,7 @@ import { refuseWhileReextracting } from './extraction.ts';
 import { kernelManifest } from './manifest.ts';
 import { preparedEntity } from './proposal-resubmit.ts';
 import { memberProfiles } from './profiles.ts';
+import { rerouteStrandedTasks } from './task-reroute.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
@@ -272,6 +273,8 @@ export const updatePosition = defineCommand({
     });
     if (Object.keys(set).length === 0) return { positionId: input.id };
     await ctx.trx.updateTable('crove_kernel.position').set(set).where('org_id', '=', ctx.orgId).where('id', '=', input.id).execute();
+    // A narrower seat scope leaves the agent unable to read some of its open tasks: they go up the chart (#1799).
+    if (input.leScope !== undefined) await rerouteStrandedTasks(ctx, [input.id]);
     await ctx.activity('kernel.position', input.id, 'position.updated', `Sửa vị trí ${input.title ?? before.title}`);
     await ctx.emit('kernel.position.updated', { positionId: input.id });
     return { positionId: input.id };
@@ -334,6 +337,8 @@ export const assignPosition = defineCommand({
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', position.id)
       .execute();
+    // The open tasks the new holder (or the vacant seat's scope) cannot read go up the chart first (#1799).
+    await rerouteStrandedTasks(ctx, [position.id]);
     if (holderAgent) {
       // One wake-up for the open tasks, as tainted as the most tainted of them, so the run that takes them over can
       // read every one (an untainted run sees only untainted tasks).

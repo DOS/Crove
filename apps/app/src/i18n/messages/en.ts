@@ -183,6 +183,7 @@ export const en = {
     kinds: {
       kernel_approval_waiting: 'Proposals waiting for my approval',
       kernel_file_unreadable: 'Files that could not be read',
+      kernel_task_rerouted: 'Tasks moved to me because their holder can no longer read them',
       finance_bank_attention: 'Bank statement lines to look at',
       finance_portal_attention: 'Tax portal checks to look at',
       finance_period_closing: 'VAT returns due on a period that is not locked',
@@ -191,6 +192,7 @@ export const en = {
     text: {
       approval_waiting: 'Waiting for your approval: {title}',
       file_unreadable: 'Could not read the file {filename}',
+      task_rerouted: 'A task moved to you: {title}',
       bank_attention: 'The statement of account {account} has {lines, plural, one {# line} other {# lines}} to look at',
       portal_attention: 'Tax portal check for {period}: {missing, plural, one {# invoice} other {# invoices}} not in {brand}, {mismatch, plural, other {#}} with a different amount',
       portal_failed: 'Could not read the tax portal list for {period}',

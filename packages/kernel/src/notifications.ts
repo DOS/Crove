@@ -8,7 +8,8 @@
 //
 // The kernel's own kinds come from kernel.notification.dispatch: a proposal waiting for my approval (the eligible
 // approvers of its command, P12) and a file that failed to read (whoever asked for the reading, else the uploader,
-// else, for a mailed file, the owners and admins). Members read their own (kernel.notification.list), mark them read
+// else, for a mailed file, the owners and admins), and a task a chart or role change moved to someone because its
+// holder could no longer read its legal entity (the target seat's holder, else the owners; #1799). Members read their own (kernel.notification.list), mark them read
 // and turn kinds off (kernel.notification.mute); a restrictive policy keeps each member to their own rows.
 import { sql } from 'kysely';
 import { z } from 'zod';
@@ -30,6 +31,7 @@ export const NOTIFICATION_KIND = /^[a-z]+\.[a-z0-9_]+$/;
 // The kernel's kinds.
 export const APPROVAL_WAITING = 'kernel.approval_waiting';
 export const FILE_UNREADABLE = 'kernel.file_unreadable';
+export const TASK_REROUTED = 'kernel.task_rerouted';
 
 export interface NotifyInput {
   // '<module>.<kind>', for example 'finance.bank_attention'.
@@ -110,7 +112,7 @@ export async function outboxEvent(ctx: Pick<CommandContext, 'trx' | 'orgId'>, ev
 }
 
 // The events kernel.notification.dispatch handles.
-export const KERNEL_NOTIFYING_EVENTS = ['kernel.proposal.created', 'kernel.file.read_failed'] as const;
+export const KERNEL_NOTIFYING_EVENTS = ['kernel.proposal.created', 'kernel.file.read_failed', 'kernel.task.rerouted'] as const;
 
 export const notificationDispatch = defineCommand({
   name: 'kernel.notification.dispatch',
@@ -167,6 +169,41 @@ export const notificationDispatch = defineCommand({
           legalEntityId: file.legal_entity_id,
           detail: { filename: file.filename.slice(0, 200) },
           eventId: event.id,
+        });
+        return { sent };
+      }
+      case 'kernel.task.rerouted': {
+        const e = z.object({ taskId: zId, toPositionId: zId.nullable() }).safeParse(event.payload);
+        if (!e.success) return { sent: 0 };
+        const task = await ctx.trx
+          .selectFrom('crove_kernel.task')
+          .select(['id', 'title', 'legal_entity_id', 'assignee_position_id'])
+          .where('org_id', '=', ctx.orgId)
+          .where('id', '=', e.data.taskId)
+          .executeTakeFirst();
+        // Moved again since: the later move tells its own holder.
+        if (!task || task.assignee_position_id !== e.data.toPositionId) return { sent: 0 };
+        const seat = task.assignee_position_id
+          ? await ctx.trx
+              .selectFrom('crove_kernel.position')
+              .select('holder_user_id')
+              .where('org_id', '=', ctx.orgId)
+              .where('id', '=', task.assignee_position_id)
+              .executeTakeFirst()
+          : undefined;
+        const owners = async () =>
+          (await ctx.trx.selectFrom('crove_kernel.tenant_member').select('user_id').where('org_id', '=', ctx.orgId).where('role', '=', 'owner').execute()).map(
+            (r) => r.user_id,
+          );
+        const sent = await notifyMembers(ctx, {
+          kind: TASK_REROUTED,
+          users: seat?.holder_user_id ? [seat.holder_user_id] : await owners(),
+          key: `task_rerouted:${event.id}`,
+          subject: { type: 'kernel.task', id: task.id },
+          legalEntityId: task.legal_entity_id,
+          detail: { title: task.title.slice(0, 200) },
+          eventId: event.id,
+          actor: event.actor,
         });
         return { sent };
       }
