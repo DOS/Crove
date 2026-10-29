@@ -254,10 +254,11 @@ suite('ledger proposals executed only with their effect (#1842)', () => {
   });
 
   it('asks no effect of a command that is not a ledger command, and answers for the org of the context only', async () => {
+    // A reversal ordered by an approved proposal of its command (#1853 refuses an entry naming no such proposal).
+    const reversal = await approved('finance.journal.reverse');
     const answer = await asOwner(async (c) => {
       const asked = async (org: string, proposalId: string, command: string) =>
         (await c.query<{ v: boolean }>('SELECT crove_finance.ledger_effect_recorded($1::uuid, $2::uuid, $3) AS v', [org, proposalId, command])).rows[0]?.v;
-      const reversal = randomUUID();
       await reverse(reversal)(c);
       return {
         notLedger: await asked(orgId, randomUUID(), 't1842.other'),
