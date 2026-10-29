@@ -381,7 +381,8 @@ suite('tasks a chart or role change would strand (#1799)', () => {
   // role change of the org waits for it there, holding nothing the first one could need.
   it('runs the chart and role changes of an org one at a time, each waiting before its own locks (#1858)', async () => {
     const holder = await member('queued', 'member', null);
-    const next = await member('queued-next', 'member', null);
+    // Limited to the branch, so revoking the default entity's assignment below leaves one.
+    const next = await member('queued-next', 'member', branch);
     const own = await seat('Kế toán kho', holder, null);
     const as = { actor: asMfa(owner), orgId };
     let assignmentId = '';
