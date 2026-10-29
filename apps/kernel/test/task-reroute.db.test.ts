@@ -536,6 +536,7 @@ suite('tasks a chart or role change would strand (#1799)', () => {
         'SELECT task_id, to_position_id FROM crove_kernel.task_reroute($1::uuid[])',
         [[own]],
       );
+      rerouted.catch(() => {});
       // The first round locked the lead's seat; its UPDATE waits for the activity table.
       await untilWaiting('the round', { pid, table: 'crove_kernel.activity' });
       // The branch's task now goes to the seat between, which the round has not locked.

@@ -7,6 +7,7 @@
 -- nothing unlocked and the task stayed on a seat whose holder cannot read it. The rounds now go on until no task of the
 -- given seats is stranded. Each round locks every new target and then moves every task whose target it locked, so a
 -- further round runs only for a task that a concurrent change stranded or gave a new target since the round read it.
+-- After 100 rounds the call fails as a serialization failure (40001), which the runtime answers as RETRY.
 -- Copied from 20261105200000 (the newest definition) with that change.
 SET LOCAL lock_timeout = '2s';
 
@@ -19,6 +20,7 @@ DECLARE
   v_locked uuid[];
   v_fresh uuid[];
   v_tries int := 0;
+  v_rounds int;
   v_ids uuid[];
   v_from uuid[];
   v_entities uuid[];
@@ -38,7 +40,14 @@ BEGIN
       v_from := ARRAY[]::uuid[];
       v_entities := ARRAY[]::uuid[];
       v_to := ARRAY[]::uuid[];
+      v_rounds := 0;
       LOOP
+        -- Each round after the first follows a concurrent change; a seat under a steady stream of them is refused for a
+        -- retry rather than held without bound.
+        v_rounds := v_rounds + 1;
+        IF v_rounds > 100 THEN
+          RAISE EXCEPTION 'TASK_REROUTE_UNSETTLED' USING ERRCODE = '40001';
+        END IF;
         LOOP
           SELECT pg_catalog.array_agg(DISTINCT s.to_position_id ORDER BY s.to_position_id) INTO v_fresh
           FROM crove_kernel.task_stranded(v_org, p_positions) s
