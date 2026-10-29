@@ -184,9 +184,15 @@ suite('context tokens: enter_user_context on PostgreSQL (#1822, ADR-0028 section
     await expect(enter(app, orgA, token(users.owner, orgA, { sessionId: revoked }))).rejects.toMatchObject({ code: '28000', message: 'SESSION_REVOKED' });
     await expect(enter(app, orgA, token(users.owner, orgA, { sessionId: revokedInA }))).rejects.toMatchObject({ code: '28000', message: 'SESSION_REVOKED_IN_ORG' });
     expect(await enter(app, orgA, token(users.owner, orgA, { sessionId: live }))).toBe(users.owner);
-    // A session the database has not recorded is refused (step 2): the kernel's session check records the session it
-    // checked in the same transaction, before the token is used.
-    await expect(enter(app, orgA, token(users.owner, orgA, { sessionId: randomUUID() }))).rejects.toMatchObject({ code: '28000', message: 'SESSION_INVALID' });
+    // A session the database has not recorded, in the token this runtime mints: a v2 token (step 2) is refused, the
+    // kernel's session check recording the session it checked in the same transaction first; a v1 token (step 1's
+    // runtime against step 1's database) is let in.
+    const unrecorded = token(users.owner, orgA, { sessionId: randomUUID() });
+    if (unrecorded.startsWith('v2.')) {
+      await expect(enter(app, orgA, unrecorded)).rejects.toMatchObject({ code: '28000', message: 'SESSION_INVALID' });
+    } else {
+      expect(await enter(app, orgA, unrecorded)).toBe(users.owner);
+    }
   });
 
   it('checks the session the kernel checked: jwt and db tokens name one, recorded and active; db needs Supabase Auth', async () => {
@@ -208,9 +214,15 @@ suite('context tokens: enter_user_context on PostgreSQL (#1822, ADR-0028 section
     for (const check of ['db', 'jwt', 'off']) {
       await expect(enter(app, orgA, sign(`v2.${users.owner}.-.${orgA}.aal1.-.${check}.${exp}`)), check).rejects.toMatchObject({ code: '42501', message: 'CONTEXT_TOKEN_INVALID' });
     }
-    // v1 (step 1's kernels, for the minutes of a deploy) is a token of no check; a v1 with a check field, or a v2
-    // without one, is malformed.
+    // v1 (step 1's kernels, for a deploy's restarts and a rollback to step 1) is a token of no check; a v1 with a check
+    // field, or a v2 without one, is malformed.
     expect(await enter(app, orgA, sign(`v1.${users.owner}.-.${orgA}.aal1.-.${exp}`))).toBe(users.owner);
+    // A v1 token that names a session gets step 2's session rules all the same: recorded and active, or refused.
+    expect(await enter(app, orgA, sign(`v1.${users.owner}.${live}.${orgA}.aal1.-.${exp}`))).toBe(users.owner);
+    await expect(enter(app, orgA, sign(`v1.${users.owner}.${randomUUID()}.${orgA}.aal1.-.${exp}`))).rejects.toMatchObject({
+      code: '28000',
+      message: 'SESSION_INVALID',
+    });
     await expect(enter(app, orgA, sign(`v1.${users.owner}.${live}.${orgA}.aal1.-.jwt.${exp}`))).rejects.toMatchObject({ message: 'CONTEXT_TOKEN_INVALID' });
     await expect(enter(app, orgA, sign(`v2.${users.owner}.-.${orgA}.aal1.-.${exp}`))).rejects.toMatchObject({ message: 'CONTEXT_TOKEN_INVALID' });
   });
@@ -286,8 +298,8 @@ suite('context tokens: enter_user_context on PostgreSQL (#1822, ADR-0028 section
     const bytes = contextTokenKeyBytes(KEY);
     expect(tok).not.toContain(KEY);
     expect(tok).not.toContain(bytes.toString('hex'));
-    // v2: the session check the kernel ran is a field of its own.
-    expect(tok.split('.')).toHaveLength(9);
+    // v2 has the session check the kernel ran as a field of its own (9 fields); v1 has 8.
+    expect(tok.split('.')).toHaveLength(tok.startsWith('v2.') ? 9 : 8);
     // A key of the wrong length is refused by both readers without echoing it.
     const short = Buffer.from('a short secret value').toString('base64');
     for (const read of [contextTokenKeyBytes, runnerKeyBytes]) {
