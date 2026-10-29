@@ -1598,12 +1598,13 @@ export class Runtime {
       cleanRoot?: string;
       writeScope?: WriteScope;
       writeCounters?: readonly { n: number }[];
-      // The entities an entity-scoped permission let the user in for (#1507); null or absent: no such limit.
-      permissionEntities?: readonly string[] | null;
+      // The entities an entity-scoped permission let the user in for (#1507); null: no such limit. Required, so every
+      // path that runs a command passes what its gate answered.
+      permissionEntities: readonly string[] | null;
     },
   ): Promise<O> {
     const commandId = uuidv7();
-    const permissionEntities = base.permissionEntities ?? null;
+    const { permissionEntities } = base;
     // Whether the handler named the entity it acts on (ctx.permissionEntity) when an entity holder ran it.
     let entityNamed = false;
     const cleanRoot = base.cleanRoot ?? (def.access === 'proposal' && this.#contactOrPayment.get(def.name) === false ? def.name : undefined);
@@ -2139,7 +2140,7 @@ export class Runtime {
             .execute();
           return output;
         }
-        return this.runInTx<O>(trx, def, input, { orgId, actor, entered: context, proposalId: null });
+        return this.runInTx<O>(trx, def, input, { orgId, actor, entered: context, proposalId: null, permissionEntities });
       });
     } catch (error) {
       const domain = toDomainError(error);

@@ -579,6 +579,12 @@ suite('role assignments on PostgreSQL (#1279)', () => {
     await expect(run(asUser(o.owner), 't1507.names', o.defaultEntity)).resolves.toEqual({ ok: true });
     // A member who holds nothing passes none of them.
     for (const command of ['t1507.org_gate', 't1507.forgets', 't1507.names']) await expect(run(asUser(o.member), command, o.branch)).rejects.toMatchObject(FORBIDDEN);
+    // The same without an idempotency key (the runtime's other path): the entity limit holds there too.
+    const bare = (actor: Actor, command: string, legalEntityId: string) => rt.execute(command, { legalEntityId }, { actor, orgId: o.orgId });
+    await expect(bare(asUser(o.chief), 't1507.forgets', o.branch)).rejects.toMatchObject({ ...FORBIDDEN, details: { rule: 'permission_entity' } });
+    await expect(bare(asUser(o.chief), 't1507.names', o.defaultEntity)).rejects.toMatchObject({ ...FORBIDDEN, details: { rule: 'permission_entity' } });
+    await expect(bare(asUser(o.chief), 't1507.names', o.branch)).resolves.toEqual({ ok: true });
+    await expect(bare(asUser(o.chief), 't1507.org_gate', o.branch)).rejects.toMatchObject(FORBIDDEN);
   });
 
   it('counts an entity chief accountant for nothing in P12, the approval gate, the accountant preset and its last chief accountant (#1507)', async () => {
