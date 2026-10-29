@@ -4,8 +4,10 @@
 //   concurrent-index      a marked file holds only `CREATE [UNIQUE] INDEX CONCURRENTLY IF NOT EXISTS <name> ON
 //                         <schema>.<table> ...;` statements, with no comment, dollar quote, quoted identifier or backslash
 //                         after the first (the runner, packages/db/src/migrate.ts concurrentIndexes, refuses the same);
-//                         the marker counts only among the comment lines before the first statement, and no name is
-//                         over the 63 bytes PostgreSQL keeps of one (security review L2);
+//                         the marker counts only among the comment lines before the first statement, no name is over
+//                         the 63 bytes PostgreSQL keeps of one (security review L2), and an index uses a built-in
+//                         access method and names nothing of a schema other than pg_catalog, so a build outside a
+//                         transaction runs no user code (#1803);
 //   hot-index-concurrently  build a new index on a hot table (see hot-table-retry) concurrently, in a marked file:
 //                         CREATE INDEX holds a SHARE lock for the whole build and every write waits (#1791); so do
 //                         ADD UNIQUE, PRIMARY KEY or EXCLUDE without USING INDEX, ADD [COLUMN] ... UNIQUE or PRIMARY
@@ -921,6 +923,8 @@ const PLAIN_CREATE_KINDS = new Set(['table', 'view', 'materialized', 'sequence',
 // A file the runner applies outside a transaction to build indexes concurrently (#1791, packages/db/src/migrate.ts,
 // concurrentIndexes): CONCURRENT_INDEX_MARKER is one of its leading comment lines, before the first statement.
 export const CONCURRENT_INDEX_MARKER = '-- crove:concurrent-index';
+// The access methods PostgreSQL ships, as the runner lists them (BUILT_IN_INDEX_METHODS).
+const BUILT_IN_INDEX_METHODS = ['btree', 'hash', 'gist', 'spgist', 'gin', 'brin'];
 export function concurrentIndexMarked(sql) {
   for (const raw of sql.split('\n')) {
     const line = raw.trim();
@@ -958,6 +962,17 @@ export function concurrentIndexProblems(sql, statements, marked) {
     // After the table: [USING method] (columns) [INCLUDE (columns)] [WHERE predicate], as the runner reads it; and no
     // semicolon inside a string, where the runner splits the file.
     let j = k + 10;
+    // A built-in access method, and no name of a schema other than pg_catalog after the table (#1803).
+    const method = isWord(tokens[j], 'using') ? tokens[j + 1] : undefined;
+    const foreign = tokens.findIndex((t, i) => i > k + 9 && isPunct(t, '.') && isWord(tokens[i - 1]) && tokens[i - 1].v !== 'pg_catalog');
+    if (method && !BUILT_IN_INDEX_METHODS.includes(method.v)) {
+      problems.push({ line: tokens[0].line, message: `the access method ${method.v} is not one PostgreSQL ships (${BUILT_IN_INDEX_METHODS.join(', ')}); an index built outside a transaction runs no user code` });
+      continue;
+    }
+    if (foreign !== -1) {
+      problems.push({ line: tokens[0].line, message: `${tokens[foreign - 1].v}.${tokens[foreign + 1]?.v ?? ''} names a schema other than pg_catalog: an index built outside a transaction calls no user function, type, operator class or operator` });
+      continue;
+    }
     if (isWord(tokens[j], 'using') && isWord(tokens[j + 1])) j += 2;
     shaped &&= isPunct(tokens[j], '(');
     j = skipParens(tokens, j);

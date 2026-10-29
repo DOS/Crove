@@ -13,7 +13,7 @@ import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { agentCommands, createOrg, decideApproval, eligibleApprovers, kernelCommands, kernelManifest, kernelQueries, runAgentWake, upsertIdentity } from '@crove/kernel';
 import { tableWrite } from '@crove/kernel-contract';
-import { Runtime, defineCommand, defineQuery, type Actor, type AgentActor, type AgentApprovers, type AgentRuntime, type CommandDef, type CommandWrite, type QueryDef, type Risk } from '@crove/kernel-runtime';
+import { DomainError, Runtime, defineCommand, defineQuery, type Actor, type AgentActor, type AgentApprovers, type AgentRuntime, type CommandDef, type CommandWrite, type QueryDef, type Risk } from '@crove/kernel-runtime';
 import { financeCommands, financeManifest, financeQueries } from '@crove/mod-finance';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
@@ -1570,6 +1570,99 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
     // Nothing the refused commands wrote stayed.
     const kept = await withAdmin(async (c) => (await c.query(`SELECT dedupe_key FROM crove_kernel.inbox_item WHERE org_id = $1 AND dedupe_key LIKE $2 ORDER BY 1`, [orgA, `t1710:%${suffix}`])).rows);
     expect(kept).toEqual([{ dedupe_key: `t1710:declared-${suffix}` }]);
+  });
+
+  it('sets aside what a refused tryRun rolled back, and counts a partition under its partitioned table (#1797)', async () => {
+    const suffix = randomUUID().slice(0, 8);
+    const raise = async (ctx: { trx: Parameters<CommandDef<unknown, unknown>['handler']>[0]['trx']; orgId: string; now: Date }, key: string) => {
+      await ctx.trx
+        .insertInto('crove_kernel.inbox_item')
+        .values({ org_id: ctx.orgId, kind: 'kernel.job.dead_lettered', dedupe_key: `t1797:${key}`, detail: JSON.stringify({ queue: 't1797', jobId: randomUUID(), retries: 0 }), raised_at: ctx.now })
+        .execute();
+    };
+    const command = (name: string, extra: Partial<CommandDef<unknown, unknown>>) =>
+      defineCommand({ sideEffect: 'none', name: `t1797.${name}_${suffix}`, input: z.object({}), risk: 'R1', access: 'system', handler: async () => ({ ok: true }), ...extra }) as CommandDef<unknown, unknown>;
+    // Nested commands that declare no writes: one writes and is then refused (a 409 its caller recovers from), one writes
+    // and commits.
+    const writesThenRefused = command('refused', {
+      handler: async (ctx) => {
+        await raise(ctx, `refused-${suffix}`);
+        throw new DomainError('CONFLICT', 409, 't1797 refused');
+      },
+    });
+    const writesAndCommits = command('commits', {
+      handler: async (ctx) => {
+        await raise(ctx, `commits-${suffix}`);
+        return { ok: true };
+      },
+    });
+    // Callers that declare they write no table.
+    const triesRefused = command('tries_refused', {
+      writes: [],
+      handler: async (ctx) => ctx.tryRun(writesThenRefused.name, {}, { recover: () => true }),
+    });
+    const triesCommitted = command('tries_committed', {
+      writes: [],
+      handler: async (ctx) => ctx.tryRun(writesAndCommits.name, {}, { recover: () => true }),
+    });
+    // The same, failing with an error the caller does not recover from: it is rolled back too, and the caller catches it.
+    const writesThenFails = command('fails', {
+      handler: async (ctx) => {
+        await raise(ctx, `fails-${suffix}`);
+        throw new DomainError('CONFLICT', 409, 't1797 failed');
+      },
+    });
+    const triesFailed = command('tries_failed', {
+      writes: [],
+      handler: async (ctx) => {
+        const answer = await ctx.tryRun(writesThenFails.name, {}, { recover: () => false }).catch(() => ({ status: 'thrown' }));
+        return answer;
+      },
+    });
+    // A statement of the caller's own beside the nested run cannot be told from the run's, so the caller fails.
+    const besideTry = command('beside_try', {
+      writes: [],
+      handler: async (ctx) => {
+        await Promise.all([ctx.tryRun(writesThenRefused.name, {}, { recover: () => true }), raise(ctx, `beside-try-${suffix}`)]);
+        return { ok: true };
+      },
+    });
+    // A row in a partition (a day of crove_jobs.queue_stats) counts under the partitioned table a manifest declares.
+    const statsRow = sql`INSERT INTO crove_jobs.queue_stats (name) VALUES (${`t1797_${suffix}`})`;
+    const statsUndeclared = command('stats_undeclared', {
+      writes: [],
+      handler: async (ctx) => {
+        await statsRow.execute(ctx.trx);
+        return { ok: true };
+      },
+    });
+    const statsDeclared = command('stats_declared', {
+      writes: [tableWrite(kernelManifest.tables, 'crove_jobs', 'queue_stats', ['name'])],
+      handler: async (ctx) => {
+        await statsRow.execute(ctx.trx);
+        return { ok: true };
+      },
+    });
+    worker.register({ commands: [writesThenRefused, writesAndCommits, triesRefused, triesCommitted, writesThenFails, triesFailed, besideTry, statsUndeclared, statsDeclared] });
+    const as = { actor: SYSTEM, orgId: orgA };
+    // The refused or failed nested command's row is rolled back with its savepoint, so the caller is not charged with it.
+    await expect(worker.execute(triesRefused.name, {}, as)).resolves.toMatchObject({ status: 'refused' });
+    await expect(worker.execute(triesFailed.name, {}, as)).resolves.toEqual({ status: 'thrown' });
+    await expect(worker.execute(statsDeclared.name, {}, as)).resolves.toEqual({ ok: true });
+    // A committed nested command that declares no writes still counts as its caller's.
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await expect(worker.execute(triesCommitted.name, {}, as)).rejects.toMatchObject({ code: 'INTERNAL' });
+      expect(logged.mock.calls.flat().map(String).join('\n')).toContain(`command ${triesCommitted.name}: wrote crove_kernel.inbox_item, which it does not declare`);
+      await expect(worker.execute(besideTry.name, {}, as)).rejects.toMatchObject({ code: 'INTERNAL' });
+      expect(logged.mock.calls.flat().map(String).join('\n')).toContain(`command ${besideTry.name}: its writes cannot be checked`);
+      await expect(worker.execute(statsUndeclared.name, {}, as)).rejects.toMatchObject({ code: 'INTERNAL' });
+      expect(logged.mock.calls.flat().map(String).join('\n')).toContain(`command ${statsUndeclared.name}: wrote crove_jobs.queue_stats, which it does not declare`);
+    } finally {
+      logged.mockRestore();
+    }
+    const kept = await withAdmin(async (c) => (await c.query(`SELECT dedupe_key FROM crove_kernel.inbox_item WHERE org_id = $1 AND dedupe_key LIKE $2`, [orgA, `t1797:%${suffix}`])).rows);
+    expect(kept).toEqual([]);
   });
 
   it('runs a command as it registered: agent access set on its definition afterwards grants an agent nothing (#1766)', async () => {

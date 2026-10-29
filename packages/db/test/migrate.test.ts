@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { applyConcurrentIndexes, CONCURRENT_INDEX_MARKER, concurrentIndexes, readMigrations } from '../src/migrate.ts';
+import { applyConcurrentIndexes, CONCURRENT_INDEX_MARKER, concurrentIndexes, readMigrations, takeMigrateLock } from '../src/migrate.ts';
 
 describe('migration files', () => {
   it('hash the same with CRLF and LF line endings', async () => {
@@ -50,12 +50,14 @@ describe('migration files', () => {
         ),
       ),
     ).toEqual([
-      { sql: 'CREATE INDEX CONCURRENTLY IF NOT EXISTS Audit_Event_X_idx ON crove_kernel.audit_event (org_id, occurred_at DESC)', name: 'audit_event_x_idx', schema: 'crove_kernel', table: 'audit_event' },
+      { sql: 'CREATE INDEX CONCURRENTLY IF NOT EXISTS Audit_Event_X_idx ON crove_kernel.audit_event (org_id, occurred_at DESC)', name: 'audit_event_x_idx', schema: 'crove_kernel', table: 'audit_event', unique: false, definition: '(org_id, occurred_at DESC)' },
       {
         sql: "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS outbox_y_idx ON crove_kernel.outbox_event USING btree (org_id, (payload->>'k')) INCLUDE (id)\n  WHERE status = 'pending'",
         name: 'outbox_y_idx',
         schema: 'crove_kernel',
         table: 'outbox_event',
+        unique: true,
+        definition: "USING btree (org_id, (payload->>'k')) INCLUDE (id)\n  WHERE status = 'pending'",
       },
     ]);
     for (const body of [
@@ -99,8 +101,60 @@ describe('migration files', () => {
         },
       }) as unknown as Parameters<typeof applyConcurrentIndexes>[0];
     await expect(applyConcurrentIndexes(client(false), 'a.sql', [])).rejects.toThrow(/could not restore the session's settings after the index builds: restore refused/);
-    const index = { sql: 'CREATE INDEX CONCURRENTLY IF NOT EXISTS i ON crove_kernel.t (a)', name: 'i', schema: 'crove_kernel', table: 't' };
+    const index = { sql: 'CREATE INDEX CONCURRENTLY IF NOT EXISTS i ON crove_kernel.t (a)', name: 'i', schema: 'crove_kernel', table: 't', unique: false, definition: '(a)' };
     await expect(applyConcurrentIndexes(client(true), 'a.sql', [index])).rejects.toThrow(/build refused/);
+  });
+
+  it('refuses user code in an index built outside a transaction, and keeps what PostgreSQL ships (#1803)', () => {
+    const build = (definition: string) => concurrentIndexes('a.sql', `${CONCURRENT_INDEX_MARKER}\nCREATE INDEX CONCURRENTLY IF NOT EXISTS i ON crove_kernel.t ${definition};\n`);
+    for (const [definition, why] of [
+      ['(crove_kernel.f(a))', /with crove_kernel\.f, a name of a schema other than pg_catalog/],
+      ['((a::crove_kernel.money_t))', /with crove_kernel\.money_t/],
+      ['((cast(a AS public.t)))', /with public\.t/],
+      ['((a::pg_catalog.text::public.t))', /with public\.t/],
+      ['((äpg_catalog.f(a)))', /with äpg_catalog\.f/],
+      ['((€pg_catalog.f(a)))', /with €pg_catalog\.f/],
+      ['((pg_catalog€.f(a)))', /with pg_catalog€\.f/],
+      ['(a crove_kernel.my_ops)', /with crove_kernel\.my_ops/],
+      ['(a) WHERE public.ok(a)', /with public\.ok/],
+      ['(a) WHERE a OPERATOR(crove_kernel.===) 1', /with crove_kernel\./],
+      ['USING bloom (a)', /access method bloom, which PostgreSQL does not ship/],
+    ] as const) {
+      expect(() => build(definition), definition).toThrow(why);
+    }
+    for (const definition of [
+      '(pg_catalog.lower(a))',
+      '(lower(a), (b::text), (cast(c AS pg_catalog.int8)))',
+      '(a text_pattern_ops)',
+      'USING gin (a jsonb_path_ops)',
+      "(a) WHERE b = 'crove_kernel.f(x)'",
+      '(a) WHERE b > 1.5',
+    ]) {
+      expect(build(definition), definition).toHaveLength(1);
+    }
+  });
+
+  it('waits for the migration lock, logs who holds it, and gives up after the maximum wait (#1803)', async () => {
+    const client = (freeAfter: number) => {
+      let tries = 0;
+      return {
+        query: async (sql: string) => {
+          if (sql.includes('pg_try_advisory_lock')) return { rows: [{ ok: ++tries > freeAfter }] };
+          if (sql.includes('pg_locks')) return { rows: [{ holder: 'pid 42 (crove-migrate, active)' }] };
+          throw new Error(`unexpected query: ${sql}`);
+        },
+      } as unknown as Parameters<typeof takeMigrateLock>[0];
+    };
+    const log: string[] = [];
+    await takeMigrateLock(client(2), { log: (m) => log.push(m), pollMs: 1, logEveryMs: 60_000 });
+    expect(log).toEqual(['waiting for the migration lock, held by pid 42 (crove-migrate, active) (waited 0s)', 'took the migration lock after 0s']);
+    // Free at once: nothing logged.
+    const quiet: string[] = [];
+    await takeMigrateLock(client(0), { log: (m) => quiet.push(m), pollMs: 1 });
+    expect(quiet).toEqual([]);
+    await expect(takeMigrateLock(client(Number.POSITIVE_INFINITY), { pollMs: 1, maxWaitMs: 20 })).rejects.toThrow(
+      /another run has held the migration lock for longer than 0s \(pid 42 \(crove-migrate, active\)\)/,
+    );
   });
 
   it('the repository migrations are not copies of each other', async () => {

@@ -26,9 +26,12 @@ const STATUSES = ['pending', 'approved', 'executed', 'rejected', 'failed', 'expi
 type Status = (typeof STATUSES)[number];
 // The transitions the runtime makes; every other change of status is refused.
 const ALLOWED = new Set(['pending>approved', 'pending>rejected', 'pending>expired', 'approved>executed']);
-// Moves a tenant writer may or may not make in SQL while #1793 lands (two-step rule): since #1793 a user context moves a
-// proposal to approved only through the gate (crove_kernel.proposal_approve). Removed once that is on main.
-const EITHER = new Set(['pending>approved']);
+// Since #1793 only the system context moves a proposal to approved by an update (the worker executing an agent's
+// approval); a user's context goes through the gate (crove_kernel.proposal_approve, proposal-approve-gate.db.test.ts).
+const SYSTEM_ONLY = new Set(['pending>approved']);
+// #1816 (step 1 of 2): approved -> executed is about to need the ok row of the proposal's command, written in the same
+// transaction by the same actor, so a plain update may pass or be refused here; step 2 expects the refusal.
+const TIGHTENING = new Set(['approved>executed']);
 const REFUSED = { code: '23514', message: 'PROPOSAL_STATUS_TRANSITION' };
 const suite = ADMIN ? describe : describe.skip;
 
@@ -185,10 +188,10 @@ suite('proposal status transitions on PostgreSQL (#1707)', () => {
         for (const to of STATUSES.filter((s) => s !== from)) {
           const outcome = await as(writer, (c) => c.query(move(from, to), [rows[from], owner, orgId]));
           const where = `${writer.name}: ${from} -> ${to}`;
-          // The system context (the worker executing an agent's approval) keeps the move either way.
-          if (writer.name !== 'system' && EITHER.has(`${from}>${to}`) && !outcome.ok) {
-            expect(outcome, where).toMatchObject({ ok: false, ...REFUSED });
-          } else if (ALLOWED.has(`${from}>${to}`)) {
+          if (TIGHTENING.has(`${from}>${to}`)) {
+            if (!outcome.ok) expect(outcome, where).toMatchObject(REFUSED);
+            else expect(outcome.value.rowCount, where).toBe(1);
+          } else if (ALLOWED.has(`${from}>${to}`) && (writer.name === 'system' || !SYSTEM_ONLY.has(`${from}>${to}`))) {
             expect(outcome, where).toMatchObject({ ok: true });
             expect(outcome.ok && outcome.value.rowCount, where).toBe(1);
           } else {
@@ -268,15 +271,11 @@ suite('proposal status transitions on PostgreSQL (#1707)', () => {
         await expect(as(writer, (c) => c.query(sql, [orgId, owner])), `${writer.name}: insert naming ${column}`).resolves.toMatchObject({ ok: false, ...REFUSED });
       }
       // A pending one, as the runtime writes it, and a decided one that names no command (it decides nothing).
+      // A pending one only from the system context: a user's names itself among the authors (#1793), this one does not.
       for (const status of ['pending', 'rejected'] as const) {
         const inserted = await as(writer, (c) => c.query(insert(status, null), [orgId, owner]));
-        // Since #1793 a user's context inserts a pending proposal only with the snapshot of now and itself among the
-        // authors (this one names neither); until it lands it may (two-step rule: either is accepted).
-        if (writer.name !== 'system' && status === 'pending' && !inserted.ok) {
-          expect(inserted, `${writer.name}: insert ${status}`).toMatchObject({ ok: false, ...REFUSED });
-        } else {
-          expect(inserted, `${writer.name}: insert ${status}`).toMatchObject({ ok: true });
-        }
+        if (writer.name !== 'system' && status === 'pending') expect(inserted, `${writer.name}: insert ${status}`).toMatchObject({ ok: false, ...REFUSED });
+        else expect(inserted, `${writer.name}: insert ${status}`).toMatchObject({ ok: true });
       }
       for (const status of STATUSES.filter((s) => s !== 'pending')) {
         const id = await proposal(status);
