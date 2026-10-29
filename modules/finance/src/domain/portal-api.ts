@@ -6,13 +6,19 @@ import { z } from 'zod';
 import { EXTRACT_LIMITS, zExtractedPortalList, type ExtractedPortalList, type PortalListSkipReason } from '@crove/extract-contract';
 import { parseTaxCode } from '@crove/l10n-vn';
 
+// What the person reads for PORTAL_LIST_TOO_LARGE, whichever cap stopped the list (#1938): the portal client's (rows,
+// pages or bytes of one answer, apps/kernel/src/tax-portal.ts), the evidence file's size, or this module's row limit
+// over every answer. Each cause asks the same of them, so one code and one message, the app's own wording
+// (apps/app/src/i18n/messages, kernelErrors).
+export const PORTAL_LIST_TOO_LARGE_MESSAGE = 'Danh sách của kỳ này quá lớn để lấy một lần; hãy xuất danh sách Excel từ cổng thuế rồi tải lên';
+
 // A period with more invoices than one list may hold. domain/ stays pure TypeScript (plan §5.1, #1680), so this is an
 // error of its own, not the runtime's DomainError: the portal sync answers it 422 PORTAL_LIST_TOO_LARGE with this
 // message (apps/kernel/src/portal-sync.ts), and readSyncedList records the message as the list's failure.
 export class PortalListTooLarge extends Error {
   readonly code = 'PORTAL_LIST_TOO_LARGE';
   constructor() {
-    super(`Kỳ này có hơn ${EXTRACT_LIMITS.maxPortalListRows} hóa đơn trên cổng thuế; hãy xuất danh sách Excel từ cổng thuế rồi tải lên`);
+    super(PORTAL_LIST_TOO_LARGE_MESSAGE);
     this.name = 'PortalListTooLarge';
   }
 }

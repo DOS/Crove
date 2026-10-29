@@ -29,7 +29,7 @@ import {
   type PortalListResult,
   type PortalXmlResult,
 } from '@crove/kernel-contract';
-import { PORTAL_SYNC_CONTENT_TYPE, PortalListTooLarge, checkPortalList, normalizePortalInvoices, vatPeriod, type PortalAnswer, type PortalCallError, type PortalXmlPlan } from '@crove/mod-finance';
+import { PORTAL_LIST_TOO_LARGE_MESSAGE, PORTAL_SYNC_CONTENT_TYPE, PortalListTooLarge, checkPortalList, normalizePortalInvoices, vatPeriod, type PortalAnswer, type PortalCallError, type PortalXmlPlan } from '@crove/mod-finance';
 import { ConcurrencyLimiter } from './concurrency.ts';
 import { RateLimiter } from './rate-limit.ts';
 import { safeFilename, sniffType } from './sniff.ts';
@@ -81,7 +81,8 @@ function portalError(kind: PortalCallError): DomainError {
     case 'SESSION_EXPIRED':
       return new DomainError('PORTAL_SESSION_EXPIRED', 409, 'Phiên đăng nhập cổng thuế đã hết hạn; hãy đăng nhập lại');
     case 'TOO_LARGE':
-      return new DomainError('PORTAL_LIST_TOO_LARGE', 422, 'Danh sách của kỳ này quá lớn để lấy một lần; hãy xuất danh sách Excel từ cổng thuế rồi tải lên');
+      // The same message as the finance domain's refusal (#1938): one code, one message.
+      return new DomainError('PORTAL_LIST_TOO_LARGE', 422, PORTAL_LIST_TOO_LARGE_MESSAGE);
     case 'TOO_SLOW':
       return new DomainError('PORTAL_STEP_TIMEOUT', 503, 'Cổng thuế trả lời chậm nên lượt lấy dữ liệu đã tạm dừng; hãy bấm lấy lại để tiếp tục');
     case 'BAD_ANSWER':
@@ -90,7 +91,7 @@ function portalError(kind: PortalCallError): DomainError {
 }
 
 // The portal's answers as a list, or the finance domain's refusal of a list too large as the API's answer: 422
-// PORTAL_LIST_TOO_LARGE with the domain's message (#1680).
+// PORTAL_LIST_TOO_LARGE with the domain's message (#1680), which is the client cap's too (#1938).
 function normalizeAnswers(answers: PortalAnswer[], range: { from: string; to: string }) {
   try {
     return normalizePortalInvoices(answers, range);

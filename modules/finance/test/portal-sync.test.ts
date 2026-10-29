@@ -7,7 +7,7 @@ import { zExtractedPortalList } from '@crove/extract-contract';
 import { PortalListTooLarge, checkPortalList, normalizePortalInvoices, portalDate, portalStatus, readSyncedList, xmlCallKey, type PortalAnswer } from '../src/index.ts';
 
 const PERIOD = { from: '2026-09-01', to: '2026-09-30' };
-const TOO_LARGE = 'Kỳ này có hơn 20000 hóa đơn trên cổng thuế; hãy xuất danh sách Excel từ cổng thuế rồi tải lên';
+const TOO_LARGE = 'Danh sách của kỳ này quá lớn để lấy một lần; hãy xuất danh sách Excel từ cổng thuế rồi tải lên';
 const BUYER = '0309876546';
 const SELLER = '0101234564';
 
