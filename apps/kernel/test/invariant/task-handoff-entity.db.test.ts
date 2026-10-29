@@ -323,4 +323,74 @@ suite('delegation and escalation within the task legal entity on PostgreSQL (#17
       await c.end();
     }
   });
+
+  // Each branch of member_covers_legal_entity has a holder that only it lets through, or one it must not (#1804): a
+  // member with assignments in two entities, one with an org-wide assignment beside an entity one, an admin who kept
+  // an entity assignment from before a promotion, and a holder removed from the org (the seat vacated by
+  // position_holder_user_fk, so no position keeps them).
+  it('covers a holder through any of their entity assignments, an org-wide one or their role, and never a removed member (#1804)', async () => {
+    const person = (name: string) =>
+      upsertIdentity(createDb(pools[0] as pg.Pool), { issuer: 't1804', subject: randomUUID(), email: `${name}-${randomUUID().slice(0, 8)}@t1804.test`, name: null });
+    const [twoEntities, orgWideToo, scopedAdmin, removed] = [await person('two-entities'), await person('org-wide-too'), await person('scoped-admin'), await person('removed')];
+    await admin(async (c) => {
+      for (const [user, role] of [
+        [twoEntities, 'member'],
+        [orgWideToo, 'member'],
+        [scopedAdmin, 'admin'],
+        [removed, 'member'],
+      ] as const) {
+        await c.query('INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, $3)', [orgId, user, role]);
+      }
+      const assign = (user: string, roleKey: string, entity: string | null) =>
+        c.query('INSERT INTO crove_kernel.role_assignment (org_id, user_id, role_key, legal_entity_id, granted_by) VALUES ($1, $2, $3, $4, $5)', [
+          orgId,
+          user,
+          roleKey,
+          entity,
+          owner,
+        ]);
+      await assign(twoEntities, 'external_accountant', defaultEntity);
+      await assign(twoEntities, 'external_accountant', branch);
+      await assign(orgWideToo, 'finance.viewer', null);
+      await assign(orgWideToo, 'external_accountant', defaultEntity);
+      await assign(scopedAdmin, 'external_accountant', defaultEntity);
+      await assign(removed, 'external_accountant', branch);
+    });
+    const seat = await personPosition('Kế toán sẽ nghỉ', removed, null);
+    await app.execute('kernel.member.remove', { userId: removed }, { actor: asMfa(owner), orgId });
+    expect(
+      await admin(async (c) => (await c.query<{ holder: string | null }>('SELECT holder_user_id AS holder FROM crove_kernel.position WHERE org_id = $1 AND id = $2', [orgId, seat])).rows[0]?.holder),
+    ).toBeNull();
+
+    // An agent that reads both entities asks for each holder.
+    const agent = await liveAgent([branch, defaultEntity], null);
+    const url = new URL(adminUrl);
+    url.username = 'crove_worker';
+    url.password = 'test-worker-pw';
+    const c = new pg.Client({ connectionString: url.toString() });
+    await c.connect();
+    try {
+      await c.query('BEGIN');
+      await c.query('SELECT crove_kernel.enter_agent_context($1::uuid, $2::uuid, $3::uuid)', [orgId, agent.actor.agentId, agent.actor.runId]);
+      const covers = async (user: string, entity: string | null) =>
+        (await c.query<{ v: boolean }>('SELECT crove_kernel.member_covers_legal_entity($1::uuid, $2::uuid) AS v', [user, entity])).rows[0]?.v;
+      // Two entity assignments: either entity, through its own row.
+      expect(await covers(twoEntities, branch)).toBe(true);
+      expect(await covers(twoEntities, defaultEntity)).toBe(true);
+      // An org-wide assignment beside an entity one reads every entity: the branch only through the org-wide row.
+      expect(await covers(orgWideToo, branch)).toBe(true);
+      expect(await covers(orgWideToo, defaultEntity)).toBe(true);
+      // An admin reads every entity whatever assignment they kept: the branch only through their role.
+      expect(await covers(scopedAdmin, branch)).toBe(true);
+      // A removed member covers nothing: their assignments went with the membership.
+      expect(await covers(removed, branch)).toBe(false);
+      expect(await covers(removed, null)).toBe(false);
+      // The members limited to one entity still read only that one.
+      expect(await covers(defaultManager, branch)).toBe(false);
+      expect(await covers(branchManager, defaultEntity)).toBe(false);
+    } finally {
+      await c.query('ROLLBACK').catch(() => {});
+      await c.end();
+    }
+  });
 });
