@@ -172,9 +172,6 @@ function singleFile(outputPath, writable) {
         } else if (declaration.declarationType === 'typeDeclaration' && declaration.name === 'Database') {
           database = {
             ...declaration,
-            // kanel-kysely joins the schema types in the order the catalog lists the schemas, which changes from one
-            // database to the next: sorted, so the file depends only on the migrations.
-            typeDefinition: declaration.typeDefinition.map((line) => line.split(' & ').sort().join(' & ')),
             comment: [`Every table of ${SCHEMAS.join(', ')} that ${TENANT_ROLE} may read.`],
             // Kanel lists the schemas in the order the catalog gives them, which a migration can change (#1842): sorted,
             // so the file depends only on what the schemas hold.

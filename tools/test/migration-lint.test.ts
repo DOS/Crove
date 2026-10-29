@@ -412,3 +412,62 @@ describe('migration lint: writes in a CTE, ownership, string mode (#1225)', () =
     expect(rules("SELECT set_config('lock_timeout', '2s', true);")).toEqual([]);
   });
 });
+
+// #1859: writes the lint did not read as statements before #1855's review found them.
+describe('migration lint: loop and cursor queries, PREPARE, EXPLAIN and COPY (#1859)', () => {
+  it('reads the query of a FOR loop and of a cursor as the statement it is', () => {
+    const inDo = (body: string) => `DO $$\nDECLARE\n  r record;\nBEGIN\n${body}\nEND $$;`;
+    // Each write is on line 5 of the DO body's file.
+    for (const body of [
+      '  FOR r IN DELETE FROM crove_kernel.tenant RETURNING org_id LOOP\n    NULL;\n  END LOOP;',
+      '  FOR r IN WITH d AS (DELETE FROM crove_kernel.tenant RETURNING 1) SELECT * FROM d LOOP\n    NULL;\n  END LOOP;',
+      "  FOR r IN EXECUTE 'DELETE FROM crove_kernel.tenant RETURNING 1' LOOP\n    NULL;\n  END LOOP;",
+      '  FOR r IN REVERSE UPDATE crove_kernel.tenant SET x = 1 RETURNING 1 LOOP\n    NULL;\n  END LOOP;',
+      '  OPEN c FOR DELETE FROM crove_kernel.tenant RETURNING 1;',
+      '  OPEN c NO SCROLL FOR WITH d AS (DELETE FROM crove_kernel.tenant RETURNING 1) SELECT * FROM d;',
+    ]) {
+      expect(rules(inDo(body)), body).toEqual(['5 module-schema']);
+    }
+    // A loop nested in another, and a cursor declared with its query.
+    expect(rules(inDo('  FOR r IN SELECT 1 LOOP\n    FOR r IN DELETE FROM crove_kernel.tenant RETURNING 1 LOOP\n      NULL;\n    END LOOP;\n  END LOOP;'))).toEqual(['6 module-schema']);
+    expect(rules('DO $$\nDECLARE\n  c CURSOR FOR DELETE FROM crove_kernel.tenant RETURNING 1;\nBEGIN\n  NULL;\nEND $$;')).toEqual(['3 module-schema']);
+    expect(rules('DO $$\nDECLARE\n  c NO SCROLL CURSOR (n int) IS DELETE FROM crove_kernel.tenant RETURNING n;\nBEGIN\n  NULL;\nEND $$;')).toEqual(['3 module-schema']);
+    // A column named cursor is not a declaration (Codex).
+    expect(rules(inDo('  PERFORM cursor FROM crove_social.sample FOR UPDATE OF sample;'))).toEqual([]);
+    // EXPLAIN as a loop or cursor query, and a query in parentheses (review).
+    for (const body of [
+      '  FOR r IN EXPLAIN ANALYZE DELETE FROM crove_social.sample RETURNING 1 LOOP\n    NULL;\n  END LOOP;',
+      '  OPEN c FOR EXPLAIN ANALYZE DELETE FROM crove_social.sample;',
+    ]) {
+      expect(rules(inDo(body)), body).toEqual(['5 no-indirect']);
+    }
+    expect(rules(inDo('  FOR r IN (WITH d AS (DELETE FROM crove_kernel.tenant RETURNING 1) SELECT * FROM d) LOOP\n    NULL;\n  END LOOP;'))).toEqual(['5 module-schema']);
+    expect(rules('(WITH d AS (DELETE FROM crove_kernel.tenant RETURNING 1) SELECT 1);')).toEqual(['1 module-schema']);
+    // A one-line loop under a waiver: the waiver covers the statement the loop guards, as before (review).
+    const waived = 'DO $$ BEGIN\n  -- migration-lint: cross-module the purge clears the kernel rows too\n  FOR r IN SELECT 1 LOOP DELETE FROM crove_kernel.tenant; END LOOP;\nEND $$;';
+    expect(lintMigration(FILE, waived, { waivers: [] })).toEqual([]);
+    // A loop over numbers, an array or a read of the file's own schema writes nothing elsewhere.
+    expect(rules(inDo('  FOR i IN 1..3 LOOP\n    NULL;\n  END LOOP;'))).toEqual([]);
+    expect(rules(inDo("  FOREACH r IN ARRAY ARRAY['a'] LOOP\n    NULL;\n  END LOOP;"))).toEqual([]);
+    expect(rules(inDo('  FOR r IN SELECT id FROM crove_social.sample LOOP\n    DELETE FROM crove_social.sample WHERE id = r.id;\n  END LOOP;'))).toEqual([]);
+  });
+
+  it('refuses PREPARE and its EXECUTE, EXPLAIN and COPY', () => {
+    for (const sql of [
+      'PREPARE p AS DELETE FROM crove_social.sample;',
+      'EXECUTE p;',
+      'EXPLAIN ANALYZE DELETE FROM crove_social.sample;',
+      'EXPLAIN SELECT 1;',
+      'COPY (DELETE FROM crove_social.sample RETURNING 1) TO STDOUT;',
+      "COPY crove_social.sample FROM '/etc/passwd';",
+      "COPY crove_social.sample TO PROGRAM 'id';",
+      "DO $$ BEGIN\n  EXECUTE 'PREPARE p AS SELECT 1';\nEND $$;",
+      "DO $$ BEGIN\n  EXECUTE 'COPY crove_social.sample TO STDOUT';\nEND $$;",
+    ]) {
+      expect(rules(sql).some((r) => r.endsWith('no-indirect')), sql).toBe(true);
+    }
+    expect(lint('COPY crove_social.sample TO STDOUT;')[0]?.message).toContain('COPY is not allowed in a migration');
+    // A DO body's EXECUTE runs a string the lint reads: allowed.
+    expect(rules("DO $$ BEGIN\n  EXECUTE 'SELECT 1';\nEND $$;")).toEqual([]);
+  });
+});
