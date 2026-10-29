@@ -27,6 +27,7 @@ suite('dead-letter Inbox items on PostgreSQL (#1747)', () => {
   let appUrl = '';
   let workerUrl = '';
   let pool: pg.Pool | undefined;
+  let runtime: Runtime;
   let orgId = '';
   const users = { owner: '', admin: '' };
   // An open item and a dismissed one of the org.
@@ -85,7 +86,7 @@ suite('dead-letter Inbox items on PostgreSQL (#1747)', () => {
     workerUrl = login('crove_worker', 'test-worker-pw');
     pool = createPool({ connectionString: appUrl, max: 2 });
     const db = createDb(pool);
-    const runtime = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
+    runtime = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
     for (const key of Object.keys(users) as Array<keyof typeof users>) {
       users[key] = await upsertIdentity(db, { issuer: 'inbox-item', subject: key, email: `${key}@inbox-item.test`, name: null });
     }
@@ -129,6 +130,20 @@ suite('dead-letter Inbox items on PostgreSQL (#1747)', () => {
     }
   });
 
+  it('dates a dismissal itself, so a backdated one cannot have the item pruned early (#1781)', async () => {
+    const backdated = await inContext(appUrl, asMember(users.owner), async (c) => {
+      await c.query(`UPDATE crove_kernel.inbox_item SET dismissed_at = now() - interval '40 days', dismissed_by = crove_kernel.ctx_user_id() WHERE id = $1`, [items.open]);
+      return (await c.query<{ fresh: boolean }>('SELECT dismissed_at = now() AS fresh FROM crove_kernel.inbox_item WHERE id = $1', [items.open])).rows[0];
+    });
+    expect(backdated).toEqual({ fresh: true });
+    // In the future too: the transaction's time, whatever the statement wrote.
+    const ahead = await inContext(appUrl, asMember(users.admin), async (c) => {
+      await c.query(`UPDATE crove_kernel.inbox_item SET dismissed_at = now() + interval '1 year', dismissed_by = crove_kernel.ctx_user_id() WHERE id = $1`, [items.open]);
+      return (await c.query<{ fresh: boolean }>('SELECT dismissed_at = now() AS fresh FROM crove_kernel.inbox_item WHERE id = $1', [items.open])).rows[0];
+    });
+    expect(ahead).toEqual({ fresh: true });
+  });
+
   it('keeps a dismissal as it was made: no re-dismissal in another name, no reopening', async () => {
     const change = (sql: string) => (c: pg.Client) => c.query(`UPDATE crove_kernel.inbox_item SET ${sql} WHERE id = $1`, [items.dismissed]);
     for (const set of ['dismissed_at = now(), dismissed_by = crove_kernel.ctx_user_id()', 'dismissed_at = NULL, dismissed_by = NULL']) {
@@ -138,8 +153,14 @@ suite('dead-letter Inbox items on PostgreSQL (#1747)', () => {
         message: expect.stringContaining('INBOX_ITEM_DISMISSED'),
       });
     }
-    // Writing the same values again changes nothing, and is allowed.
-    expect(await inContext(appUrl, asMember(users.admin), (c) => outcome(change('dismissed_at = dismissed_at')(c)))).toEqual({ ok: true, rows: 1 });
+    // Writing the same values again changes nothing, and is allowed: the dismissal keeps its date (#1781).
+    const kept = await inContext(appUrl, asMember(users.admin), async (c) => {
+      const before = (await c.query<{ at: string }>('SELECT dismissed_at::text AS at FROM crove_kernel.inbox_item WHERE id = $1', [items.dismissed])).rows[0]?.at;
+      const result = await outcome(change('dismissed_at = dismissed_at')(c));
+      const after = (await c.query<{ at: string }>('SELECT dismissed_at::text AS at FROM crove_kernel.inbox_item WHERE id = $1', [items.dismissed])).rows[0]?.at;
+      return { result, same: before !== undefined && before === after };
+    });
+    expect(kept).toEqual({ result: { ok: true, rows: 1 }, same: true });
   });
 
   it('lets only the system context change the detail, and only of an open item', async () => {
@@ -187,5 +208,41 @@ suite('dead-letter Inbox items on PostgreSQL (#1747)', () => {
     expect(await inContext(workerUrl, asSystem, (c) => outcome(due(c)))).toMatchObject({ ok: false, code: '42501', message: expect.stringContaining('INBOX_ITEM_WORKER_ONLY') });
     expect(await inContext(appUrl, null, (c) => outcome(due(c)))).toMatchObject({ ok: false, code: '42501' });
     expect(await inContext(appUrl, asMember(users.owner), (c) => outcome(due(c)))).toMatchObject({ ok: false, code: '42501' });
+  });
+
+  // #1781: at the retention run's own cut-offs (30 days after a dismissal, 90 after a raise), an active org whose items
+  // are all recent, and an offboarding org whatever the age of its items, are left out; an active org with an old item
+  // of either kind is due.
+  it('leaves out of inbox_item_prune_due an org with only recent items and an offboarding org (#1781)', async () => {
+    // Created by the admin, so the owner stays well under the default of 5 new orgs a day.
+    const org = async (name: string) => (await createOrg(runtime, asUser(users.admin), name)).orgId;
+    const [oldRaised, oldDismissed, recent, offboarding] = [await org('Cũ'), await org('Đã ẩn lâu'), await org('Mới'), await org('Đang rời')];
+    await admin(async (c) => {
+      const add = (org: string, raisedAgo: string, dismissedAgo: string | null) =>
+        c.query(
+          `INSERT INTO crove_kernel.inbox_item (org_id, kind, dedupe_key, detail, raised_at, dismissed_at, dismissed_by)
+           VALUES ($1, 'kernel.job.dead_lettered', $2, '{}', now() - $3::interval, now() - $4::interval, CASE WHEN $4::interval IS NULL THEN NULL ELSE $5::uuid END)`,
+          [org, `queue:t1781:${randomUUID()}`, raisedAgo, dismissedAgo, users.owner],
+        );
+      await add(oldRaised, '100 days', null);
+      await add(oldDismissed, '40 days', '35 days');
+      await add(recent, '2 days', null);
+      await add(recent, '10 days', '5 days');
+      await add(offboarding, '200 days', null);
+      await add(offboarding, '100 days', '60 days');
+      await c.query('BEGIN');
+      await c.query("SET LOCAL session_replication_role = 'replica'");
+      await c.query(`UPDATE crove_kernel.tenant SET status = 'offboarding' WHERE org_id = $1`, [offboarding]);
+      await c.query('COMMIT');
+    });
+    const due = await inContext(workerUrl, null, (c) =>
+      c.query<{ org_id: string }>(`SELECT org_id FROM crove_kernel.inbox_item_prune_due(NULL, now() - interval '30 days', now() - interval '90 days', 1000)`),
+    );
+    const ids = due.rows.map((r) => r.org_id);
+    expect(ids).toEqual(expect.arrayContaining([oldRaised, oldDismissed]));
+    expect(ids).not.toContain(recent);
+    expect(ids).not.toContain(offboarding);
+    // The first org's items are recent too.
+    expect(ids).not.toContain(orgId);
   });
 });
