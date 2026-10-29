@@ -7,14 +7,16 @@
 -- or removal of a chief accountant in an org on the accountant preset waited for every such command. With a command
 -- that then waits on the member rows the revoke holds, that is a deadlock:
 --   - a period lock or unlock (#1921) locks its caller's member row FOR SHARE after its idempotency row;
---   - the role commands lock the actor's and the member's rows FOR UPDATE, kernel.member.change_role and remove every
---     owner's row too, so an owner who locks or unlocks a month while another owner (or they themself, in another tab)
---     revokes or demotes a chief accountant is caught either way.
+--   - the role commands lock the actor's and the member's rows FOR UPDATE, and kernel.member.change_role and
+--     kernel.member.remove also lock every owner's row, so an owner who locks or unlocks a month while another owner
+--     (or they themself, in another tab) revokes or demotes a chief accountant is caught either way.
 -- One side was refused as a deadlock (RETRY). The guard now takes the row FOR NO KEY UPDATE, which KEY SHARE does not
--- conflict with. What it serializes stays serialized: two guards still wait for each other (NO KEY UPDATE conflicts
--- with itself), and a change of the org's preset is an UPDATE of the row, which takes the same mode. A command in
--- flight that only references the org cannot remove a chief accountant without the guard, so the guard has no reason
--- to wait for it. Copied with that change; the triggers are unchanged.
+-- conflict with. Two guards still wait for each other (NO KEY UPDATE conflicts with itself), and the preset switch
+-- still locks the row FOR UPDATE, which conflicts with both modes. A command in flight that only references the org
+-- cannot remove a chief accountant without the guard, so the guard has no reason to wait for it. One wait is gone: a
+-- removal no longer waits for a grant in flight, so a removal of the last chief accountant that races the grant of a
+-- new one is refused (LAST_CHIEF_ACCOUNTANT) where it used to wait and pass. Copied with that change; the triggers are
+-- unchanged.
 SET LOCAL lock_timeout = '2s';
 
 CREATE OR REPLACE FUNCTION crove_kernel.chief_accountant_keep_guard()
