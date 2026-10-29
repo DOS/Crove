@@ -267,7 +267,7 @@ suite('ledger rows naming a proposal on PostgreSQL (#1853)', () => {
     // proposal, as the member limited to the branch posts them.
     const reverseInBranch = (proposalId: string) => async (c: pg.Client) => {
       const { rows } = await c.query<{ id: string }>(
-        `SELECT crove_finance.post_journal_entry('2026-10-15'::date, 'gốc', 'test.original', $1::uuid, $2::jsonb, NULL, NULL, $3::uuid) AS id`,
+        `SELECT crove_finance.post_journal_entry('2026-10-15'::date, 'gốc', 'test.original', $1::uuid, $2::jsonb, NULL, 1, $3::uuid) AS id`,
         [randomUUID(), LINES, branch],
       );
       return c.query(`SELECT crove_finance.post_journal_entry('2026-10-15'::date, 'đảo', 'kernel.proposal', $1::uuid, $2::jsonb, $3::uuid, 1)`, [
