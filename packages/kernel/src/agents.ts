@@ -1793,7 +1793,7 @@ export const createAgentProposal = defineCommand({
       .insertInto('crove_kernel.task_comment')
       .values({ org_id: ctx.orgId, task_id: taskId, body: `Đã gửi đề xuất chờ duyệt: ${title}`.slice(0, 10000), author_type: 'system' })
       .execute();
-    await ctx.activity('kernel.proposal', proposal.id, 'proposal.created', title);
+    await ctx.activity('kernel.proposal', proposal.id, 'proposal.created', 'Tác tử AI tạo đề xuất');
     await ctx.emit('kernel.proposal.created', { proposalId: proposal.id, kind });
     return { proposalId: proposal.id, reason: null };
   },
@@ -1856,7 +1856,7 @@ export const executeAgentApproval = defineCommand({
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', proposal.id)
       .execute();
-    await ctx.activity('kernel.proposal', proposal.id, 'proposal.approved', `Tác tử AI đã duyệt: ${proposal.title}`);
+    await ctx.activity('kernel.proposal', proposal.id, 'proposal.approved', 'Tác tử AI đã duyệt');
     return { approved: true, reason: null };
   },
 });

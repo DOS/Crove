@@ -333,7 +333,7 @@ export const setVendorDefaultAccount = defineCommand({
       'kernel.party',
       partyId,
       'vendor.default_account',
-      accountCode ? `Tài khoản mặc định của ${party.name}: ${accountCode}` : `Bỏ tài khoản mặc định của ${party.name}`,
+      accountCode ? `Đặt tài khoản mặc định: ${accountCode}` : 'Bỏ tài khoản mặc định',
     );
     return { partyId, accountCode };
   },

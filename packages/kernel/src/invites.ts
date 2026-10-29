@@ -328,8 +328,8 @@ export function inviteCreateCommand(limits: InviteLimits = DEFAULT_INVITE_LIMITS
         invite.id,
         'invite.created',
         legalEntityIds
-          ? `Mời ${email} tham gia với vai trò ${ROLE_LABEL[input.role]}, làm kế toán bên ngoài cho ${legalEntityIds.length} pháp nhân`
-          : `Mời ${email} tham gia với vai trò ${ROLE_LABEL[input.role]}`,
+          ? `Mời một người tham gia với vai trò ${ROLE_LABEL[input.role]}, làm kế toán bên ngoài cho ${legalEntityIds.length} pháp nhân`
+          : `Mời một người tham gia với vai trò ${ROLE_LABEL[input.role]}`,
       );
       return {
         inviteId: invite.id,
@@ -378,7 +378,7 @@ export const revokeInvite = defineCommand({
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', invite.id)
       .execute();
-    await ctx.activity('kernel.member_invite', invite.id, 'invite.revoked', `Thu hồi lời mời của ${invite.email}`);
+    await ctx.activity('kernel.member_invite', invite.id, 'invite.revoked', 'Thu hồi lời mời');
     return { ok: true as const };
   },
 });
@@ -453,8 +453,8 @@ export const acceptInvite = defineCommand({
       userId,
       'member.joined',
       alreadyMember
-        ? `${invite.email} chấp nhận lời mời (đã là thành viên, giữ vai trò ${ROLE_LABEL[membership.role]})`
-        : `${invite.email} chấp nhận lời mời và tham gia với vai trò ${ROLE_LABEL[membership.role]}`,
+        ? `Chấp nhận lời mời (đã là thành viên, giữ vai trò ${ROLE_LABEL[membership.role]})`
+        : `Chấp nhận lời mời và tham gia với vai trò ${ROLE_LABEL[membership.role]}`,
     );
     return { orgId: tenant.org_id, slug: tenant.slug, name: tenant.name, role: membership.role };
   },

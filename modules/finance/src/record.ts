@@ -29,7 +29,7 @@ import { postJournalEntry } from './ledger.ts';
 import { resolveLegalEntity } from './legal-entity.ts';
 import { learnFromApproval } from './categorization.ts';
 import { postReversal } from './reversal.ts';
-import { journalMemo } from './memo.ts';
+import { invoiceLabel, journalMemo } from './memo.ts';
 import { isOwnTaxCode } from './own-tax-code.ts';
 import { databaseToday, dateLabel, liveOpeningDate } from './period-lock.ts';
 import { BOOK_CURRENCY, checkRate, convertInvoice, foreignNote, toDong } from './domain/foreign-currency.ts';
@@ -87,7 +87,7 @@ export async function upsertParty(ctx: CommandContext, ref: PurchaseProposal['se
       verified_by: ctx.actor.type === 'user' ? ctx.actor.userId : null,
     })
     .execute();
-  await ctx.activity('kernel.party', created.id, 'party.created', direction === 'sale' ? `Thêm khách hàng ${name}` : `Thêm nhà cung cấp ${name}`);
+  await ctx.activity('kernel.party', created.id, 'party.created', direction === 'sale' ? 'Thêm khách hàng' : 'Thêm nhà cung cấp');
   return created.id;
 }
 
@@ -604,7 +604,7 @@ export const recordPurchase = defineCommand({
     });
     const event = sale ? 'sale.recorded' : 'purchase.recorded';
     const correction = related ? ` (${related.kind === 'replacement' ? 'thay thế' : 'điều chỉnh'} hóa đơn ${related.series}/${related.number})` : '';
-    const recorded = replaces ? `Ghi sổ lại ${memo} (thay chứng từ đã hủy)` : `Ghi sổ ${memo}${correction}`;
+    const recorded = replaces ? `Ghi sổ lại ${invoiceLabel(payload)} (thay chứng từ đã hủy)` : `Ghi sổ ${invoiceLabel(payload)}${correction}`;
     await ctx.activity(
       'finance.purchase_document',
       document.id,

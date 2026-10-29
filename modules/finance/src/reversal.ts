@@ -216,11 +216,11 @@ export async function postReversal(
     // The event keeps its name for sales too (finance.purchase_document holds both directions) and says which it was.
     const direction = (await documentDirection(ctx, entry)) ?? 'purchase';
     const voided = direction === 'sale' ? 'Hủy chứng từ bán do đảo bút toán' : 'Hủy chứng từ mua do đảo bút toán';
-    await ctx.activity('finance.purchase_document', voidedDocumentId, direction === 'sale' ? 'sale.voided' : 'purchase.voided', `${voided}: ${entry.description}`);
+    await ctx.activity('finance.purchase_document', voidedDocumentId, direction === 'sale' ? 'sale.voided' : 'purchase.voided', voided);
     await ctx.emit('finance.purchase.voided', { documentId: voidedDocumentId, reversalEntryId: journalEntryId, direction });
   }
   ctx.audit({ reversed_entry_id: entry.id, reversal_entry_id: journalEntryId, voided_document_id: voidedDocumentId });
-  await ctx.activity('finance.journal_entry', entry.id, 'journal_entry.reversed', `Đảo bút toán: ${entry.description}`);
+  await ctx.activity('finance.journal_entry', entry.id, 'journal_entry.reversed', 'Đảo bút toán');
   await ctx.emit('finance.journal_entry.reversed', { entryId: entry.id, reversalEntryId: journalEntryId });
   return { journalEntryId, reversedEntryId: entry.id, ...(voidedDocumentId ? { voidedDocumentId } : {}) };
 }

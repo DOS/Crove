@@ -226,7 +226,7 @@ export const recordVoucher = defineCommand({
       })),
     });
     ctx.audit({ voucher_type: payload.type, number: voucher.number, amount: total, lines: payload.lines.length, legal_entity_id: legalEntityId });
-    await ctx.activity('finance.cash_voucher', voucher.id, 'voucher.recorded', `Ghi sổ ${VOUCHER_LABELS[payload.type].toLowerCase()} ${code}: ${payload.description}`);
+    await ctx.activity('finance.cash_voucher', voucher.id, 'voucher.recorded', `Ghi sổ ${VOUCHER_LABELS[payload.type].toLowerCase()} ${code}`);
     await ctx.emit('finance.voucher.recorded', { voucherId: voucher.id, journalEntryId, type: payload.type, number: voucher.number });
     return { voucherId: voucher.id, journalEntryId, code };
   },

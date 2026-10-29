@@ -121,7 +121,7 @@ export const updateParty = defineCommand({
       }
     }
     ctx.audit({ partyId: before.id, changed: changed.map((key) => (key === 'tax_code' ? 'taxCode' : key)), previous, next: values });
-    await ctx.activity('kernel.party', before.id, 'party.updated', before.name === name ? `Sửa thông tin của ${name}` : `Đổi tên ${before.name} thành ${name}`);
+    await ctx.activity('kernel.party', before.id, 'party.updated', before.name === name ? 'Sửa thông tin' : 'Đổi tên');
     return { partyId: before.id, version: updated.version };
   },
 });
@@ -176,7 +176,7 @@ export const markDuplicate = defineCommand({
       .where('id', '=', partyId)
       .execute();
     ctx.audit({ partyId, keepId, name: auditValue(PARTY, 'name', party.name), keepName: auditValue(PARTY, 'name', keep.name) });
-    await ctx.activity('kernel.party', partyId, 'party.marked_duplicate', `Gộp ${party.name} vào ${keep.name}`);
+    await ctx.activity('kernel.party', partyId, 'party.marked_duplicate', 'Gộp vào một đối tác trùng');
     return { partyId, keepId };
   },
 });
@@ -210,7 +210,7 @@ export const unmarkDuplicate = defineCommand({
       .where('id', '=', partyId)
       .execute();
     ctx.audit({ partyId, keepId: party.duplicate_of, name: auditValue(PARTY, 'name', party.name), keepName: auditValue(PARTY, 'name', keep.name) });
-    await ctx.activity('kernel.party', partyId, 'party.unmarked_duplicate', `Tách ${party.name} khỏi ${keep.name}`);
+    await ctx.activity('kernel.party', partyId, 'party.unmarked_duplicate', 'Tách khỏi đối tác đã gộp vào');
     return { partyId };
   },
 });
@@ -381,7 +381,7 @@ export const linkPartyEntity = defineCommand({
       .executeTakeFirst();
     ctx.audit({ partyId: party.id, legalEntityId: entity.id, already: added === undefined });
     // The row names the entity: it is read only where that entity is (#1725).
-    if (added) await ctx.activity('kernel.party', party.id, 'party.entity_linked', `Gắn ${party.name} cho pháp nhân ${entity.name}`, { legalEntityId: entity.id });
+    if (added) await ctx.activity('kernel.party', party.id, 'party.entity_linked', 'Gắn cho một pháp nhân', { legalEntityId: entity.id });
     return { partyId: party.id, legalEntityId: entity.id, linked: true as const };
   },
 });
@@ -404,7 +404,7 @@ export const unlinkPartyEntity = defineCommand({
       .executeTakeFirst();
     const found = Number(removed.numDeletedRows) > 0;
     ctx.audit({ partyId: party.id, legalEntityId: entity.id, found });
-    if (found) await ctx.activity('kernel.party', party.id, 'party.entity_unlinked', `Bỏ gắn ${party.name} khỏi pháp nhân ${entity.name}`, { legalEntityId: entity.id });
+    if (found) await ctx.activity('kernel.party', party.id, 'party.entity_unlinked', 'Bỏ gắn khỏi một pháp nhân', { legalEntityId: entity.id });
     return { partyId: party.id, legalEntityId: entity.id, linked: false as const };
   },
 });

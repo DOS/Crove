@@ -154,7 +154,7 @@ export async function postJournalVoucher(ctx: CommandContext, payload: JournalVo
     })),
   });
   ctx.audit({ number: voucher.number, total, lines: payload.lines.length, legal_entity_id: legalEntityId, ...(closingYear ? { closingYear } : {}) });
-  await ctx.activity('finance.journal_voucher', voucher.id, 'journal_voucher.recorded', `Ghi sổ ${JOURNAL_VOUCHER_LABEL.toLowerCase()} ${code}: ${payload.description}`);
+  await ctx.activity('finance.journal_voucher', voucher.id, 'journal_voucher.recorded', `Ghi sổ ${JOURNAL_VOUCHER_LABEL.toLowerCase()} ${code}`);
   await ctx.emit('finance.journal_voucher.recorded', { voucherId: voucher.id, journalEntryId, number: voucher.number });
   return { voucherId: voucher.id, journalEntryId, code };
 }
