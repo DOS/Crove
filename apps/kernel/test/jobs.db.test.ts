@@ -1,5 +1,7 @@
 // The crove_jobs schema comes only from committed migrations (External-tenant gate T6). Set CROVE_TEST_ADMIN_URL
 // to a superuser URL; each test creates and drops its own database.
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { PgBoss } from 'pg-boss';
@@ -42,6 +44,51 @@ suite('crove_jobs from committed migrations', () => {
   afterAll(async () => {
     if (!ADMIN) return;
     for (const name of created) await withClient(ADMIN, (admin) => admin.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`));
+  });
+
+  // #1780: a job created before its queue had a dead letter queue carries none (pg-boss stamps it at creation). The
+  // backfill migration stamps the waiting, retrying and running ones, and leaves finished jobs and the dead letter
+  // queue's own jobs alone; run again, it changes nothing.
+  it('stamps the dead letter queue on jobs queued before it, and only on unfinished ones (#1780)', async () => {
+    const adminUrl = await createDatabase();
+    await migrate({ adminUrl, dir: MIGRATIONS });
+    const backfill = readFileSync(join(MIGRATIONS, '20261104210000_crove_jobs_dead_letter_backfill.sql'), 'utf8');
+    await withClient(adminUrl, async (admin) => {
+      const add = async (name: string, state: string) =>
+        (
+          await admin.query<{ id: string }>(`INSERT INTO ${JOB_SCHEMA}.job (name, data, state, dead_letter) VALUES ($1, '{}', $2::${JOB_SCHEMA}.job_state, NULL) RETURNING id`, [
+            name,
+            state,
+          ])
+        ).rows[0]?.id as string;
+      const jobs = {
+        created: await add(QUEUES.extract, 'created'),
+        retry: await add(QUEUES.orgExport, 'retry'),
+        active: await add(QUEUES.agentWake, 'active'),
+        completed: await add(QUEUES.extract, 'completed'),
+        failed: await add(QUEUES.extract, 'failed'),
+        dlq: await add(QUEUES.deadLetter, 'created'),
+      };
+      const stamped = async () =>
+        Object.fromEntries(
+          await Promise.all(
+            Object.entries(jobs).map(async ([state, id]) => [state, (await admin.query<{ d: string | null }>(`SELECT dead_letter AS d FROM ${JOB_SCHEMA}.job WHERE id = $1`, [id])).rows[0]?.d ?? null]),
+          ),
+        );
+      for (let run = 0; run < 2; run++) {
+        await admin.query('BEGIN');
+        await admin.query(backfill);
+        await admin.query('COMMIT');
+        expect(await stamped(), `run ${run + 1}`).toEqual({
+          created: QUEUES.deadLetter,
+          retry: QUEUES.deadLetter,
+          active: QUEUES.deadLetter,
+          completed: null,
+          failed: null,
+          dlq: null,
+        });
+      }
+    });
   });
 
   it('installs the expected version and queues; only the worker may use the schema', async () => {
