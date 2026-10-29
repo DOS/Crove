@@ -8,6 +8,7 @@ import { chartAccounts, type OrgChartAccount } from './accounts.ts';
 import { OPEN_REVERSAL_STATUSES, REVERSAL_KIND } from './reversal.ts';
 import { VOUCHER_SOURCE } from './domain/cash-voucher.ts';
 import { resolveLegalEntity } from './legal-entity.ts';
+import { latestRevision } from './source-entry.ts';
 import type { PurchaseVoucher, SalesVoucher } from './misa.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
@@ -124,7 +125,7 @@ async function loadDocuments(ctx: QueryContext, filter: { legalEntityId: string;
     .selectFrom('crove_finance.purchase_document as d')
     .innerJoin('crove_kernel.party as p', (join) => join.onRef('p.org_id', '=', 'd.org_id').onRef('p.id', '=', 'd.party_id'))
     .leftJoin('crove_finance.journal_entry as j', (join) =>
-      join.onRef('j.org_id', '=', 'd.org_id').onRef('j.source_id', '=', 'd.id').on('j.source_type', '=', 'finance.purchase_document'),
+      join.onRef('j.org_id', '=', 'd.org_id').onRef('j.source_id', '=', 'd.id').on('j.source_type', '=', 'finance.purchase_document').on(latestRevision('j')),
     )
     .leftJoin('crove_finance.purchase_document_void as v', (join) => join.onRef('v.org_id', '=', 'd.org_id').onRef('v.document_id', '=', 'd.id'))
     .select([
@@ -458,7 +459,7 @@ async function loadVouchers(
   let documents = ctx.trx
     .selectFrom('crove_finance.journal_entry as j')
     .innerJoin('crove_finance.purchase_document as d', (join) =>
-      join.onRef('d.org_id', '=', 'j.org_id').onRef('d.id', '=', 'j.source_id').on('j.source_type', '=', 'finance.purchase_document'),
+      join.onRef('d.org_id', '=', 'j.org_id').onRef('d.id', '=', 'j.source_id').on('j.source_type', '=', 'finance.purchase_document').on(latestRevision('j')),
     )
     .innerJoin('crove_kernel.party as p', (join) => join.onRef('p.org_id', '=', 'd.org_id').onRef('p.id', '=', 'd.party_id'))
     .leftJoin('crove_finance.purchase_document_void as v', (join) => join.onRef('v.org_id', '=', 'd.org_id').onRef('v.document_id', '=', 'd.id'))

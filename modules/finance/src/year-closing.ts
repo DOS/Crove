@@ -23,6 +23,7 @@ import { JOURNAL_VOUCHER_SOURCE, journalVoucherTitle, journalVoucherTotal } from
 import { closingDescription, closingLines, type AccountBalance, type ClosingLine } from './domain/year-closing.ts';
 import { postJournalVoucher } from './journal-voucher.ts';
 import { resolveLegalEntity } from './legal-entity.ts';
+import { latestRevision } from './source-entry.ts';
 import { databaseToday, dateLabel, periodLockedThrough } from './period-lock.ts';
 
 const REQUESTERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
@@ -52,7 +53,7 @@ export async function isClosed(ctx: QueryContext, year: number, legalEntityId: s
   const row = await ctx.trx
     .selectFrom('crove_finance.journal_voucher as v')
     .innerJoin('crove_finance.journal_entry as e', (join) =>
-      join.onRef('e.org_id', '=', 'v.org_id').onRef('e.source_id', '=', 'v.id').on('e.source_type', '=', JOURNAL_VOUCHER_SOURCE).on('e.reverses_entry_id', 'is', null),
+      join.onRef('e.org_id', '=', 'v.org_id').onRef('e.source_id', '=', 'v.id').on('e.source_type', '=', JOURNAL_VOUCHER_SOURCE).on('e.reverses_entry_id', 'is', null).on(latestRevision('e')),
     )
     .select('v.id')
     .where('v.org_id', '=', ctx.orgId)
