@@ -200,6 +200,28 @@ describe('migration lint: the schema of the module', () => {
     expect(rules("SELECT 'x\n-- migration-lint: cross-module reason';\nALTER TABLE crove_kernel.tenant ADD COLUMN IF NOT EXISTS x text;")).toEqual(['3 module-schema']);
   });
 
+  // #1227: the EXECUTE touches nothing itself, so its waiver goes to the first statement of its command string.
+  it('lets a waiver before an EXECUTE cover the first statement of its command string, and only that one', () => {
+    const inDo = (body: string) => `DO $$ BEGIN\n${body}\nEND $$;`;
+    for (const body of [
+      "  -- migration-lint: cross-module the purge clears the kernel row too\n  EXECUTE 'UPDATE crove_kernel.tenant SET x = 1';",
+      "  -- migration-lint: cross-module the purge clears the kernel rows too\n  EXECUTE format('UPDATE crove_kernel.%I SET x = 1', 'tenant');",
+      "  -- migration-lint: cross-module the command string starts on the next line\n  EXECUTE\n    'DELETE FROM crove_kernel.tenant WHERE false';",
+    ]) {
+      const waivers: { file: string; line: number; schemas: string[]; reason: string }[] = [];
+      expect(lintMigration(FILE, inDo(body), { waivers }), body).toEqual([]);
+      expect(waivers.map((w) => w.schemas), body).toEqual([['crove_kernel']]);
+    }
+    // Without a reason it is refused, as everywhere.
+    const noReason = lint(inDo("  -- migration-lint: cross-module\n  EXECUTE 'UPDATE crove_kernel.tenant SET x = 1';"));
+    expect(noReason.map((f) => `${f.line} ${f.rule}`)).toEqual(['3 module-schema']);
+    expect(noReason[0]!.message).toContain('has no reason');
+    // A second statement of the same string has no waiver.
+    expect(rules(inDo("  -- migration-lint: cross-module reason\n  EXECUTE 'UPDATE crove_kernel.tenant SET x = 1; DELETE FROM crove_kernel.party';"))).toEqual(['3 module-schema']);
+    // Nor does the next statement after the EXECUTE.
+    expect(rules(inDo("  -- migration-lint: cross-module reason\n  EXECUTE 'SELECT 1'; DELETE FROM crove_kernel.party;"))).toEqual(['3 module-schema']);
+  });
+
   it('refuses unqualified objects, which land wherever search_path points', () => {
     expect(rules('CREATE TABLE IF NOT EXISTS sample (id int);')).toEqual(['1 module-schema']);
     expect(rules('ALTER TABLE ONLY sample ADD COLUMN x int;')).toEqual(['1 module-schema']);
