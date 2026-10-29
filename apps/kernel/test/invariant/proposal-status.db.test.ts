@@ -307,8 +307,10 @@ suite('proposal status transitions on PostgreSQL (#1707)', () => {
       });
       expect(undone, `${writer.name}: after a rolled-back run`).toMatchObject({ ok: false, ...REFUSED });
     }
-    // One statement that writes the row first (a data-modifying CTE the update reads) is two statements in one: the
-    // guard runs after the row is in, so the ok row passes and a failed one is refused (#1840).
+    // One statement that writes the row first is two statements in one (#1840): the update reads the CTE, so its insert
+    // runs first, and proposal_status_guard is VOLATILE, so its expression takes a fresh snapshot (after a command
+    // counter increment) that the STABLE proposal_execution_recorded reads. The ok row passes, a failed one is refused.
+    // Dropping the EXISTS or marking the guard STABLE flips the first case.
     const inOneStatement = (outcome: string) => (c: pg.Client) =>
       c.query(
         `WITH r AS (
@@ -318,8 +320,7 @@ suite('proposal status transitions on PostgreSQL (#1707)', () => {
         [orgId, outcome, approved],
       );
     for (const writer of writers()) {
-      const ok = await as(writer, inOneStatement('ok'));
-      expect(ok.ok && ok.value.rowCount, `${writer.name}: one statement, ok row`).toBe(1);
+      await expect(as(writer, inOneStatement('ok')), `${writer.name}: one statement, ok row`).resolves.toMatchObject({ ok: true, value: { rowCount: 1 } });
       await expect(as(writer, inOneStatement('failed')), `${writer.name}: one statement, failed row`).resolves.toMatchObject({ ok: false, ...REFUSED });
     }
     // The check answers for the org of the context only: the same row, asked about from another org, is not there.
