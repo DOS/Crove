@@ -3,10 +3,13 @@
 // re-applicable. Set CROVE_TEST_ADMIN_URL to a superuser URL; the test creates and drops its own database.
 // Part of the invariant suite: CI runs this file from the base branch on protected-path PRs (AGENTS.md).
 import { createHash } from 'node:crypto';
+import { cp, mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { hardeningViolations, migrate, readMigrations } from '../../src/migrate.ts';
+import { applyConcurrentIndexes, CONCURRENT_INDEX_MARKER, concurrentIndexes, hardeningViolations, migrate, readMigrations } from '../../src/migrate.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -306,6 +309,12 @@ suite('migrations with a runner that is not a superuser', () => {
       expect(rows[0]?.rolsuper).toBe(false);
       const before = await catalogFingerprint(runner);
       for (const file of files) {
+        // A file that builds indexes concurrently runs outside a transaction, as the runner applies it (#1791).
+        const indexes = concurrentIndexes(file.name, file.sql);
+        if (indexes !== null) {
+          await applyConcurrentIndexes(runner, file.name, indexes);
+          continue;
+        }
         await runner.query('BEGIN');
         try {
           await runner.query(file.sql);
@@ -591,5 +600,108 @@ suite('migrations with a runner that is not a superuser', () => {
     } finally {
       await withClient(ADMIN as string, (admin) => admin.query(`DROP DATABASE IF EXISTS ${other} WITH (FORCE)`));
     }
+  });
+
+  // The repository's migrations plus `extra` files, in a directory of their own.
+  async function withExtraMigrations(extra: Record<string, string>): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), 'crove-migrate-1791-'));
+    await cp(MIGRATIONS, dir, { recursive: true });
+    for (const [name, sql] of Object.entries(extra)) await writeFile(join(dir, name), sql);
+    return dir;
+  }
+
+  // #1791: a marked file builds its index outside a transaction, as this runner (not a superuser), and a write to the
+  // hot table goes through while the build runs. The build waits out a transaction left open on purpose; meanwhile an
+  // audit_event insert gets its lock at once (a plain CREATE INDEX would hold a SHARE lock for the whole build).
+  it('builds an index on audit_event concurrently while an insert goes through (#1791)', async () => {
+    const file = '29990101000000_crove_kernel_concurrent_index_test.sql';
+    const dir = await withExtraMigrations({
+      [file]: `-- An index on a hot table, built without blocking writes.\n${CONCURRENT_INDEX_MARKER}\n\nCREATE INDEX CONCURRENTLY IF NOT EXISTS audit_event_t1791_idx ON crove_kernel.audit_event (org_id, command);\n`,
+    });
+    const db = adminUrlFor(dbName);
+    await withClient(db, async (blocker) => {
+      await blocker.query('BEGIN');
+      await blocker.query('SELECT pg_catalog.txid_current()');
+      const run = migrate({ adminUrl: runnerUrl, dir });
+      run.catch(() => {});
+      await withClient(db, async (watch) => {
+        for (let i = 0; ; i++) {
+          const { rows } = await watch.query(
+            `SELECT 1 FROM pg_catalog.pg_stat_activity
+             WHERE application_name = 'crove-migrate' AND query LIKE 'CREATE INDEX CONCURRENTLY%' AND wait_event_type = 'Lock'`,
+          );
+          if (rows.length > 0) break;
+          if (i > 200) throw new Error('the concurrent build never started waiting');
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+      });
+      await withClient(db, async (writer) => {
+        await writer.query("SET lock_timeout = '3s'");
+        await writer.query('BEGIN');
+        // Triggers and foreign keys off: the row only has to reach the table, not pass the audit rules.
+        await writer.query('SET LOCAL session_replication_role = replica');
+        await writer.query(
+          `INSERT INTO crove_kernel.audit_event (org_id, actor_type, command, command_id, outcome, input_sha256)
+           VALUES (gen_random_uuid(), 'system', 't1791', gen_random_uuid(), 'ok', 'x')`,
+        );
+        await writer.query('ROLLBACK');
+      });
+      await blocker.query('COMMIT');
+      expect(await run).toEqual([file]);
+    });
+    await withClient(runnerUrl, async (runner) => {
+      const { rows } = await runner.query<{ valid: boolean }>(
+        "SELECT i.indisvalid AND i.indisready AS valid FROM pg_index i WHERE i.indexrelid = 'crove_kernel.audit_event_t1791_idx'::regclass",
+      );
+      expect(rows).toEqual([{ valid: true }]);
+      expect((await runner.query('SELECT 1 FROM crove_meta.schema_migrations WHERE name = $1', [file])).rowCount).toBe(1);
+    });
+  });
+
+  it('records nothing when a build fails, and drops the INVALID index a failed build left before the retry (#1791)', async () => {
+    const file = '29990102000000_crove_kernel_concurrent_index_retry.sql';
+    await withClient(runnerUrl, async (runner) => {
+      await runner.query('CREATE TABLE crove_kernel.t1791 (id int, k int)');
+      await runner.query('INSERT INTO crove_kernel.t1791 VALUES (1, 1), (2, 1)');
+    });
+    const dir = await withExtraMigrations({
+      [file]: `${CONCURRENT_INDEX_MARKER}\nCREATE INDEX CONCURRENTLY IF NOT EXISTS t1791_id_idx ON crove_kernel.t1791 (id);\nCREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS t1791_k_key ON crove_kernel.t1791 (k);\n`,
+    });
+    const indexes = () =>
+      withClient(runnerUrl, async (runner) =>
+        (
+          await runner.query<{ name: string; valid: boolean }>(
+            `SELECT c.relname AS name, i.indisvalid AS valid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+             WHERE i.indrelid = 'crove_kernel.t1791'::regclass ORDER BY 1`,
+          )
+        ).rows,
+      );
+    const recorded = () =>
+      withClient(runnerUrl, async (runner) => (await runner.query('SELECT 1 FROM crove_meta.schema_migrations WHERE name = $1', [file])).rowCount);
+
+    // The unique build fails on the duplicate: the first index stays, the failed one leaves nothing, the file is not
+    // recorded.
+    await expect(migrate({ adminUrl: runnerUrl, dir })).rejects.toThrow(/failed building crove_kernel\.t1791_k_key/);
+    expect(await indexes()).toEqual([{ name: 't1791_id_idx', valid: true }]);
+    expect(await recorded()).toBe(0);
+
+    // A build that failed outside the runner (a killed deploy) leaves an INVALID index behind.
+    await withClient(runnerUrl, (runner) => runner.query('CREATE UNIQUE INDEX CONCURRENTLY t1791_k_key ON crove_kernel.t1791 (k)').catch(() => {}));
+    expect(await indexes()).toEqual([
+      { name: 't1791_id_idx', valid: true },
+      { name: 't1791_k_key', valid: false },
+    ]);
+
+    // Once the data allows it, the retry drops the INVALID index, builds it again and records the file once.
+    await withClient(runnerUrl, (runner) => runner.query('DELETE FROM crove_kernel.t1791 WHERE id = 2'));
+    const log: string[] = [];
+    expect(await migrate({ adminUrl: runnerUrl, dir, log: (m) => log.push(m) })).toEqual([file]);
+    expect(log).toContain('dropping the INVALID index crove_kernel.t1791_k_key a failed build left');
+    expect(await indexes()).toEqual([
+      { name: 't1791_id_idx', valid: true },
+      { name: 't1791_k_key', valid: true },
+    ]);
+    expect(await recorded()).toBe(1);
+    expect(await migrate({ adminUrl: runnerUrl, dir })).toEqual([]);
   });
 });

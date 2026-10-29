@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { readMigrations } from '../src/migrate.ts';
+import { CONCURRENT_INDEX_MARKER, concurrentIndexes, readMigrations } from '../src/migrate.ts';
 
 describe('migration files', () => {
   it('hash the same with CRLF and LF line endings', async () => {
@@ -34,6 +34,47 @@ describe('migration files', () => {
     const dir = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
     const files = await readMigrations(dir);
     expect(new Set(files.map((f) => f.version)).size).toBe(files.length);
+  });
+
+  it('reads a file marked to build indexes concurrently, and refuses anything else in it (#1791)', () => {
+    const marked = (body: string) => `-- Indexes on a hot table.\n${CONCURRENT_INDEX_MARKER}\n\n${body}`;
+    expect(concurrentIndexes('a.sql', 'CREATE INDEX IF NOT EXISTS i ON crove_kernel.t (a);')).toBeNull();
+    // The marker counts only among the leading comment lines.
+    expect(concurrentIndexes('a.sql', `SELECT 1;\n${CONCURRENT_INDEX_MARKER}\n`)).toBeNull();
+    expect(
+      concurrentIndexes(
+        'a.sql',
+        marked(
+          "CREATE INDEX CONCURRENTLY IF NOT EXISTS Audit_Event_X_idx ON crove_kernel.audit_event (org_id, occurred_at DESC);\n" +
+            "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS outbox_y_idx ON crove_kernel.outbox_event USING btree (org_id, (payload->>'k')) INCLUDE (id)\n  WHERE status = 'pending';\n",
+        ),
+      ),
+    ).toEqual([
+      { sql: 'CREATE INDEX CONCURRENTLY IF NOT EXISTS Audit_Event_X_idx ON crove_kernel.audit_event (org_id, occurred_at DESC)', name: 'audit_event_x_idx', schema: 'crove_kernel', table: 'audit_event' },
+      {
+        sql: "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS outbox_y_idx ON crove_kernel.outbox_event USING btree (org_id, (payload->>'k')) INCLUDE (id)\n  WHERE status = 'pending'",
+        name: 'outbox_y_idx',
+        schema: 'crove_kernel',
+        table: 'outbox_event',
+      },
+    ]);
+    for (const body of [
+      'CREATE INDEX CONCURRENTLY IF NOT EXISTS i ON crove_kernel.t (a);\nDROP TABLE crove_kernel.t;',
+      'CREATE INDEX CONCURRENTLY i ON crove_kernel.t (a);',
+      'CREATE INDEX IF NOT EXISTS i ON crove_kernel.t (a);',
+      'CREATE INDEX CONCURRENTLY IF NOT EXISTS i ON t (a);',
+      'CREATE INDEX CONCURRENTLY IF NOT EXISTS ON crove_kernel.t (a);',
+      'BEGIN;\nCREATE INDEX CONCURRENTLY IF NOT EXISTS i ON crove_kernel.t (a);\nCOMMIT;',
+      'CREATE INDEX CONCURRENTLY IF NOT EXISTS i ON crove_kernel.t (a);\n-- a comment between statements\n',
+      'CREATE INDEX CONCURRENTLY IF NOT EXISTS i ON crove_kernel.t (a) /* x */;',
+      'CREATE INDEX CONCURRENTLY IF NOT EXISTS i ON crove_kernel.t ((f($$x$$)));',
+      'CREATE INDEX CONCURRENTLY IF NOT EXISTS "I" ON crove_kernel.t (a);',
+      "CREATE INDEX CONCURRENTLY IF NOT EXISTS i ON crove_kernel.t (a) WHERE b = 'x;DROP TABLE crove_kernel.t;--';",
+      "CREATE INDEX CONCURRENTLY IF NOT EXISTS i ON crove_kernel.t (a) WHERE b = E'\\'';",
+      '',
+    ]) {
+      expect(() => concurrentIndexes('a.sql', marked(body)), body).toThrow(/marked -- crove:concurrent-index but/);
+    }
   });
 
   it('the repository migrations are not copies of each other', async () => {

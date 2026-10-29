@@ -1,5 +1,6 @@
-// Built-in migration runner: applies supabase/migrations/*.sql in order, one transaction per file,
-// recording a ledger in crove_meta.schema_migrations. Works on any PostgreSQL 17; no Supabase CLI.
+// Built-in migration runner: applies supabase/migrations/*.sql in order, one transaction per file (but a file marked to
+// build indexes concurrently, #1791), recording a ledger in crove_meta.schema_migrations. Works on any PostgreSQL 17; no
+// Supabase CLI.
 import { createHash } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -75,6 +76,20 @@ export async function migrate(options: MigrateOptions): Promise<string[]> {
         }
         continue;
       }
+      const indexes = concurrentIndexes(file.name, file.sql);
+      if (indexes !== null) {
+        log(`applying ${file.name} (index builds outside a transaction)`);
+        await applyConcurrentIndexes(client, file.name, indexes, log);
+        // Recorded only once every index is built and valid: a run that failed halfway records nothing, and the next
+        // run builds what is missing (IF NOT EXISTS) after dropping what a failed build left INVALID.
+        await client.query('INSERT INTO crove_meta.schema_migrations (version, name, sha256) VALUES ($1, $2, $3)', [
+          file.version,
+          file.name,
+          file.sha256,
+        ]);
+        applied.push(file.name);
+        continue;
+      }
       log(`applying ${file.name}`);
       await client.query('BEGIN');
       try {
@@ -117,6 +132,104 @@ export async function migrate(options: MigrateOptions): Promise<string[]> {
     await client.end();
   }
   return applied;
+}
+
+// A migration that builds indexes without blocking writes (#1791). CREATE INDEX holds a SHARE lock on the table for the
+// whole build, so every write to a hot table (audit_event, the outbox) waits; CREATE INDEX CONCURRENTLY does not, but
+// it cannot run in a transaction. A file whose leading comment lines include CONCURRENT_INDEX_MARKER is applied outside
+// one, and may hold nothing but `CREATE [UNIQUE] INDEX CONCURRENTLY IF NOT EXISTS <name> ON <schema>.<table> ...;`
+// statements, one per index, with no comment, dollar quote, quoted identifier or backslash among them: a file applied
+// statement by statement must not do anything that would leave the database half changed. The migration lint checks the
+// same shape (tools/ci/migration-lint.mjs). Each build first drops an INVALID index of the same name, which an earlier
+// build left when it failed (a unique violation, a cancel), and drops what it leaves INVALID itself when it fails.
+export const CONCURRENT_INDEX_MARKER = '-- crove:concurrent-index';
+
+export interface ConcurrentIndex {
+  sql: string;
+  schema: string;
+  name: string;
+  table: string;
+}
+
+const CONCURRENT_INDEX =
+  /^CREATE\s+(?:UNIQUE\s+)?INDEX\s+CONCURRENTLY\s+IF\s+NOT\s+EXISTS\s+([a-z_][a-z0-9_]*)\s+ON\s+([a-z_][a-z0-9_]*)\.([a-z_][a-z0-9_]*)\s*(?:USING\s+[a-z_]+\s*)?\(.*\)(?:\s+INCLUDE\s*\(.*\))?(?:\s+WHERE\s+.*)?$/is;
+
+// The index builds of a marked file, or null for an ordinary (transactional) file. Throws on a marked file that holds
+// anything else.
+export function concurrentIndexes(name: string, sql: string): ConcurrentIndex[] | null {
+  const lines = sql.split('\n');
+  let first = 0;
+  let marked = false;
+  for (; first < lines.length; first++) {
+    const line = (lines[first] ?? '').trim();
+    if (line === '') continue;
+    if (!line.startsWith('--')) break;
+    if (line === CONCURRENT_INDEX_MARKER) marked = true;
+  }
+  if (!marked) return null;
+  const refuse = (why: string) => new Error(`migration ${name} is marked ${CONCURRENT_INDEX_MARKER} but ${why}`);
+  const body = lines.slice(first).join('\n');
+  if (/--|\/\*|\$|\\|"/.test(body)) throw refuse('holds a comment, dollar quote, quoted identifier or backslash after its first statement');
+  const statements = body.split(';').map((s) => s.trim()).filter((s) => s !== '');
+  if (statements.length === 0) throw refuse('builds no index');
+  return statements.map((statement) => {
+    const match = CONCURRENT_INDEX.exec(statement);
+    // A semicolon inside a string would split a statement in two; an odd count of quotes shows it.
+    if (!match || (statement.match(/'/g)?.length ?? 0) % 2 !== 0) {
+      throw refuse(`holds a statement other than CREATE [UNIQUE] INDEX CONCURRENTLY IF NOT EXISTS <name> ON <schema>.<table>: ${statement.slice(0, 80)}`);
+    }
+    // Unquoted names fold to lower case, as PostgreSQL folds them.
+    return { sql: statement, name: (match[1] ?? '').toLowerCase(), schema: (match[2] ?? '').toLowerCase(), table: (match[3] ?? '').toLowerCase() };
+  });
+}
+
+// The index named `schema.name`: whether it is valid and ready, and its table; null when there is no such index.
+async function indexState(client: pg.ClientBase, index: ConcurrentIndex): Promise<{ valid: boolean; schema: string; table: string } | null> {
+  const { rows } = await client.query<{ valid: boolean; schema: string; table: string }>(
+    `SELECT i.indisvalid AND i.indisready AS valid, tn.nspname AS schema, t.relname AS table
+     FROM pg_catalog.pg_class c
+     JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+     JOIN pg_catalog.pg_index i ON i.indexrelid = c.oid
+     JOIN pg_catalog.pg_class t ON t.oid = i.indrelid
+     JOIN pg_catalog.pg_namespace tn ON tn.oid = t.relnamespace
+     WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind IN ('i', 'I')`,
+    [index.schema, index.name],
+  );
+  return rows[0] ?? null;
+}
+
+// Builds the indexes of a marked file, one statement at a time and outside any transaction (the client must not be in
+// one). Throws when a build fails, after dropping the INVALID index it left, or when the index it names ends up missing,
+// invalid or on another table (IF NOT EXISTS also skips when another relation has the name).
+export async function applyConcurrentIndexes(
+  client: pg.ClientBase,
+  file: string,
+  indexes: ConcurrentIndex[],
+  log: (message: string) => void = () => {},
+): Promise<void> {
+  for (const index of indexes) {
+    const qualified = `${client.escapeIdentifier(index.schema)}.${client.escapeIdentifier(index.name)}`;
+    const dropInvalid = async () => {
+      const state = await indexState(client, index);
+      if (state === null || state.valid) return;
+      log(`dropping the INVALID index ${index.schema}.${index.name} a failed build left`);
+      await client.query(`DROP INDEX CONCURRENTLY IF EXISTS ${qualified}`);
+    };
+    await dropInvalid();
+    try {
+      await client.query(index.sql);
+    } catch (error) {
+      await dropInvalid().catch(() => {});
+      throw new Error(`migration ${file} failed building ${index.schema}.${index.name}: ${(error as Error).message}`, { cause: error });
+    }
+    const built = await indexState(client, index);
+    if (built === null || !built.valid || built.schema !== index.schema || built.table !== index.table) {
+      throw new Error(
+        `migration ${file}: ${index.schema}.${index.name} is not a valid index on ${index.schema}.${index.table} after the build` +
+          (built === null ? ' (another relation may have the name)' : ''),
+      );
+    }
+  }
 }
 
 // The DDL watch (issue #1202): crove_kernel.ddl_watch() records DDL from every session except the pipeline's own,
