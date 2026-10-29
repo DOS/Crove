@@ -475,6 +475,9 @@ suite('org offboarding on PostgreSQL (#38)', () => {
       manifestGeneration: expect.stringMatching(/^s3:older-/),
       parts: older.parts.map((p) => ({ ...p, generation: expect.stringMatching(/^s3:older-/) })),
     });
+    // The owner's view lists the tables that export holds, not the one added since.
+    const view = await runtime.query<OrgExportView>('kernel.org.export.get', {}, { actor: asUser(owner.id), orgId: org.orgId });
+    expect(view.export?.tables.map((t) => t.table)).toEqual(EXPORT_TABLE_NAMES.filter((t) => t !== added));
     // A rebind is that export, but for its versions: other rows, another part or no export at all are refused.
     const current = (await workerRuntime.query<ExportRecord>('kernel.org.export.current', {}, system))!;
     const changed = { ...current, rebind: true as const, parts: current.parts.map((p, i) => (i === 0 ? { ...p, rows: p.rows + 1 } : p)) };

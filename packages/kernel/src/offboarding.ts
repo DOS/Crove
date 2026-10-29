@@ -342,11 +342,13 @@ export interface OrgExportView {
   } | null;
 }
 
+// The tables the export holds. An export stores at least one chunk per table, an empty one included, so a table with
+// none was added to EXPORT_TABLES after this export was made (#1726): it is left out, not shown as an empty table.
 function summarize(parts: readonly ExportPart[]): ExportTableSummary[] {
   return EXPORT_TABLE_NAMES.map((table) => {
     const own = parts.filter((p) => p.table === table);
     return { table, rows: own.reduce((n, p) => n + p.rows, 0), bytes: own.reduce((n, p) => n + p.bytes, 0), chunks: own.length };
-  });
+  }).filter((t) => t.chunks > 0);
 }
 
 // The detail of a kernel.org.export.record audit row (format 2 and later).
