@@ -245,6 +245,16 @@ export const legalEntityUpdate = defineCommand({
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
     const name = nameOf(input.name);
     const taxCode = taxCodeOf(input.taxCode);
+    // The default entity's change may write the tenant row (its name, #1317): the tenant row is locked first, in the
+    // order kernel.org.set_tax_code takes the two rows, so the two commands never wait on each other in a cycle.
+    // is_default never changes, so reading it before the lock is safe.
+    const isDefault = await ctx.trx
+      .selectFrom('crove_kernel.legal_entity')
+      .select('is_default')
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.legalEntityId)
+      .executeTakeFirst();
+    if (isDefault?.is_default) await ctx.trx.selectFrom('crove_kernel.tenant').select('org_id').where('org_id', '=', ctx.orgId).forNoKeyUpdate().execute();
     const before = await ctx.trx
       .selectFrom('crove_kernel.legal_entity')
       .select(COLUMNS)
