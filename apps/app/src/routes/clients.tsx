@@ -61,11 +61,12 @@ function Deadline({ deadline, slug, canChoose }: { deadline: ClientDeadline | nu
 // refusal shows next to the row it concerns.
 function TaxCalendarRow({ row, periodLabel }: { row: TaxDueRow; periodLabel: (period: string) => string }) {
   const tt = useTranslations('taxCalendar');
-  // Each legal entity marks its own dues (#1553), those the server says the user may mark there (#1917). This screen has
-  // no entity choice, so with several such entities still open it sends the user to that org's Overview, where the
-  // shell's switcher picks the entity.
+  // Each legal entity marks its own dues (#1553), where the server says the user may mark it (#1917). This screen has no
+  // entity choice: the one open entity is marked, and with several open, of which the user may mark some, it sends the
+  // user to that org's Overview, where the shell's switcher picks the entity.
   const markable = markableEntities(row);
-  const markFor = entityToMark(markable, undefined);
+  const open = entityToMark(row.openEntities, undefined);
+  const markFor = markable.some((e) => e.id === open) ? open : null;
   const done = useMutation({
     mutationFn: () =>
       clientForOrg(row.slug).org.markTaxObligation({ obligation: row.obligation, period: row.period, done: true, ...(markFor ? { legalEntityId: markFor } : {}) }),
@@ -94,7 +95,8 @@ function TaxCalendarRow({ row, periodLabel }: { row: TaxDueRow; periodLabel: (pe
             {tt('markDone')}
           </Button>
         ) : (
-          markable.length > 1 && (
+          row.openEntities.length > 1 &&
+          markable.length > 0 && (
             <Link to="/o/$slug/overview" params={{ slug: row.slug }} className="text-xs text-link hover:underline">
               {tt('openCount', { count: row.openEntities.length })}
             </Link>

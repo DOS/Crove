@@ -132,7 +132,8 @@ function AppCards({ slug, vat, vatLoaded }: { slug: string; vat: { period: strin
 function DueRow({ due, severalEntities, chosen }: { due: TaxDueView; severalEntities: boolean; chosen: string | null }) {
   const tt = useTranslations('taxCalendar');
   const periodLabel = usePeriodLabel();
-  const markFor = entityToMark(markableEntities(due), chosen);
+  const open = entityToMark(due.openEntities, chosen);
+  const markFor = markableEntities(due).some((e) => e.id === open) ? open : null;
   const markName = due.openEntities.find((e) => e.id === markFor)?.name ?? '';
   const done = useMutation({
     mutationFn: () => client.org.markTaxObligation({ obligation: due.obligation, period: due.period, done: true, ...(markFor ? { legalEntityId: markFor } : {}) }),

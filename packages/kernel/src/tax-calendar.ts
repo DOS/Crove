@@ -80,16 +80,18 @@ export async function readTaxProfile(ctx: Pick<QueryContext, 'trx' | 'orgId'>): 
 // finance installed, the VAT return's mark is finance.vat.return_mark's (rpc.ts routes it there, #1400): owners and
 // admins, and a holder of finance.vat.file org-wide or for that entity (#1508). The same rule as mayFileVat in
 // modules/finance/src/vat.ts and crove_finance.vat_return_filed_guard, through the same context functions, so a due
-// row offers the mark exactly where the server takes it. Only a user marks.
+// row offers the mark exactly where the server takes it. Only a user marks. `vat` false skips reading the permission
+// for a caller that asks about another obligation only.
 export async function markRule(
   ctx: Pick<QueryContext, 'trx' | 'actor' | 'role' | 'installed'>,
+  vat = true,
 ): Promise<(obligation: TaxObligation, legalEntityId: string) => boolean> {
   const user = ctx.actor.type === 'user';
   const marker = user && ctx.role !== null && MARKERS.includes(ctx.role);
   const filer = user && ctx.role !== null && ADMINS.includes(ctx.role);
   const viaFinance = ctx.installed('finance');
   let entities: readonly string[] = [];
-  if (user && viaFinance && !filer) {
+  if (vat && user && viaFinance && !filer) {
     const { rows } = await sql<{ entities: string[] | null }>`SELECT crove_kernel.ctx_permission_entities(${VAT_FILE_PERMISSION}) AS entities`.execute(ctx.trx);
     entities = rows[0]?.entities ?? [];
   }
@@ -202,7 +204,7 @@ async function markEntity(ctx: Pick<QueryContext, 'trx' | 'orgId'>, legalEntityI
 // either, however it is reached (rpc.ts sends the VAT return to finance.vat.return_mark, which runs this one as the
 // same user once it has checked the same right).
 async function assertMayMark(ctx: Pick<QueryContext, 'trx' | 'actor' | 'role' | 'installed'>, obligation: TaxObligation, legalEntityId: string): Promise<void> {
-  if (!(await markRule(ctx))(obligation, legalEntityId)) {
+  if (!(await markRule(ctx, obligation === 'vat_return'))(obligation, legalEntityId)) {
     throw new DomainError('FORBIDDEN', 403, `Bạn không có quyền đánh dấu ${TAX_OBLIGATION_LABELS[obligation]} cho pháp nhân này`);
   }
 }
