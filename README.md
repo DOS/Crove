@@ -33,7 +33,7 @@ The defaults are for local use. Before anyone else can reach your instance, copy
 
 | Feature | Variables |
 |---|---|
-| Modules | `CROVE_MODULES`: comma-separated modules to run, such as `finance` (default: every module; `kernel` is always on). A module left out registers no commands, routes, jobs or menus; migrations still apply to every schema. Give the `api` and `worker` roles the same value (ADR-0031) |
+| Modules | `CROVE_MODULES`: comma-separated modules to run, such as `finance` (default: every module; `kernel` is always on). A module left out registers no commands, routes, jobs or menus; migrations still apply to every schema. Give the `api` and `worker` roles and the prober the same value (ADR-0031; the prober counts those modules' queued jobs, #1894) |
 | AI for PDFs and photos | `AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL` (any OpenAI-compatible endpoint: OpenAI, Ollama, vLLM, ...) |
 | Product name users see | `BRAND_NAME`: the name the app, the browser tab title, mails (sender name and texts), the authenticator app entry, the status and bio pages, the calendar feed, chat alerts, Zalo articles without an author, exported files and their names show, 1 to 40 characters of letters, digits, spaces and `. , & ' + _ ! ( ) -`. Unset keeps "Ludy"; any other character stops the boot. Code, schemas, logs and the AGPL source notice keep "Crove". Browsers read it from `/api/config` |
 | Feedback and support link | `SUPPORT_URL`: where the app's "Góp ý / Hỗ trợ" link goes, an `https:` page (a chat group, a help desk) or a `mailto:` address. Unset hides the link; any other scheme stops the boot. Browsers read it from `/api/config` |

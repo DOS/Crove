@@ -22,8 +22,9 @@ export const AVAILABLE_MODULES = ['kernel', 'finance', 'social', 'crm', 'notes']
 export type ModuleId = (typeof AVAILABLE_MODULES)[number];
 
 // CROVE_MODULES: a comma-separated list such as `finance`. Unset or empty enables every available module; kernel is
-// added when missing. An unknown name stops the boot, so a typo never silently turns a module off.
-const modules = optional.transform((value, ctx): readonly ModuleId[] => {
+// added when missing. An unknown name stops the boot, so a typo never silently turns a module off. The prober reads it
+// too, as the modules the deployment runs (#1894).
+export const modulesSetting = optional.transform((value, ctx): readonly ModuleId[] => {
   if (value === undefined) return AVAILABLE_MODULES;
   const names = value
     .split(',')
@@ -48,7 +49,7 @@ const schema = z.object({
   PUBLIC_URL: z.string().default('http://localhost:8080'),
   // Which modules' commands, queries, jobs, routes and menus this deployment registers. Migrations still apply to
   // every schema (one linear ledger); per-org access is entitlements (Decision 10), not this setting.
-  CROVE_MODULES: modules,
+  CROVE_MODULES: modulesSetting,
   DATABASE_URL: z.string().min(1),
   WORKER_DATABASE_URL: optional,
   // Reset each pooled connection's session before it goes back to the pool (#117, plan §3.3). Keep true for direct
