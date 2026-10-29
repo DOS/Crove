@@ -163,6 +163,27 @@ export const changeMemberRole = defineCommand({
     ctx.audit({ target_user: input.userId, role: input.role, previous_role: previousRole, changed: previousRole !== input.role });
     if (previousRole === input.role) return { userId: input.userId, role: input.role, previousRole };
     if (previousRole === 'owner' && owners <= 1) throw LAST_OWNER(input.userId, input.role);
+    // An owner or admin made member or viewer must not hold org-wide and legal-entity roles together (#1367): as a
+    // member they would read every entity (any org-wide role lifts the scope, enter_context) while their entity roles
+    // still show, a scope no grant could have made (ROLE_GRANT_WIDENS_SCOPE refuses an org-wide role to a member limited
+    // to some entities). Whoever demotes them decides which side goes first.
+    if ((previousRole === 'owner' || previousRole === 'admin') && (input.role === 'member' || input.role === 'viewer')) {
+      const held = await ctx.trx
+        .selectFrom('crove_kernel.role_assignment')
+        .select('legal_entity_id')
+        .where('org_id', '=', ctx.orgId)
+        .where('user_id', '=', input.userId)
+        .execute();
+      if (held.some((a) => a.legal_entity_id === null) && held.some((a) => a.legal_entity_id !== null)) {
+        throw new DomainError(
+          'ROLE_DEMOTION_MIXES_SCOPE',
+          409,
+          'Người này đang có cả vai trò cho cả tổ chức lẫn vai trò theo pháp nhân. Đổi họ thành Thành viên hoặc Chỉ xem lúc này sẽ cho họ xem mọi pháp nhân trong khi các vai trò theo pháp nhân vẫn hiện; hãy thu hồi một trong hai loại vai trò trước',
+          undefined,
+          { audit: { target_user: input.userId, role: input.role, previous_role: previousRole } },
+        );
+      }
+    }
     // A demotion to viewer of the last chief accountant under the accountant preset is refused (#1402).
     await keepingChiefAccountant(() =>
       ctx.trx.updateTable('crove_kernel.tenant_member').set({ role: input.role }).where('org_id', '=', ctx.orgId).where('user_id', '=', input.userId).execute(),
