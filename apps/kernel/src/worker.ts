@@ -488,6 +488,12 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   const social = deps.runtime.installed('social');
   const crm = deps.runtime.installed('crm');
   const notes = deps.runtime.installed('notes');
+  // A cron job of a module left out (#1471): a schedule a run with the module saved stays in pg-boss, which would queue
+  // ticks nobody works and the prober would report as stuck. So it is taken off, and the ticks it queued (no data) go.
+  const dropCron = async (queue: string) => {
+    await boss.unschedule(queue);
+    await boss.deleteQueuedJobs(queue);
+  };
   // Background, agent and bulk queues, paused under back-pressure (#894, plan §4.9). Registered with background.add.
   const background = new PausableWork(boss);
 
@@ -739,6 +745,8 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       }
     }));
     await boss.schedule(QUEUES.periodBalanceVerify, PERIOD_BALANCE_VERIFY_CRON, null, { tz: RETENTION_TZ, missed: 'once', retryLimit: 0, expireInSeconds: 3600 });
+  } else {
+    await dropCron(QUEUES.periodBalanceVerify);
   }
 
   // Inbox triage: tasks for the agents whose template subscribes to the event. The command reads the event from the
@@ -798,6 +806,10 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       if (sent > 0) console.log(`[notes-remind] sent ${sent}`);
     });
     await boss.schedule(QUEUES.notesRemind, NOTES_REMIND_CRON, null, { tz: NOTES_TRASH_TZ });
+  } else {
+    // The member purges stay queued (they carry whose notes to purge) for when notes is installed again.
+    await dropCron(QUEUES.notesTrash);
+    await dropCron(QUEUES.notesRemind);
   }
 
   // In-app notifications of the kernel and finance (#671): the module's dispatch reads the event from the outbox.

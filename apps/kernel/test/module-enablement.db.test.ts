@@ -207,6 +207,12 @@ suite('module enablement on PostgreSQL (plan Decision 12, ADR-0031)', () => {
     const storage = new MemoryStore();
     const kernel = createKernel(config, { ...defaultAdapters(config), identity, ai: null, storage });
     expect(kernel.modules).toEqual(['kernel']);
+    // As an earlier run with finance and notes left them (#1471): their cron schedules, and a tick each queued.
+    const crons = [QUEUES.periodBalanceVerify, QUEUES.notesTrash, QUEUES.notesRemind];
+    for (const queue of crons) {
+      await adminQuery("INSERT INTO crove_jobs.schedule (name, cron) VALUES ($1, '0 3 * * *') ON CONFLICT DO NOTHING", [queue]);
+      await adminQuery('INSERT INTO crove_jobs.job (name) VALUES ($1)', [queue]);
+    }
     const stop = await kernel.start('all');
     try {
       const origin = `http://127.0.0.1:${port}`;
@@ -262,9 +268,11 @@ suite('module enablement on PostgreSQL (plan Decision 12, ADR-0031)', () => {
       expect(jobs?.n).toBe('0');
       const runs = await adminQuery<{ n: string }>('SELECT count(*)::text AS n FROM crove_kernel.extraction');
       expect(runs[0]?.n).toBe('0');
-      // Nor does it schedule the finance reconciliation (#1471).
-      const [scheduled] = await adminQuery<{ n: string }>('SELECT count(*)::text AS n FROM crove_jobs.schedule WHERE name = $1', [QUEUES.periodBalanceVerify]);
+      // Nor does it keep the finance and notes cron jobs: their schedules are taken off and their queued ticks dropped (#1471).
+      const [scheduled] = await adminQuery<{ n: string }>('SELECT count(*)::text AS n FROM crove_jobs.schedule WHERE name = ANY ($1)', [crons]);
       expect(scheduled?.n).toBe('0');
+      const [ticks] = await adminQuery<{ n: string }>("SELECT count(*)::text AS n FROM crove_jobs.job WHERE name = ANY ($1) AND state = 'created'", [crons]);
+      expect(ticks?.n).toBe('0');
     } finally {
       await stop();
     }
