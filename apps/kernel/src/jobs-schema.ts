@@ -148,9 +148,15 @@ export function queueEgress(queue: string): JobEgress {
 // agent runs once at a time (ADR-0029 section 5; the database also allows one running ai_run per agent).
 const QUEUE_POLICIES: Partial<Record<QueueName, 'stately'>> = { [QUEUES.agentWake]: 'stately' };
 
-// What `boss.createQueue(name, { policy })` sends to crove_jobs.create_queue.
+// The dead letter queue's own options, as 20261103150000_crove_jobs_dead_letter.sql created it: a few retries, in case
+// the database or the command is briefly unavailable.
+const DEAD_LETTER_OPTIONS = { policy: 'standard', retryLimit: 5, retryDelay: 30, retryBackoff: true } as const;
+
+// What `boss.createQueue(name, options)` sends to crove_jobs.create_queue: the queue's policy, and every queue but the
+// dead letter queue sends its dead letters there (#1720, #1780).
 export function queueOptions(queue: string): string {
-  return JSON.stringify({ policy: QUEUE_POLICIES[queue as QueueName] ?? 'standard' });
+  if (queue === QUEUES.deadLetter) return JSON.stringify(DEAD_LETTER_OPTIONS);
+  return JSON.stringify({ policy: QUEUE_POLICIES[queue as QueueName] ?? 'standard', deadLetter: QUEUES.deadLetter });
 }
 
 // First line of every vendored migration.
@@ -237,9 +243,11 @@ export function renderJobsMigration(target: number, from: number | null, queues:
     END IF;`;
   const missing = from === null ? `\n  ELSE\n    EXECUTE $pgboss$\n${adaptPlans(plans)}\n$pgboss$;` : '';
   const upgrade = from === null ? '' : `\n  EXECUTE $pgboss$\n${adaptPlans(plans)}\n$pgboss$;`;
-  // One create_queue statement per set of options, so each queue gets the policy the worker expects.
+  // One create_queue statement per set of options, so each queue gets the policy the worker expects. The dead letter
+  // queue comes first: the others name it, and queue.dead_letter references a queue that exists.
   const byOptions = new Map<string, string[]>();
-  for (const queue of queues) byOptions.set(queueOptions(queue), [...(byOptions.get(queueOptions(queue)) ?? []), `'${queue.replaceAll("'", "''")}'`]);
+  const ordered = [...queues].sort((a, b) => Number(b === QUEUES.deadLetter) - Number(a === QUEUES.deadLetter));
+  for (const queue of ordered) byOptions.set(queueOptions(queue), [...(byOptions.get(queueOptions(queue)) ?? []), `'${queue.replaceAll("'", "''")}'`]);
   const createQueues = [...byOptions]
     .map(([options, names]) => `SELECT ${JOB_SCHEMA}.create_queue(q, '${options}'::jsonb) FROM unnest(ARRAY[${names.join(', ')}]) AS q;`)
     .join('\n');
