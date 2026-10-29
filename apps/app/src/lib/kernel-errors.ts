@@ -55,6 +55,7 @@ export const KERNEL_ERROR_CODES = [
   // Invites scoped to legal entities (#1281).
   'INVITE_SCOPE_OWNER_ONLY',
   'INVITE_SCOPE_STALE',
+  'INVITE_SCOPE_ALREADY_MEMBER',
   'INVITE_USED',
   'INVITE_RATE_LIMITED',
   'TOO_MANY_INVITES',
