@@ -22,6 +22,9 @@ import { contextToken } from './fixtures/context-token.ts';
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
 const REFUSED = { code: '23514', message: 'PROPOSAL_STATUS_TRANSITION' };
+// #1853 (step 1 of 2): an effect row naming another command's proposal is about to be refused when it is written
+// (EFFECT_PROPOSAL_MISMATCH), before the move; until then the move refuses it. Step 2 expects the earlier refusal.
+const EARLIER = 'EFFECT_PROPOSAL_MISMATCH';
 const LINES = JSON.stringify([
   { line_no: 1, account_code: '6422', debit: '100000', credit: '0' },
   { line_no: 2, account_code: '331', debit: '0', credit: '100000' },
@@ -186,19 +189,23 @@ suite('ledger proposals executed only with their effect (#1842)', () => {
     const id = await approved('finance.journal.reverse');
     const other = await approved('finance.journal.reverse');
     const nvk = await approved('finance.journal_voucher.record');
-    for (const [label, effect, proposalId, command] of [
-      ['a reversal for another proposal', reverse(other), id, 'finance.journal.reverse'],
-      ['an entry of source kernel.proposal that reverses nothing', post('kernel.proposal', id), id, 'finance.journal.reverse'],
-      ["a journal voucher's entry for a reversal", voucher(id), id, 'finance.journal.reverse'],
-      ["a reversal's entry for a journal voucher", reverse(nvk), nvk, 'finance.journal_voucher.record'],
-      ['a journal voucher of another proposal', voucher(other), nvk, 'finance.journal_voucher.record'],
+    for (const [label, effect, proposalId, command, wrongCommand] of [
+      ['a reversal for another proposal', reverse(other), id, 'finance.journal.reverse', false],
+      ['an entry of source kernel.proposal that reverses nothing', post('kernel.proposal', id), id, 'finance.journal.reverse', false],
+      ["a journal voucher's entry for a reversal", voucher(id), id, 'finance.journal.reverse', true],
+      ["a reversal's entry for a journal voucher", reverse(nvk), nvk, 'finance.journal_voucher.record', true],
+      ['a journal voucher of another proposal', voucher(other), nvk, 'finance.journal_voucher.record', true],
     ] as const) {
       const outcome = await asOwner(async (c) => {
         await effect(c);
         await ran(command, proposalId)(c);
         return execute(proposalId)(c);
       });
-      expect(outcome, label).toMatchObject({ ok: false, ...REFUSED });
+      if (wrongCommand) {
+        // The effect names a proposal of another command: refused when written (#1853) or at the move.
+        expect(outcome, label).toMatchObject({ ok: false, code: REFUSED.code });
+        expect([REFUSED.message, EARLIER], label).toContain(outcome.ok ? '' : outcome.message);
+      } else expect(outcome, label).toMatchObject({ ok: false, ...REFUSED });
     }
     // The entry committed by an earlier transaction does not carry a later move.
     expect(await asOwner(reverse(id), true)).toMatchObject({ ok: true });
@@ -248,10 +255,11 @@ suite('ledger proposals executed only with their effect (#1842)', () => {
   });
 
   it('asks no effect of a command that is not a ledger command, and answers for the org of the context only', async () => {
+    // A reversal ordered by an approved proposal of its command (#1853 refuses an entry naming no such proposal).
+    const reversal = await approved('finance.journal.reverse');
     const answer = await asOwner(async (c) => {
       const asked = async (org: string, proposalId: string, command: string) =>
         (await c.query<{ v: boolean }>('SELECT crove_finance.ledger_effect_recorded($1::uuid, $2::uuid, $3) AS v', [org, proposalId, command])).rows[0]?.v;
-      const reversal = randomUUID();
       await reverse(reversal)(c);
       return {
         notLedger: await asked(orgId, randomUUID(), 't1842.other'),
