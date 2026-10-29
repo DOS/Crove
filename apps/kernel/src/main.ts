@@ -36,7 +36,12 @@ const ROLES: readonly Role[] = ['migrate', 'auth-grants', 'api', 'worker', 'all'
 async function runMigrate(config: Config) {
   const adminUrl = config.ADMIN_DATABASE_URL;
   if (!adminUrl) throw new Error('ADMIN_DATABASE_URL is required for migrate');
-  const applied = await migrate({ adminUrl, dir: config.MIGRATIONS_DIR, log: (m) => console.log(`[migrate] ${m}`) });
+  const applied = await migrate({
+    adminUrl,
+    dir: config.MIGRATIONS_DIR,
+    log: (m) => console.log(`[migrate] ${m}`),
+    ...(config.MIGRATE_LOCK_WAIT_SECONDS === undefined ? {} : { lockWaitMs: config.MIGRATE_LOCK_WAIT_SECONDS * 1000 }),
+  });
   await setRolePasswords(adminUrl, {
     crove_app: config.CROVE_APP_DB_PASSWORD,
     crove_worker: config.CROVE_WORKER_DB_PASSWORD,

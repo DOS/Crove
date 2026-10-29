@@ -57,6 +57,8 @@ const schema = z.object({
   DB_RESET_ON_RELEASE: z.enum(['true', 'false']).default('true'),
   ADMIN_DATABASE_URL: optional,
   MIGRATIONS_DIR: z.string().default(here('../../../supabase/migrations')),
+  // How long `migrate` waits for another run's migration lock before it fails; unset waits as long as it takes (#1803).
+  MIGRATE_LOCK_WAIT_SECONDS: z.coerce.number().int().positive().optional(),
   WEB_DIST: z.string().default(here('../../app/dist')),
   // Blob storage (External-tenant gate T7): local disk under STORAGE_DIR, or any S3-compatible store. The API
   // and the worker must point at the same store; with s3 they need no shared volume.

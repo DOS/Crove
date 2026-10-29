@@ -734,4 +734,58 @@ suite('migrations with a runner that is not a superuser', () => {
     expect(await recorded()).toBe(1);
     expect(await migrate({ adminUrl: runnerUrl, dir })).toEqual([]);
   });
+
+  // #1803: IF NOT EXISTS keeps any index of the name, so the runner compares it with the one the statement asks for
+  // (pg_get_indexdef of a build on an empty copy). The same definition written another way passes; another one fails.
+  it('refuses an index of the same name with another definition, and accepts the same one written another way (#1803)', async () => {
+    await withClient(runnerUrl, async (runner) => {
+      await runner.query('CREATE TABLE crove_kernel.t1803 (a int, b int, c text)');
+      await runner.query('CREATE INDEX t1803_same_idx ON crove_kernel.t1803 (lower(c)) WHERE a > 1');
+      await runner.query('CREATE INDEX t1803_other_idx ON crove_kernel.t1803 (b)');
+    });
+    const same = '29990104000000_crove_kernel_concurrent_index_same.sql';
+    const sameDir = await withExtraMigrations({
+      [same]: `${CONCURRENT_INDEX_MARKER}\nCREATE INDEX CONCURRENTLY IF NOT EXISTS t1803_same_idx ON crove_kernel.t1803 USING btree ( pg_catalog.lower( c ) )\n  WHERE (a > 1);\n`,
+    });
+    expect(await migrate({ adminUrl: runnerUrl, dir: sameDir })).toEqual([same]);
+
+    const other = '29990105000000_crove_kernel_concurrent_index_other.sql';
+    const otherDir = await withExtraMigrations({
+      [same]: `${CONCURRENT_INDEX_MARKER}\nCREATE INDEX CONCURRENTLY IF NOT EXISTS t1803_same_idx ON crove_kernel.t1803 USING btree ( pg_catalog.lower( c ) )\n  WHERE (a > 1);\n`,
+      [other]: `${CONCURRENT_INDEX_MARKER}\nCREATE INDEX CONCURRENTLY IF NOT EXISTS t1803_other_idx ON crove_kernel.t1803 (a);\n`,
+    });
+    await expect(migrate({ adminUrl: runnerUrl, dir: otherDir })).rejects.toThrow(
+      /t1803_other_idx already exists with another definition, so IF NOT EXISTS kept it: USING btree \(b\) instead of USING btree \(a\)/,
+    );
+    const recorded = await withClient(runnerUrl, async (runner) => (await runner.query('SELECT 1 FROM crove_meta.schema_migrations WHERE name = $1', [other])).rowCount);
+    expect(recorded).toBe(0);
+    // The probe the comparison builds is rolled back with its transaction.
+    const probe = await withClient(runnerUrl, async (runner) => (await runner.query("SELECT to_regclass('crove_meta.concurrent_index_probe') AS t")).rows[0]?.t);
+    expect(probe).toBeNull();
+  });
+
+  it('refuses to build while the session has temporary types an expression could resolve to (#1803)', async () => {
+    await withClient(runnerUrl, async (runner) => {
+      await runner.query('CREATE TABLE IF NOT EXISTS crove_kernel.t1803_temp (a int)');
+      await runner.query('CREATE TEMP TABLE t1803_shadow (a int)');
+      const indexes = concurrentIndexes('a.sql', `${CONCURRENT_INDEX_MARKER}\nCREATE INDEX CONCURRENTLY IF NOT EXISTS t1803_temp_idx ON crove_kernel.t1803_temp (a);\n`) ?? [];
+      await expect(applyConcurrentIndexes(runner, 'a.sql', indexes)).rejects.toThrow(/this session has temporary types/);
+      expect((await runner.query("SELECT to_regclass('crove_kernel.t1803_temp_idx') AS i")).rows[0]?.i).toBeNull();
+    });
+  });
+
+  it('logs while another run holds the migration lock, and gives up after the maximum wait (#1803)', async () => {
+    const holder = new pg.Client({ connectionString: runnerUrl, application_name: 't1803-holder' });
+    await holder.connect();
+    try {
+      await holder.query("SELECT pg_advisory_lock(hashtext('crove_migrate'))");
+      const log: string[] = [];
+      await expect(migrate({ adminUrl: runnerUrl, dir: MIGRATIONS, log: (m) => log.push(m), lockWaitMs: 1500 })).rejects.toThrow(
+        /another run has held the migration lock for longer than 2s \(pid \d+ \(t1803-holder, idle\)\)/,
+      );
+      expect(log[0]).toMatch(/^waiting for the migration lock, held by pid \d+ \(t1803-holder, idle\) \(waited 0s\)$/);
+    } finally {
+      await holder.end();
+    }
+  });
 });
