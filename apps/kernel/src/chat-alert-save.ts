@@ -1,6 +1,6 @@
 // Team alerts in a Telegram or Discord chat (#863): the API's half. It checks a target with the platform, seals it with
 // the credential broker for the binding (org, 'social.chat_alert', a new alert id) and hands the envelope to the save
-// command, which seals it into crove_social.chat_alert_target. It never reads a target back or opens one (ADR-0025:
+// command, which seals it into the social module's chat_alert_target table. It never reads a target back or opens one (ADR-0025:
 // the API seals, only the worker opens): a test line is only asked for here, and the worker sends it
 // (apps/kernel/src/chat-alerts.ts).
 import { randomUUID } from 'node:crypto';
