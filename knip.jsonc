@@ -6,8 +6,11 @@
   "ignoreExportsUsedInFile": true,
   "workspaces": {
     ".": {
-      // tools/*.mjs and tools/ci/*.mjs are scripts the package.json scripts and the workflows run by path.
-      "entry": ["tools/**/*.{mjs,ts}"],
+      // No glob entry for tools/ (#1650): knip's package.json, GitHub Actions and Vitest plugins find the scripts run by path
+      // and the tests in tools/test, and follow their imports, so a tools file that nothing runs or imports is reported.
+      // These four are run where knip cannot look: protected.yml runs the first two from $RUNNER_TEMP after git show
+      // (the base branch's copy), lib.sh runs seal.mjs inside a container, and Cloudflare runs the inbound mail worker.
+      "entry": ["tools/ci/protected-paths.mjs", "tools/ci/invariant-summary.mjs", "tools/backup/seal.mjs", "tools/inbound-mail/worker.js"],
       // tools/ui-colors.mjs resolves tailwindcss/theme.css from packages/ui (createRequire), which lists it.
       "ignoreDependencies": ["tailwindcss"]
     },

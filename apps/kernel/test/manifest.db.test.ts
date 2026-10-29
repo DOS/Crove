@@ -77,6 +77,7 @@ suite('module manifests against the catalog (#1588, #1599)', () => {
   let columnRows: Array<{ schema: string; table: string; column: string }> = [];
   let grants: Grant[] = [];
   let sqlUses: PermissionUse[] = [];
+  let sqlProblems: string[] = [];
   let appendOnly = new Set<string>();
   let numbering: NumberingCall[] = [];
   let numberingProblems: string[] = [];
@@ -125,7 +126,9 @@ suite('module manifests against the catalog (#1588, #1599)', () => {
            ORDER BY 1`,
         )
       ).rows;
-      sqlUses = texts.flatMap((t) => sqlPermissionUses(t.source, t.text));
+      const read = texts.map((t) => sqlPermissionUses(t.source, t.text));
+      sqlUses = read.flatMap((r) => r.uses);
+      sqlProblems = read.flatMap((r) => r.problems);
       // The tables crove_kernel.make_append_only() guards: its row trigger refuses every UPDATE and DELETE.
       appendOnly = new Set(
         (
@@ -232,6 +235,8 @@ suite('module manifests against the catalog (#1588, #1599)', () => {
   it('declares every permission a role grants or something checks, with the seeded rows as its default roles (#1630)', () => {
     const { uses, problems } = staticPermissionUses();
     expect(problems).toEqual([]);
+    // Every function and policy names its permissions in a form the scan attributes (#1641).
+    expect(sqlProblems, 'database functions or policies that name a permission the manifest check cannot read').toEqual([]);
     // The database names both permissions on main: unlock_period() and the accountant preset's chief accountant guard.
     expect([...new Set(sqlUses.map((u) => u.permission))].sort()).toEqual(['finance.period.unlock', 'finance.proposal.approve']);
     expect(grants.length).toBeGreaterThan(0);
