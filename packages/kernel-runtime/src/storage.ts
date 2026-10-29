@@ -161,11 +161,18 @@ export async function putFile(store: BlobStore, key: string, bytes: Uint8Array, 
 // maxBytes (#1126): the size the row records, or a caller's cap. A swapped object larger than that is refused
 // (BlobTooLargeError) before it is read whole, rather than read in full and then refused by its hash.
 export async function readVerified(store: BlobStore, ref: BlobRef, maxBytes?: number): Promise<Uint8Array> {
-  if (maxBytes !== undefined && !(Number.isSafeInteger(maxBytes) && maxBytes >= 0)) throw new Error('invalid read cap');
+  assertReadCap(maxBytes);
   const bytes = await store.get(ref.key, ref.generation, maxBytes);
   if (maxBytes !== undefined && bytes.byteLength > maxBytes) throw new BlobTooLargeError(ref.key, maxBytes);
   if (sha256Hex(bytes) !== ref.sha256) throw new BlobIntegrityError(ref);
   return bytes;
+}
+
+// A read cap is a whole number of bytes, 0 or more; undefined reads uncapped. Each store checks it as well as
+// readVerified (#1189): a NaN, negative, fractional or infinite cap compares false against every size, so a store
+// that took it would read the object whole. Fails closed, before anything is read.
+export function assertReadCap(maxBytes: number | undefined): void {
+  if (maxBytes !== undefined && !(Number.isSafeInteger(maxBytes) && maxBytes >= 0)) throw new RangeError('invalid read cap');
 }
 
 export function sha256Hex(bytes: Uint8Array | string): string {
@@ -438,6 +445,7 @@ export class LocalDiskStore implements BlobStore {
   // One copy per key (see put), so the generation selects nothing; readVerified checks the bytes. With maxBytes, a
   // larger file is refused by its size before it is read (a blob is never rewritten in place, see put).
   async get(key: string, _generation?: string | null, maxBytes?: number): Promise<Uint8Array> {
+    assertReadCap(maxBytes);
     const target = this.path(key);
     try {
       if (maxBytes === undefined) return new Uint8Array(await readFile(target));

@@ -22,6 +22,7 @@ import {
   UPLOAD_TTL_SECONDS,
   assertContentAddress,
   assertListArgs,
+  assertReadCap,
   assertStorageKey,
   contentGeneration,
   isListedKey,
@@ -390,6 +391,7 @@ export class S3BlobStore implements BlobStore {
   // past the cap.
   private async fetch(key: string, versionId?: string | null, maxBytes?: number): Promise<Fetched> {
     assertStorageKey(key);
+    assertReadCap(maxBytes);
     try {
       const out = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: key, ...(versionId ? { VersionId: versionId } : {}) }));
       if (!out.Body) throw new BlobNotFoundError(key);
@@ -580,6 +582,8 @@ export class S3BlobStore implements BlobStore {
   // Streams the staged object through sha256 and a byte count, and stops reading as soon as it passes maxBytes.
   private async readStaged(key: string, maxBytes: number): Promise<{ bytes: Uint8Array; sha256: string }> {
     if (!isStagingKey(key)) throw new Error('invalid staging key');
+    // A cap the comparisons below cannot hold would read the staged object whole (#1189).
+    assertReadCap(maxBytes);
     let out;
     try {
       out = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }));
