@@ -12,6 +12,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove
 import { Runtime } from '@crove/kernel-runtime';
 import { reviewFile } from '../src/review-link.ts';
 import { reviewTokenHash, socialCommands, socialQueries, type PostView, type ReviewFeedbackView, type ReviewLinkView } from '@crove/mod-social';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -78,7 +79,7 @@ suite('social client review links on PostgreSQL (#589)', () => {
     app.password = 'test-app-pw';
     pool = createPool({ connectionString: app.toString(), max: 4 });
     db = createDb(pool);
-    rt = new Runtime(db).register({
+    rt = new Runtime(db, { manifests: TEST_MANIFESTS }).register({
       commands: [...kernelCommands, ...socialCommands],
       queries: [...kernelQueries({ inboundDomain: null }), ...socialQueries],
     });

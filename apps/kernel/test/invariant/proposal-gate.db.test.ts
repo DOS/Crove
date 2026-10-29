@@ -23,6 +23,7 @@ import { createExtractClient } from '@crove/extract-contract';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime, defineCommand, fileKey, sha256Hex, type BlobStore, type CommandDef } from '@crove/kernel-runtime';
 import { extractAndPropose, financeCommands, financeQueries } from '@crove/mod-finance';
+import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 // The kernel's proposal edit command: the only command that runs a reviser.
@@ -198,7 +199,7 @@ suite('proposal gate follow-ups on PostgreSQL (#161)', () => {
       return url.toString();
     };
     const register = (target: Db) =>
-      new Runtime(target).register({
+      new Runtime(target, { manifests: TEST_MANIFESTS }).register({
         commands: [...kernelCommands, ...financeCommands],
         queries: [...kernelQueries({ inboundDomain: 'in.test' }), ...financeQueries],
       });
@@ -221,15 +222,15 @@ suite('proposal gate follow-ups on PostgreSQL (#161)', () => {
 
   it('refuses to register a reviser that names no command it revises, and `revises` on any other command', () => {
     const reviser = { name: 'finance.test_reviser', input: z.object({}), risk: 'R1' as const, handler: async () => ({}) };
-    expect(() => new Runtime(db).register({ commands: [defineCommand({ ...reviser, access: 'proposal_revision' })] })).toThrow(/names the command it revises/);
-    expect(() => new Runtime(db).register({ commands: [defineCommand({ ...reviser, access: 'proposal_revision', revises: '' })] })).toThrow(
+    expect(() => new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: [defineCommand({ sideEffect: 'none', ...reviser, access: 'proposal_revision' })] })).toThrow(/names the command it revises/);
+    expect(() => new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: [defineCommand({ sideEffect: 'none', ...reviser, access: 'proposal_revision', revises: '' })] })).toThrow(
       /names the command it revises/,
     );
-    expect(() => new Runtime(db).register({ commands: [defineCommand({ ...reviser, access: ['owner'], revises: 'finance.purchase.record' })] })).toThrow(
+    expect(() => new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: [defineCommand({ sideEffect: 'none', ...reviser, access: ['owner'], revises: 'finance.purchase.record' })] })).toThrow(
       /only a reviser does/,
     );
     expect(() =>
-      new Runtime(db).register({ commands: [defineCommand({ ...reviser, access: 'proposal_revision', revises: 'finance.purchase.record' })] }),
+      new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: [defineCommand({ sideEffect: 'none', ...reviser, access: 'proposal_revision', revises: 'finance.purchase.record' })] }),
     ).not.toThrow();
   });
 
@@ -245,6 +246,7 @@ suite('proposal gate follow-ups on PostgreSQL (#161)', () => {
 
     // A command with a bug: it runs the reviser on a pending proposal it does not edit.
     const rogue = defineCommand({
+      sideEffect: 'none',
       name: 'kernel.test_rogue_revise',
       input: z.object({ proposalId: z.uuid() }),
       risk: 'R1',
@@ -253,6 +255,7 @@ suite('proposal gate follow-ups on PostgreSQL (#161)', () => {
     });
     // A reviser that runs another reviser (it inherits the proposal id).
     const nested = defineCommand({
+      sideEffect: 'none',
       name: 'finance.test_nested_revise',
       input: z.object({}),
       risk: 'R1',
@@ -266,12 +269,13 @@ suite('proposal gate follow-ups on PostgreSQL (#161)', () => {
     const realEdit: CommandDef<any, any> | undefined = kernelCommands.find((c) => c.name === EDIT);
     if (!realEdit) throw new Error(`${EDIT} is not a kernel command`);
     const editor = defineCommand({
+      sideEffect: 'none',
       ...realEdit,
       input: z.object({ proposalId: z.uuid(), reviser: z.string() }),
       target: () => null,
       handler: async (ctx, input) => ctx.run(input.reviser, input.reviser === 'finance.purchase.revise' ? reviserInput : {}, { proposalId: input.proposalId }),
     });
-    const gated = new Runtime(db).register({ commands: [...kernelCommands.filter((c) => c.name !== EDIT), ...financeCommands, rogue, nested, editor] });
+    const gated = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: [...kernelCommands.filter((c) => c.name !== EDIT), ...financeCommands, rogue, nested, editor] });
     const refused = { code: 'FORBIDDEN', status: 403, details: { rule: 'proposal_state' } };
     const runEditor = (proposalId: string, reviser = 'finance.purchase.revise') =>
       gated.execute<{ changed: boolean }>(EDIT, { proposalId, reviser }, { actor: asUser(admin), orgId });
@@ -326,6 +330,7 @@ suite('proposal gate follow-ups on PostgreSQL (#161)', () => {
     const input = z.object({ proposalId: z.uuid() });
     // The edit command's name without its declaration: what a module that took the name would get.
     const namesake = defineCommand({
+      sideEffect: 'none',
       name: EDIT,
       input,
       risk: 'R1',
@@ -334,13 +339,14 @@ suite('proposal gate follow-ups on PostgreSQL (#161)', () => {
     });
     // The declaration under another name. It writes nothing.
     const renamed = defineCommand({
+      sideEffect: 'none',
       ...realEdit,
       name: 'kernel.test_renamed_editor',
       input,
       target: () => null,
       handler: async (ctx, { proposalId }: z.infer<typeof input>) => ctx.run('finance.purchase.revise', reviserInput, { proposalId }),
     });
-    const bound = new Runtime(db).register({ commands: [...kernelCommands.filter((c) => c.name !== EDIT), ...financeCommands, namesake, renamed] });
+    const bound = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: [...kernelCommands.filter((c) => c.name !== EDIT), ...financeCommands, namesake, renamed] });
     const actor = { actor: asUser(admin), orgId };
     await expect(bound.execute(EDIT, { proposalId: id }, actor)).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403, details: { rule: 'proposal_state' } });
     await expect(bound.execute('kernel.test_renamed_editor', { proposalId: id }, actor)).resolves.toMatchObject({ changed: true });
@@ -369,6 +375,7 @@ suite('proposal gate follow-ups on PostgreSQL (#161)', () => {
     const { payload: purchase } = await view(a.orgId, a.owner, own);
     const reversal = { entryId: randomUUID(), entryDate: '2026-10-16', reason: 'test' };
     const rogue = defineCommand({
+      sideEffect: 'none',
       name: 'kernel.test_rogue_record',
       input: z.object({ proposalId: z.uuid(), command: z.string() }),
       risk: 'R1',
@@ -376,7 +383,7 @@ suite('proposal gate follow-ups on PostgreSQL (#161)', () => {
       handler: async (ctx, input) =>
         ctx.run(input.command, { payload: input.command === 'finance.purchase.record' ? purchase : reversal, acceptFailedChecks: true }, { proposalId: input.proposalId }),
     });
-    const gated = new Runtime(db).register({ commands: [...kernelCommands, ...financeCommands, rogue] });
+    const gated = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: [...kernelCommands, ...financeCommands, rogue] });
     const lineAccounts = [{ lineNo: 1, debitAccount: '6421' }];
     const owner = a.owner;
     // The refusal an unknown id gets from each, pinned so an attempt that starts failing for another reason (input,

@@ -13,6 +13,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove
 import { CredentialVault, Runtime, parseVaultKey, type BlobStore } from '@crove/kernel-runtime';
 import { captureKey, runCommentJob, runGateJob, runPinJob, runPlaylistJob, runPublishJob, runThreadJob, METRICS_INTERVAL_SECONDS, socialCommands, socialQueries, STORY_EXPIRED_KEY, STORY_FINAL_KEY, storyCapture, sweepMetrics, type BeginResult, type MetricsRow, type PostView } from '@crove/mod-social';
 import { shortLinkTarget } from '../src/short-link.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -161,9 +162,9 @@ suite('social publishing on PostgreSQL (S4)', () => {
     workerPool = createPool({ connectionString: as('crove_worker', 'test-worker-pw'), max: 4 });
     appDb = createDb(appPool);
     const registry = { commands: [...kernelCommands, ...socialCommands], queries: [...kernelQueries({ inboundDomain: null }), ...socialQueries] };
-    api = new Runtime(appDb).register(registry);
+    api = new Runtime(appDb, { manifests: TEST_MANIFESTS }).register(registry);
     workerDb = createDb(workerPool);
-    worker = new Runtime(workerDb).register(registry);
+    worker = new Runtime(workerDb, { manifests: TEST_MANIFESTS }).register(registry);
   });
 
   afterAll(async () => {

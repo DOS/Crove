@@ -33,6 +33,7 @@ import { ConcurrencyLimiter } from '../src/concurrency.ts';
 import { loadConfig } from '../src/config.ts';
 import { createHttpApp, type HttpDeps } from '../src/http.ts';
 import { createSessionStatusSource } from '../src/sessions.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const S3_URL = process.env.CROVE_TEST_S3_URL;
@@ -273,7 +274,7 @@ suite.each(backends)('staged uploads on PostgreSQL and $name (issue #109)', (bac
       MIGRATIONS_DIR: MIGRATIONS,
       WEB_DIST: '/nonexistent',
     });
-    const runtime = new Runtime(db, { sessions: createSessionStatusSource('off'), stepUp: 'required' }).register({
+    const runtime = new Runtime(db, { manifests: TEST_MANIFESTS, sessions: createSessionStatusSource('off'), stepUp: 'required' }).register({
       commands: [...kernelCommands, ...financeCommands],
       queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries],
     });
@@ -616,7 +617,7 @@ suite.each(backends)('staged uploads on PostgreSQL and $name (issue #109)', (bac
   it('limits the grants one user opens per rolling minute, in the database', async () => {
     await join('burst', 'member');
     await join('steady', 'member');
-    const runtime = new Runtime(createDb(pool), { sessions: createSessionStatusSource('off'), stepUp: 'required' }).register({
+    const runtime = new Runtime(createDb(pool), { manifests: TEST_MANIFESTS, sessions: createSessionStatusSource('off'), stepUp: 'required' }).register({
       commands: [...buildKernelCommands({ uploadBeginLimits: { perMinute: 3 } }), ...financeCommands],
       queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries],
     });

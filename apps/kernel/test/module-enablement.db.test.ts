@@ -18,6 +18,7 @@ import { loadConfig } from '../src/config.ts';
 import { QUEUES } from '../src/jobs-schema.ts';
 import { createKernel, defaultAdapters, moduleDefinitions, type IdentityPort } from '../src/kernel.ts';
 import { startExtractService } from './extract-service.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -56,6 +57,7 @@ const probeQuery = defineQuery({
   handler: (ctx, input) => ctx.query<unknown[]>(input.name, {}),
 });
 const probeCommand = defineCommand({
+  sideEffect: 'none',
   name: 'probe.lookup_in_command',
   input: z.object({ name: z.string() }),
   risk: 'R1',
@@ -125,7 +127,7 @@ suite('module enablement on PostgreSQL (plan Decision 12, ADR-0031)', () => {
     pool = createPool({ connectionString: appUrl, max: 2 });
     db = createDb(pool);
     // The kernel alone creates the org: kernel flows need no other module.
-    const kernelOnly = new Runtime(db).register(moduleDefinitions(configFor('kernel')));
+    const kernelOnly = new Runtime(db, { manifests: TEST_MANIFESTS }).register(moduleDefinitions(configFor('kernel')));
     owner = await upsertIdentity(db, { issuer: 'test', subject: 'modules-owner', email: 'modules-owner@example.com', name: null });
     ({ orgId, slug } = await createOrg(kernelOnly, asUser(owner), 'Org Modules'));
   });
@@ -166,7 +168,7 @@ suite('module enablement on PostgreSQL (plan Decision 12, ADR-0031)', () => {
 
   it('answers COMMAND_NOT_FOUND for a disabled module and not_installed for a lookup into it', async () => {
     // createKernel passes the modules CROVE_MODULES leaves out, so a lookup into them answers not_installed.
-    const runtime = new Runtime(db, { absentModules: ['finance'] })
+    const runtime = new Runtime(db, { manifests: TEST_MANIFESTS, absentModules: ['finance'] })
       .register(moduleDefinitions(configFor('kernel')))
       .register({ commands: [probeCommand], queries: [probeQuery] });
     const actor = asUser(owner);
@@ -185,7 +187,7 @@ suite('module enablement on PostgreSQL (plan Decision 12, ADR-0031)', () => {
     await expect(runtime.query('probe.lookup', { name: 'kernel.no_such_query' }, { actor, orgId })).rejects.toMatchObject({ code: 'QUERY_NOT_FOUND' });
 
     // With finance installed the same lookup runs the query in the caller's transaction.
-    const full = new Runtime(db).register(moduleDefinitions(configFor(undefined))).register({ commands: [probeCommand], queries: [probeQuery] });
+    const full = new Runtime(db, { manifests: TEST_MANIFESTS }).register(moduleDefinitions(configFor(undefined))).register({ commands: [probeCommand], queries: [probeQuery] });
     const ok = await full.query<Lookup<unknown[]>>('probe.lookup', { name: 'finance.accounts.list' }, { actor, orgId });
     expect(ok.status).toBe('ok');
     expect(ok.status === 'ok' && Array.isArray(ok.value)).toBe(true);

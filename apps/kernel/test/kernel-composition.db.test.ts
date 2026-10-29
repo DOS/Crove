@@ -19,6 +19,7 @@ import type { AuthUser } from '../src/auth.ts';
 import { loadConfig } from '../src/config.ts';
 import { createKernel, defaultAdapters, type IdentityPort } from '../src/kernel.ts';
 import { startExtractService } from './extract-service.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -86,7 +87,7 @@ suite('composition root on PostgreSQL (ADR-0030)', () => {
     workerUrl = loginUrl('crove_worker', 'test-worker-pw');
     pool = createPool({ connectionString: appUrl, max: 2 });
     const db = createDb(pool);
-    const runtime = new Runtime(db).register({ commands: kernelCommands, queries: [] });
+    const runtime = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: kernelCommands, queries: [] });
     owner = await upsertIdentity(db, { issuer: 'test', subject: 'root-owner', email: 'root-owner@example.com', name: null });
     ({ orgId, slug } = await createOrg(runtime, asUser(owner), 'Org Root'));
     const service = await startExtractService();
@@ -178,7 +179,7 @@ suite('composition root on PostgreSQL (ADR-0030)', () => {
       expect([...storage.blobs.keys()].some((key) => key.includes(orgId))).toBe(true);
 
       // The worker reads the file with the AI adapter passed in and raises a proposal from its answer.
-      const reader = new Runtime(createDb(pool)).register({ commands: [], queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries] });
+      const reader = new Runtime(createDb(pool), { manifests: TEST_MANIFESTS }).register({ commands: [], queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries] });
       const deadline = Date.now() + 60_000;
       let status: string | undefined;
       while (Date.now() < deadline) {

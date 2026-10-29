@@ -14,6 +14,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove
 import { Runtime } from '@crove/kernel-runtime';
 import { PERIOD_BALANCE_VERIFY_CRON, PeriodBalanceMismatchError, findPeriodBalanceDifferences, runPeriodBalanceReconciliation } from '../src/period-balance.ts';
 import { QUEUES } from '../src/jobs-schema.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -110,7 +111,7 @@ suite('period balance reconciliation (#1284)', () => {
     workerDb = createDb(workerPool);
     pool = createPool({ connectionString: appUrl, max: 1 });
     const db = createDb(pool);
-    const runtime = new Runtime(db).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: 'in.test' }) });
+    const runtime = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: 'in.test' }) });
     userId = await upsertIdentity(db, { issuer: 'test', subject: 'period-reconcile', email: 'reconcile@period.test', name: null });
     orgId = (await createOrg(runtime, { type: 'user', userId, aal: 'aal1' }, 'Reconcile')).orgId;
   });

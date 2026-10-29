@@ -14,6 +14,7 @@ import { isVietnamHoliday, zonedDate, zonedInstant, type BookingItem, type Event
 import { Runtime } from '@crove/kernel-runtime';
 import { crmCommands, crmQueries } from '@crove/mod-crm';
 import { bookingRequest, bookingView } from '../src/booking-page.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -50,7 +51,7 @@ suite('team event types on PostgreSQL (#1373)', () => {
   }
 
   const register = (db: Db) =>
-    new Runtime(db).register({ commands: [...kernelCommands, ...crmCommands], queries: [...kernelQueries({ inboundDomain: null }), ...crmQueries] });
+    new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: [...kernelCommands, ...crmCommands], queries: [...kernelQueries({ inboundDomain: null }), ...crmQueries] });
 
   const draft = (hostUserId: string, over: Partial<EventTypeInput> = {}): EventTypeInput => ({
     slug: 'nhom',

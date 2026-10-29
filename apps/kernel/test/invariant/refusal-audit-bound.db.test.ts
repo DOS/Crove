@@ -14,6 +14,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { DomainError, Runtime, defineCommand, isSecurityRefusal, type RefusalAuditLimits } from '@crove/kernel-runtime';
 import { pruneRefusalTally } from '../../src/worker.ts';
+import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -22,6 +23,7 @@ const PRUNE = 'crove_kernel.refusal_tally_prune(integer,integer)';
 
 // Refuses with the code it is given: 409 and 404 are audited as failed, 403 as denied.
 const refuse = defineCommand({
+  sideEffect: 'none',
   name: 'test.refuse',
   risk: 'R1',
   access: ['owner', 'admin', 'member'],
@@ -30,7 +32,7 @@ const refuse = defineCommand({
     throw new DomainError(input.code, input.status, 'refused');
   },
 });
-const refuseOther = defineCommand({ ...refuse, name: 'test.refuse_other' });
+const refuseOther = defineCommand({ sideEffect: 'none', ...refuse, name: 'test.refuse_other' });
 
 const suite = ADMIN ? describe : describe.skip;
 
@@ -118,7 +120,7 @@ suite('refusal audit bound on PostgreSQL (#162)', () => {
     workerUrl = login('crove_worker', 'test-worker-pw');
     pool = createPool({ connectionString: appUrl, max: 8 });
     db = createDb(pool);
-    runtime = new Runtime(db, { refusalAudit: LIMITS }).register({
+    runtime = new Runtime(db, { manifests: TEST_MANIFESTS, refusalAudit: LIMITS }).register({
       commands: [...kernelCommands, refuse, refuseOther],
       queries: kernelQueries({ inboundDomain: 'in.test' }),
     });
@@ -200,7 +202,7 @@ suite('refusal audit bound on PostgreSQL (#162)', () => {
   });
 
   it('keeps a reserve per actor that another member filling the org bound cannot take', async () => {
-    const reserved = new Runtime(db, { refusalAudit: { perActor: 5, perOrg: 5, windowSeconds: 3600, reserve: 2 } }).register({
+    const reserved = new Runtime(db, { manifests: TEST_MANIFESTS, refusalAudit: { perActor: 5, perOrg: 5, windowSeconds: 3600, reserve: 2 } }).register({
       commands: [...kernelCommands, refuse],
     });
     const org = await newOrg('reserve');
@@ -268,7 +270,7 @@ suite('refusal audit bound on PostgreSQL (#162)', () => {
   });
 
   it('writes a row for every refusal when unbounded', async () => {
-    const unbounded = new Runtime(db, { refusalAudit: 'unbounded' }).register({ commands: [...kernelCommands, refuse] });
+    const unbounded = new Runtime(db, { manifests: TEST_MANIFESTS, refusalAudit: 'unbounded' }).register({ commands: [...kernelCommands, refuse] });
     const org = await newOrg('unbounded');
     for (let i = 0; i < 6; i++) await refused(unbounded, org.orgId, org.owner, 'NOPE');
     expect((await audits(org.orgId)).length).toBe(6);

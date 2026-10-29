@@ -13,6 +13,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { CredentialVault, Runtime, parseVaultKey } from '@crove/kernel-runtime';
 import { socialCommands, socialQueries, type ActivityItem, type PostView } from '@crove/mod-social';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -108,7 +109,7 @@ suite('social queue reordering on PostgreSQL (#1020)', () => {
     u.password = 'test-app-pw';
     appPool = createPool({ connectionString: u.toString(), max: 6 });
     appDb = createDb(appPool);
-    api = new Runtime(appDb).register({ commands: [...kernelCommands, ...socialCommands], queries: [...kernelQueries({ inboundDomain: null }), ...socialQueries] });
+    api = new Runtime(appDb, { manifests: TEST_MANIFESTS }).register({ commands: [...kernelCommands, ...socialCommands], queries: [...kernelQueries({ inboundDomain: null }), ...socialQueries] });
   });
 
   afterAll(async () => {

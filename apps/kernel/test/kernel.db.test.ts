@@ -19,6 +19,7 @@ import { createHttpApp } from '../src/http.ts';
 import { processInboundEmail } from '../src/inbound.ts';
 import { startWorker } from '../src/worker.ts';
 import { startExtractService } from './extract-service.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -134,7 +135,7 @@ suite('kernel on PostgreSQL', () => {
     appUrl = loginUrl('crove_app', 'test-app-pw');
     workerUrl = loginUrl('crove_worker', 'test-worker-pw');
     const register = (target: Db) =>
-      new Runtime(target).register({
+      new Runtime(target, { manifests: TEST_MANIFESTS }).register({
         commands: [...kernelCommands, ...financeCommands],
         queries: [...kernelQueries({ inboundDomain: 'in.test' }), ...financeQueries],
       });
@@ -188,7 +189,7 @@ suite('kernel on PostgreSQL', () => {
         };
       },
     }) as Db;
-    const hookedRuntime = new Runtime(hooked).register({
+    const hookedRuntime = new Runtime(hooked, { manifests: TEST_MANIFESTS }).register({
       commands: [...kernelCommands, ...extra],
       queries: kernelQueries({ inboundDomain: 'in.test' }),
     });
@@ -345,7 +346,7 @@ suite('kernel on PostgreSQL', () => {
 
     for (const resetOnRelease of [true, false]) {
       const single = createPool({ connectionString: appUrl, max: 1, resetOnRelease });
-      const r = new Runtime(createDb(single)).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: 'in.test' }) });
+      const r = new Runtime(createDb(single), { manifests: TEST_MANIFESTS }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: 'in.test' }) });
       try {
         await captureErrors(async (logged) => {
           const backend = await leak(single);

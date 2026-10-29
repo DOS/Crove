@@ -28,6 +28,7 @@ import { loadConfig } from '../../src/config.ts';
 import { createHttpApp, type StreamDeps } from '../../src/http.ts';
 import { createSessionStatusSource } from '../../src/sessions.ts';
 import { ENTITY_HINT_TYPES, StreamHub, createDbTicketStore, createPgNotificationSource } from '../../src/stream.ts';
+import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -243,7 +244,7 @@ suite('invariant: invalidation hints honor the legal-entity scope', () => {
       WEB_DIST: '/nonexistent',
       TRUSTED_PROXY_HOPS: '1',
     });
-    runtime = new Runtime(db, { sessions: createSessionStatusSource('off'), stepUp: 'required' }).register({
+    runtime = new Runtime(db, { manifests: TEST_MANIFESTS, sessions: createSessionStatusSource('off'), stepUp: 'required' }).register({
       commands: [...kernelCommands, ...financeCommands],
       queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries],
     });

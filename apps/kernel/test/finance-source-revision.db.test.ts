@@ -14,6 +14,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
 import { sourceRevisionError } from '@crove/mod-finance';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -120,7 +121,7 @@ suite('journal entry source revisions (#1283)', () => {
     appUrl = url.toString();
     pool = createPool({ connectionString: appUrl, max: 1 });
     const db = createDb(pool);
-    const runtime = new Runtime(db).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: 'in.test' }) });
+    const runtime = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: 'in.test' }) });
     userId = await upsertIdentity(db, { issuer: 'test', subject: 'source-revision', email: 'rev@source.test', name: null });
     const actor = { type: 'user' as const, userId, aal: 'aal1' as const };
     orgs.a = (await createOrg(runtime, actor, 'Revision A')).orgId;

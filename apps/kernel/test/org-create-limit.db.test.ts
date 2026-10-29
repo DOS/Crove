@@ -10,6 +10,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { buildKernelCommands, createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
 import { toORPCError } from '../src/rpc.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -80,8 +81,8 @@ suite('org creation rate limit on PostgreSQL (T4, #94)', () => {
     pool = createPool({ connectionString: appUrl.toString(), max: 6 });
     db = createDb(pool);
     const queries = kernelQueries({ inboundDomain: 'in.test' });
-    runtime = new Runtime(db).register({ commands: kernelCommands, queries });
-    tight = new Runtime(db).register({ commands: buildKernelCommands({ orgCreateLimits: { perDay: 2, total: 3 } }), queries });
+    runtime = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: kernelCommands, queries });
+    tight = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: buildKernelCommands({ orgCreateLimits: { perDay: 2, total: 3 } }), queries });
   });
 
   afterAll(async () => {

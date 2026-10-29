@@ -19,6 +19,7 @@ import { financeCommands, financeQueries } from '@crove/mod-finance';
 import { createAuthenticator } from '../src/auth.ts';
 import { loadConfig } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -44,6 +45,7 @@ const reached: string[] = [];
 // An export command whose audit write fails: the runtime refuses the command, as it would on a database error.
 const failing = (name: string) =>
   defineCommand({
+    sideEffect: 'none',
     name,
     input: z.object({}).passthrough(),
     risk: 'R0',
@@ -91,7 +93,7 @@ suite('finance exports: no audit row, no download (#365)', () => {
     pool = createPool({ connectionString: appUrl.toString(), max: 4 });
     const db: Db = createDb(pool);
     // The finance module as deployed, but with its export commands replaced by failing ones of the same names.
-    const runtime = new Runtime(db).register({
+    const runtime = new Runtime(db, { manifests: TEST_MANIFESTS }).register({
       commands: [...kernelCommands, ...financeCommands.filter((c) => !EXPORT_COMMANDS.includes(c.name)), ...EXPORT_COMMANDS.map(failing)],
       queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries],
     });
