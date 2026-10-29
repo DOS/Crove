@@ -465,8 +465,9 @@ export const zInboxItem = z.object({
   sellerName: z.string().nullable(),
   // The customer of a sale (the seller is the org itself); null otherwise.
   buyerName: z.string().nullable(),
-  // The legal entity the revision names (#1543); null when it names none, and approval then records it in the
-  // approver's default entity.
+  // The legal entity the proposal is recorded in: the one its revision names (#1543), else the proposal's own (#1538,
+  // the entity of its reading or of its request), which an edit never changes (#1764). Null only for a list row whose
+  // stored value is not an id.
   legalEntityId: zId.nullable(),
   total: zMoney.nullable(),
   issueDate: zLocalDate.nullable(),

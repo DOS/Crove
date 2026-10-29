@@ -156,6 +156,7 @@ function toInboxItem(row: {
   decided_at: Date | null;
   extraction_id: string | null;
   requested_by_agent: string | null;
+  legal_entity_id: string;
 }, agentName: string | null) {
   const payload = parsePayload(row.kind, row.payload);
   const voucher = parseVoucher(row.kind, row.payload) ?? parseJournalVoucher(row.kind, row.payload);
@@ -168,8 +169,8 @@ function toInboxItem(row: {
     direction,
     sellerName: payload?.seller.name ?? null,
     buyerName: direction === 'sale' ? (payload?.buyer.name ?? null) : null,
-    // The legal entity the revision names (#1543), as the list gives it.
-    legalEntityId: payload?.legalEntityId ?? voucher?.legalEntityId ?? null,
+    // The legal entity the revision names (#1543), else the proposal's own (#1764), as the list gives it.
+    legalEntityId: payload?.legalEntityId ?? voucher?.legalEntityId ?? row.legal_entity_id,
     total: payload?.invoice.total ?? voucher?.total ?? null,
     issueDate: payload?.invoice.issueDate ?? voucher?.date ?? null,
     failedChecks: countChecks(payload, 'fail'),
@@ -216,10 +217,9 @@ export const inboxList = defineQuery({
         sql<string | null>`left(payload #>> '{seller,name}', 500)`.as('seller_name'),
         sql<boolean>`coalesce(payload ->> 'direction' = 'sale', false)`.as('is_sale'),
         sql<string | null>`left(payload #>> '{buyer,name}', 500)`.as('buyer_name'),
-        // The legal entity the revision names (#1543): an invoice's from inbox.edit, a voucher's from its form. Approval
-        // records the proposal there, and in the approver's default entity when it names none. The entity stamped on the
-        // row when it was made (#1556) is not used: the edit does not move it and approval does not read it.
-        sql<string | null>`left(payload ->> 'legalEntityId', 36)`.as('legal_entity_id'),
+        // The legal entity the revision names (#1543): a voucher's from its form. Else the proposal's own (#1538): the
+        // entity of its reading or of its request, where approval records it (#1756); an edit never moves it (#1764).
+        sql<string | null>`left(coalesce(payload ->> 'legalEntityId', legal_entity_id::text), 36)`.as('legal_entity_id'),
         // A voucher (#327) and a general journal voucher (#888) keep their total and date at the top of their payload.
         sql<string | null>`left(CASE WHEN kind IN (${VOUCHER_KIND}, ${JOURNAL_VOUCHER_KIND}) THEN payload ->> 'total' ELSE payload #>> '{invoice,total}' END, 30)`.as('total'),
         sql<string | null>`left(CASE WHEN kind IN (${VOUCHER_KIND}, ${JOURNAL_VOUCHER_KIND}) THEN payload ->> 'date' ELSE payload #>> '{invoice,issueDate}' END, 10)`.as('issue_date'),

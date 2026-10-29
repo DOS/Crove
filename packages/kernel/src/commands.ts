@@ -508,6 +508,13 @@ function changesContent(payload: unknown, lineAccounts: z.infer<typeof zLineAcco
   return lineAccounts.some((l) => stored.get(l.lineNo) !== l.debitAccount);
 }
 
+const legalEntityMoveRefused = () =>
+  new DomainError(
+    'LEGAL_ENTITY_MOVE_REFUSED',
+    409,
+    'Đề xuất này thuộc một pháp nhân khác; không chuyển sang pháp nhân khác được. Hãy từ chối đề xuất rồi tải chứng từ lên lại ở pháp nhân cần ghi sổ',
+  );
+
 // Edits a pending proposal: the new content becomes a new revision authored by the editor (plan §8.3), and
 // the approval policy runs again on it. An edit never approves; kernel.proposal.approve does, separately.
 //
@@ -516,7 +523,7 @@ export const editProposal = defineCommand({
   name: 'kernel.proposal.edit',
   proposalEditor: true,
   // lineAccounts, an exchangeRate for a foreign-currency invoice read without one (#918), the legal entity whose books
-  // the invoice goes to (#1280), or several of them.
+  // the invoice goes to (#1280, only the proposal's own since #1764), or several of them.
   input: z
     .object({
       id: zId,
@@ -533,6 +540,9 @@ export const editProposal = defineCommand({
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới chỉnh sửa được');
     const proposal = await lockPendingProposal(ctx, input.id, input.revision);
+    // A proposal stays in its legal entity (#1764): moving it would show one entity's document to another's members,
+    // and its entity never changes (ADR-0021, b_legal_entity). The database refuses it too (proposal_entity_payload).
+    if (input.legalEntityId !== undefined && input.legalEntityId.toLowerCase() !== proposal.legal_entity_id) throw legalEntityMoveRefused();
     await refuseWhileReextracting(ctx, proposal.source_file_id);
     // The module's reviser for this proposal's command, from the registered definitions (their `revises`).
     const reviser = ctx.reviserOf(proposal.command);
@@ -550,6 +560,8 @@ export const editProposal = defineCommand({
       { proposalId: proposal.id },
     );
     if (!revised.changed) return { revision: proposal.revision, changed: false };
+    const named = zId.safeParse((revised.payload as { legalEntityId?: unknown } | null)?.legalEntityId);
+    if (named.success && named.data.toLowerCase() !== proposal.legal_entity_id) throw legalEntityMoveRefused();
     const revision = proposal.revision + 1;
     await ctx.trx
       .updateTable('crove_kernel.proposal')
