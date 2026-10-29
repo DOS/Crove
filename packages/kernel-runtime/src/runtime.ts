@@ -2062,15 +2062,12 @@ export class Runtime {
             .returning('key')
             .executeTakeFirst();
           if (!claimed) {
-            // A row claimed before the switch to keyed hashes (#1732) holds the plain SHA-256 and still replays, until
-            // the 7-day retention removes it; a keyed row is compared only with the keyed hash.
+            // The stored hash is compared with this runtime's hash of the input only. A row claimed before the switch
+            // to keyed hashes (#1732) holds the plain SHA-256, matches no keyed hash, and is refused as another request,
+            // so a retry against it never runs the command again; the 7-day retention removes such rows (#1750).
             const existing = await trx
               .selectFrom('crove_kernel.idempotency_key')
-              .select([
-                'command',
-                'response',
-                sql<boolean>`(request_sha256 = ${requestHash} OR (NOT starts_with(request_sha256, ${KEYED_INPUT_HASH_PREFIX}) AND request_sha256 = ${sha256Hex(canonical)}))`.as('same_request'),
-              ])
+              .select(['command', 'response', sql<boolean>`(request_sha256 = ${requestHash})`.as('same_request')])
               .where('org_id', '=', orgId)
               .where('actor_key', '=', key)
               .where('key', '=', idempotencyKey)
