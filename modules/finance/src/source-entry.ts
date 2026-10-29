@@ -3,7 +3,8 @@
 // n + 1 only once revision n is reversed, so the latest revision is the only one that can be in force. Every join from
 // a source to its entry keeps that one, so a re-posted source counts once in each list and report (#1338). A source
 // whose latest revision is reversed (a voided document) keeps that entry, as before. A join from an entry to its source
-// (the journal, the ledger) needs none of this: each entry has one source.
+// (the journal, the ledger) needs none of this: each entry has one source. Nor does a document's export history
+// (document-exports.ts), which asks of every revision whether a file took it in.
 import { sql, type RawBuilder, type SqlBool } from 'kysely';
 
 // True for the entry `alias` when its source has no later revision. The unique key (org_id, source_type, source_id,

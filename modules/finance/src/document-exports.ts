@@ -8,7 +8,6 @@ import { z } from 'zod';
 import { zId, type DocumentExport } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineQuery } from '@crove/kernel-runtime';
-import { latestRevision } from './source-entry.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 // The most exports one history shows.
@@ -30,30 +29,37 @@ export const documentExports = defineQuery({
     const misa = found.direction === 'sale' ? 'misa_sme_sales' : 'misa_sme_purchases';
     // Never matches for a sale: a sale has no goods file.
     const goods = found.direction === 'sale' ? 'none' : 'misa_sme_goods_purchases';
-    // The journal holds every entry, voided or not; a MISA file leaves a voided document out (loadVouchers).
+    // The journal holds every entry, voided or not; a MISA file leaves a voided document out (loadVouchers), and holds
+    // only the entry in force (#1338). Every revision of the document's entry counts (#1283): an export took the
+    // document in when its range held the date of a revision posted before it, and for a MISA file, one not yet
+    // reversed. Each export once, however many revisions it matched.
     const { rows } = await sql<{ id: string; occurred_at: Date; actor_id: string | null; format: string | null; from: string | null; to: string | null }>`
       WITH doc AS (
-        SELECT j.entry_date, j.created_at AS posted_at, v.created_at AS voided_at,
+        SELECT j.entry_date, j.created_at AS posted_at, r.created_at AS reversed_at, v.created_at AS voided_at,
           EXISTS (SELECT 1 FROM crove_finance.purchase_line l WHERE l.org_id = j.org_id AND l.document_id = j.source_id
             AND l.debit_account ~ '^15[236]') AS has_stock,
           EXISTS (SELECT 1 FROM crove_finance.purchase_line l WHERE l.org_id = j.org_id AND l.document_id = j.source_id
             AND (l.debit_account IS NULL OR l.debit_account !~ '^15[236]')) AS has_other
         FROM crove_finance.journal_entry j
+        LEFT JOIN crove_finance.journal_entry r ON r.org_id = j.org_id AND r.reverses_entry_id = j.id
         LEFT JOIN crove_finance.purchase_document_void v ON v.org_id = j.org_id AND v.document_id = j.source_id
         WHERE j.org_id = ${ctx.orgId}::uuid AND j.source_type = 'finance.purchase_document' AND j.source_id = ${found.id}::uuid
-          AND j.reverses_entry_id IS NULL AND ${latestRevision('j')}
+          AND j.reverses_entry_id IS NULL
       )
       SELECT e.id, e.occurred_at, e.actor_id, e.detail ->> 'format' AS format, e.detail ->> 'from' AS "from", e.detail ->> 'to' AS "to"
-      FROM crove_kernel.audit_event e, doc
+      FROM crove_kernel.audit_event e
       WHERE e.org_id = ${ctx.orgId}::uuid AND e.command = 'finance.journal.export' AND e.outcome = 'ok'
-        AND e.occurred_at >= doc.posted_at
         AND e.detail ? 'from' AND e.detail ? 'to'
-        AND (e.detail ->> 'from' IS NULL OR (e.detail ->> 'from')::date <= doc.entry_date)
-        AND (e.detail ->> 'to' IS NULL OR (e.detail ->> 'to')::date >= doc.entry_date)
-        AND (coalesce(e.detail ->> 'format', 'journal') = 'journal'
-          OR ((doc.voided_at IS NULL OR e.occurred_at < doc.voided_at)
-            AND ((e.detail ->> 'format' = ${misa} AND (NOT e.detail ? 'stockLines' OR doc.has_other))
-              OR (e.detail ->> 'format' = ${goods} AND doc.has_stock))))
+        AND EXISTS (
+          SELECT 1 FROM doc
+          WHERE e.occurred_at >= doc.posted_at
+            AND (e.detail ->> 'from' IS NULL OR (e.detail ->> 'from')::date <= doc.entry_date)
+            AND (e.detail ->> 'to' IS NULL OR (e.detail ->> 'to')::date >= doc.entry_date)
+            AND (coalesce(e.detail ->> 'format', 'journal') = 'journal'
+              OR ((doc.voided_at IS NULL OR e.occurred_at < doc.voided_at)
+                AND (doc.reversed_at IS NULL OR e.occurred_at < doc.reversed_at)
+                AND ((e.detail ->> 'format' = ${misa} AND (NOT e.detail ? 'stockLines' OR doc.has_other))
+                  OR (e.detail ->> 'format' = ${goods} AND doc.has_stock)))))
       ORDER BY e.occurred_at, e.id
       LIMIT ${DOCUMENT_EXPORT_LIMIT}`.execute(ctx.trx);
     const users = [...new Set(rows.map((r) => r.actor_id).filter((u): u is string => u !== null))];

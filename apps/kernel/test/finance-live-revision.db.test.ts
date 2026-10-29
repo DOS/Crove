@@ -1,8 +1,9 @@
 // A re-posted source counts once (issue #1338). Since #1283 a source document may have several journal entries:
 // revision 1, its reversal, then revision 2. The lists that join a source to its entry keep the latest revision only
 // (modules/finance/src/source-entry.ts), so a purchase document and a cash voucher posted again each show once, with
-// their revision 2 entry. The entries are written by the database owner, as the posting path would leave them; the
-// lists are read through the runtime as the org's owner.
+// their revision 2 entry, and a document's export history names each file that took one of its revisions in, once.
+// The entries are written by the database owner, as the posting path would leave them; the lists are read through the
+// runtime as the org's owner.
 // Set CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -79,6 +80,9 @@ suite('a re-posted source counts once in the finance lists (#1338)', () => {
   }
 
   const query = <T>(name: string, input: unknown) => runtime.query<T>(name, input, { actor: { type: 'user', userId, aal: 'aal1' }, orgId });
+  // An export of the journal or a MISA file over a range, as the export routes record it (#878).
+  const exported = (input: { from: string; to: string; format?: string }) =>
+    runtime.execute('finance.journal.export', { ...input, entries: 1 }, { actor: { type: 'user', userId, aal: 'aal1' }, orgId, idempotencyKey: randomUUID() });
 
   beforeAll(async () => {
     const root = new pg.Client({ connectionString: ADMIN });
@@ -130,6 +134,9 @@ suite('a re-posted source counts once in the finance lists (#1338)', () => {
       );
       first = await entry(c, { date: '2026-09-10', sourceType: 'finance.purchase_document', sourceId: document, lines });
     });
+    // Exported while revision 1 is in force: the journal and the MISA purchases file of its dates.
+    await exported({ from: '2026-09-01', to: '2026-09-15' });
+    await exported({ from: '2026-09-01', to: '2026-09-15', format: 'misa_sme_purchases' });
     // The reversal of revision 1 voids the document in the same transaction, as finance.journal.reverse does.
     let reversal = '';
     await inTransaction(async (c) => {
@@ -144,6 +151,9 @@ suite('a re-posted source counts once in the finance lists (#1338)', () => {
     await inTransaction(async (c) => {
       second = await entry(c, { date: '2026-09-25', sourceType: 'finance.purchase_document', sourceId: document, revision: 2, lines });
     });
+    // Exported after revision 2: the journal of its dates, and a MISA file, which leaves the voided document out.
+    await exported({ from: '2026-09-20', to: '2026-09-30' });
+    await exported({ from: '2026-09-01', to: '2026-09-30', format: 'misa_sme_purchases' });
 
     // Two entries name the document; the list shows it once, with revision 2.
     const listed = (await query<Array<{ id: string; journalEntryId: string | null }>>('finance.documents.list', {})).filter((d) => d.id === document);
@@ -151,6 +161,13 @@ suite('a re-posted source counts once in the finance lists (#1338)', () => {
     expect(await query('finance.documents.get', { id: document })).toMatchObject({ id: document, journalEntryId: second, voided: { reversalEntryId: reversal } });
     // The voided document stays out of the MISA export and the VAT working, as before.
     expect(await query<unknown[]>('finance.vouchers.purchases', { from: '2026-09-01', to: '2026-09-30' })).toEqual([]);
+    // The document's export history: each file that took one of its revisions in, once.
+    const history = await query<Array<{ format: string; from: string | null; to: string | null }>>('finance.document.exports', { documentId: document });
+    expect(history.map((h) => [h.format, h.from, h.to])).toEqual([
+      ['journal', '2026-09-01', '2026-09-15'],
+      ['misa_sme_purchases', '2026-09-01', '2026-09-15'],
+      ['journal', '2026-09-20', '2026-09-30'],
+    ]);
     // The journal lists every entry: both revisions and the reversal.
     const journal = await query<Array<{ id: string }>>('finance.journal.list', { from: '2026-09-01', to: '2026-09-30' });
     expect(journal.map((e) => e.id).sort()).toEqual([first, reversal, second].sort());
