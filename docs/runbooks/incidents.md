@@ -38,7 +38,7 @@ The page does not cover sign-in: when it loads, the API is up, and Supabase Auth
 **Alert.** From the prober, one or both of:
 
 - `heartbeat`: `last worker heartbeat was N s ago (limit 120 s): the worker is down`, or `no worker heartbeat recorded: the worker has never started`. The worker records a heartbeat every 30 s (`crove_kernel.worker_heartbeat`); the limit is `PROBER_MAX_HEARTBEAT_AGE_SECONDS`.
-- `job_age`: `oldest queued job has waited N s (limit 900 s, M queued): workers are stuck or too few`. The limit is `PROBER_MAX_JOB_AGE_SECONDS`.
+- `job_age`: `oldest queued job has waited N s (limit 900 s, M queued): workers are stuck or too few`. The limit is `PROBER_MAX_JOB_AGE_SECONDS`. Only the queues of the modules a worker that beat in the last hour works count (#1877): a module the deployment leaves out (`CROVE_MODULES`) keeps its queued jobs for when it is installed again, and they do not raise this alert; while a worker of an older release is running, every queue counts.
 
 When the database cannot be read, the prober alerts `probe: the prober could not read crove_kernel.health(): ...` instead, and the heartbeat monitor pages once the pings stop: go to "The database" below.
 

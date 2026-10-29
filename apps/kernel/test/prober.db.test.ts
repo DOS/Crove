@@ -12,6 +12,7 @@ import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
+import { AVAILABLE_MODULES } from '../src/config.ts';
 import { EXIT, evaluateHealth, probeOnce, readHealth, runProber, type ProberConfig } from '../src/prober.ts';
 import { JOB_SCHEMA, QUEUES } from '../src/jobs-schema.ts';
 import { beat } from '../src/worker.ts';
@@ -20,6 +21,7 @@ import { TEST_MANIFESTS } from './manifests.ts';
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
 const limits = { outboxAgeSeconds: 300, jobAgeSeconds: 900, heartbeatAgeSeconds: 120, deadLetters: 0, notifyQueuePercent: 50 };
+const ALL_MODULES = [...AVAILABLE_MODULES];
 
 const suite = ADMIN ? describe : describe.skip;
 
@@ -141,7 +143,7 @@ suite('prober on PostgreSQL', () => {
   });
 
   it('is healthy once the relay is current and the worker beats', async () => {
-    await beat(workerDb, 'worker-a');
+    await beat(workerDb, 'worker-a', ALL_MODULES);
     const health = await readHealth(proberUrl, 3600);
     expect(health).toMatchObject({ outbox_pending: 0, outbox_oldest_age_seconds: null, jobs_schema_present: true, jobs_queued: 0, dead_letter_count: 0 });
     expect(health.worker_heartbeat_age_seconds).toBeGreaterThanOrEqual(0);
@@ -196,6 +198,47 @@ suite('prober on PostgreSQL', () => {
     const stale = await readHealth(proberUrl, 3600);
     expect(stale.worker_heartbeat_age_seconds).toBeGreaterThanOrEqual(600);
     expect(evaluateHealth(stale, limits, 3600).map((f) => f.check)).toEqual(['outbox', 'inbound', 'job_age', 'dead_letters', 'heartbeat']);
+  });
+
+  // #1877: a module left out (CROVE_MODULES) has its queues worked by nobody; its queued jobs stay for when it is
+  // installed again, and the prober does not read them as stuck workers.
+  it('ages only the queues of the modules a worker that beat in the last hour works', async () => {
+    const queued = async () => {
+      const h = await readHealth(proberUrl, 3600);
+      return { jobs: h.jobs_queued, aged: h.job_oldest_queued_age_seconds !== null && h.job_oldest_queued_age_seconds >= 1200 };
+    };
+    // The finance extraction jobs of the test above wait; worker-a now works the kernel alone.
+    await beat(workerDb, 'worker-a', ['kernel']);
+    expect(await queued()).toEqual({ jobs: 0, aged: false });
+    // A second worker that works finance counts them again.
+    await beat(workerDb, 'worker-b', ['kernel', 'finance']);
+    expect(await queued()).toEqual({ jobs: 2, aged: true });
+    await admin((c) => c.query(`DELETE FROM crove_kernel.worker_heartbeat WHERE instance = 'worker-b'`));
+    expect(await queued()).toEqual({ jobs: 0, aged: false });
+    // A live worker of an older release, which records no modules: every queue counts, as before.
+    await admin((c) => c.query(`INSERT INTO crove_kernel.worker_heartbeat (instance, beat_at) VALUES ('worker-legacy', now())`));
+    expect(await queued()).toEqual({ jobs: 2, aged: true });
+    // Silent for over an hour, it no longer counts; nor does the day-old 'worker-old' (also without modules).
+    await admin((c) => c.query(`UPDATE crove_kernel.worker_heartbeat SET beat_at = now() - interval '2 hours' WHERE instance = 'worker-legacy'`));
+    expect(await queued()).toEqual({ jobs: 0, aged: false });
+    // Nothing was deleted: the jobs are still there.
+    const [left] = await admin(async (c) => (await c.query<{ n: number }>(`SELECT count(*)::int AS n FROM ${JOB_SCHEMA}.job WHERE name = $1 AND state = 'created'`, [QUEUES.extract])).rows);
+    expect(left?.n).toBe(2);
+    // Module names are checked, and only the worker login records them.
+    await expect(beat(workerDb, 'worker-a', ['Finance'])).rejects.toMatchObject({ code: '22023' });
+    const prober = new pg.Client({ connectionString: proberUrl });
+    await prober.connect();
+    try {
+      await expect(prober.query(`SELECT crove_kernel.worker_beat('x', ARRAY['kernel'])`)).rejects.toMatchObject({ code: '42501' });
+    } finally {
+      await prober.end();
+    }
+    // As the test above left it: worker-a works every module and stopped beating ten minutes ago.
+    await beat(workerDb, 'worker-a', ALL_MODULES);
+    await admin(async (c) => {
+      await c.query(`DELETE FROM crove_kernel.worker_heartbeat WHERE instance = 'worker-legacy'`);
+      await c.query(`UPDATE crove_kernel.worker_heartbeat SET beat_at = now() - interval '10 minutes' WHERE instance = 'worker-a'`);
+    });
   });
 
   it('delivers the alert to the webhook and exits 1', async () => {
