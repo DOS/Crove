@@ -5,7 +5,7 @@
 //     delegated or escalated task its parent's; any other task stays org-level. A comment goes with its task.
 //   - A member limited to one entity lists, opens and comments on no task of another entity, and still sees the
 //     org-level ones; an agent limited to one entity sees the same.
-//   - Tasks written before 20261104040000 are stamped the same way, and the review and escalation titles that copied a
+//   - Tasks written before 20261104060000 are stamped the same way, and the review and escalation titles that copied a
 //     proposal's title before #1756 take the neutral wording.
 // Part of the invariant suite: keep it self-contained (package code under test, no helpers from outside
 // test/invariant/). Set CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
@@ -24,7 +24,7 @@ import { financeCommands, financeQueries } from '@crove/mod-finance';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
-const THIS_VERSION = '20261104040000';
+const THIS_VERSION = '20261104060000';
 const TEMPLATE = 'finance.chief_accountant';
 const SYSTEM = { type: 'system' as const, component: 'kernel.agent' };
 const suite = ADMIN ? describe : describe.skip;
@@ -307,6 +307,35 @@ suite('tasks and task comments per legal entity on PostgreSQL (#1762)', () => {
     await expect(
       admin((c) => insertTask(c, { title: 'Sai', kind: 'proposal_review', source: 'event', source_ref: ref(proposal), created_by_type: 'system', legal_entity_id: defaultEntity })),
     ).rejects.toThrow(/LEGAL_ENTITY_MISMATCH/);
+    // A record the writer cannot read: a writer limited to one entity stamps its own, one limited to several is refused.
+    const single = await asMember(accountantA, (c) =>
+      c
+        .query<{ e: string }>(
+          `INSERT INTO crove_kernel.task (org_id, title, source, source_ref, created_by_type) VALUES ($1, 'Về chi nhánh', 'human', $2, 'user') RETURNING legal_entity_id AS e`,
+          [orgId, ref(proposal)],
+        )
+        .then((r) => r.rows[0]?.e),
+    );
+    expect(single).toBe(defaultEntity);
+    const accountantC = await upsertIdentity(createDb(pools[0] as pg.Pool), { issuer: 't1762', subject: randomUUID(), email: 'accountant-c@t1762.test', name: null });
+    await admin(async (c) => {
+      const second = (
+        await c.query<{ id: string }>(`INSERT INTO crove_kernel.legal_entity (org_id, name, kind, created_by) VALUES ($1, 'Chi nhánh 2', 'branch', $2) RETURNING id`, [orgId, owner])
+      ).rows[0]?.id as string;
+      await c.query(`INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member')`, [orgId, accountantC]);
+      for (const entity of [defaultEntity, second]) {
+        await c.query(`INSERT INTO crove_kernel.role_assignment (org_id, user_id, role_key, legal_entity_id, granted_by) VALUES ($1, $2, 'external_accountant', $3, $4)`, [
+          orgId,
+          accountantC,
+          entity,
+          owner,
+        ]);
+      }
+    });
+    await asMember(accountantC, async (c) => {
+      expect((await c.query<{ s: string[] }>('SELECT crove_kernel.ctx_le_scope() AS s')).rows[0]?.s).toHaveLength(2);
+      await expect(insertTask(c, { title: 'Về chi nhánh', source: 'human', source_ref: ref(proposal), created_by_type: 'user' })).rejects.toThrow(/LEGAL_ENTITY_MISMATCH/);
+    });
     // A person's task stays org-level.
     const { taskId } = await app.execute<{ taskId: string }>('kernel.task.create', { title: 'Việc mới', assigneePositionId: null }, { actor: asUser(accountantB), orgId });
     expect(await entityOf(taskId)).toBeNull();

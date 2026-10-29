@@ -26,7 +26,9 @@
 --     record's id is the table's id column). The listed types are activity's (20261104010000) whose record id is the
 --     record's own id: kernel.proposal (the review tasks dispatch creates), kernel.legal_entity and the finance
 --     records. The record is read as the writer (SECURITY INVOKER); when the writer cannot read it, the task takes the
---     writer's own entity when its scope is exactly one entity, and stays org-level otherwise, as activity does.
+--     writer's own entity when its scope is exactly one entity, as activity does, and is refused (LEGAL_ENTITY_MISMATCH)
+--     for a writer limited to several; a writer with every entity ('*') or no context names another org's record or
+--     none, and the task stays org-level.
 --     source_ref is never a caller's input (kernel.task.create names none; kernel code sets it).
 --   - Otherwise (no parent, no listed record: a person's task, a to-do handed over, a social post) NULL, org-level.
 --   - A writer that names an entity keeps it when no rule above gives one (le_scope's WITH CHECK and the foreign key
@@ -107,10 +109,14 @@ BEGIN
             INTO v_entity USING NEW.org_id, v_id::uuid;
         END IF;
         IF v_entity IS NULL AND NEW.legal_entity_id IS NULL THEN
-          -- A record the writer cannot read: the writer's own entity when it is limited to exactly one.
+          -- A record the writer cannot read: the writer's own entity when it is limited to exactly one; refused for a
+          -- writer limited to several (or none), which cannot tell which of them the record is about.
           v_scope := crove_kernel.ctx_le_scope();
           IF pg_catalog.cardinality(v_scope) = 1 AND v_scope[1] <> '*' THEN
             NEW.legal_entity_id := v_scope[1]::uuid;
+          ELSIF v_scope IS NOT NULL AND NOT ('*' = ANY (v_scope)) THEN
+            RAISE EXCEPTION 'LEGAL_ENTITY_MISMATCH' USING ERRCODE = '23514',
+              DETAIL = pg_catalog.json_build_object('table', 'crove_kernel.task', 'record_type', v_type)::text;
           END IF;
         END IF;
         EXIT;
