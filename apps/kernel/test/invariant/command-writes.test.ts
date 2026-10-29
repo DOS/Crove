@@ -173,6 +173,16 @@ function runtimeImports(raw: string): { names: string[]; problems: string[] } {
   }
   // Code built from strings, and an object made over another (a shadow of a runtime); Object.create(null) stays allowed.
   if (/\beval\s*\(|\bFunction\s*\(|\bObject\s*\.\s*create\s*\((?!\s*null\s*\))/.test(text)) problems.push('eval, Function or Object.create over an object');
+  // Loading code past the import graph (#1772): Node's module loader and its builtins by name, the vm module, and every
+  // descriptor of an object at once (a prototype's constructor among them).
+  if (/\bgetBuiltinModule\b|\b_load\b|\bModule\s*\.\s*prototype\b|\bgetOwnPropertyDescriptors\b/.test(text)) {
+    problems.push('the module loader, a builtin by name or every descriptor of an object');
+  }
+  for (const m of text.matchAll(/\b(?:import|export)\b([^;]*?)\bfrom\s*['"`](?:node:)?(vm|module)['"`]/g)) {
+    // node:module only for createRequire, which the scan above holds to resolve().
+    if (m[2] === 'vm' || !/^\s*\{\s*createRequire\s*\}\s*$/.test(m[1] ?? '')) problems.push(`imports ${m[2]}`);
+  }
+  if (/\bvm\s*\./.test(text)) problems.push('the vm module');
   return { names, problems };
 }
 
@@ -206,7 +216,6 @@ const INTERNAL = tableWrite(kernelManifest.tables, 'crove_kernel', 'task_comment
 const def = (extra: Partial<CommandDef<unknown, unknown>>): CommandDef<unknown, unknown> =>
   defineCommand({ sideEffect: 'none', name: 't1710.reg', input: z.object({}), risk: 'R1', access: 'proposal', handler: async () => ({}), ...extra }) as CommandDef<unknown, unknown>;
 const withManifests = (extra: Partial<CommandDef<unknown, unknown>>) => () => new Runtime(cells, { manifests: manifests() }).register({ commands: [def(extra)] });
-const withoutManifests = (extra: Partial<CommandDef<unknown, unknown>>) => () => new Runtime(cells, { manifests: TEST_MANIFESTS }).register({ commands: [def(extra)] });
 const forged = (classes: Record<string, string>, columns: readonly string[] = ['email']): CommandWrite => ({ table: 'crove_kernel.party', classes, columns });
 
 describe('declared command writes against the manifests (#1697, #1710)', () => {
@@ -236,21 +245,32 @@ describe('declared command writes against the manifests (#1697, #1710)', () => {
     expect(runtime.commandInfo('t1710.clean')?.contactOrPayment).toBe(false);
   });
 
-  it('refuses a pattern for a column, with or without the manifests', () => {
-    for (const register of [withManifests, withoutManifests]) {
-      expect(register({ writes: [forged({ '*': 'internal' }, ['*'])] })).toThrow(/not a column name/);
-      expect(register({ writes: [forged({ ...PARTY, '*': 'internal' })] })).toThrow(/not a column name/);
-    }
+  it('refuses a pattern for a column', () => {
+    expect(withManifests({ writes: [forged({ '*': 'internal' }, ['*'])] })).toThrow(/not a column name/);
+    expect(withManifests({ writes: [forged({ ...PARTY, '*': 'internal' })] })).toThrow(/not a column name/);
   });
 
   it('reads the classes once, so a getter cannot answer the checks one class and P04 another', () => {
-    for (const options of [{ manifests: manifests() }, {}]) {
-      let reads = 0;
-      const classes = { ...PARTY };
-      Object.defineProperty(classes, 'email', { enumerable: true, get: () => (reads++ === 0 ? 'contact' : 'internal') });
-      const runtime = new Runtime(cells, { manifests: TEST_MANIFESTS, ...options }).register({ commands: [def({ writes: [forged(classes)] })] });
-      expect(runtime.commandInfo('t1710.reg')?.contactOrPayment).toBe(true);
-    }
+    let reads = 0;
+    const classes = { ...PARTY };
+    Object.defineProperty(classes, 'email', { enumerable: true, get: () => (reads++ === 0 ? 'contact' : 'internal') });
+    const runtime = new Runtime(cells, { manifests: manifests() }).register({ commands: [def({ writes: [forged(classes)] })] });
+    expect(runtime.commandInfo('t1710.reg')?.contactOrPayment).toBe(true);
+  });
+
+  it('builds no runtime without the manifests, and registers no command without a side effect (#1772, #1637)', () => {
+    // Whatever path builds a runtime (the server's serverRuntime() or any other), it checks declared writes against
+    // the manifests; a runtime whose commands declare none takes an empty list.
+    expect(() => new (Runtime as unknown as new (c: CellResolver) => Runtime)(cells)).toThrow(/RuntimeOptions\.manifests/);
+    expect(() => new Runtime(cells, {} as never)).toThrow(/RuntimeOptions\.manifests/);
+    expect(() => new Runtime(cells, { manifests: null } as never)).toThrow(/RuntimeOptions\.manifests/);
+    expect(() => new Runtime(cells, { manifests: [] }).register({ commands: [def({ name: 't1772.writes', writes: [INTERNAL] })] })).toThrow(/no module manifest has/);
+    expect(() => new Runtime(cells, { manifests: [] }).register({ commands: [def({ name: 't1772.reads' })] })).not.toThrow();
+    // Every command says what it does beyond its transaction.
+    const { sideEffect: _sideEffect, ...without } = def({ name: 't1637.none' });
+    expect(() => new Runtime(cells, { manifests: [] }).register({ commands: [without as CommandDef<unknown, unknown>] })).toThrow(/declares no side effect/);
+    expect(() => new Runtime(cells, { manifests: [] }).register({ commands: [def({ name: 't1637.bad', sideEffect: 'some' as never })] })).toThrow(/declares no side effect or an unknown one/);
+    expect(() => new Runtime(cells, { manifests: [] }).register({ commands: [def({ name: 't1637.low', risk: 'R1', sideEffect: 'external' })] })).toThrow(/below R2/);
   });
 
   it('refuses manifests that give one table twice', () => {
@@ -312,6 +332,8 @@ describe('declared command writes against the manifests (#1697, #1710)', () => {
     expect(scan(`// an import (#465) of a .constructor, Reflect.construct\nconst a = 1;`)).toEqual({ names: [], problems: [] });
     expect(scan(`class A {\n  constructor(a: string) {}\n}`)).toEqual({ names: [], problems: [] });
     expect(scan('const out = Object.create(null) as Record<string, unknown>;')).toEqual({ names: [], problems: [] });
+    expect(scan(`import { createRequire } from 'node:module';\nconst p = createRequire(import.meta.url).resolve('x');`)).toEqual({ names: [], problems: [] });
+    expect(scan('const d = Object.getOwnPropertyDescriptor(value, key);')).toEqual({ names: [], problems: [] });
     // A quote or backtick in a regular expression does not hide the code after it.
     expect(scan("const re = /[`'*]/g;\nconst k = require('x');").problems).toEqual(['require()']);
     expect(scan(`import { 'Runtime' as R } from '@crove/kernel-runtime';`).names).toEqual(['R']);
@@ -337,6 +359,15 @@ describe('declared command writes against the manifests (#1697, #1710)', () => {
       'const shadow = Object.create(runtime);',
       `const f = new Function('return 1');`,
       'eval(code);',
+      // The module loader and code built past the import graph (#1772).
+      `const mod = process.getBuiltinModule('module');`,
+      `const k = Module._load('@crove/kernel-runtime');`,
+      `const r = Module.prototype.require.call(m, 'x');`,
+      'const all = Object.getOwnPropertyDescriptors(Object.getPrototypeOf(runtime));',
+      `import vm from 'node:vm';`,
+      `import { runInThisContext } from 'vm';`,
+      `import { Module } from 'node:module';`,
+      `const v = vm.runInThisContext(code);`,
       // The class passed on through another module (#1771 review): kernel.ts exporting it, another file importing it.
       'export {\n  Runtime,\n};',
       'export default Runtime;',
@@ -457,15 +488,13 @@ describe('declared command writes against the manifests (#1697, #1710)', () => {
   });
 
   it('refuses a command an agent may run that does not declare its writes, and the old noContactOrPayment form', () => {
-    for (const register of [withManifests, withoutManifests]) {
-      expect(register({ access: [], agent: { roles: 'any' } })).toThrow(/an agent may run it, so it declares its writes/);
-      expect(register({ access: [], agent: { roles: 'any' }, writes: [] })).not.toThrow();
-      expect(register({ agentApprovers: { roles: ['finance.chief_accountant'] } })).toThrow(/declares its writes/);
-      expect(register({ agentApprovers: { roles: ['finance.chief_accountant'], noContactOrPayment: true } as AgentApprovers })).toThrow(/declares its writes/);
-      expect(register({ agentApprovers: { roles: ['finance.chief_accountant'], noContactOrPayment: true } as AgentApprovers, writes: [INTERNAL] })).toThrow(
-        /no longer take noContactOrPayment/,
-      );
-    }
+    expect(withManifests({ access: [], agent: { roles: 'any' } })).toThrow(/an agent may run it, so it declares its writes/);
+    expect(withManifests({ access: [], agent: { roles: 'any' }, writes: [] })).not.toThrow();
+    expect(withManifests({ agentApprovers: { roles: ['finance.chief_accountant'] } })).toThrow(/declares its writes/);
+    expect(withManifests({ agentApprovers: { roles: ['finance.chief_accountant'], noContactOrPayment: true } as AgentApprovers })).toThrow(/declares its writes/);
+    expect(withManifests({ agentApprovers: { roles: ['finance.chief_accountant'], noContactOrPayment: true } as AgentApprovers, writes: [INTERNAL] })).toThrow(
+      /no longer take noContactOrPayment/,
+    );
   });
 
   it('registers every command the server ships against the manifests', () => {

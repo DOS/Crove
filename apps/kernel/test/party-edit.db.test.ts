@@ -142,7 +142,7 @@ suite('editing a party (#887)', () => {
     const activity = await admin(
       async (c) => (await c.query(`SELECT kind, summary, actor_id FROM crove_kernel.activity WHERE org_id = $1 AND record_type = 'kernel.party' AND record_id = $2`, [o.orgId, id])).rows,
     );
-    expect(activity).toEqual([{ kind: 'party.updated', summary: 'Đổi tên CONG TY MAU thành Công ty TNHH Mẫu', actor_id: o.member }]);
+    expect(activity).toEqual([{ kind: 'party.updated', summary: 'Đổi tên', actor_id: o.member }]);
   });
 
   it('refuses an edit from a version someone else has already saved over, and changes nothing', async () => {

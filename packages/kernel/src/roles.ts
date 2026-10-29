@@ -14,7 +14,6 @@ import { BUILTIN_ROLE_KEYS, zId, zRoleAssignInput, type BuiltinRoleKey, type Mem
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext, type QueryContext } from '@crove/kernel-runtime';
 import { lastChiefAccountant } from './approval.ts';
-import { memberProfiles } from './profiles.ts';
 
 const ADMINS: readonly MemberRole[] = ['owner', 'admin'];
 
@@ -94,7 +93,7 @@ export async function myPermissions(ctx: QueryContext): Promise<string[]> {
 // Locks the actor's and the member's tenant_member rows, in user_id order (the order every membership change locks
 // in), and refuses unless the actor is an owner and the member belongs to the org. A concurrent demotion of the owner
 // or removal of the member is seen here, and an approval that reads the member's roles waits for this command.
-async function lockForRoleChange(ctx: CommandContext, targetId: string): Promise<{ actorId: string; email: string; role: MemberRole }> {
+async function lockForRoleChange(ctx: CommandContext, targetId: string): Promise<{ actorId: string; role: MemberRole }> {
   if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới giao được vai trò');
   const actorId = ctx.actor.userId;
   const rows = await ctx.trx
@@ -110,9 +109,7 @@ async function lockForRoleChange(ctx: CommandContext, targetId: string): Promise
   }
   const target = rows.find((r) => r.user_id === targetId);
   if (!target) throw new DomainError('MEMBER_NOT_FOUND', 404, 'Không tìm thấy thành viên này trong tổ chức');
-  // Through the definer (plan §3.6, #169): the member belongs to the org in context, so it is found.
-  const email = (await memberProfiles(ctx.trx, [targetId])).get(targetId)?.email ?? '';
-  return { actorId, email, role: target.role };
+  return { actorId, role: target.role };
 }
 
 interface PgError {
@@ -164,17 +161,6 @@ function roleRefusal(error: unknown): never {
   throw error;
 }
 
-async function legalEntityName(ctx: CommandContext, legalEntityId: string | null): Promise<string | null> {
-  if (!legalEntityId) return null;
-  const row = await ctx.trx
-    .selectFrom('crove_kernel.legal_entity')
-    .select('name')
-    .where('org_id', '=', ctx.orgId)
-    .where('id', '=', legalEntityId)
-    .executeTakeFirst();
-  return row?.name ?? null;
-}
-
 export const assignRole = defineCommand({
   name: 'kernel.member.role.assign',
   input: zRoleAssignInput,
@@ -183,7 +169,7 @@ export const assignRole = defineCommand({
   access: ['owner'],
   target: (input) => ({ type: 'kernel.user', id: input.userId }),
   handler: async (ctx, input): Promise<{ assignmentId: string; created: boolean }> => {
-    const { email } = await lockForRoleChange(ctx, input.userId);
+    await lockForRoleChange(ctx, input.userId);
     ctx.audit({ target_user: input.userId, role_key: input.roleKey, legal_entity_id: input.legalEntityId });
     // Only roles of a module the deployment runs: a role of a missing module would grant nothing anyone can use.
     const role = await ctx.trx.selectFrom('crove_kernel.role').select('module').where('key', '=', input.roleKey).executeTakeFirst();
@@ -202,12 +188,11 @@ export const assignRole = defineCommand({
     if (!granted) throw new Error('role_assignment_grant answered no row');
     ctx.audit({ assignment_id: granted.assignment_id, changed: granted.created });
     if (granted.created) {
-      const entity = await legalEntityName(ctx, input.legalEntityId);
       await ctx.activity(
         'kernel.member',
         input.userId,
         'member.role_assigned',
-        `Giao vai trò ${ROLE_LABELS[input.roleKey]}${entity ? ` (pháp nhân ${entity})` : ''} cho ${email}`,
+        `Giao vai trò ${ROLE_LABELS[input.roleKey]}${input.legalEntityId ? ' (cho một pháp nhân)' : ''}`,
       );
       await ctx.emit('kernel.member.role_assigned', { userId: input.userId, roleKey: input.roleKey, legalEntityId: input.legalEntityId, assignmentId: granted.assignment_id });
     }
@@ -230,7 +215,7 @@ export const revokeRole = defineCommand({
       .where('id', '=', input.assignmentId)
       .executeTakeFirst();
     if (!found) throw new DomainError('ROLE_ASSIGNMENT_NOT_FOUND', 404, 'Không tìm thấy vai trò này của thành viên');
-    const { email } = await lockForRoleChange(ctx, found.user_id);
+    await lockForRoleChange(ctx, found.user_id);
     let revoked: { user_id: string; role_key: string; legal_entity_id: string | null } | undefined;
     try {
       const { rows } = await sql<{ user_id: string; role_key: string; legal_entity_id: string | null }>`
@@ -242,8 +227,7 @@ export const revokeRole = defineCommand({
     if (!revoked) throw new Error('role_assignment_revoke answered no row');
     ctx.audit({ target_user: revoked.user_id, role_key: revoked.role_key, legal_entity_id: revoked.legal_entity_id, assignment_id: input.assignmentId });
     const label = isBuiltin(revoked.role_key) ? ROLE_LABELS[revoked.role_key] : revoked.role_key;
-    const entity = await legalEntityName(ctx, revoked.legal_entity_id);
-    await ctx.activity('kernel.member', revoked.user_id, 'member.role_revoked', `Thu hồi vai trò ${label}${entity ? ` (pháp nhân ${entity})` : ''} của ${email}`);
+    await ctx.activity('kernel.member', revoked.user_id, 'member.role_revoked', `Thu hồi vai trò ${label}${revoked.legal_entity_id ? ' (của một pháp nhân)' : ''}`);
     await ctx.emit('kernel.member.role_revoked', {
       userId: revoked.user_id,
       roleKey: revoked.role_key,

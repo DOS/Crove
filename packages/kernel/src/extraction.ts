@@ -178,7 +178,7 @@ export const reextractFile = defineCommand({
   target: (input) => ({ type: 'kernel.file', id: input.fileId }),
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới yêu cầu đọc lại được');
-    const file = await lockFile(ctx, input.fileId);
+    await lockFile(ctx, input.fileId);
     const latest = await latestExtraction(ctx, input.fileId);
     if (!latest) throw new DomainError('EXTRACTION_PENDING', 409, 'Tệp đang được đọc lần đầu; hãy chờ kết quả');
     if (latest.inFlight) {
@@ -244,7 +244,7 @@ export const reextractFile = defineCommand({
       proposal_revision: proposal?.revision ?? null,
       ...(entity !== latest.legalEntityId ? { legal_entity_id: entity, previous_legal_entity_id: latest.legalEntityId } : {}),
     });
-    await ctx.activity('kernel.file', input.fileId, 'extraction.requested', `Yêu cầu đọc lại ${file.filename} (lần đọc ${run.version})`);
+    await ctx.activity('kernel.file', input.fileId, 'extraction.requested', `Yêu cầu đọc lại chứng từ (lần đọc ${run.version})`);
     await ctx.emit('kernel.file.reextract_requested', { fileId: input.fileId, version: run.version });
     return { fileId: input.fileId, version: run.version };
   },
@@ -392,7 +392,7 @@ export const recordExtraction = defineCommand({
         .where('id', '=', current.id)
         .execute();
       ctx.audit({ proposal_id: current.id, revision });
-      await ctx.activity('kernel.proposal', current.id, 'proposal.reextracted', `Đọc lại chứng từ (lần đọc ${run.version}, bản ${revision}): ${input.proposal.title}`);
+      await ctx.activity('kernel.proposal', current.id, 'proposal.reextracted', `Đọc lại chứng từ (lần đọc ${run.version}, bản ${revision})`);
       return { extractionId: run.id, proposalId: current.id, duplicate: false };
     }
 
@@ -416,7 +416,7 @@ export const recordExtraction = defineCommand({
       .returning('id')
       .executeTakeFirstOrThrow();
     if (current) ctx.audit({ proposal_id: proposal.id, replaces_proposal_id: current.id });
-    await ctx.activity('kernel.proposal', proposal.id, 'proposal.created', input.proposal.title);
+    await ctx.activity('kernel.proposal', proposal.id, 'proposal.created', 'Tạo đề xuất từ chứng từ');
     await ctx.emit('kernel.proposal.created', { proposalId: proposal.id, kind: input.proposal.kind });
     return { extractionId: run.id, proposalId: proposal.id, duplicate: false };
   },

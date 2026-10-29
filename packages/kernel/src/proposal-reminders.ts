@@ -247,7 +247,7 @@ export const proposalExpire = defineCommand({
       .where('id', '=', proposal.id)
       .execute();
     ctx.audit({ revision: proposal.revision, days, expire_after_days: policy.expireAfterDays });
-    await ctx.activity('kernel.proposal', proposal.id, 'proposal.expired', `Hết hạn sau ${days} ngày chờ duyệt: ${proposal.title}`);
+    await ctx.activity('kernel.proposal', proposal.id, 'proposal.expired', `Hết hạn sau ${days} ngày chờ duyệt`);
     return { expired: true };
   },
 });

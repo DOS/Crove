@@ -249,7 +249,7 @@ suite('proposal expiry on PostgreSQL (#876)', () => {
     expect(await counts(o.orgId)).toEqual({ ...counted, activity: counted.activity + 1, audit: counted.audit + 1 });
     expect(await expiryAudit(id)).toEqual([{ actor_type: 'system', outcome: 'ok', detail: expect.objectContaining({ days: 4, expire_after_days: 3, revision: 1 }) }]);
     const activity = await admin(async (c) => (await c.query<{ kind: string; summary: string }>("SELECT kind, summary FROM crove_kernel.activity WHERE org_id = $1 AND record_id = $2 AND kind = 'proposal.expired'", [o.orgId, id])).rows);
-    expect(activity).toEqual([{ kind: 'proposal.expired', summary: expect.stringMatching(/^Hết hạn sau 4 ngày chờ duyệt: Hóa đơn /) }]);
+    expect(activity).toEqual([{ kind: 'proposal.expired', summary: 'Hết hạn sau 4 ngày chờ duyệt' }]);
 
     // Later passes write nothing more, and nobody is mailed again.
     await sweep();
