@@ -5,9 +5,9 @@
 // posted is refused, and so is an entry for another proposal or one posted by an earlier transaction. The entry of the
 // reversal path (source kernel.proposal) and of the journal voucher path (a voucher naming the proposal) let the move
 // pass. A command that is not a ledger command needs no effect, and the move keeps the command as approved, in the system
-// context too. crove_finance.ledger_effect_recorded answers for the
-// org of the context only. Part of the invariant suite: keep it self-contained (package code under test, no helpers from
-// outside test/invariant/). Set CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
+// context too. crove_finance.ledger_effect_recorded answers for the org of the context only. Part of the invariant suite:
+// keep it self-contained (package code under test, no helpers from outside test/invariant/). Set CROVE_TEST_ADMIN_URL to
+// a superuser URL; the run creates and drops its own database.
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
