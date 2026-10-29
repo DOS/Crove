@@ -58,6 +58,7 @@ function EntityForm({
   const lockedTaxCode = entity?.isDefault ?? false;
   // The tax code is checked on leaving the field and on submit, its error under it (#1515); the server checks again.
   const taxCodeId = useId();
+  const nameHintId = useId();
   const fields = useFieldErrors<'taxCode'>(() => (!lockedTaxCode && draft.taxCode.trim() && !normalizeTaxCode(draft.taxCode) ? t('taxCodeInvalid') : null));
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -69,8 +70,12 @@ function EntityForm({
   };
   return (
     <form className="mt-2 space-y-2" onSubmit={submit} aria-label={entity ? t('editOf', { name: entity.name }) : t('addTitle')}>
-      <Input required maxLength={200} placeholder={t('namePlaceholder')} aria-label={t('name')} value={draft.name} onChange={(e) => set('name', e.target.value)} />
-      {lockedTaxCode && <p className="text-xs text-subtle-foreground">{t('defaultNameHint')}</p>}
+      <Input required maxLength={200} placeholder={t('namePlaceholder')} aria-label={t('name')} aria-describedby={lockedTaxCode ? nameHintId : undefined} value={draft.name} onChange={(e) => set('name', e.target.value)} />
+      {lockedTaxCode && (
+        <p id={nameHintId} className="text-xs text-subtle-foreground">
+          {t('defaultNameHint')}
+        </p>
+      )}
       <div className="flex flex-wrap gap-2">
         <NativeSelect className="min-w-48 flex-1" value={draft.kind} onChange={(e) => set('kind', e.target.value as LegalEntityKind)} aria-label={t('kind')}>
           {LEGAL_ENTITY_KINDS.map((k) => (
