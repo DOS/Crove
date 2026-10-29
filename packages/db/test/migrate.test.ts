@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { CONCURRENT_INDEX_MARKER, concurrentIndexes, readMigrations } from '../src/migrate.ts';
+import { applyConcurrentIndexes, CONCURRENT_INDEX_MARKER, concurrentIndexes, readMigrations } from '../src/migrate.ts';
 
 describe('migration files', () => {
   it('hash the same with CRLF and LF line endings', async () => {
@@ -75,6 +75,32 @@ describe('migration files', () => {
     ]) {
       expect(() => concurrentIndexes('a.sql', marked(body)), body).toThrow(/marked -- crove:concurrent-index but/);
     }
+  });
+
+  it('refuses a name longer than the 63 bytes PostgreSQL keeps (#1791 review)', () => {
+    const name = `i_${'x'.repeat(62)}`;
+    expect(() => concurrentIndexes('a.sql', `${CONCURRENT_INDEX_MARKER}\nCREATE INDEX CONCURRENTLY IF NOT EXISTS ${name} ON crove_kernel.t (a);\n`)).toThrow(
+      new RegExp(`names ${name}, longer than the 63 bytes`),
+    );
+    expect(concurrentIndexes('a.sql', `${CONCURRENT_INDEX_MARKER}\nCREATE INDEX CONCURRENTLY IF NOT EXISTS ${name.slice(0, 63)} ON crove_kernel.t (a);\n`)).toHaveLength(1);
+  });
+
+  it('stops the run when the session settings cannot be restored after good builds, and keeps a build error first (#1791 review)', async () => {
+    // A client that answers the settings read and the pinning, refuses the restore and, when told to, the build.
+    const client = (buildFails: boolean) =>
+      ({
+        escapeIdentifier: (s: string) => `"${s}"`,
+        query: async (sql: string) => {
+          if (sql.includes("current_setting('search_path')")) return { rows: [{ path: 'public', statement: '0', lock: '0' }] };
+          if (sql.includes("set_config('search_path', 'pg_catalog, pg_temp'")) return { rows: [] };
+          if (sql.includes('set_config($1, $2, false)')) throw new Error('restore refused');
+          if (buildFails) throw new Error('build refused');
+          return { rows: [] };
+        },
+      }) as unknown as Parameters<typeof applyConcurrentIndexes>[0];
+    await expect(applyConcurrentIndexes(client(false), 'a.sql', [])).rejects.toThrow(/could not restore the session's settings after the index builds: restore refused/);
+    const index = { sql: 'CREATE INDEX CONCURRENTLY IF NOT EXISTS i ON crove_kernel.t (a)', name: 'i', schema: 'crove_kernel', table: 't' };
+    await expect(applyConcurrentIndexes(client(true), 'a.sql', [index])).rejects.toThrow(/build refused/);
   });
 
   it('the repository migrations are not copies of each other', async () => {

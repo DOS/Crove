@@ -32,6 +32,8 @@ const BAD: Record<string, [string, number]> = {
   'NULLS NOT DISTINCT': [marked('CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS a_key ON crove_kernel.party (a) NULLS NOT DISTINCT;\n'), 4],
   'a tablespace': [marked('CREATE INDEX CONCURRENTLY IF NOT EXISTS a_idx ON crove_kernel.party (a) TABLESPACE pg_default;\n'), 4],
   'a semicolon in a string': [marked("CREATE INDEX CONCURRENTLY IF NOT EXISTS a_idx ON crove_kernel.party (a) WHERE b = 'x;y';\n"), 4],
+  // A name PostgreSQL would cut to 63 bytes (security review L2).
+  'a name over 63 bytes': [marked(`CREATE INDEX CONCURRENTLY IF NOT EXISTS a_${'x'.repeat(62)} ON crove_kernel.party (a);\n`), 4],
 };
 
 describe('migration lint: concurrent index builds (#1791)', () => {
@@ -75,6 +77,17 @@ describe('migration lint: concurrent index builds (#1791)', () => {
     expect(hot('ALTER TABLE crove_kernel.audit_event ADD CONSTRAINT audit_event_x_key UNIQUE USING INDEX audit_event_x_key;')).toEqual([]);
     expect(hot('ALTER TABLE crove_kernel.audit_event ADD CONSTRAINT audit_event_pk PRIMARY KEY USING INDEX audit_event_pk;')).toEqual([]);
     expect(hot('CREATE UNIQUE INDEX IF NOT EXISTS k ON ONLY crove_jobs.job (id);')).toEqual([]);
+    // A unique or primary key column constraint in ADD [COLUMN], a REINDEX with options, and a REINDEX of a schema with
+    // hot tables, of the database or of the catalogs (security review M1, M2).
+    expect(hot('ALTER TABLE crove_kernel.audit_event ADD COLUMN IF NOT EXISTS x uuid UNIQUE;')).toEqual([1]);
+    expect(hot('ALTER TABLE crove_kernel.audit_event ADD x uuid CONSTRAINT x_key PRIMARY KEY;')).toEqual([1]);
+    expect(hot('ALTER TABLE crove_kernel.outbox_event ADD COLUMN y int, ADD COLUMN z int NOT NULL DEFAULT 0 UNIQUE;')).toEqual([1]);
+    expect(hot('REINDEX (VERBOSE) TABLE crove_kernel.audit_event;\nREINDEX (VERBOSE, TABLESPACE pg_default) INDEX crove_jobs.job_i1;')).toEqual([1, 2]);
+    expect(hot('REINDEX SCHEMA crove_kernel;\nREINDEX SCHEMA crove_jobs;\nREINDEX DATABASE ludy;\nREINDEX SYSTEM ludy;')).toEqual([1, 2, 3, 4]);
+    expect(lint('REINDEX SCHEMA crove_kernel;')[0]?.message).toContain('every table of schema crove_kernel');
+    // Column definitions without one, a check or a foreign key, and a schema with no hot table are left alone.
+    expect(hot("ALTER TABLE crove_kernel.audit_event ADD COLUMN IF NOT EXISTS x text CHECK (x IN ('unique')), ADD CONSTRAINT f FOREIGN KEY (org_id) REFERENCES crove_kernel.tenant (org_id);")).toEqual([]);
+    expect(hot('REINDEX SCHEMA crove_notes;')).toEqual([]);
     expect(hot(`DO $$ DECLARE n int := 0; BEGIN LOOP BEGIN
     PERFORM set_config('lock_timeout', '2s', true);
     CREATE INDEX IF NOT EXISTS outbox_event_x_idx ON crove_kernel.outbox_event (org_id); EXIT;
@@ -91,9 +104,9 @@ describe('migration lint: concurrent index builds (#1791)', () => {
   it('skips the files on main before the rule, unless a PR adds them', () => {
     expect(lint('CREATE INDEX IF NOT EXISTS audit_event_x_idx ON crove_kernel.audit_event (org_id);', { hotIndexRule: false }).map((f) => f.rule)).not.toContain('hot-index-concurrently');
     // Pinned: the newest migration on main when the rule landed; raising it would exempt later files from the full-tree run.
-    expect(HOT_INDEX_RULE_AFTER).toBe('20261104050000');
-    expect(hotIndexRuleApplies('20261104050000_crove_notes_member_purge_lock.sql', false)).toBe(false);
-    expect(hotIndexRuleApplies('supabase/migrations/20261104050001_crove_kernel_x.sql', false)).toBe(true);
+    expect(HOT_INDEX_RULE_AFTER).toBe('20261104070000');
+    expect(hotIndexRuleApplies('20261104070000_crove_kernel_proposal_status_guard.sql', false)).toBe(false);
+    expect(hotIndexRuleApplies('supabase/migrations/20261104070001_crove_kernel_x.sql', false)).toBe(true);
     expect(hotIndexRuleApplies('20261013120000_crove_kernel_bootstrap.sql', true)).toBe(true);
   });
 });

@@ -184,8 +184,12 @@ export function concurrentIndexes(name: string, sql: string): ConcurrentIndex[] 
     if (!match || (statement.match(/'/g)?.length ?? 0) % 2 !== 0) {
       throw refuse(`holds a statement other than CREATE [UNIQUE] INDEX CONCURRENTLY IF NOT EXISTS <name> ON <schema>.<table>: ${statement.slice(0, 80)}`);
     }
-    // Unquoted names fold to lower case, as PostgreSQL folds them.
-    return { sql: statement, name: (match[1] ?? '').toLowerCase(), schema: (match[2] ?? '').toLowerCase(), table: (match[3] ?? '').toLowerCase() };
+    // Unquoted names fold to lower case, as PostgreSQL folds them. One longer than 63 bytes it would cut short, and the
+    // index built under the shorter name would never be found.
+    const [name, schema, table] = [match[1], match[2], match[3]].map((part) => (part ?? '').toLowerCase());
+    const long = [name, schema, table].find((part) => Buffer.byteLength(part ?? '') > 63);
+    if (long !== undefined) throw refuse(`names ${long}, longer than the 63 bytes PostgreSQL keeps of a name`);
+    return { sql: statement, name: name ?? '', schema: schema ?? '', table: table ?? '' };
   });
 }
 
@@ -220,19 +224,30 @@ export async function applyConcurrentIndexes(
     "SELECT current_setting('search_path') AS path, current_setting('statement_timeout') AS statement, current_setting('lock_timeout') AS lock",
   );
   await client.query("SELECT set_config('search_path', 'pg_catalog, pg_temp', false), set_config('statement_timeout', '0', false), set_config('lock_timeout', '0', false)");
+  let buildError: unknown;
   try {
     for (const index of indexes) await buildConcurrentIndex(client, file, index, log);
-  } finally {
-    await client
-      .query('SELECT set_config($1, $2, false), set_config($3, $4, false), set_config($5, $6, false)', [
-        'search_path',
-        before[0]?.path ?? '"$user", public',
-        'statement_timeout',
-        before[0]?.statement ?? '0',
-        'lock_timeout',
-        before[0]?.lock ?? '0',
-      ])
-      .catch(() => {});
+  } catch (error) {
+    buildError = error ?? new Error(`migration ${file}: an index build failed`);
+  }
+  let restoreError: unknown;
+  try {
+    await client.query('SELECT set_config($1, $2, false), set_config($3, $4, false), set_config($5, $6, false)', [
+      'search_path',
+      before[0]?.path ?? '"$user", public',
+      'statement_timeout',
+      before[0]?.statement ?? '0',
+      'lock_timeout',
+      before[0]?.lock ?? '0',
+    ]);
+  } catch (error) {
+    restoreError = error;
+  }
+  // After a failed build the build's error is the one to report. After a good one, the later files must not run with
+  // the pinned search_path and no timeouts, so the run stops.
+  if (buildError !== undefined) throw buildError;
+  if (restoreError !== undefined) {
+    throw new Error(`migration ${file}: could not restore the session's settings after the index builds: ${(restoreError as Error).message}`, { cause: restoreError });
   }
 }
 
