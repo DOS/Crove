@@ -24,6 +24,7 @@ import { loadConfig } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
 import { socialDrafter } from '../src/kernel.ts';
 import { createSessionStatusSource } from '../src/sessions.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -157,7 +158,7 @@ suite('AI drafts from the post photos through the API (#1191)', () => {
     dir = await mkdtemp(join(tmpdir(), 'crove-ai-photos-'));
     const store = new LocalDiskStore(dir);
     const kernel = { commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) };
-    const runtime = new Runtime(db, { sessions: createSessionStatusSource('off'), stepUp: 'required' }).register({
+    const runtime = new Runtime(db, { manifests: TEST_MANIFESTS, sessions: createSessionStatusSource('off'), stepUp: 'required' }).register({
       commands: [...kernel.commands, ...socialCommands],
       queries: [...kernel.queries, ...socialQueries],
     });

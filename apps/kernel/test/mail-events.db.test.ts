@@ -18,6 +18,7 @@ import { createAuthenticator } from '../src/auth.ts';
 import { loadConfig } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
 import { mailEventJob, processMailEvent, type MailEventJob, type MailEventRow } from '../src/mail-events.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -29,6 +30,7 @@ const suite = ADMIN ? describe : describe.skip;
 // Test-only commands: one writes a mail row the way a sending command does, one tries to write an event in a member
 // context.
 const sendTest = defineCommand({
+  sideEffect: 'none',
   name: 'kernel.mail_test.send',
   input: z.object({ to: z.string(), stream: z.enum(['system', 'transactional', 'marketing']) }),
   risk: 'R1',
@@ -37,6 +39,7 @@ const sendTest = defineCommand({
     createMailMessage(ctx, { stream: input.stream, source: 'kernel.mail_test.send', templateKey: 'kernel.mail_test', to: input.to, status: 'sending' }),
 });
 const forgeEvent = defineCommand({
+  sideEffect: 'none',
   name: 'kernel.mail_test.forge_event',
   input: z.object({ messageId: z.uuid() }),
   risk: 'R1',
@@ -151,8 +154,8 @@ suite('mail delivery events (#539)', () => {
     db = createDb(pool);
     workerDb = createDb(workerPool);
     const registry = { commands: [...kernelCommands, sendTest, forgeEvent], queries: kernelQueries({ inboundDomain: null }) };
-    runtime = new Runtime(db).register(registry);
-    workerRuntime = new Runtime(workerDb).register(registry);
+    runtime = new Runtime(db, { manifests: TEST_MANIFESTS }).register(registry);
+    workerRuntime = new Runtime(workerDb, { manifests: TEST_MANIFESTS }).register(registry);
 
     owner = actor(await upsertIdentity(db, { issuer: 'mail-events', subject: `owner-${randomUUID()}`, email: `owner-${dbName}@mail.test`, name: null }));
     other = actor(await upsertIdentity(db, { issuer: 'mail-events', subject: `other-${randomUUID()}`, email: `other-${dbName}@mail.test`, name: null }));

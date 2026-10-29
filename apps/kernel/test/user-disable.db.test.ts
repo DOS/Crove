@@ -11,6 +11,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
 import { runUserDisable, setUserDisabled } from '../src/user-disable.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -66,12 +67,12 @@ suite('user disable and enable on PostgreSQL (#985)', () => {
     pool = createPool({ connectionString: app.toString(), max: 2 });
     db = createDb(pool);
     const registry = { commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) };
-    rt = new Runtime(db).register(registry);
+    rt = new Runtime(db, { manifests: TEST_MANIFESTS }).register(registry);
     const asWorker = new URL(adminUrl);
     asWorker.username = 'crove_worker';
     asWorker.password = 'test-worker-pw';
     workerPool = createPool({ connectionString: asWorker.toString(), max: 2 });
-    worker = new Runtime(createDb(workerPool)).register(registry);
+    worker = new Runtime(createDb(workerPool), { manifests: TEST_MANIFESTS }).register(registry);
   });
 
   afterAll(async () => {

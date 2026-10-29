@@ -15,6 +15,7 @@ import { agentCommands, createOrg, decideApproval, eligibleApprovers, kernelComm
 import { tableWrite } from '@crove/kernel-contract';
 import { Runtime, defineCommand, type Actor, type AgentActor, type AgentApprovers, type AgentRuntime, type CommandDef, type CommandWrite, type Risk } from '@crove/kernel-runtime';
 import { financeCommands, financeManifest, financeQueries } from '@crove/mod-finance';
+import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -38,6 +39,7 @@ const AGENT_PROPOSAL_COMMANDS: Record<string, 'propagate' | undefined> = {
 // declares its writes (#1710): none of them writes a table, only the rows the runtime writes for it.
 const probe = (name: string, risk: Risk, taint?: 'propagate'): CommandDef<unknown, unknown> =>
   defineCommand({
+    sideEffect: 'none',
     name,
     input: z.object({}),
     risk,
@@ -48,6 +50,7 @@ const probe = (name: string, risk: Risk, taint?: 'propagate'): CommandDef<unknow
   }) as CommandDef<unknown, unknown>;
 // t18.whoami: who the runtime runs a command as, and an activity row written in that context.
 const whoami = defineCommand({
+  sideEffect: 'none',
   name: 't18.whoami',
   input: z.object({ recordId: z.string() }),
   risk: 'R0',
@@ -61,6 +64,7 @@ const whoami = defineCommand({
 }) as CommandDef<unknown, unknown>;
 // #333 item 4: a command that puts another run in its audit detail; the row keeps the actor's run.
 const forgeRun333 = defineCommand({
+  sideEffect: 'none',
   name: 't333.forge_run',
   input: z.object({}),
   risk: 'R0',
@@ -75,6 +79,7 @@ const forgeRun333 = defineCommand({
 // #260: a preparer agents may run (it writes nothing) and proposal commands of each risk, two of which agents with the
 // chief accountant role key may approve.
 const prepare260 = defineCommand({
+  sideEffect: 'none',
   name: 't260.prepare',
   input: z.object({ command: z.string() }),
   risk: 'R0',
@@ -85,6 +90,7 @@ const prepare260 = defineCommand({
 }) as CommandDef<unknown, unknown>;
 const proposal260 = (name: string, risk: Risk, roles?: string[]) =>
   defineCommand({
+    sideEffect: 'none',
     name,
     input: z.object({ payload: z.unknown(), acceptFailedChecks: z.boolean().optional() }),
     risk,
@@ -94,6 +100,7 @@ const proposal260 = (name: string, risk: Risk, roles?: string[]) =>
   }) as CommandDef<unknown, unknown>;
 // The same preparer without agent access: humans only.
 const prepareHumans260 = defineCommand({
+  sideEffect: 'none',
   name: 't260.prepare_humans',
   input: z.object({ command: z.string() }),
   risk: 'R0',
@@ -102,6 +109,7 @@ const prepareHumans260 = defineCommand({
 }) as CommandDef<unknown, unknown>;
 // A preparer agents may run that is not read-only (R1): never a preparer of an agent's proposal.
 const prepareR1260 = defineCommand({
+  sideEffect: 'none',
   name: 't260.prepare_r1',
   input: z.object({ command: z.string() }),
   risk: 'R1',
@@ -113,6 +121,7 @@ const prepareR1260 = defineCommand({
 // #435: a preparer that echoes what the agent gives it (kind, title, payload): none of that may become the proposal's
 // label, and a payload above the cap is refused. And a proposal command that declares its proposal kind.
 const prepareEcho435 = defineCommand({
+  sideEffect: 'none',
   name: 't435.prepare_echo',
   input: z.object({ command: z.string(), kind: z.string(), title: z.string(), payload: z.record(z.string(), z.unknown()) }),
   risk: 'R0',
@@ -122,6 +131,7 @@ const prepareEcho435 = defineCommand({
   handler: async (_ctx, input) => ({ kind: input.kind, command: input.command, title: input.title, payload: input.payload }),
 }) as CommandDef<unknown, unknown>;
 const proposalKind435 = defineCommand({
+  sideEffect: 'none',
   name: 't435.prop_kind',
   input: z.object({ payload: z.unknown(), acceptFailedChecks: z.boolean().optional() }),
   risk: 'R1',
@@ -272,7 +282,7 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
       const target = createDb(pool);
       return {
         db: target,
-        runtime: new Runtime(target).register({
+        runtime: new Runtime(target, { manifests: TEST_MANIFESTS }).register({
           commands: [...kernelCommands, ...financeCommands, ...PROBES],
           queries: [...kernelQueries({ inboundDomain: 'in.test' }), ...financeQueries],
         }),
@@ -1336,12 +1346,12 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
 
   it('refuses agent approvers that do not declare the command writes no contact or payment field (P04)', () => {
     const def = (agentApprovers: unknown, risk: Risk = 'R1') =>
-      ({ name: 't260.reg', input: z.object({}), risk, access: 'proposal', agentApprovers, handler: async () => ({}) }) as unknown as CommandDef<unknown, unknown>;
-    expect(() => new Runtime(db).register({ commands: [def({ roles: [TEMPLATE] })] })).toThrow(/noContactOrPayment/);
-    expect(() => new Runtime(db).register({ commands: [def({ roles: [], noContactOrPayment: true })] })).toThrow(/noContactOrPayment/);
-    expect(() => new Runtime(db).register({ commands: [def({ roles: [TEMPLATE], noContactOrPayment: true }, 'R3')] })).toThrow(/R1 or R2/);
+      ({ sideEffect: 'none', name: 't260.reg', input: z.object({}), risk, access: 'proposal', agentApprovers, handler: async () => ({}) }) as unknown as CommandDef<unknown, unknown>;
+    expect(() => new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: [def({ roles: [TEMPLATE] })] })).toThrow(/noContactOrPayment/);
+    expect(() => new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: [def({ roles: [], noContactOrPayment: true })] })).toThrow(/noContactOrPayment/);
+    expect(() => new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: [def({ roles: [TEMPLATE], noContactOrPayment: true }, 'R3')] })).toThrow(/R1 or R2/);
     // The old form alone, with no declared writes, is gone (#1710): the command must declare its writes.
-    expect(() => new Runtime(db).register({ commands: [def({ roles: [TEMPLATE], noContactOrPayment: true })] })).toThrow(/declares its writes/);
+    expect(() => new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: [def({ roles: [TEMPLATE], noContactOrPayment: true })] })).toThrow(/declares its writes/);
   });
 
   // #1697: P04 derived from the manifests' column classes. A proposal command declares the tables and columns it
@@ -1352,6 +1362,7 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
   const INTERNAL_1697 = tableWrite(kernelManifest.tables, 'crove_kernel', 'task_comment', ['body']);
   const proposal1697 = (name: string, writes: readonly CommandWrite[] | undefined, extra: Partial<CommandDef<unknown, unknown>> = {}) =>
     defineCommand({
+      sideEffect: 'none',
       name,
       input: z.object({ payload: z.unknown(), acceptFailedChecks: z.boolean().optional() }),
       risk: 'R1',
@@ -1373,13 +1384,14 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
         agentApprovers: { roles: [TEMPLATE] },
         handler: async (ctx) => ctx.run('t1697.inner', {}),
       }),
-      defineCommand({ name: 't1697.inner', input: z.object({}), risk: 'R1', access: 'system', writes: [CONTACT_1697], handler: async () => ({ ok: true }) }) as CommandDef<unknown, unknown>,
+      defineCommand({ sideEffect: 'none', name: 't1697.inner', input: z.object({}), risk: 'R1', access: 'system', writes: [CONTACT_1697], handler: async () => ({ ok: true }) }) as CommandDef<unknown, unknown>,
       // The same through a clean command in between: the bound holds at every depth.
       proposal1697('t1697.nests_deep', [INTERNAL_1697], {
         agentApprovers: { roles: [TEMPLATE] },
         handler: async (ctx) => ctx.run('t1697.middle', {}),
       }),
       defineCommand({
+        sideEffect: 'none',
         name: 't1697.middle',
         input: z.object({}),
         risk: 'R1',
@@ -1438,7 +1450,7 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
 
   it('refuses declared writes that do not match the column classes, and contact or payment writes by agents (#1697)', () => {
     const register = (def: Partial<CommandDef<unknown, unknown>>) => () =>
-      new Runtime(db).register({ commands: [{ name: 't1697.reg', input: z.object({}), risk: 'R1', access: 'proposal', handler: async () => ({}), ...def } as CommandDef<unknown, unknown>] });
+      new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: [{ sideEffect: 'none', name: 't1697.reg', input: z.object({}), risk: 'R1', access: 'proposal', handler: async () => ({}), ...def } as CommandDef<unknown, unknown>] });
     const party = kernelManifest.tables.crove_kernel.party;
     // A column the table does not have, a table not named <schema>.<table>, a table twice, no column, an unknown class.
     expect(register({ writes: [{ table: 'crove_kernel.party', classes: party, columns: ['iban'] }] })).toThrow(/a column its classes do not have/);
@@ -1478,7 +1490,7 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
         .execute();
     };
     const probe = (name: string, writes: readonly CommandWrite[], handler: CommandDef<unknown, unknown>['handler']) =>
-      defineCommand({ name: `t1710.${name}_${suffix}`, input: z.object({}), risk: 'R1', access: 'system', writes, handler }) as CommandDef<unknown, unknown>;
+      defineCommand({ sideEffect: 'none', name: `t1710.${name}_${suffix}`, input: z.object({}), risk: 'R1', access: 'system', writes, handler }) as CommandDef<unknown, unknown>;
     const undeclared = probe('undeclared', [INTERNAL_1697], async (ctx) => {
       await raise(ctx, `undeclared-${suffix}`);
       return { ok: true };
@@ -1499,10 +1511,10 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
       return { ok: true };
     });
     // A nested command that declares no writes counts as the caller's.
-    const undeclaredNested = defineCommand({ name: `t1710.nested_${suffix}`, input: z.object({}), risk: 'R1', access: 'system', handler: async (ctx) => raise(ctx, `nested-${suffix}`) }) as CommandDef<unknown, unknown>;
+    const undeclaredNested = defineCommand({ sideEffect: 'none', name: `t1710.nested_${suffix}`, input: z.object({}), risk: 'R1', access: 'system', handler: async (ctx) => raise(ctx, `nested-${suffix}`) }) as CommandDef<unknown, unknown>;
     const viaNested = probe('via_nested', [], async (ctx) => ctx.run(undeclaredNested.name, {}));
     // A nested command that declares none and writes nothing: its audit row is the runtime's, not the caller's.
-    const readOnlyNested = defineCommand({ name: `t1710.reads_${suffix}`, input: z.object({}), risk: 'R0', access: 'system', handler: async () => ({ read: true }) }) as CommandDef<unknown, unknown>;
+    const readOnlyNested = defineCommand({ sideEffect: 'none', name: `t1710.reads_${suffix}`, input: z.object({}), risk: 'R0', access: 'system', handler: async () => ({ read: true }) }) as CommandDef<unknown, unknown>;
     const viaReadOnly = probe('via_read_only', [], async (ctx) => ctx.run(readOnlyNested.name, {}));
     // A write beside an event in Promise.all cannot be told from the event's rows, so the command fails.
     const beside = probe('beside', [], async (ctx) => {
@@ -1548,6 +1560,7 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
 
   it('runs a command as it registered: agent access set on its definition afterwards grants an agent nothing (#1766)', async () => {
     const contactWriter = defineCommand({
+      sideEffect: 'none',
       name: `t1766.contact_writer_${randomUUID().slice(0, 8)}`,
       input: z.object({}),
       risk: 'R1',
@@ -1835,11 +1848,11 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
 
     // A proposal kind is declared only on a proposal command, as <module>.<name> within its own module.
     const def = (extra: Record<string, unknown>) =>
-      ({ name: 't435.reg', input: z.object({}), risk: 'R1', access: 'proposal', handler: async () => ({}), ...extra }) as unknown as CommandDef<unknown, unknown>;
-    expect(() => new Runtime(db).register({ commands: [def({ proposalKind: 'finance.purchase' })] })).toThrow(/proposal kind/);
-    expect(() => new Runtime(db).register({ commands: [def({ proposalKind: 't435.kind', access: ['owner'] })] })).toThrow(/proposal kind/);
-    expect(() => new Runtime(db).register({ commands: [def({ proposalKind: 'T435 Kind' })] })).toThrow(/proposal kind/);
-    expect(() => new Runtime(db).register({ commands: [def({ proposalKind: 't435.kind' })] })).not.toThrow();
+      ({ sideEffect: 'none', name: 't435.reg', input: z.object({}), risk: 'R1', access: 'proposal', handler: async () => ({}), ...extra }) as unknown as CommandDef<unknown, unknown>;
+    expect(() => new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: [def({ proposalKind: 'finance.purchase' })] })).toThrow(/proposal kind/);
+    expect(() => new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: [def({ proposalKind: 't435.kind', access: ['owner'] })] })).toThrow(/proposal kind/);
+    expect(() => new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: [def({ proposalKind: 'T435 Kind' })] })).toThrow(/proposal kind/);
+    expect(() => new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: [def({ proposalKind: 't435.kind' })] })).not.toThrow();
   });
 
   it('keeps assessed flags to agent requests in the database (#435 N2)', async () => {

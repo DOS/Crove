@@ -16,6 +16,7 @@ import type { ParsedInvoice } from '@crove/l10n-vn';
 import { extractAndPropose, financeCommands, financeQueries } from '@crove/mod-finance';
 import { startWorker } from '../src/worker.ts';
 import { inProcessExtract } from './extract-service.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -121,7 +122,7 @@ suite('re-extraction on PostgreSQL (issue #40)', () => {
     };
     workerUrl = loginUrl('crove_worker', 'test-worker-pw');
     const register = (target: Db) =>
-      new Runtime(target).register({
+      new Runtime(target, { manifests: TEST_MANIFESTS }).register({
         commands: [...kernelCommands, ...financeCommands],
         queries: [...kernelQueries({ inboundDomain: 'in.test' }), ...financeQueries],
       });

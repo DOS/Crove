@@ -18,6 +18,7 @@ import { createAuthenticator } from '../../src/auth.ts';
 import { loadConfig } from '../../src/config.ts';
 import { createHttpApp } from '../../src/http.ts';
 import { createSessionStatusSource } from '../../src/sessions.ts';
+import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -186,7 +187,7 @@ suite('aal1 tokens of users with a verified MFA factor on PostgreSQL (issue #126
         blobs.delete(key);
       },
     };
-    const runtime = new Runtime(db, { sessions: createSessionStatusSource('db'), stepUp: 'required' }).register({
+    const runtime = new Runtime(db, { manifests: TEST_MANIFESTS, sessions: createSessionStatusSource('db'), stepUp: 'required' }).register({
       commands: [...kernelCommands, ...financeCommands],
       queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries],
     });

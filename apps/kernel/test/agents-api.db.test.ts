@@ -16,6 +16,7 @@ import { createAuthenticator } from '../src/auth.ts';
 import { loadConfig } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
 import { createSessionStatusSource } from '../src/sessions.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -107,12 +108,12 @@ suite('AI agents through the API (ADR-0029, #258)', () => {
       WEB_DIST: '/nonexistent',
     });
     const options = { sessions: createSessionStatusSource('off'), stepUp: 'required' as const };
-    const full = new Runtime(db, options).register({
+    const full = new Runtime(db, { manifests: TEST_MANIFESTS, ...options }).register({
       commands: [...kernelCommands, ...financeCommands],
       queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries],
     });
     // A deployment without finance (CROVE_MODULES=kernel) on the same database.
-    const kernelOnly = new Runtime(db, { ...options, absentModules: ['finance'] }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
+    const kernelOnly = new Runtime(db, { manifests: TEST_MANIFESTS, ...options, absentModules: ['finance'] }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
     const make = (runtime: Runtime) => createHttpApp({ config, runtime, store: {} as BlobStore, authenticate: createAuthenticator(config, db), pool, aiEnabled: false });
     apps = { full: make(full), kernelOnly: make(kernelOnly) };
 

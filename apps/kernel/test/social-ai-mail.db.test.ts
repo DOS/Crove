@@ -23,6 +23,7 @@ import { loadConfig } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
 import { socialDrafter } from '../src/kernel.ts';
 import { createSessionStatusSource } from '../src/sessions.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -119,7 +120,7 @@ suite('AI drafts from a forwarded mail through the API (#779)', () => {
     db = createDb(pool);
     dir = await mkdtemp(join(tmpdir(), 'crove-ai-mail-'));
     const store = new LocalDiskStore(dir);
-    runtime = new Runtime(db, { sessions: createSessionStatusSource('off'), stepUp: 'required' }).register({
+    runtime = new Runtime(db, { manifests: TEST_MANIFESTS, sessions: createSessionStatusSource('off'), stepUp: 'required' }).register({
       commands: [...kernelCommands, ...socialCommands],
       queries: [...kernelQueries({ inboundDomain: null }), ...socialQueries],
     });
@@ -127,7 +128,7 @@ suite('AI drafts from a forwarded mail through the API (#779)', () => {
     workerUrl.username = 'crove_worker';
     workerUrl.password = 'test-worker-pw';
     workerPool = createPool({ connectionString: workerUrl.toString(), max: 2 });
-    worker = new Runtime(createDb(workerPool)).register({ commands: [...kernelCommands, ...socialCommands], queries: [...kernelQueries({ inboundDomain: null }), ...socialQueries] });
+    worker = new Runtime(createDb(workerPool), { manifests: TEST_MANIFESTS }).register({ commands: [...kernelCommands, ...socialCommands], queries: [...kernelQueries({ inboundDomain: null }), ...socialQueries] });
     const config = loadConfig({ DATABASE_URL: appUrl.toString(), AUTH_JWT_SECRET: SECRET, AUTH_ISSUER: ISSUER, AUTH_SESSION_CHECK: 'off', MIGRATIONS_DIR: MIGRATIONS, WEB_DIST: '/nonexistent' });
     const writer = new SocialWriter({ baseURL: 'http://localhost:1/v1', apiKey: null, model: 'test' }, generate);
     const vault = new CredentialVault([parseVaultKey(randomBytes(32).toString('base64'))]);

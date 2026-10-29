@@ -17,6 +17,7 @@ import { socialCommands, socialQueries, sweepReportSchedules, type ReportLinkVie
 import { MAIL_TEMPLATES } from '../src/mail-templates.ts';
 import { runMailJob, sweepMail, type MailJob } from '../src/mail-queue.ts';
 import { reportView, type ReportPage } from '../src/report-link.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -102,8 +103,8 @@ suite('scheduled client report mail on PostgreSQL (#704)', () => {
     db = createDb(pool);
     workerDb = createDb(workerPool);
     const registry = { commands: [...kernelCommands, ...socialCommands], queries: [...kernelQueries({ inboundDomain: null }), ...socialQueries] };
-    rt = new Runtime(db).register(registry);
-    worker = new Runtime(workerDb).register(registry);
+    rt = new Runtime(db, { manifests: TEST_MANIFESTS }).register(registry);
+    worker = new Runtime(workerDb, { manifests: TEST_MANIFESTS }).register(registry);
   });
 
   afterAll(async () => {

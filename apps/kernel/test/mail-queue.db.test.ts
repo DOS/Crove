@@ -15,6 +15,7 @@ import { createMailMessage, createOrg, kernelCommands, kernelQueries, upsertIden
 import { DomainError, Runtime, defineCommand, type UserActor } from '@crove/kernel-runtime';
 import { createLogProvider, type MailProvider, type OutboundMail, type SendResult } from '@crove/mail';
 import { MAIL_BULK_QUEUE, MAIL_SEND_QUEUE, purgeMail, runMailJob, sweepMail, type MailJob, type MailTemplates } from '../src/mail-queue.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -22,6 +23,7 @@ const suite = ADMIN ? describe : describe.skip;
 
 // A command that queues a mail the way a module does: the row 'queued', with its merge data.
 const queueTest = defineCommand({
+  sideEffect: 'none',
   name: 'kernel.mail_test.queue',
   input: z.object({ to: z.string(), stream: z.enum(['system', 'transactional', 'marketing']), template: z.string().optional() }),
   risk: 'R1',
@@ -132,8 +134,8 @@ suite('queued mail (#548)', () => {
     db = createDb(pool);
     workerDb = createDb(workerPool);
     const registry = { commands: [...kernelCommands, queueTest], queries: kernelQueries({ inboundDomain: null }) };
-    runtime = new Runtime(db).register(registry);
-    workerRuntime = new Runtime(workerDb).register(registry);
+    runtime = new Runtime(db, { manifests: TEST_MANIFESTS }).register(registry);
+    workerRuntime = new Runtime(workerDb, { manifests: TEST_MANIFESTS }).register(registry);
     owner = actor(await upsertIdentity(db, { issuer: 'mail-queue', subject: `owner-${randomUUID()}`, email: `owner-${dbName}@mail.test`, name: null }));
     orgId = (await createOrg(runtime, owner, 'Công ty Hàng đợi')).orgId;
     otherOrgId = (await createOrg(runtime, owner, 'Công ty Khác')).orgId;

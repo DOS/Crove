@@ -13,6 +13,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { CredentialVault, Runtime, parseVaultKey } from '@crove/kernel-runtime';
 import { HELD_TOO_LONG, runCommentJob, runPublishJob, socialCommands, socialQueries, type NotificationItem, type PostView, type PublishHoldView } from '@crove/mod-social';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -146,8 +147,8 @@ suite('social publishing hold on PostgreSQL (#946)', () => {
     workerPool = createPool({ connectionString: as('crove_worker', 'test-worker-pw'), max: 4 });
     appDb = createDb(appPool);
     const registry = { commands: [...kernelCommands, ...socialCommands], queries: [...kernelQueries({ inboundDomain: null }), ...socialQueries] };
-    api = new Runtime(appDb).register(registry);
-    worker = new Runtime(createDb(workerPool)).register(registry);
+    api = new Runtime(appDb, { manifests: TEST_MANIFESTS }).register(registry);
+    worker = new Runtime(createDb(workerPool), { manifests: TEST_MANIFESTS }).register(registry);
   });
 
   afterAll(async () => {

@@ -19,6 +19,7 @@ import { createDb, createPool } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
+import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -118,7 +119,7 @@ suite('gapless numbering on PostgreSQL (#1401)', () => {
     appUrl = app.toString();
     runtimePool = createPool({ connectionString: appUrl, max: 2 });
     const db = createDb(runtimePool);
-    const rt = new Runtime(db).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
+    const rt = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
     const user = (name: string) => upsertIdentity(db, { issuer: 'numbering-inv', subject: randomUUID(), email: `${name}@numbering.test`, name: null });
     owner = await user('owner');
     member = await user('member');

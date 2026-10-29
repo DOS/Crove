@@ -32,6 +32,7 @@ import {
   type Extracted,
   type InjectionCase,
 } from './fixtures/injection-cases.ts';
+import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -240,7 +241,7 @@ suite('prompt-injection red team for document extraction (#893)', () => {
       return u.toString();
     };
     const register = (target: Db) =>
-      new Runtime(target).register({ commands: [...kernelCommands, ...financeCommands], queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries] });
+      new Runtime(target, { manifests: TEST_MANIFESTS }).register({ commands: [...kernelCommands, ...financeCommands], queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries] });
     pool = createPool({ connectionString: login('crove_app', 'test-app-pw'), max: 4 });
     const db = createDb(pool);
     runtime = register(db);

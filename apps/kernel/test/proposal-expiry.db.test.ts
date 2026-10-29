@@ -17,6 +17,7 @@ import { createOrg, kernelCommands, kernelQueries, sweepProposalNudges, upsertId
 import type { JournalVoucherRequest } from '@crove/kernel-contract';
 import { Runtime, fileKey, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
 import { extractAndPropose, financeCommands, financeQueries } from '@crove/mod-finance';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -177,10 +178,10 @@ suite('proposal expiry on PostgreSQL (#876)', () => {
     pool = createPool({ connectionString: login('crove_app', 'test-app-pw'), max: 4 });
     db = createDb(pool);
     const registry = { commands: [...kernelCommands, ...financeCommands], queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries] };
-    rt = new Runtime(db).register(registry);
+    rt = new Runtime(db, { manifests: TEST_MANIFESTS }).register(registry);
     workerPool = createPool({ connectionString: login('crove_worker', 'test-worker-pw'), max: 2 });
     workerDb = createDb(workerPool);
-    worker = new Runtime(workerDb).register(registry);
+    worker = new Runtime(workerDb, { manifests: TEST_MANIFESTS }).register(registry);
   });
 
   afterAll(async () => {

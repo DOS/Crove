@@ -17,6 +17,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove
 import type { JournalVoucherRequest, Timeline } from '@crove/kernel-contract';
 import { Runtime, type InputHashMode } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -76,7 +77,7 @@ suite('activity per legal entity on PostgreSQL (#1716)', () => {
   // crove_kernel.command_input_hash does not exist yet: the runtime that seeds it writes the plain hash (#1741).
   function connect(inputHash: InputHashMode = 'keyed') {
     pool = createPool({ connectionString: appUrl, max: 4 });
-    rt = new Runtime(createDb(pool), { inputHash }).register({
+    rt = new Runtime(createDb(pool), { manifests: TEST_MANIFESTS, inputHash }).register({
       commands: [...kernelCommands, ...financeCommands],
       queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries],
     });

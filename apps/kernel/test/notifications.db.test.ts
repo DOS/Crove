@@ -19,6 +19,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove
 import { Runtime, fileKey, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
 import { extractAndPropose, financeCommands, financeQueries, recordExtractionFailure, sweepPeriodClosing } from '@crove/mod-finance';
 import { inProcessExtract } from './extract-service.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -132,7 +133,7 @@ suite('in-app notifications of the kernel and finance (#671)', () => {
     const db = createDb(pool);
     workerDb = createDb(workerPool);
     const register = (target: Db) =>
-      new Runtime(target).register({ commands: [...kernelCommands, ...financeCommands], queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries] });
+      new Runtime(target, { manifests: TEST_MANIFESTS }).register({ commands: [...kernelCommands, ...financeCommands], queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries] });
     runtime = register(db);
     workerRuntime = register(workerDb);
     for (const key of Object.keys(people) as (keyof typeof people)[]) {

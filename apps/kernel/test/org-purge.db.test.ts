@@ -15,6 +15,7 @@ import { Runtime, fileKey, sha256Hex, type BlobStore } from '@crove/kernel-runti
 import { extractAndPropose, financeCommands, financeQueries } from '@crove/mod-finance';
 import { orgPurgeCommand, parseOrgPurgeArgs, runOrgPurge, type HeldCheck } from '../src/org-purge.ts';
 import { inProcessExtract } from './extract-service.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -232,10 +233,10 @@ suite('org purge on PostgreSQL (#1024)', () => {
     pool = createPool({ connectionString: login('crove_app', 'test-app-pw'), max: 4 });
     db = createDb(pool);
     const registry = { commands: [...kernelCommands, ...financeCommands], queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries] };
-    rt = new Runtime(db).register(registry);
+    rt = new Runtime(db, { manifests: TEST_MANIFESTS }).register(registry);
     workerPool = createPool({ connectionString: login('crove_worker', 'test-worker-pw'), max: 4 });
     workerDb = createDb(workerPool);
-    worker = new Runtime(workerDb).register(registry).register({ commands: [orgPurgeCommand({ store, held: isHeld })] });
+    worker = new Runtime(workerDb, { manifests: TEST_MANIFESTS }).register(registry).register({ commands: [orgPurgeCommand({ store, held: isHeld })] });
   });
 
   afterAll(async () => {

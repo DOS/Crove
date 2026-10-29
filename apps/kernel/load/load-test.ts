@@ -35,9 +35,9 @@ import { sql } from 'kysely';
 import pg from 'pg';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
-import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
+import { createOrg, kernelCommands, kernelManifest, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime, contentGeneration, fileKey, type Actor } from '@crove/kernel-runtime';
-import { financeCommands, financeQueries } from '@crove/mod-finance';
+import { financeCommands, financeManifest, financeQueries } from '@crove/mod-finance';
 import { PgBoss } from 'pg-boss';
 import { BACK_PRESSURE_CHECK_MS, DEFAULT_OUTBOX_LAG_PAUSE_SECONDS, PausableWork, checkBackPressure, outboxLagSeconds } from '../src/back-pressure.ts';
 import { jobKey } from '../src/job-keys.ts';
@@ -593,7 +593,8 @@ export async function runLoad(args: LoadArgs, log: (line: string) => void = cons
     const db: Db = createDb(appPool);
     const worker: Db = createDb(workerPool);
     // Input hashes keyed as the server writes them (#1732), so the run measures their cost too.
-    const runtime = new Runtime(db, { sessions: createSessionStatusSource('off'), inputHash: 'keyed' }).register({
+    // The manifests of the modules it registers, as the server passes them (#1710, #1772).
+    const runtime = new Runtime(db, { manifests: [kernelManifest.tables, financeManifest.tables], sessions: createSessionStatusSource('off'), inputHash: 'keyed' }).register({
       commands: [...kernelCommands, ...financeCommands],
       queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries],
     });

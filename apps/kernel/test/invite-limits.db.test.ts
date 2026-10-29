@@ -13,6 +13,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { MAX_INVITES_PER_DAY, MAX_INVITES_PER_EMAIL_PER_DAY, buildKernelCommands, createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
 import { toORPCError } from '../src/rpc.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -107,8 +108,8 @@ suite('invite mail limits on PostgreSQL (#185)', () => {
     pool = createPool({ connectionString: appUrl.toString(), max: 16 });
     db = createDb(pool);
     const queries = kernelQueries({ inboundDomain: null });
-    runtime = new Runtime(db).register({ commands: kernelCommands, queries });
-    tight = new Runtime(db).register({ commands: buildKernelCommands({ inviteLimits: { perRecipientPerDay: TIGHT } }), queries });
+    runtime = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: kernelCommands, queries });
+    tight = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: buildKernelCommands({ inviteLimits: { perRecipientPerDay: TIGHT } }), queries });
   });
 
   afterAll(async () => {
