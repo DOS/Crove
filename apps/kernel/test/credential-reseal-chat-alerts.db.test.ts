@@ -162,6 +162,15 @@ suite('team chat alert targets resealed after a key rotation on PostgreSQL (#863
     expect(await keyOf(waiting)).toBe(keyB.id);
   });
 
+  it('reseals the targets of an org being offboarded too, as it counts them (#1889)', async () => {
+    const d = await org();
+    const target = await save(d.orgId, d.owner, '-4012345681');
+    await admin((c) => c.query("UPDATE crove_kernel.tenant SET status = 'offboarding' WHERE org_id = $1", [d.orgId]));
+    const done = await resealCredentials({ runtime: worker, broker: rotated, workerDb });
+    expect(await keyOf(target)).toBe(keyB.id);
+    expect(done).toMatchObject({ failed: 0, leftActive: 0, leftWaiting: 0 });
+  });
+
   it('changes nothing when the envelope moved on since it was read, and is the worker alone', async () => {
     const o = await org();
     const id = await save(o.orgId, o.owner, '-4012345670');
