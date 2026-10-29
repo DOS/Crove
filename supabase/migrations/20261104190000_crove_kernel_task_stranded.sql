@@ -50,8 +50,10 @@ GRANT EXECUTE ON FUNCTION crove_kernel.task_stranded(uuid[]) TO crove_app;
 -- ---------------------------------------------------------------------------
 -- crove_kernel.activity: a task's rows (task.rerouted, the first kernel.task rows) take its entity, so a member limited
 -- to other entities never reads where a task of another went. The trigger's list from
--- 20261104010000_crove_kernel_proposal_legal_entity.sql, with kernel.task added; the function is unchanged. An
--- org-level task (no entity) gives an org-level row, as the function leaves a NULL entity as it is.
+-- 20261104010000_crove_kernel_proposal_legal_entity.sql, with kernel.task added; the function is unchanged. Only
+-- tasks of an entity are moved (task_stranded), so every kernel.task row this file's commands write names one; a row
+-- for an org-level task would take the writer's own entity when it is limited to exactly one (the function's NULL
+-- branch), as for every other record type.
 -- ---------------------------------------------------------------------------
 DO $$
 DECLARE

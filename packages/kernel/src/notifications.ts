@@ -177,12 +177,12 @@ export const notificationDispatch = defineCommand({
         if (!e.success) return { sent: 0 };
         const task = await ctx.trx
           .selectFrom('crove_kernel.task')
-          .select(['id', 'title', 'legal_entity_id', 'assignee_position_id'])
+          .select(['id', 'title', 'status', 'legal_entity_id', 'assignee_position_id'])
           .where('org_id', '=', ctx.orgId)
           .where('id', '=', e.data.taskId)
           .executeTakeFirst();
-        // Moved again since: the later move tells its own holder.
-        if (!task || task.assignee_position_id !== e.data.toPositionId) return { sent: 0 };
+        // Moved again since (the later move tells its own holder), or closed: nothing waits for anyone.
+        if (!task || task.assignee_position_id !== e.data.toPositionId || task.status === 'done' || task.status === 'cancelled') return { sent: 0 };
         const seat = task.assignee_position_id
           ? await ctx.trx
               .selectFrom('crove_kernel.position')

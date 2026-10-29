@@ -189,9 +189,27 @@ suite('tasks a chart or role change would strand (#1799)', () => {
         ).rows[0]?.detail,
     );
     expect(audit?.rerouted_tasks).toEqual([{ task: ofDefault, from: clerkSeat, to: leadSeat }]);
-    // The lead lists it now.
-    const listed = await app.query<{ tasks: Array<{ id: string }> }>('kernel.task.list', {}, { actor: asUser(lead), orgId });
-    expect(listed.tasks.map((t) => t.id)).toContain(ofDefault);
+    // It is among the lead's own tasks now.
+    const mine = await app.query<{ tasks: Array<{ id: string }> }>('kernel.task.list', { mine: true }, { actor: asUser(lead), orgId });
+    expect(mine.tasks.map((t) => t.id)).toContain(ofDefault);
+    // Its activity row takes the task's entity: a member limited to the branch does not read it.
+    const seen = async (user: string) => {
+      const url = new URL(adminUrl);
+      url.username = 'crove_app';
+      url.password = 'test-app-pw';
+      const c = new pg.Client({ connectionString: url.toString() });
+      await c.connect();
+      try {
+        await c.query('BEGIN');
+        await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [user, orgId]);
+        return (await c.query<{ n: number }>(`SELECT count(*)::int AS n FROM crove_kernel.activity WHERE record_type = 'kernel.task' AND record_id = $1`, [ofDefault])).rows[0]?.n;
+      } finally {
+        await c.query('ROLLBACK').catch(() => {});
+        await c.end();
+      }
+    };
+    expect(await seen(lead)).toBe(1);
+    expect(await seen(after)).toBe(0);
   });
 
   it("moves a seat's tasks to the owners when its holder's first entity assignment leaves them out and nobody above reads them", async () => {
@@ -206,6 +224,63 @@ suite('tasks a chart or role change would strand (#1799)', () => {
     expect(await taskRow(ofDefault)).toEqual({ assignee: own, status: 'todo' });
     // The owner acted, so the owner is not told about their own move; the activity row and the event are there.
     expect(await trail(ofBranch)).toEqual({ activity: [{ kind: 'task.rerouted', entity: branch }], events: 1, notified: [] });
+  });
+
+  it('moves them when the org-wide assignment is revoked and an entity one stays', async () => {
+    const holder = await member('revoked', 'member', defaultEntity);
+    const wide = await admin(
+      async (c) =>
+        (
+          await c.query<{ id: string }>(
+            `INSERT INTO crove_kernel.role_assignment (org_id, user_id, role_key, legal_entity_id, granted_by) VALUES ($1, $2, 'finance.accountant', NULL, $3) RETURNING id`,
+            [orgId, holder, owner],
+          )
+        ).rows[0]?.id as string,
+    );
+    const own = await seat('Kế toán tổng hợp', holder, null);
+    const ofBranch = await task(branch, own);
+    const ofDefault = await task(defaultEntity, own);
+
+    await app.execute('kernel.member.role.revoke', { assignmentId: wide }, { actor: asMfa(owner), orgId });
+
+    expect(await taskRow(ofBranch)).toEqual({ assignee: null, status: 'todo' });
+    expect(await taskRow(ofDefault)).toEqual({ assignee: own, status: 'todo' });
+  });
+
+  it("moves an agent seat's tasks outside a narrower scope, ending the agent's lease on them", async () => {
+    const { agentId, positionId } = await app.execute<{ agentId: string; positionId: string }>(
+      'kernel.agent.template.install',
+      { templateKey: 'finance.chief_accountant', leScope: [defaultEntity, branch], reportsTo: null },
+      { actor: asMfa(owner), orgId },
+    );
+    const started = await worker.execute<{ runId: string | null }>('kernel.agent.run.start', { agentId }, { actor: { type: 'system', component: 'kernel.agent' }, orgId });
+    if (!started.runId) throw new Error('no run');
+    const ofBranch = await task(branch, positionId);
+    await worker.execute('kernel.task.checkout', { id: ofBranch }, { actor: { type: 'agent', agentId, runId: started.runId }, orgId });
+    expect(await taskRow(ofBranch)).toEqual({ assignee: positionId, status: 'in_progress' });
+
+    await app.execute('kernel.position.update', { id: positionId, leScope: [defaultEntity] }, { actor: asMfa(owner), orgId });
+
+    expect(await taskRow(ofBranch)).toEqual({ assignee: null, status: 'todo' });
+    const lease = await admin(
+      async (c) => (await c.query<{ run: string | null }>('SELECT checkout_run_id AS run FROM crove_kernel.task WHERE id = $1', [ofBranch])).rows[0]?.run,
+    );
+    expect(lease).toBeNull();
+  });
+
+  it("moves what a removed member's vacant seat does not read, as #1788 reads a vacant seat (its le_scope)", async () => {
+    const leaving = await member('leaving', 'member', null);
+    const own = await seat('Thủ quỹ', leaving, null);
+    const scope = await admin(
+      async (c) => (await c.query<{ le_scope: string[] }>('SELECT le_scope FROM crove_kernel.position WHERE id = $1', [own])).rows[0]?.le_scope ?? [],
+    );
+    const ofBranch = await task(branch, own);
+
+    await app.execute('kernel.member.remove', { userId: leaving }, { actor: asMfa(owner), orgId });
+
+    // A vacant seat keeps the tasks its scope names, for an agent placed there later; the rest go up.
+    const reads = scope.includes('*') || scope.includes(branch);
+    expect(await taskRow(ofBranch)).toEqual({ assignee: reads ? own : null, status: 'todo' });
   });
 
   it('moves them when an admin limited to an entity is made a member', async () => {

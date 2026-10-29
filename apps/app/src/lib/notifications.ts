@@ -29,11 +29,12 @@ export type NotificationTarget =
   | { to: 'portal' }
   | { to: 'ledger' }
   | { to: 'myWork' }
+  | { to: 'task'; id: string }
   | { to: 'tasks' };
 
 // What an item opens: the proposal waiting for approval, the Inbox (where a file that failed to read is listed), the
 // bank account with lines to look at, the tax-portal check, the ledger, where the period is locked, or My work, where
-// the reminded to-do is, or the tasks, where a task that came to me is listed.
+// the reminded to-do is, or the task that came to me (else the task list).
 export function notificationTarget(item: { kind: string; subjectId: string | null; detail: Record<string, string> }): NotificationTarget | null {
   switch (item.kind) {
     case 'kernel.approval_waiting':
@@ -41,7 +42,7 @@ export function notificationTarget(item: { kind: string; subjectId: string | nul
     case 'kernel.file_unreadable':
       return { to: 'inbox' };
     case 'kernel.task_rerouted':
-      return { to: 'tasks' };
+      return item.subjectId ? { to: 'task', id: item.subjectId } : { to: 'tasks' };
     case 'finance.bank_attention':
       return item.detail.bankAccount ? { to: 'bank', account: item.detail.bankAccount } : { to: 'bank' };
     case 'finance.portal_attention':

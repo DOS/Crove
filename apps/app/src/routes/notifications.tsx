@@ -105,6 +105,7 @@ export function NotificationsPage() {
     else if (target?.to === 'portal') void navigate({ to: '/o/$slug/portal-invoices', params: { slug } });
     else if (target?.to === 'ledger') void navigate({ to: '/o/$slug/ledger', params: { slug } });
     else if (target?.to === 'myWork') void navigate({ to: '/o/$slug/my-work', params: { slug } });
+    else if (target?.to === 'task') void navigate({ to: '/o/$slug/tasks/$id', params: { slug, id: target.id } });
     else if (target?.to === 'tasks') void navigate({ to: '/o/$slug/tasks', params: { slug } });
   };
   // A kind this version of the app does not know (a newer module) is left out rather than shown blank.
