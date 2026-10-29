@@ -5279,6 +5279,7 @@ export const en = {
       ROLE_ASSIGNMENT_NOT_FOUND: 'This member does not hold that role.',
       ROLE_PRIVILEGED_FOR_VIEWER: 'A view-only member cannot get a role that approves postings or unlocks the books. Make them a member first.',
       ROLE_GRANT_WIDENS_SCOPE: 'This member may see only some legal entities. An organization-wide role would let them see every entity, so it cannot be given. If you mean organization-wide access, revoke their entity roles first; the last one goes only by making them an admin, or by removing and inviting them again.',
+      ROLE_DEMOTION_MIXES_SCOPE: 'This member holds both organization-wide roles and roles for some legal entities, so they cannot be made a member or viewer yet. Revoke their organization-wide roles to keep them limited to those entities, or their entity roles to let them see every entity, then try again.',
       ROLE_REVOKE_WIDENS_SCOPE: 'This is the last legal entity this member may see. Revoking it would let them see every entity; if they no longer work for the organization, remove them instead.',
       UNKNOWN_PRESET: 'There is no such approval rule.',
       NO_CHIEF_ACCOUNTANT: 'Give a member the chief accountant role before choosing the rule where only the chief accountant approves postings.',

@@ -76,8 +76,8 @@ const KERNEL_MODULE_REFERENCES: Record<string, { modules: readonly string[]; why
     why: 'the org export lists every table of every schema (its manifest needs a part per table): a module left out exports its old rows or none, and its data stays, as ADR-0031 says',
   },
   'packages/kernel/src/personal-data.ts': {
-    modules: ['crm', 'finance', 'social'],
-    why: 'the personal-data registry, find and erase: an erasure reaches data an earlier install of the module left, whatever is installed now',
+    modules: ['crm', 'finance', 'notes', 'social'],
+    why: "the personal-data registry, find and erase: an erasure reaches data an earlier install of the module left, whatever is installed now; notes' text columns wait there for notes step N9 (#1874)",
   },
   'apps/kernel/src/bio-page.ts': { modules: ['social'], why: 'public bio page routes, registered only when social is installed (http.ts)' },
   'apps/kernel/src/booking-feed.ts': { modules: ['crm'], why: 'the booking calendar feed, served only when crm is installed (http.ts)' },

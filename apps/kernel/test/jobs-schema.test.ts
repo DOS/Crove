@@ -1,7 +1,10 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getConstructionPlans } from 'pg-boss';
 import { describe, expect, it } from 'vitest';
-import { QUEUES, adaptPlans, pgBossSchemaVersion, queueOptions, renderJobsMigration, vendoredSchemaVersion } from '../src/jobs-schema.ts';
+import { AVAILABLE_MODULES } from '../src/config.ts';
+import { MAIL_QUEUES, QUEUES, SOCIAL_PUBLISH_QUEUES, adaptPlans, pgBossSchemaVersion, queueOptions, renderJobsMigration, vendoredSchemaVersion } from '../src/jobs-schema.ts';
 
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
 
@@ -42,6 +45,17 @@ describe('vendored pg-boss schema (External-tenant gate T6)', () => {
     expect(created[0]).toEqual({ options: { policy: 'standard', retryLimit: 5, retryDelay: 30, retryBackoff: true }, names: [QUEUES.deadLetter] });
     for (const { options, names } of created.slice(1)) expect(options.deadLetter, names.join(', ')).toBe(QUEUES.deadLetter);
     expect(created.flatMap((c) => c.names).sort()).toEqual(Object.values(QUEUES).sort());
+  });
+
+  // crove_kernel.health() takes a queue's module from its name up to the first '-' (#1877).
+  it('names every queue after the module that works it', () => {
+    for (const queue of [...Object.values(QUEUES), ...SOCIAL_PUBLISH_QUEUES, ...MAIL_QUEUES]) {
+      expect(AVAILABLE_MODULES as readonly string[], queue).toContain(queue.split('-')[0]);
+    }
+    // health() lists the optional modules, whose queues alone can drop out of its job age: every module but kernel.
+    const sql = readFileSync(join(MIGRATIONS, '20261105130000_crove_kernel_health_installed_queues.sql'), 'utf8');
+    const listed = /<> ALL \(ARRAY\[([^\]]*)\]\)/.exec(sql)?.[1]?.split(',').map((m) => m.trim().replaceAll("'", ''));
+    expect(listed?.sort()).toEqual(AVAILABLE_MODULES.filter((m) => m !== 'kernel').sort());
   });
 
   it('renders an upgrade that refuses any starting version but its own', () => {

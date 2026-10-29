@@ -8,7 +8,9 @@
 //
 // The sealed targets of team chat alerts (#863, crove_social.chat_alert_target) go through the same pass, under the
 // same lock, when the Social module is on: those whose saver is still an owner or admin are resealed, the others when
-// the chat is saved again, and both are in the counts.
+// the chat is saved again, and both are in the counts. With Social left out (ADR-0031: its tables stay) they are
+// counted all the same (#1878), apart: they reseal only once Social is on again, so the previous key must stay until
+// then, or those targets never open again.
 import { createHash } from 'node:crypto';
 import { sql } from 'kysely';
 import type { Db } from '@crove/db';
@@ -36,6 +38,8 @@ export interface ResealOutcome {
   // Envelopes still under a key other than the current one: of active connections, and of the others.
   leftActive: number;
   leftInactive: number;
+  // Team chat alert targets under an older key while the Social module is off: they reseal only once it is on again.
+  leftWaiting: number;
   skipped: boolean;
 }
 
@@ -46,7 +50,7 @@ const currentKeyOf = (broker: CredentialBroker): string | null => {
 };
 
 export async function resealCredentials(deps: ResealDeps): Promise<ResealOutcome> {
-  const outcome: ResealOutcome = { resealed: 0, failed: 0, leftActive: 0, leftInactive: 0, skipped: false };
+  const outcome: ResealOutcome = { resealed: 0, failed: 0, leftActive: 0, leftInactive: 0, leftWaiting: 0, skipped: false };
   const current = currentKeyOf(deps.broker);
   if (!current) return { ...outcome, skipped: true };
   return deps.workerDb.connection().execute(async (db) => {
@@ -79,12 +83,18 @@ export async function resealCredentials(deps: ResealDeps): Promise<ResealOutcome
         });
       }
       const { rows: counts } = await sql<{ key_id: string; active: string; inactive: string }>`SELECT key_id, active, inactive FROM crove_kernel.credential_key_counts()`.execute(db);
-      const { rows: chatCounts } = social
-        ? await sql<{ key_id: string; active: string; inactive: string }>`SELECT key_id, active, inactive FROM crove_social.chat_alert_target_key_counts()`.execute(db)
-        : { rows: [] };
-      for (const c of [...counts, ...chatCounts]) {
+      // Counted whatever is installed: the tables exist with Social left out too (ADR-0031), and a target left under the
+      // previous key must keep it from being retired (#1878).
+      const { rows: chatCounts } = await sql<{ key_id: string; active: string; inactive: string }>`SELECT key_id, active, inactive FROM crove_social.chat_alert_target_key_counts()`.execute(db);
+      for (const c of counts) {
         if (c.key_id === current) continue;
         outcome.leftActive += Number(c.active);
+        outcome.leftInactive += Number(c.inactive);
+      }
+      for (const c of chatCounts) {
+        if (c.key_id === current) continue;
+        if (social) outcome.leftActive += Number(c.active);
+        else outcome.leftWaiting += Number(c.active);
         outcome.leftInactive += Number(c.inactive);
       }
       return outcome;

@@ -95,7 +95,7 @@ Options considered: delete at once (rejected: a removal by mistake loses the mem
 
 - **The member's own request:** they download their notes and to-dos (Markdown and JSON) at any time; their private items are personal data the org processes, and this answers access and portability.
 - **A third person's request** (a client's director named in a note). The finder (`kernel.personal_data.*`) today compares whole values in email, phone and tax-code columns of four schemas; notes.md step N9 adds `crove_notes` and a match inside free text. Then it lists shared notes that contain the email, phone or tax code; for private items it reports only how many each author has (`private_matches`), never the text. The finder is a read-only query, so telling the authors is a separate owner command whose event a system command turns into notifications. An erasure (R3, owner) leaves each shared note that holds the value for the owner to edit (the one case where someone other than the author edits a note; `title` is NOT NULL, so nulling columns is not an option) and deletes the matching private items through `private_erase`, without showing them, after the authors were notified; the runbook of #923 sets the waiting time inside the legal deadline.
-- Classes: `title`, `body`, `tags`, `details`, `checklist` and `search_text` are `pii` in the manifest; their registry entries come with step N9.
+- Classes: `title`, `body`, `tags`, `details`, `checklist` and `search` (the folded search words) are `pii` in the manifest; their registry entries come with step N9, and until then they wait in `PERSONAL_DATA_PENDING` (#1874).
 
 ### 6. Org export and org purge
 
