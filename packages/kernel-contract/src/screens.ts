@@ -2,8 +2,8 @@
 // Every module's manifest names its entry here (`...MODULE_SCREENS.crm`), and the app's shell builds its apps, menus,
 // command palette and module guard from this list, so the shell names no module's screen itself. They live in
 // @crove/kernel-contract because the app's bundle already reads it and it carries no server code.
-// apps/app/test/module-screens.test.ts fails when a route of the app's router under /o/$slug has no entry or two, or a
-// label has no message in Vietnamese or English; apps/kernel/test/manifest-screens.test.ts fails when a manifest drifts
+// apps/app/test/module-screens.test.ts fails when a route of the app's router, under /o/$slug or outside it (#1660),
+// has no entry or two, or a label has no message in Vietnamese or English; apps/kernel/test/manifest-screens.test.ts fails when a manifest drifts
 // from its entry or a route names an undeclared permission. Modules are in the order of the app switcher.
 import type { ModuleScreens } from './manifest.ts';
 
@@ -24,6 +24,9 @@ const KERNEL_SCREENS = {
     { path: 'audit' },
     { path: 'personal-data' },
   ],
+  // Signing in and the screens before an org: the landing redirect, the home of several orgs, sign-in, the second
+  // factor, a password reset, an invite to accept and a new org.
+  outside: [{ path: '/' }, { path: '/clients' }, { path: '/login' }, { path: '/mfa' }, { path: '/reset-password' }, { path: '/-/invite' }, { path: '/onboarding' }],
   nav: [
     { app: 'home', group: 'work', path: 'overview', label: 'overview' },
     { app: 'home', group: 'work', path: 'inbox', label: 'inbox' },
@@ -82,6 +85,15 @@ const SOCIAL_SCREENS = {
     // The content plan to print (#978), outside the org's frame so only the plan reaches the paper.
     { path: 'print/social-plan' },
   ],
+  outside: [
+    // A page shared into a new draft (#1235), before the org is known.
+    { path: '/-/share' },
+    // Where a channel provider's OAuth dialog sends the browser back (S6), one address for every org.
+    { path: '/channels/oauth/$provider/callback' },
+    // A client's review and report links (#589, #643): the token in the fragment is the only credential.
+    { path: '/-/review', public: true },
+    { path: '/-/report', public: true },
+  ],
   nav: [
     { app: 'social', group: 'social', path: 'social', label: 'social' },
     { app: 'social', group: 'social', path: 'social/notifications', label: 'notifications' },
@@ -91,6 +103,8 @@ const SOCIAL_SCREENS = {
 const CRM_SCREENS = {
   // Bookings of the public booking page (#1320).
   routes: [{ path: 'bookings' }],
+  // The public booking page (#1318), no account.
+  outside: [{ path: '/-/b/$org/$type', public: true }],
   nav: [{ app: 'crm', group: 'crm', path: 'bookings', label: 'bookings' }],
 } as const satisfies ModuleScreens;
 

@@ -20,6 +20,8 @@ export const en = {
     time: 'Time',
     error: 'Something went wrong',
     unknownError: 'Unknown error',
+    notFound: 'Page not found',
+    notFoundHint: 'The address is wrong, or this system does not run the feature of this page.',
     httpError: 'Error {status}',
     serverUnreachable: 'Cannot reach the {brand} server.',
     configLoadFailed: 'Could not load the configuration',

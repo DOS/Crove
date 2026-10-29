@@ -13,12 +13,23 @@ describe('module manifests declare their screens (#1652)', () => {
       const screens = MODULE_SCREENS[id as keyof typeof MODULE_SCREENS];
       expect(manifest.routes, id).toBe(screens.routes);
       expect(manifest.nav, id).toBe(screens.nav);
+      expect((manifest as { outside?: unknown }).outside, id).toBe((screens as { outside?: unknown }).outside);
     }
   });
 
   it('writes each screen as a path under /o/$slug, once across the modules', () => {
     const paths = Object.values(MODULE_MANIFESTS).flatMap(({ manifest }) => manifest.routes.map((r) => r.path));
     for (const path of paths) expect(path, path).toMatch(/^[a-z][a-z0-9-]*(\/([a-z][a-z0-9-]*|\$[a-zA-Z]+))*$/);
+    expect(new Set(paths).size).toBe(paths.length);
+  });
+
+  it('writes each screen outside /o/$slug as a full path, once across the modules (#1660)', () => {
+    const paths = Object.values(MODULE_MANIFESTS).flatMap(({ manifest }) => ((manifest as { outside?: ReadonlyArray<{ path: string }> }).outside ?? []).map((r) => r.path));
+    expect(paths.length).toBeGreaterThan(0);
+    for (const path of paths) {
+      expect(path, path).toMatch(/^\/(([a-z-]+|\$[a-zA-Z]+)(\/([a-z][a-z0-9-]*|\$[a-zA-Z]+))*)?$/);
+      expect(path === '/o/$slug' || path.startsWith('/o/'), path).toBe(false);
+    }
     expect(new Set(paths).size).toBe(paths.length);
   });
 

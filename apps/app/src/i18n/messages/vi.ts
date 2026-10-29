@@ -18,6 +18,8 @@ export const vi = {
     time: 'Giờ',
     error: 'Đã có lỗi xảy ra',
     unknownError: 'Lỗi không xác định',
+    notFound: 'Không tìm thấy trang này',
+    notFoundHint: 'Địa chỉ không đúng, hoặc hệ thống này không dùng chức năng của trang này.',
     httpError: 'Lỗi {status}',
     serverUnreachable: 'Không kết nối được máy chủ {brand}.',
     configLoadFailed: 'Không tải được cấu hình',
