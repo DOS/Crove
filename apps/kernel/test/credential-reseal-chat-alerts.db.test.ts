@@ -139,15 +139,26 @@ suite('team chat alert targets resealed after a key rotation on PostgreSQL (#863
     const c = await org();
     const waiting = await save(c.orgId, c.owner, '-4012345680');
     expect(await keyOf(waiting)).toBe(keyA.id);
-    const off = await resealCredentials({ runtime: kernelOnly, broker: rotated, workerDb });
-    // Not resealed, not lost from the counts: it keeps the previous key from being retired.
-    expect(off).toMatchObject({ resealed: 0, failed: 0, skipped: false });
-    expect(off.leftWaiting).toBeGreaterThanOrEqual(1);
+    // Not resealed, not lost from the counts and not counted twice: it keeps the previous key from being retired. (The
+    // case above left nothing under the old key.)
+    expect(await resealCredentials({ runtime: kernelOnly, broker: rotated, workerDb })).toEqual({
+      resealed: 0,
+      failed: 0,
+      leftActive: 0,
+      leftInactive: 0,
+      leftWaiting: 1,
+      skipped: false,
+    });
     expect(await keyOf(waiting)).toBe(keyA.id);
-    // Social on again: the next pass reseals it, and nothing waits.
-    const on = await resealCredentials({ runtime: worker, broker: rotated, workerDb });
-    expect(on.resealed).toBeGreaterThanOrEqual(1);
-    expect(on.leftWaiting).toBe(0);
+    // Social on again: the next pass reseals it, and nothing is left.
+    expect(await resealCredentials({ runtime: worker, broker: rotated, workerDb })).toEqual({
+      resealed: 1,
+      failed: 0,
+      leftActive: 0,
+      leftInactive: 0,
+      leftWaiting: 0,
+      skipped: false,
+    });
     expect(await keyOf(waiting)).toBe(keyB.id);
   });
 
