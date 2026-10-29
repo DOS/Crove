@@ -1,6 +1,6 @@
 // Team alerts in a Telegram or Discord chat (#863): the worker's half. The API checks and seals a target
 // (chat-alert-save.ts) and never opens one; here the worker reads the sealed target through the definer only it may
-// call (crove_social.chat_alert_target_get), posts one short line per alerting outbox event, and sends an owner's
+// call (the social module's chat_alert_target_get), posts one short line per alerting outbox event, and sends an owner's
 // test line and records how it went.
 //
 // - Sealing: the target ({botToken, chatId} or {webhookId, token}) is sealed with the credential broker for the binding
