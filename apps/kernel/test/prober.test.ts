@@ -133,6 +133,18 @@ describe('prober configuration', () => {
     ).toMatchObject({ instance: 'office', thresholds: { outboxAgeSeconds: 60, jobAgeSeconds: 61, heartbeatAgeSeconds: 62, deadLetters: 5 }, deadLetterWindowSeconds: 600 });
   });
 
+  // #1894: the modules the deployment runs, which health() counts in the job age whatever the workers record.
+  it('reads the modules the deployment runs from CROVE_MODULES, as the API does, and hands them to readHealth', async () => {
+    expect(loadProberConfig({}).modules).toEqual(['kernel', 'finance', 'social', 'crm', 'notes']);
+    expect(loadProberConfig({ CROVE_MODULES: '' }).modules).toEqual(['kernel', 'finance', 'social', 'crm', 'notes']);
+    expect(loadProberConfig({ CROVE_MODULES: ' Finance , notes' }).modules).toEqual(['kernel', 'finance', 'notes']);
+    expect(() => loadProberConfig({ CROVE_MODULES: 'finanse' })).toThrow(/CROVE_MODULES/);
+    const readHealth = vi.fn(async () => healthy);
+    const config = { ...loadProberConfig({ CROVE_MODULES: 'finance' }), databaseUrl: 'postgres://prober@db.test/crove' };
+    await probeOnce(config, { log: () => {}, error: () => {}, readHealth });
+    expect(readHealth).toHaveBeenCalledWith('postgres://prober@db.test/crove', 3600, ['kernel', 'finance']);
+  });
+
   it('counts dead letters over the --every interval plus 60 s unless the window is set', () => {
     expect(loadProberConfig({}, 300).deadLetterWindowSeconds).toBe(360);
     expect(loadProberConfig({ PROBER_DEAD_LETTER_WINDOW_SECONDS: '' }, 30).deadLetterWindowSeconds).toBe(90);
