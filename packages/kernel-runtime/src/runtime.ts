@@ -1516,6 +1516,22 @@ export class Runtime {
     // Set once the handler settled: from then on the runtime writes this command's rows, and nothing the handler
     // left running may write, run a command or roll back to a savepoint in this transaction.
     let closed = false;
+    // The rows the runtime is writing for the handler (ctx.emit, ctx.activity, ctx.numbering) right now. The handler may
+    // not await them; they still finish before the command does, and before a refused command's savepoint rolls back,
+    // so no row of it lands after its rollback (#1831).
+    const writing = new Set<Promise<unknown>>();
+    const pending = <T>(work: () => Promise<T>): Promise<T> => {
+      const promise = work();
+      writing.add(promise);
+      void promise.then(
+        () => writing.delete(promise),
+        () => writing.delete(promise),
+      );
+      return promise;
+    };
+    const settleWriting = async () => {
+      while (writing.size > 0) await Promise.allSettled(writing);
+    };
     const refuseClosed = (what: string) => {
       if (closed) throw new Error(`command ${def.name}: ${what} after the handler returned`);
     };
@@ -1527,15 +1543,17 @@ export class Runtime {
       proposalId: base.proposalId,
       now: new Date(),
       build: this.build,
-      emit: async (type, payload) => {
-        refuseClosed('ctx.emit');
-        if (!type.startsWith(`${def.name.split('.')[0]}.`)) throw new Error(`command ${def.name} cannot emit ${type}`);
-        const { rows } = await aside(() => sql<{ id: string }>`SELECT crove_kernel.emit(${type}, ${JSON.stringify(payload)}::jsonb, ${commandId}::uuid) AS id`.execute(trx));
-        return rows[0]?.id ?? '';
-      },
-      activity: async (recordType, recordId, kind, summary, options) => {
-        refuseClosed('ctx.activity');
-        await aside(() =>
+      emit: (type, payload) =>
+        pending(async () => {
+          refuseClosed('ctx.emit');
+          if (!type.startsWith(`${def.name.split('.')[0]}.`)) throw new Error(`command ${def.name} cannot emit ${type}`);
+          const { rows } = await aside(() => sql<{ id: string }>`SELECT crove_kernel.emit(${type}, ${JSON.stringify(payload)}::jsonb, ${commandId}::uuid) AS id`.execute(trx));
+          return rows[0]?.id ?? '';
+        }),
+      activity: (recordType, recordId, kind, summary, options) =>
+        pending(async () => {
+          refuseClosed('ctx.activity');
+          await aside(() =>
           trx
             .insertInto('crove_kernel.activity')
             .values({
@@ -1550,8 +1568,8 @@ export class Runtime {
               ...(options?.legalEntityId === undefined ? {} : { legal_entity_id: options.legalEntityId }),
             })
             .execute(),
-        );
-      },
+          );
+        }),
       audit: (detail) => {
         refuseClosed('ctx.audit');
         const own = { ...detail };
@@ -1574,23 +1592,25 @@ export class Runtime {
         return tracked(() => scope.undoneIfRolledBack((counter) => tryNested<R>(name, nestedInput, options, counter), (result) => result.status === 'refused'));
       },
       numbering: {
-        allocate: async (n) => {
-          refuseClosed('ctx.numbering.allocate');
-          const { rows } = await aside(() => sql<{ period_key: string; number: string; allocation_id: string }>`
-            SELECT a.period_key, a.number::text AS number, a.allocation_id
-            FROM crove_kernel.allocate_number(${n.legalEntityId}::uuid, ${n.docType}::text, ${n.documentDate}::date, ${n.targetType}::text, ${n.targetId}::uuid) a`.execute(trx));
-          const row = rows[0];
-          const number = Number(row?.number);
-          if (!row || !Number.isSafeInteger(number) || number < 1) throw new Error(`command ${def.name}: allocate_number answered no number`);
-          return { periodKey: row.period_key, number, allocationId: row.allocation_id };
-        },
-        void: async (n) => {
-          refuseClosed('ctx.numbering.void');
-          const { rows } = await aside(() => sql<{ id: string }>`SELECT crove_kernel.void_number(${n.allocationId}::uuid, ${n.reason}::text) AS id`.execute(trx));
-          const voidId = rows[0]?.id;
-          if (!voidId) throw new Error(`command ${def.name}: void_number answered no void`);
-          return { voidId };
-        },
+        allocate: (n) =>
+          pending(async () => {
+            refuseClosed('ctx.numbering.allocate');
+            const { rows } = await aside(() => sql<{ period_key: string; number: string; allocation_id: string }>`
+              SELECT a.period_key, a.number::text AS number, a.allocation_id
+              FROM crove_kernel.allocate_number(${n.legalEntityId}::uuid, ${n.docType}::text, ${n.documentDate}::date, ${n.targetType}::text, ${n.targetId}::uuid) a`.execute(trx));
+            const row = rows[0];
+            const number = Number(row?.number);
+            if (!row || !Number.isSafeInteger(number) || number < 1) throw new Error(`command ${def.name}: allocate_number answered no number`);
+            return { periodKey: row.period_key, number, allocationId: row.allocation_id };
+          }),
+        void: (n) =>
+          pending(async () => {
+            refuseClosed('ctx.numbering.void');
+            const { rows } = await aside(() => sql<{ id: string }>`SELECT crove_kernel.void_number(${n.allocationId}::uuid, ${n.reason}::text) AS id`.execute(trx));
+            const voidId = rows[0]?.id;
+            if (!voidId) throw new Error(`command ${def.name}: void_number answered no void`);
+            return { voidId };
+          }),
       },
     };
     // ctx.run and ctx.tryRun call these only while the handler runs, after both are defined.
@@ -1724,11 +1744,13 @@ export class Runtime {
       closed = true;
     } catch (error) {
       closed = true;
-      // A nested command the handler left running still uses this transaction's connection: let it settle before the
-      // transaction rolls back.
+      // A nested command or a runtime write the handler left running still uses this transaction's connection: let
+      // them settle before the transaction (or a tryRun's savepoint) rolls back.
+      await settleWriting();
       await settleRunning();
       throw error;
     }
+    await settleWriting();
     // Before the runtime writes this command's rows: a nested command still running would share the connection with
     // them, and a tryRun's rollback could undo them, so the command fails instead and commits nothing.
     if (await settleRunning()) throw new Error(`command ${def.name}: the handler returned while a nested command was still running`);

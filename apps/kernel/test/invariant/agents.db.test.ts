@@ -1665,6 +1665,38 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
     expect(kept).toEqual([]);
   });
 
+  it('lets no row of a refused nested command land after its rollback, even one its handler did not await (#1831)', async () => {
+    const suffix = randomUUID().slice(0, 8);
+    const eventType = `t1831.late_${suffix}`;
+    // A nested command that declares its writes, emits an event without awaiting it, and is refused.
+    const leavesEvent = defineCommand({
+      sideEffect: 'none',
+      name: `t1831.leaves_${suffix}`,
+      input: z.object({}),
+      risk: 'R1',
+      access: 'system',
+      writes: [],
+      handler: async (ctx) => {
+        void ctx.emit(eventType, { n: 1 });
+        throw new DomainError('CONFLICT', 409, 't1831 refused');
+      },
+    }) as CommandDef<unknown, unknown>;
+    const caller = defineCommand({
+      sideEffect: 'none',
+      name: `t1831.caller_${suffix}`,
+      input: z.object({}),
+      risk: 'R1',
+      access: 'system',
+      writes: [],
+      handler: async (ctx) => ctx.tryRun(leavesEvent.name, {}, { recover: () => true }),
+    }) as CommandDef<unknown, unknown>;
+    worker.register({ commands: [leavesEvent, caller] });
+    await expect(worker.execute(caller.name, {}, { actor: SYSTEM, orgId: orgA })).resolves.toMatchObject({ status: 'refused' });
+    // The event was written before the savepoint rolled back, so it went with it.
+    const events = await withAdmin(async (c) => (await c.query('SELECT count(*)::int AS n FROM crove_kernel.outbox_event WHERE org_id = $1 AND type = $2', [orgA, eventType])).rows[0]?.n);
+    expect(events).toBe(0);
+  });
+
   it('runs a command as it registered: agent access set on its definition afterwards grants an agent nothing (#1766)', async () => {
     const contactWriter = defineCommand({
       sideEffect: 'none',
