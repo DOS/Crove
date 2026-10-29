@@ -9,7 +9,7 @@
 import { sql } from 'kysely';
 import { z } from 'zod';
 import type { MemberRole } from '@crove/db';
-import { DomainError, defineCommand, defineQuery, exportKey, GENERATION_PATTERN } from '@crove/kernel-runtime';
+import { DomainError, defineCommand, defineQuery, exportKey, GENERATION_PATTERN, type QueryContext } from '@crove/kernel-runtime';
 
 const OWNERS: readonly MemberRole[] = ['owner'];
 
@@ -135,10 +135,15 @@ const zExportRecord = z
     fileCount: z.number().int().nonnegative(),
     encryption: zExportEncryption,
     expiresAt: z.iso.datetime(),
-    parts: z.array(zPart).min(EXPORT_TABLE_NAMES.length).max(EXPORT_MAX_PARTS),
+    parts: z.array(zPart).min(1).max(EXPORT_MAX_PARTS),
+    // A restore re-recording the org's newest export with the object versions restored (#351, #1726): the record must
+    // then be that export's own, but for the versions, and it names the tables the export was made with, which may be
+    // fewer than EXPORT_TABLES has since.
+    rebind: z.literal(true).optional(),
   })
   .superRefine((record, ctx) => {
-    // Every table, each with chunks 0..n-1 in order: the download concatenates them.
+    // The tables in EXPORT_TABLES order, each with chunks 0..n-1 in order: the download concatenates them. A new export
+    // names every table; a rebound one the tables its own export had.
     let index = 0;
     for (const table of EXPORT_TABLE_NAMES) {
       let chunk = 0;
@@ -147,7 +152,7 @@ const zExportRecord = z
         index++;
         chunk++;
       }
-      if (chunk === 0) ctx.addIssue({ code: 'custom', message: `no chunk for ${table}`, path: ['parts'] });
+      if (chunk === 0 && !record.rebind) ctx.addIssue({ code: 'custom', message: `no chunk for ${table}`, path: ['parts'] });
     }
     if (index !== record.parts.length) ctx.addIssue({ code: 'custom', message: 'parts in an unexpected order', path: ['parts', index] });
   });
@@ -255,8 +260,21 @@ export const exportSnapshot = defineQuery({
   },
 });
 
+// What a rebind may change of the export it re-records: the object versions, nothing else.
+const withoutGenerations = (record: Omit<ExportRecord, 'rebind'>) =>
+  JSON.stringify({
+    format: record.format,
+    manifestKey: record.manifestKey,
+    manifestSha256: record.manifestSha256,
+    fileCount: record.fileCount,
+    encryption: record.encryption,
+    expiresAt: record.expiresAt,
+    parts: record.parts.map(({ table, chunk, key, sha256, rows, bytes }) => ({ table, chunk, key, sha256, rows, bytes })),
+  });
+
 // Records a finished export (system only). Every key must be a content address under this org's export prefix, and the
-// parts must name every table with its chunks in order.
+// parts must name every table with its chunks in order. A rebind re-records the org's newest export with the restored
+// object versions, the same export in every other field, whatever tables were added to EXPORT_TABLES since it was made.
 export const recordExport = defineCommand({
   name: 'kernel.org.export.record',
   input: zExportRecord,
@@ -268,6 +286,12 @@ export const recordExport = defineCommand({
     if (keys.some((k) => k.key !== exportKey(ctx.orgId, k.sha256))) {
       throw new DomainError('INVALID_STORAGE_KEY', 400, 'Khóa lưu trữ không hợp lệ');
     }
+    if (input.rebind) {
+      const current = await currentExport(ctx.trx, ctx.orgId);
+      if (!current || withoutGenerations(current) !== withoutGenerations(input)) {
+        throw new DomainError('EXPORT_REBIND_MISMATCH', 409, 'Bản ghi không khớp với bản xuất dữ liệu đang có của tổ chức');
+      }
+    }
     ctx.audit({
       format: input.format,
       manifest_key: input.manifestKey,
@@ -277,12 +301,16 @@ export const recordExport = defineCommand({
       encryption: input.encryption,
       expires_at: input.expiresAt,
       parts: input.parts,
+      ...(input.rebind ? { rebind: true } : {}),
     });
+    const tables = new Set(input.parts.map((p) => p.table)).size;
     await ctx.activity(
       'kernel.org',
       ctx.orgId,
       'org.export_ready',
-      `Đã xuất dữ liệu tổ chức (${EXPORT_TABLE_NAMES.length} bảng, ${input.parts.length} phần, ${input.fileCount} tệp)`,
+      input.rebind
+        ? `Gắn lại bản xuất dữ liệu sau khi khôi phục (${tables} bảng, ${input.parts.length} phần, ${input.fileCount} tệp)`
+        : `Đã xuất dữ liệu tổ chức (${tables} bảng, ${input.parts.length} phần, ${input.fileCount} tệp)`,
     );
     return { ok: true as const };
   },
@@ -418,32 +446,35 @@ export const exportCurrent = defineQuery({
   name: 'kernel.org.export.current',
   input: z.object({}),
   access: 'system',
-  handler: async (ctx): Promise<ExportRecord | null> => {
-    const row = await ctx.trx
-      .selectFrom('crove_kernel.audit_event')
-      .select('detail')
-      .where('org_id', '=', ctx.orgId)
-      .where('command', '=', 'kernel.org.export.record')
-      .where('outcome', '=', 'ok')
-      .where('actor_type', '<>', 'agent')
-      .orderBy('occurred_at', 'desc')
-      .orderBy('id', 'desc')
-      .limit(1)
-      .executeTakeFirst();
-    const parsed = row ? zRecordedExport.safeParse(row.detail) : null;
-    if (!parsed?.success || Date.parse(parsed.data.expires_at) <= Date.now()) return null;
-    const d = parsed.data;
-    return {
-      format: d.format,
-      manifestKey: d.manifest_key,
-      manifestSha256: d.manifest_sha256,
-      manifestGeneration: d.manifest_generation,
-      fileCount: d.file_count,
-      encryption: d.encryption,
-      expiresAt: d.expires_at,
-      parts: d.parts,
-    };
-  },
+  handler: async (ctx): Promise<ExportRecord | null> => currentExport(ctx.trx, ctx.orgId),
 });
+
+// The org's newest live export record (see exportCurrent), for the query and for a rebind's check.
+async function currentExport(trx: QueryContext['trx'], orgId: string): Promise<ExportRecord | null> {
+  const row = await trx
+    .selectFrom('crove_kernel.audit_event')
+    .select('detail')
+    .where('org_id', '=', orgId)
+    .where('command', '=', 'kernel.org.export.record')
+    .where('outcome', '=', 'ok')
+    .where('actor_type', '<>', 'agent')
+    .orderBy('occurred_at', 'desc')
+    .orderBy('id', 'desc')
+    .limit(1)
+    .executeTakeFirst();
+  const parsed = row ? zRecordedExport.safeParse(row.detail) : null;
+  if (!parsed?.success || Date.parse(parsed.data.expires_at) <= Date.now()) return null;
+  const d = parsed.data;
+  return {
+    format: d.format,
+    manifestKey: d.manifest_key,
+    manifestSha256: d.manifest_sha256,
+    manifestGeneration: d.manifest_generation,
+    fileCount: d.file_count,
+    encryption: d.encryption,
+    expiresAt: d.expires_at,
+    parts: d.parts,
+  };
+}
 
 export const offboardingQueries = [exportSnapshot, orgExportGet, exportLiveKeys, exportCurrent];

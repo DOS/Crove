@@ -443,6 +443,52 @@ suite('org offboarding on PostgreSQL (#38)', () => {
     // An org without an export.
     const quiet = await orgWithMember('Công ty Chưa xuất');
     expect(await rebindExport({ runtime: workerRuntime, store: restored }, quiet.org.orgId)).toBe('none');
+
+    // An export made before a table was added to EXPORT_TABLES (#1726): its record lacks that table. A new record that
+    // lacks a table is refused, but the restore re-records the older export as it was, with the restored versions.
+    const added = EXPORT_TABLE_NAMES.at(-1)!;
+    const older = { ...record, parts: record.parts.filter((p) => p.table !== added) };
+    await expect(workerRuntime.execute('kernel.org.export.record', older, system)).rejects.toMatchObject({ code: 'VALIDATION' });
+    await withAdmin((admin) =>
+      admin.query(
+        `INSERT INTO crove_kernel.audit_event (org_id, actor_type, command, command_id, outcome, input_sha256, detail)
+         VALUES ($1, 'system', 'kernel.org.export.record', gen_random_uuid(), 'ok', repeat('0', 64), $2::jsonb)`,
+        [
+          org.orgId,
+          JSON.stringify({
+            format: older.format,
+            manifest_key: older.manifestKey,
+            manifest_sha256: older.manifestSha256,
+            manifest_generation: older.manifestGeneration,
+            file_count: older.fileCount,
+            encryption: older.encryption,
+            expires_at: older.expiresAt,
+            parts: older.parts,
+          }),
+        ],
+      ),
+    );
+    expect(await workerRuntime.query('kernel.org.export.current', {}, system)).toEqual(older);
+    expect(await rebindExport({ runtime: workerRuntime, store: original.restoredCopy('older') }, org.orgId)).toBe('rebound');
+    expect(await workerRuntime.query<ExportRecord>('kernel.org.export.current', {}, system)).toEqual({
+      ...older,
+      manifestGeneration: expect.stringMatching(/^s3:older-/),
+      parts: older.parts.map((p) => ({ ...p, generation: expect.stringMatching(/^s3:older-/) })),
+    });
+    // A rebind is that export, but for its versions: other rows, another part or no export at all are refused.
+    const current = (await workerRuntime.query<ExportRecord>('kernel.org.export.current', {}, system))!;
+    const changed = { ...current, rebind: true as const, parts: current.parts.map((p, i) => (i === 0 ? { ...p, rows: p.rows + 1 } : p)) };
+    await expect(workerRuntime.execute('kernel.org.export.record', changed, system)).rejects.toMatchObject({ code: 'EXPORT_REBIND_MISMATCH' });
+    await expect(workerRuntime.execute('kernel.org.export.record', { ...record, rebind: true }, system)).rejects.toMatchObject({ code: 'EXPORT_REBIND_MISMATCH' });
+    const elsewhere = {
+      ...record,
+      rebind: true as const,
+      manifestKey: exportKey(quiet.org.orgId, record.manifestSha256),
+      parts: record.parts.map((p) => ({ ...p, key: exportKey(quiet.org.orgId, p.sha256) })),
+    };
+    await expect(workerRuntime.execute('kernel.org.export.record', elsewhere, { ...system, orgId: quiet.org.orgId })).rejects.toMatchObject({
+      code: 'EXPORT_REBIND_MISMATCH',
+    });
   });
 
   it('runs a streamed query in one REPEATABLE READ, READ ONLY transaction that may idle while the sink works', async () => {
