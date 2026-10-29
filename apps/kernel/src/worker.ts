@@ -1723,5 +1723,8 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     if (lateIdTimer) clearInterval(lateIdTimer);
     await listener.end().catch(() => {});
     await boss.stop({ graceful: true, timeout: 10_000 }).catch(() => {});
+    // A clean stop works no module any more, so a module a redeploy leaves out drops out of the prober's job age at
+    // once; a worker that dies without this beat keeps its modules counted for 7 days (#1887).
+    await beat(deps.workerDb, instance, []).catch((error) => console.error('[heartbeat] stop', error));
   };
 }
