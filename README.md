@@ -20,14 +20,42 @@ Open http://localhost:8080, create an account, create your organization, and dro
 
 The defaults are for local use. Before anyone else can reach your instance, copy `.env.example` to `.env` and change every secret: [docs/self-host/](docs/self-host/README.md) walks through a server setup (TLS, mail, storage, sign-up, backups, upgrades).
 
-## What works today (MVP)
+## What works today
 
-- Email + password sign-up and sign-in (bundled [Supabase Auth](https://github.com/supabase/auth)), organizations, members and roles
-- Upload of e-invoice XML (the tax authority's format under Decree 254/2026 and Circular 91/2026, as before under Decree 123/2020), PDF and images; inbound email per organization
+**Platform**
+- Email + password sign-up and sign-in (bundled [Supabase Auth](https://github.com/supabase/auth)) with two-factor authentication, organizations, members, roles, and legal entities (branches) with access per entity
+- AI Inbox: every AI result is a proposal checked by deterministic rules; people approve, edit or reject, with four-eyes approval and step-up for risky actions
+- Tenant isolation with PostgreSQL row-level security, an append-only audit log anchored in a tamper-evident archive, idempotent commands
+- Notes and personal to-do lists, in-app notifications, organization export and offboarding
+
+**Accounting** (module `finance`)
+- E-invoice XML (the tax authority's format under Decree 254/2026 and Circular 91/2026, as before under Decree 123/2020), PDF and photos, uploaded or sent to the organization's inbound address
 - Deterministic checks: line totals, VAT, tax-code check digit, tax-authority code, duplicates
-- AI Inbox: proposals with suggested TT133 accounts that learn per vendor; approve, edit or reject
-- Purchase documents, vendors, journal entries that always balance, Excel export
-- Tenant isolation with PostgreSQL row-level security, append-only audit log, idempotent approvals
+- Purchase and sales documents, cash and bank vouchers, journal vouchers, fixed assets, bank statement matching
+- TT133 ledger: journal entries that always balance, gapless voucher numbers, trial balance, receivables and payables per party, period locks and year-end closing
+- VAT return working (01/GTGT) and its XML; B01-DNN and B02-DNN statements and their HTKK XML
+- Exports to Excel and to the MISA SME import templates; tax portal sync
+
+Not yet checked on a real company's books by an accountant, nor filed through HTKK or eTax: that is the pilot's job (see the roadmap).
+
+**Social** (module `social`, paused): compose, client review links, queues, exactly-once publishing, AI drafts, metrics, media library. Live connections to Meta and Zalo OA wait for the platforms' developer apps.
+
+**Bookings** (module `crm`): booking pages, event types, working hours and days off.
+
+## Roadmap
+
+Ludy is heading for a first pilot with an accounting firm. Status on 2026-10-30; the live counts are on the [milestones page](https://github.com/DOS/Ludy/milestones).
+
+| Milestone | Goal | Status |
+|---|---|---|
+| M0 Decisions and discovery | A design partner, real sample documents, where Cloud data lives | Waiting on people: the pilot agreement, consented samples, interviews |
+| M1 Pilot deploy (Nov 2026) | An instance a design partner can use | 20 of 22 done: the readiness checklist with the partner and phone alerts are left |
+| M2 Monthly close loop (Dec 2026) | A client's month booked end to end | Built; acceptance on real data with the partner's accountant is left |
+| M3 Paid pilot (Jan 2027) | Exports the firm's tools accept, bank matching, terms of service | 40 of 50 done: accountant and legal sign-offs are left |
+| GA gate | The security, privacy (PDPL) and operations bar before general availability | 227 of 244 done |
+| Social | Publishing to social channels | Paused (decision D5): built, live channel connections left |
+
+Later, not scheduled: two-way external calendars and meeting links for bookings, more notes features (turning a line into a to-do, AI summaries, links to meetings).
 
 ## Configuration
 
