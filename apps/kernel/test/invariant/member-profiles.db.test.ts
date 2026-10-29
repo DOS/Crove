@@ -14,6 +14,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
+import { contextToken } from './fixtures/context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -70,7 +71,7 @@ suite('member profiles definer invariants on PostgreSQL', () => {
     withClient(appUrl, async (c) => {
       await c.query('BEGIN');
       try {
-        if (ctx) await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [ctx.userId, ctx.orgId]);
+        if (ctx) await c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [ctx.orgId, contextToken(ctx.userId, ctx.orgId)]);
         const { rows } = await c.query<{ user_id: string; email: string; display_name: string | null }>(
           'SELECT user_id, email, display_name FROM crove_kernel.member_profiles($1::uuid[]) ORDER BY email',
           [ids],
@@ -143,7 +144,7 @@ suite('member profiles definer invariants on PostgreSQL', () => {
     const nullIds = await withClient(appUrl, async (c) => {
       await c.query('BEGIN');
       try {
-        await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [users.ownerA, orgA]);
+        await c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgA, contextToken(users.ownerA, orgA)]);
         return (await c.query('SELECT * FROM crove_kernel.member_profiles(NULL)')).rows;
       } finally {
         await c.query('ROLLBACK');
@@ -160,7 +161,7 @@ suite('member profiles definer invariants on PostgreSQL', () => {
     const sealed = await withClient(appUrl, async (c) => {
       await c.query('BEGIN');
       try {
-        await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [users.ownerA, orgA]);
+        await c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgA, contextToken(users.ownerA, orgA)]);
         const { rows } = await c.query<{ ctx: string; seal: string }>(
           `SELECT current_setting('crove.ctx') AS ctx, current_setting('crove.ctx_seal') AS seal`,
         );

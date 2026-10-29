@@ -19,6 +19,7 @@ import { loadConfig } from '../../src/config.ts';
 import { createHttpApp } from '../../src/http.ts';
 import { createSessionStatusSource } from '../../src/sessions.ts';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
+import { contextToken } from './fixtures/context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -252,7 +253,7 @@ suite('member role changes and removal on PostgreSQL (issue #36)', () => {
 
     // The API login role in B's context cannot update or delete A's membership rows, nor move a row into A.
     const touched = await db.transaction().execute(async (trx) => {
-      await sql`SELECT crove_kernel.enter_context(${ownerB.userId}::uuid, ${b.orgId}::uuid)`.execute(trx);
+      await sql`SELECT crove_kernel.enter_user_context(${b.orgId}::uuid, ${contextToken(ownerB.userId, b.orgId)}::text)`.execute(trx);
       const updated = await sql`UPDATE crove_kernel.tenant_member SET role = 'viewer' WHERE org_id = ${a.orgId}::uuid`.execute(trx);
       const deleted = await sql`DELETE FROM crove_kernel.tenant_member WHERE org_id = ${a.orgId}::uuid`.execute(trx);
       return Number(updated.numAffectedRows ?? 0) + Number(deleted.numAffectedRows ?? 0);
@@ -260,7 +261,7 @@ suite('member role changes and removal on PostgreSQL (issue #36)', () => {
     expect(touched).toBe(0);
     await expect(
       db.transaction().execute(async (trx) => {
-        await sql`SELECT crove_kernel.enter_context(${ownerB.userId}::uuid, ${b.orgId}::uuid)`.execute(trx);
+        await sql`SELECT crove_kernel.enter_user_context(${b.orgId}::uuid, ${contextToken(ownerB.userId, b.orgId)}::text)`.execute(trx);
         await sql`UPDATE crove_kernel.tenant_member SET org_id = ${a.orgId}::uuid WHERE user_id = ${memberB.userId}::uuid`.execute(trx);
       }),
       // Since #35 tenant roles may update only the role column, so the privilege check refuses before RLS would.

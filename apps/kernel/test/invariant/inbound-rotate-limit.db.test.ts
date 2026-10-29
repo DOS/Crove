@@ -14,6 +14,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { buildKernelCommands, createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
+import { contextToken } from './fixtures/context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -224,7 +225,7 @@ suite('inbound address rotation rate limit on PostgreSQL (#113)', () => {
       // The waiter does what the runtime does for a keyed command (the idempotency_key row takes a KEY SHARE lock on
       // the tenant row through its foreign key), then calls the definer, which waits for the per-org lock.
       await waiter.query('BEGIN');
-      await waiter.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [org.owner, org.orgId]);
+      await waiter.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [org.orgId, contextToken(org.owner, org.orgId)]);
       await waiter.query(
         `INSERT INTO crove_kernel.idempotency_key (org_id, actor_key, key, command, request_sha256) VALUES ($1, $2, $3, 'kernel.inbound.rotate', $4)`,
         [org.orgId, `user:${org.owner}`, randomUUID(), '0'.repeat(64)],
@@ -319,7 +320,7 @@ suite('inbound address rotation rate limit on PostgreSQL (#113)', () => {
     // The session's own lock_timeout is restored after the lock: a later statement in the transaction is unaffected.
     const restored = await db.transaction().execute(async (trx) => {
       await sql`SELECT set_config('lock_timeout', '7s', true)`.execute(trx);
-      await sql`SELECT crove_kernel.enter_context(${org.owner}::uuid, ${org.orgId}::uuid)`.execute(trx);
+      await sql`SELECT crove_kernel.enter_user_context(${org.orgId}::uuid, ${contextToken(org.owner, org.orgId)}::text)`.execute(trx);
       await sql`SELECT crove_kernel.inbound_rotate()`.execute(trx);
       const { rows } = await sql<{ lock_timeout: string }>`SELECT current_setting('lock_timeout') AS lock_timeout`.execute(trx);
       return rows[0]?.lock_timeout;
@@ -334,7 +335,7 @@ suite('inbound address rotation rate limit on PostgreSQL (#113)', () => {
       for (const value of ['0', '-1', 'abc', '1e3', '1.5', '9999999', ' 3']) {
         await expect(
           db.transaction().execute(async (trx) => {
-            await sql`SELECT crove_kernel.enter_context(${org.owner}::uuid, ${org.orgId}::uuid)`.execute(trx);
+            await sql`SELECT crove_kernel.enter_user_context(${org.orgId}::uuid, ${contextToken(org.owner, org.orgId)}::text)`.execute(trx);
             await sql`SELECT set_config(${setting}, ${value}, true)`.execute(trx);
             await sql`SELECT crove_kernel.inbound_rotate()`.execute(trx);
           }),

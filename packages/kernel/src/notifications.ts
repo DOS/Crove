@@ -8,7 +8,8 @@
 //
 // The kernel's own kinds come from kernel.notification.dispatch: a proposal waiting for my approval (the eligible
 // approvers of its command, P12) and a file that failed to read (whoever asked for the reading, else the uploader,
-// else, for a mailed file, the owners and admins). Members read their own (kernel.notification.list), mark them read
+// else, for a mailed file, the owners and admins), and a task a chart or role change moved to someone because its
+// holder could no longer read its legal entity (the target seat's holder, else the owners; #1799). Members read their own (kernel.notification.list), mark them read
 // and turn kinds off (kernel.notification.mute); a restrictive policy keeps each member to their own rows.
 import { sql } from 'kysely';
 import { z } from 'zod';
@@ -16,6 +17,7 @@ import { zId, zNotificationKind } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext } from '@crove/kernel-runtime';
 import { eligibleApprovers } from './approval.ts';
+import { REROUTED_EVENT_TASKS } from './task-reroute.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 // The newest notifications a read returns, and the unread count it reports at most.
@@ -30,6 +32,7 @@ export const NOTIFICATION_KIND = /^[a-z]+\.[a-z0-9_]+$/;
 // The kernel's kinds.
 export const APPROVAL_WAITING = 'kernel.approval_waiting';
 export const FILE_UNREADABLE = 'kernel.file_unreadable';
+export const TASK_REROUTED = 'kernel.task_rerouted';
 
 export interface NotifyInput {
   // '<module>.<kind>', for example 'finance.bank_attention'.
@@ -110,7 +113,7 @@ export async function outboxEvent(ctx: Pick<CommandContext, 'trx' | 'orgId'>, ev
 }
 
 // The events kernel.notification.dispatch handles.
-export const KERNEL_NOTIFYING_EVENTS = ['kernel.proposal.created', 'kernel.file.read_failed'] as const;
+export const KERNEL_NOTIFYING_EVENTS = ['kernel.proposal.created', 'kernel.file.read_failed', 'kernel.task.rerouted'] as const;
 
 export const notificationDispatch = defineCommand({
   name: 'kernel.notification.dispatch',
@@ -167,6 +170,48 @@ export const notificationDispatch = defineCommand({
           legalEntityId: file.legal_entity_id,
           detail: { filename: file.filename.slice(0, 200) },
           eventId: event.id,
+        });
+        return { sent };
+      }
+      case 'kernel.task.rerouted': {
+        const e = z
+          .object({ toPositionId: zId.nullable(), legalEntityId: zId, count: z.number().int().positive(), taskIds: z.array(zId).min(1).max(REROUTED_EVENT_TASKS) })
+          .safeParse(event.payload);
+        if (!e.success) return { sent: 0 };
+        // The moved tasks still waiting where they went: one moved again since tells its own holder, and a closed one
+        // waits for nobody.
+        const waiting = await ctx.trx
+          .selectFrom('crove_kernel.task')
+          .select(['id', 'title'])
+          .where('org_id', '=', ctx.orgId)
+          .where('id', 'in', e.data.taskIds)
+          .where((eb) => (e.data.toPositionId === null ? eb('assignee_position_id', 'is', null) : eb('assignee_position_id', '=', e.data.toPositionId)))
+          .where('status', 'not in', ['done', 'cancelled'])
+          .orderBy('id')
+          .execute();
+        const first = waiting[0];
+        if (!first) return { sent: 0 };
+        const seat = e.data.toPositionId
+          ? await ctx.trx.selectFrom('crove_kernel.position').select('holder_user_id').where('org_id', '=', ctx.orgId).where('id', '=', e.data.toPositionId).executeTakeFirst()
+          : undefined;
+        const owners = async () =>
+          (await ctx.trx.selectFrom('crove_kernel.tenant_member').select('user_id').where('org_id', '=', ctx.orgId).where('role', '=', 'owner').execute()).map(
+            (r) => r.user_id,
+          );
+        const sent = await notifyMembers(ctx, {
+          kind: TASK_REROUTED,
+          users: seat?.holder_user_id ? [seat.holder_user_id] : await owners(),
+          key: `task_rerouted:${event.id}`,
+          // One task opens itself; several open the task list.
+          subject: waiting.length === 1 && e.data.count === 1 ? { type: 'kernel.task', id: first.id } : null,
+          legalEntityId: e.data.legalEntityId,
+          // The event lists the first ids only: when every listed one still waits, so do the rest it counts.
+          detail:
+            waiting.length === 1 && e.data.count === 1
+              ? { title: first.title.slice(0, 200) }
+              : { count: String(waiting.length === e.data.taskIds.length ? e.data.count : waiting.length) },
+          eventId: event.id,
+          actor: event.actor,
         });
         return { sent };
       }

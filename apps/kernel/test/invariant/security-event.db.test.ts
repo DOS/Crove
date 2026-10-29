@@ -13,6 +13,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove
 import { Runtime } from '@crove/kernel-runtime';
 import { pruneSecurityEvents } from '../../src/worker.ts';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
+import { contextToken } from './fixtures/context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -189,7 +190,7 @@ suite('security_event: refusals before membership on PostgreSQL (#1006)', () => 
       // A refusal after membership belongs to the org's audit, never here.
       await c.query('BEGIN');
       try {
-        await c.query(`SELECT crove_kernel.enter_context($1::uuid, $2::uuid)`, [owner, orgA]);
+        await c.query(`SELECT crove_kernel.enter_user_context($1::uuid, $2::text)`, [orgA, contextToken(owner, orgA)]);
         await expect(c.query(`SELECT crove_kernel.security_event_note($1, 'x', 'X', NULL)`, [`user:${owner}`])).rejects.toMatchObject({ code: '42501' });
       } finally {
         await c.query('ROLLBACK');

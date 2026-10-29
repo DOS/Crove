@@ -14,6 +14,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime, type InputHashMode } from '@crove/kernel-runtime';
 import { TEST_MANIFESTS } from './manifests.ts';
+import { enterUser } from './context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -51,7 +52,8 @@ suite('kernel projections per legal entity on PostgreSQL (#1280 part 3)', () => 
   function connect(inputHash: InputHashMode = 'keyed') {
     pool = createPool({ connectionString: appUrl, max: 4 });
     db = createDb(pool);
-    rt = new Runtime(db, { manifests: TEST_MANIFESTS, inputHash }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
+    // No context token key: the database starts at a version before enter_user_context (#1822).
+    rt = new Runtime(db, { manifests: TEST_MANIFESTS, contextTokenKey: null, inputHash }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
   }
 
   // A file and its reading, written as the database owner, the reading in the given entity or none.
@@ -179,7 +181,7 @@ suite('kernel projections per legal entity on PostgreSQL (#1280 part 3)', () => 
     const asAccountant = async (sql: string, params: unknown[] = []) => {
       await client.query('BEGIN');
       try {
-        await client.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [accountant, orgId]);
+        await enterUser(client, accountant, orgId);
         return await client.query(sql, params);
       } finally {
         await client.query('ROLLBACK');

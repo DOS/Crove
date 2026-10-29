@@ -14,6 +14,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
+import { contextToken } from './fixtures/context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -88,7 +89,7 @@ suite('audit rows stamped from the sealed context on PostgreSQL (#1482)', () => 
         ).rows[0],
     );
   }
-  const userContext = (userId: string, orgId: string) => ({ sql: 'SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', params: [userId, orgId] });
+  const userContext = (userId: string, orgId: string) => ({ sql: 'SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', params: [orgId, contextToken(userId, orgId)] });
   const systemContext = (orgId: string) => ({ sql: 'SELECT crove_kernel.enter_system_context($1::uuid)', params: [orgId] });
 
   beforeAll(async () => {
@@ -162,7 +163,7 @@ suite('audit rows stamped from the sealed context on PostgreSQL (#1482)', () => 
       withClient(appUrl, async (c) => {
         await c.query('BEGIN');
         try {
-          await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [o.member, o.orgId]);
+          await c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [o.orgId, contextToken(o.member, o.orgId)]);
           await c.query(
             `INSERT INTO crove_kernel.audit_event (org_id, actor_type, actor_id, command, command_id, outcome, input_sha256, detail)
              VALUES ($1, 'user', $2, 'kernel.org.set_tax_code', gen_random_uuid(), 'ok', repeat('0', 64), $3::jsonb)`,

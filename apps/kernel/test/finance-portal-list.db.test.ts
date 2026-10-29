@@ -24,6 +24,7 @@ import { createHttpApp } from '../src/http.ts';
 import { createSessionStatusSource } from '../src/sessions.ts';
 import { inProcessExtract } from './extract-service.ts';
 import { TEST_MANIFESTS } from './manifests.ts';
+import { contextToken } from './context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -439,7 +440,7 @@ suite('tax portal purchase list (#465)', () => {
       const c = await pool.connect();
       try {
         await c.query('BEGIN');
-        await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [owner.userId, org.orgId]);
+        await c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [org.orgId, contextToken(owner.userId, org.orgId)]);
         return await c.query(text, params);
       } finally {
         await c.query('ROLLBACK').catch(() => {});

@@ -15,6 +15,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove
 import { Runtime, type AgentActor } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
+import { contextToken } from './fixtures/context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -66,7 +67,7 @@ suite('parties scoped by record_le on PostgreSQL (#1280)', () => {
     }
   }
   const asMember = <T>(userId: string, fn: (c: pg.Client) => Promise<T>) =>
-    inContext(appUrl, (c) => c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [userId, orgId]), fn);
+    inContext(appUrl, (c) => c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgId, contextToken(userId, orgId)]), fn);
   const linksOf = (partyId: string) =>
     admin((c) =>
       c.query<{ legal_entity_id: string }>(`SELECT legal_entity_id FROM crove_kernel.record_le WHERE org_id = $1 AND record_type = 'kernel.party' AND record_id = $2`, [orgId, partyId]),

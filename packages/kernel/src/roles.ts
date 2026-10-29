@@ -14,6 +14,7 @@ import { BUILTIN_ROLE_KEYS, zId, zRoleAssignInput, type BuiltinRoleKey, type Mem
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext, type QueryContext } from '@crove/kernel-runtime';
 import { lastChiefAccountant } from './approval.ts';
+import { positionsHeldBy, rerouteStrandedTasks } from './task-reroute.ts';
 
 const ADMINS: readonly MemberRole[] = ['owner', 'admin'];
 
@@ -188,6 +189,8 @@ export const assignRole = defineCommand({
     if (!granted) throw new Error('role_assignment_grant answered no row');
     ctx.audit({ assignment_id: granted.assignment_id, changed: granted.created });
     if (granted.created) {
+      // A first legal-entity assignment narrows the person's scope: open tasks of their seats outside it go up (#1799).
+      await rerouteStrandedTasks(ctx, await positionsHeldBy(ctx, input.userId));
       await ctx.activity(
         'kernel.member',
         input.userId,
@@ -226,6 +229,8 @@ export const revokeRole = defineCommand({
     }
     if (!revoked) throw new Error('role_assignment_revoke answered no row');
     ctx.audit({ target_user: revoked.user_id, role_key: revoked.role_key, legal_entity_id: revoked.legal_entity_id, assignment_id: input.assignmentId });
+    // Revoking an org-wide or an entity assignment can narrow the person's scope (#1799).
+    await rerouteStrandedTasks(ctx, await positionsHeldBy(ctx, revoked.user_id));
     const label = isBuiltin(revoked.role_key) ? ROLE_LABELS[revoked.role_key] : revoked.role_key;
     await ctx.activity('kernel.member', revoked.user_id, 'member.role_revoked', `Thu hồi vai trò ${label}${revoked.legal_entity_id ? ' (của một pháp nhân)' : ''}`);
     await ctx.emit('kernel.member.role_revoked', {

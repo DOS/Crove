@@ -15,6 +15,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime, toDomainError } from '@crove/kernel-runtime';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
+import { contextToken } from './fixtures/context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -63,7 +64,7 @@ suite('sealed request context on PostgreSQL (§4.5 item 5, T11)', () => {
   }
 
   const enter = (c: pg.Client, userId: string, orgId: string) =>
-    c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [userId, orgId]);
+    c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgId, contextToken(userId, orgId)]);
   const enterSystem = (c: pg.Client, orgId: string) => c.query('SELECT crove_kernel.enter_system_context($1::uuid)', [orgId]);
 
   async function settings(c: pg.Client) {
@@ -594,7 +595,7 @@ suite('sealed request context on PostgreSQL (§4.5 item 5, T11)', () => {
         expect(after.rows).toEqual(before.rows);
         // Without the key nothing can be sealed: entering fails instead of writing an unsealed context.
         await a.query('DELETE FROM crove_kernel.context_key');
-        await expect(a.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [users.owner, orgA])).rejects.toMatchObject({
+        await expect(a.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgA, contextToken(users.owner, orgA)])).rejects.toMatchObject({
           code: '55000',
           message: 'CONTEXT_KEY_MISSING',
         });
@@ -810,7 +811,7 @@ suite('sealed request context on PostgreSQL (§4.5 item 5, T11)', () => {
       const db = createDb(pooled);
       const kyselyBackend = await poison();
       await expect(
-        db.transaction().execute((trx) => sql`SELECT crove_kernel.enter_context(${users.owner}::uuid, ${orgA}::uuid)`.execute(trx)),
+        db.transaction().execute((trx) => sql`SELECT crove_kernel.enter_user_context(${orgA}::uuid, ${contextToken(users.owner, orgA)}::text)`.execute(trx)),
       ).rejects.toMatchObject({ code: '42501', message: 'CONTEXT_REENTRY' });
       const afterKysely = await pooled.connect();
       try {
@@ -989,7 +990,7 @@ suite('sealed request context on PostgreSQL (§4.5 item 5, T11)', () => {
         await a.query('SELECT crove_kernel.context_key_rotate()');
         const { rows } = await a.query<{ n: string }>('SELECT count(*) AS n FROM crove_kernel.context_key');
         expect(rows[0]?.n).toBe('1');
-        await expect(a.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [users.owner, orgA])).resolves.toBeDefined();
+        await expect(a.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgA, contextToken(users.owner, orgA)])).resolves.toBeDefined();
       } finally {
         await a.query('ROLLBACK');
       }

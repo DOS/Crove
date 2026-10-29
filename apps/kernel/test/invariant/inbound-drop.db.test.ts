@@ -13,6 +13,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
+import { contextToken } from './fixtures/context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -78,7 +79,7 @@ suite('inbound drop count invariants on PostgreSQL', () => {
     withClient(appUrl, async (c) => {
       await c.query('BEGIN');
       try {
-        await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [userId, orgId]);
+        await c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgId, contextToken(userId, orgId)]);
         const { rows } = await c.query<{ n: string }>('SELECT crove_kernel.inbound_drop_count() AS n');
         return Number(rows[0]?.n);
       } finally {

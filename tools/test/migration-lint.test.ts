@@ -315,3 +315,100 @@ describe('migration lint: the allowlist', () => {
     expect(edited[0]!.message).toContain('never edit or delete an applied migration');
   });
 });
+
+// #1225: the three blind spots that could change what a migration does to another module or how the file is read.
+describe('migration lint: writes in a CTE, ownership, string mode (#1225)', () => {
+  it('reads the writes of a WITH as the writes they are', () => {
+    // A data-modifying CTE, and the statement after the CTE list, in another module's schema.
+    expect(rules('WITH d AS (DELETE FROM crove_kernel.tenant RETURNING 1) SELECT count(*) FROM d;')).toEqual(['1 module-schema']);
+    expect(rules('WITH u AS (UPDATE crove_kernel.tenant SET x = 1 RETURNING org_id),\n  i AS (INSERT INTO crove_finance.voucher (id) SELECT org_id FROM u RETURNING id)\nSELECT 1;')).toEqual([
+      '1 module-schema',
+      '2 module-schema',
+    ]);
+    expect(rules('WITH v AS (SELECT 1 AS n)\nINSERT INTO crove_kernel.number_series (n) SELECT n FROM v;')).toEqual(['2 module-schema']);
+    expect(rules('WITH RECURSIVE v AS (SELECT 1)\nMERGE INTO crove_kernel.tenant t USING v ON true WHEN MATCHED THEN DO NOTHING;')).toEqual(['2 module-schema']);
+    expect(rules('DO $$ BEGIN\n  WITH d AS (DELETE FROM crove_kernel.tenant RETURNING 1) SELECT 1 INTO STRICT n;\nEND $$;')).toEqual(['2 module-schema']);
+    // Its own schema, a read, a row lock and an upsert's DO UPDATE are not writes elsewhere.
+    expect(rules('WITH d AS (DELETE FROM crove_social.sample RETURNING id) INSERT INTO crove_social.sample_log (id) SELECT id FROM d;')).toEqual([]);
+    expect(rules('WITH v AS (SELECT org_id FROM crove_kernel.tenant FOR UPDATE) SELECT * FROM v;')).toEqual([]);
+    expect(rules('WITH v AS (SELECT 1 AS id) INSERT INTO crove_social.sample (id) SELECT id FROM v ON CONFLICT (id) DO UPDATE SET id = EXCLUDED.id;')).toEqual([]);
+    // After SEARCH and CYCLE clauses, in CREATE TABLE ... AS WITH, and with a CTE named like a statement word (review).
+    expect(rules('WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM t) SEARCH DEPTH FIRST BY n SET o\nDELETE FROM crove_kernel.tenant;')).toEqual(['2 module-schema']);
+    expect(rules('WITH RECURSIVE t(n) AS (SELECT 1) CYCLE n SET c USING p\nUPDATE crove_kernel.tenant SET x = 1;')).toEqual(['2 module-schema']);
+    expect(rules('CREATE TABLE IF NOT EXISTS crove_social.t AS WITH d AS (DELETE FROM crove_kernel.tenant RETURNING 1) SELECT 1;')).toEqual(['1 module-schema']);
+    expect(rules('WITH update AS (SELECT 1), delete AS (SELECT 2) SELECT * FROM update, delete;')).toEqual([]);
+    // Deeply nested CTEs are read once each, not once per level (Codex): fast.
+    const nested = `${'WITH a AS ('.repeat(40)}DELETE FROM crove_kernel.tenant RETURNING 1${') SELECT 1'.repeat(40)};`;
+    const started = Date.now();
+    expect(rules(nested)).toEqual(['1 module-schema']);
+    expect(Date.now() - started).toBeLessThan(1000);
+    // The same waiver as a top-level write covers it.
+    const waived = '-- migration-lint: cross-module the numbers are recorded in the kernel series\nWITH v AS (SELECT 1 AS n)\nINSERT INTO crove_kernel.number_series (n) SELECT n FROM v;';
+    const waivers: { file: string; line: number; schemas: string[]; reason: string }[] = [];
+    expect(lintMigration(FILE, waived, { waivers })).toEqual([]);
+    expect(waivers.map((w) => w.schemas)).toEqual([['crove_kernel']]);
+  });
+
+  it('hands ownership only to the roles definer functions run as', () => {
+    for (const role of ['crove_definer_tenant', 'crove_auth_reader', 'CURRENT_USER']) {
+      expect(rules(`ALTER FUNCTION crove_social.f(int) OWNER TO ${role};`), role).toEqual([]);
+    }
+    for (const sql of [
+      'ALTER TABLE crove_social.sample OWNER TO crove_app;',
+      'ALTER FUNCTION crove_social.f(int) OWNER TO "crove_worker";',
+      'ALTER SEQUENCE crove_social.s OWNER TO crove_tenant;',
+      'REASSIGN OWNED BY crove_definer_tenant TO crove_app;',
+      'CREATE SCHEMA IF NOT EXISTS crove_social AUTHORIZATION crove_app;',
+      "DO $$ BEGIN\n  EXECUTE 'ALTER TABLE crove_social.sample OWNER TO crove_app';\nEND $$;",
+    ]) {
+      expect(rules(sql).filter((r) => r.endsWith('owner-to')), sql).toHaveLength(1);
+    }
+    expect(lint('ALTER TABLE crove_social.sample OWNER TO crove_app;')[0]?.message).toContain('login roles own nothing');
+    // A column, constraint or value named owner is renamed, not handed over.
+    expect(rules('ALTER TABLE crove_social.sample RENAME COLUMN owner TO owner_id;')).toEqual([]);
+    expect(rules('ALTER TABLE crove_social.sample RENAME owner TO owner_id;')).toEqual([]);
+    expect(rules('ALTER TABLE crove_social.sample RENAME CONSTRAINT owner TO owner_key;')).toEqual([]);
+    // From the reviews: a table named like a RENAME keyword, a table or schema for the definer roles (its owner bypasses
+    // RLS), quoted names taken as written, a role the lint cannot read, and a switch of the session's role.
+    for (const sql of [
+      'ALTER TABLE crove_social.value OWNER TO crove_app;',
+      'ALTER TABLE crove_social.attribute OWNER TO crove_app;',
+      'ALTER TABLE crove_social.sample OWNER TO crove_definer_tenant;',
+      'ALTER SCHEMA crove_social OWNER TO crove_auth_reader;',
+      'CREATE SCHEMA IF NOT EXISTS crove_social AUTHORIZATION crove_definer_tenant;',
+      'ALTER FUNCTION crove_social.f(int) OWNER TO "Crove_Definer_Tenant";',
+      'ALTER FUNCTION crove_social.f(int) OWNER TO "current_user";',
+      "DO $$ BEGIN\n  EXECUTE format('ALTER FUNCTION crove_social.f(int) OWNER TO %I', r);\nEND $$;",
+      'SET ROLE crove_app;',
+      'SET LOCAL ROLE crove_app;',
+      'SET SESSION AUTHORIZATION crove_app;',
+      "SELECT set_config('role', 'crove_app', true);",
+    ]) {
+      expect(rules(sql).some((r) => r.endsWith('owner-to')), sql).toBe(true);
+    }
+    expect(rules('ALTER FUNCTION crove_social.f(int) OWNER TO "crove_definer_tenant";')).toEqual([]);
+    expect(rules('ALTER TABLE crove_social.sample OWNER TO CURRENT_USER;')).toEqual([]);
+  });
+
+  it('refuses a change of standard_conforming_strings in any form', () => {
+    for (const sql of [
+      'SET standard_conforming_strings = off;',
+      'SET LOCAL standard_conforming_strings TO off;',
+      'RESET standard_conforming_strings;',
+      "SELECT set_config('standard_conforming_strings', 'off', true);",
+      "DO $$ BEGIN\n  PERFORM pg_catalog.set_config('Standard_Conforming_Strings', 'off', true);\nEND $$;",
+      'ALTER FUNCTION crove_social.f(int) SET standard_conforming_strings = off;',
+      // From the reviews: a quoted name in any case, escaped names, a name built from pieces, and the client encoding.
+      'SET "standard_conforming_strings" = off;',
+      'SET "Standard_Conforming_Strings" = off;',
+      "SELECT set_config(E'standard\\x5fconforming_strings', 'off', false);",
+      "SELECT set_config(U&'standard\\005fconforming_strings', 'off', false);",
+      "SELECT set_config('standard_' || 'conforming_strings', 'off', false);",
+      "SET client_encoding = 'SJIS';",
+      "SET NAMES 'BIG5';",
+    ]) {
+      expect(rules(sql).some((r) => r.endsWith('string-mode')), sql).toBe(true);
+    }
+    expect(rules("SELECT set_config('lock_timeout', '2s', true);")).toEqual([]);
+  });
+});

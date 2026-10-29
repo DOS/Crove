@@ -17,6 +17,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove
 import { Runtime, type BlobStore } from '@crove/kernel-runtime';
 import { orgPurgeCommand, purgeOrg } from '../../src/org-purge.ts';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
+import { contextToken } from './fixtures/context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -164,7 +165,7 @@ suite('org purge invariants on PostgreSQL (#1024)', () => {
     await expect(
       withClient(appUrl, async (c) => {
         await c.query('BEGIN');
-        await c.query('SELECT crove_kernel.enter_context($1, $2)', [org.owner, org.orgId]);
+        await c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [org.orgId, contextToken(org.owner, org.orgId)]);
         await c.query(`UPDATE crove_kernel.tenant SET status = 'closed' WHERE org_id = $1`, [org.orgId]);
         await c.query('COMMIT');
       }),

@@ -1,7 +1,7 @@
 // The single write path. Every state change is a typed command executed through Runtime.execute(),
 // inside one transaction that enters the tenant context checked by RLS, and writes audit + outbox.
 import { PostgresQueryCompiler, sql, type KyselyPlugin, type RawBuilder, type Transaction } from 'kysely';
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import { v7 as uuidv7 } from 'uuid';
 import type { z } from 'zod';
 import { contextTaint, singleCell, type CellResolver, type Database, type Db, type MemberRole } from '@crove/db';
@@ -438,6 +438,12 @@ export interface RuntimeOptions {
   // as before #1732, only for tests: one that shows what the plain hash gives away, and those that seed a database
   // migrated to a version before crove_kernel.command_input_hash exists.
   inputHash?: InputHashMode;
+  // The deployment's context token key (#1822, ADR-0028 section 9): base64 of 32 to 64 random bytes, the one the
+  // migration runner installed in the database. Given, a user's context is entered with a token the runtime signs
+  // with it (crove_kernel.enter_user_context), which raw SQL on the API's login cannot make. Unset:
+  // CROVE_CONTEXT_TOKEN_KEY from the environment; null, or neither: today's crove_kernel.enter_context, until step 2
+  // of #1822 requires the key.
+  contextTokenKey?: string | null;
   // The tables of the module manifests (ModuleManifest['tables'] of each module, #1710). register() checks each
   // declared write (CommandDef.writes) against them: the table is a manifest's and the classes it carries are exactly
   // that manifest's, so P04 rests on the manifests rather than on classes a declaration builds by hand. Required
@@ -1022,6 +1028,51 @@ const ACCESS_KINDS: readonly string[] = ['system', 'proposal', 'proposal_revisio
 const validAccess = (access: unknown, kinds: readonly string[]): boolean =>
   Array.isArray(access) ? access.every((role) => typeof role === 'string' && role.length > 0) : typeof access === 'string' && kinds.includes(access);
 
+// How long a context token is good for, by the kernel's clock (#1822). The database allows 30 seconds of skew either way
+// between its clock and the kernel's (crove_kernel.enter_user_context).
+export const CONTEXT_TOKEN_TTL_S = 60;
+
+// The wall clock as this module loaded it: a test that mocks Date (vi.useFakeTimers({ toFake: ['Date'] }), a spy on
+// Date.now) to move business time still signs tokens against the real time the database checks them with.
+const wallClock: () => number = Date.now;
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+// Decodes a context token key (base64, 32 to 64 bytes). The error never shows the value.
+export function contextTokenKeyBytes(value: string): Buffer {
+  const trimmed = value.trim();
+  const bytes = /^[A-Za-z0-9+/_-]+={0,2}$/.test(trimmed) ? Buffer.from(trimmed, 'base64') : Buffer.alloc(0);
+  if (bytes.length < 32 || bytes.length > 64) throw new Error('CROVE_CONTEXT_TOKEN_KEY must be base64 of 32 to 64 random bytes');
+  return bytes;
+}
+
+export interface ContextTokenClaims {
+  userId: string;
+  sessionId: string | null;
+  orgId: string;
+  aal: Aal;
+  // Unix seconds of the newest second factor, or null.
+  mfaAt: number | null;
+}
+
+// A context token (#1822, ADR-0028 section 9), signed with the deployment's key:
+//   v1.<user>.<session|->.<org>.<aal1|aal2>.<mfa epoch|->.<exp epoch>.<hmac-sha256 hex of everything before it>
+// crove_kernel.enter_user_context verifies it and enters that user's context in that org, nothing else.
+export function mintContextToken(key: Uint8Array | string, claims: ContextTokenClaims, nowMs: number = wallClock()): string {
+  const bytes = typeof key === 'string' ? contextTokenKeyBytes(key) : Buffer.from(key);
+  const user = claims.userId.toLowerCase();
+  const org = claims.orgId.toLowerCase();
+  const session = claims.sessionId === null ? null : claims.sessionId.toLowerCase();
+  if (!UUID.test(user) || !UUID.test(org) || (session !== null && !UUID.test(session))) throw new Error('context token: user, org and session are UUIDs');
+  const aal = claims.aal === 'aal2' ? 'aal2' : 'aal1';
+  // Epoch seconds, at most 12 digits as the database's pattern takes; anything else (milliseconds by mistake) is left out
+  // rather than failing every request of the user.
+  const mfa = typeof claims.mfaAt === 'number' && Number.isFinite(claims.mfaAt) && claims.mfaAt >= 0 && claims.mfaAt < 1e12 ? String(Math.floor(claims.mfaAt)) : '-';
+  const exp = Math.floor(nowMs / 1000) + CONTEXT_TOKEN_TTL_S;
+  const message = `v1.${user}.${session ?? '-'}.${org}.${aal}.${mfa}.${exp}`;
+  return `${message}.${createHmac('sha256', bytes).update(message, 'utf8').digest('hex')}`;
+}
+
 export class Runtime {
   // The registry and the state that P04 and the agent checks read are JavaScript private fields (#), not TypeScript
   // `private`: no cast, Object.create(runtime) or assignment from outside reaches them, and the instance itself is
@@ -1037,6 +1088,8 @@ export class Runtime {
   readonly #contactOrPayment = new Map<string, boolean>();
   // The classes of every manifest table (RuntimeOptions.manifests).
   readonly #manifestTables: ReadonlyMap<string, Readonly<Record<string, string>>>;
+  // The context token key (RuntimeOptions.contextTokenKey), or null: never logged, never in an error.
+  readonly #contextTokenKey: Buffer | null;
   // Where each transaction opens (Decision 14): tenant work on the org's cell, org-less work on the control plane.
   readonly #cells: CellResolver;
   readonly #sessions: SessionStatusSource | null;
@@ -1072,6 +1125,8 @@ export class Runtime {
     if (!(INPUT_HASH_MODES as readonly string[]).includes(inputHash)) throw new Error(`unknown input hash mode ${String(inputHash)}`);
     this.inputHash = inputHash;
     this.#manifestTables = manifestTableClasses(manifests as readonly ManifestTables[]);
+    const contextTokenKey = options.contextTokenKey === undefined ? process.env.CROVE_CONTEXT_TOKEN_KEY : options.contextTokenKey;
+    this.#contextTokenKey = contextTokenKey?.trim() ? contextTokenKeyBytes(contextTokenKey) : null;
     Object.freeze(this);
   }
 
@@ -1325,6 +1380,12 @@ export class Runtime {
           tainted: entered.tainted !== false,
         },
       };
+    }
+    if (this.#contextTokenKey !== null) {
+      // Signed right before it is used, as a bind parameter (never in a statement's text).
+      const token = mintContextToken(this.#contextTokenKey, { userId: actor.userId, sessionId: actor.sessionId ?? null, orgId, aal: actor.aal, mfaAt: actor.mfaAt ?? null });
+      const { rows } = await sql<{ role: MemberRole }>`SELECT crove_kernel.enter_user_context(${orgId}::uuid, ${token}::text) AS role`.execute(trx);
+      return { role: rows[0]?.role ?? null, agent: null };
     }
     const { rows } = await sql<{ role: MemberRole }>`SELECT crove_kernel.enter_context(${actor.userId}::uuid, ${orgId}::uuid) AS role`.execute(trx);
     return { role: rows[0]?.role ?? null, agent: null };

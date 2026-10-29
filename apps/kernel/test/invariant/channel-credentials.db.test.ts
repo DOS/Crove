@@ -16,6 +16,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity, type ChannelConnectInput, type SealedChannelCredential } from '@crove/kernel';
 import { CredentialVault, parseVaultKey, Runtime, type CredentialBinding } from '@crove/kernel-runtime';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
+import { contextToken } from './fixtures/context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -80,7 +81,7 @@ suite('channel credentials on PostgreSQL (ADR-0025)', () => {
     await client.connect();
     try {
       await client.query('BEGIN');
-      await client.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [userId, orgId]);
+      await client.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgId, contextToken(userId, orgId)]);
       return await client.query<T>(text, values);
     } finally {
       await client.query('ROLLBACK').catch(() => undefined);
