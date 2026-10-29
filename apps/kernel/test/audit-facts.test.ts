@@ -439,6 +439,10 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
       const key = (m[1] as string).replace(/^['"]|['"]$/g, '');
       checkFact(key, valueAt(obj, (m.index ?? 0) + m[0].length), start + (m.index ?? 0) + m[0].length, depth);
     }
+    // A getter runs when the facts are serialized, so what it returns cannot be read here.
+    for (const m of obj.matchAll(/[{,]\s*get\s+([A-Za-z_$][\w$]*)\s*\(/g)) {
+      reporter(start + (m.index ?? 0), m[1] as string)('a getter computes the fact when it is written; write the value out');
+    }
     // A computed key (`{ [field]: value }`): its value is read like any other.
     for (const m of obj.matchAll(/[{,]\s*\[/g)) {
       const open = (m.index ?? 0) + m[0].length - 1;
@@ -715,6 +719,9 @@ describe('audit facts and classified columns (#1626, #1632)', () => {
       'previous: the value reads the classified column tax_code outside auditValue(...)',
     ]);
     expect(check('const previous = {};\nprevious[party.email] = true;\nctx.audit({ previous });')).toEqual(['previous: the value reads the classified column email outside auditValue(...)']);
+    expect(check('ctx.audit({ previous: { get code() { return party.tax_code; } } });')).toEqual([
+      'code: a getter computes the fact when it is written; write the value out',
+    ]);
     // An array of the names that changed holds the names, not the values its conditions compare.
     expect(check("const changed = [...(before.title !== input.title ? ['title'] : []), ...(before.tax_code !== code ? ['tax_code'] : [])];\nctx.audit({ changed });")).toEqual([]);
     expect(check('const changed = [...(flag ? [before.tax_code] : [])];\nctx.audit({ changed });')).toEqual(['changed: the value reads the classified column tax_code outside auditValue(...)']);
