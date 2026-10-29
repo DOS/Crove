@@ -802,10 +802,10 @@ export const en = {
     },
     hints: {
       finance: {
-        chief_accountant: 'Approves posting proposals and unlocks locked months, as an owner does.',
+        chief_accountant: 'Approves posting proposals, unlocks locked months and marks VAT returns filed, as an owner does.',
         accountant: 'Says the member keeps the books. Adds no permission beyond the base role yet.',
         viewer: 'Says the member only follows the accounting figures. Adds no permission beyond the base role yet.',
-        entity_chief_accountant: 'Unlocks the locked months of the assigned legal entities only. Each assignment names one entity; you can add more. Approving posting proposals needs the org-wide chief accountant. If it is the only role of this person, give them Outside accountant for that entity before revoking it.',
+        entity_chief_accountant: 'Unlocks the locked months and marks the VAT returns filed of the assigned legal entities only. Each assignment names one entity; you can add more. Approving posting proposals needs the org-wide chief accountant. If it is the only role of this person, give them Outside accountant for that entity before revoking it.',
       },
       crm: { sales: 'Adds no permission beyond the base role yet.' },
       desk: { agent: 'Adds no permission beyond the base role yet.' },
@@ -1109,7 +1109,7 @@ export const en = {
       invalid: 'Each figure is a whole, non-negative amount of at most 14 digits.',
       save: 'Save and mark as filed',
       cancel: 'Cancel',
-      onlyAdmins: 'Only owners and admins can mark a return as filed.',
+      onlyAdmins: 'Only owners, admins and the chief accountant of this entity can mark a return as filed.',
     },
     payment: {
       title: '{count, plural, one {Non-cash payment check (# invoice)} other {Non-cash payment check (# invoices)}}',

@@ -800,10 +800,10 @@ export const vi = {
     },
     hints: {
       finance: {
-        chief_accountant: 'Duyệt các đề xuất ghi sổ và mở khóa tháng đã khóa sổ, như chủ sở hữu.',
+        chief_accountant: 'Duyệt các đề xuất ghi sổ, mở khóa tháng đã khóa sổ và đánh dấu đã nộp tờ khai GTGT, như chủ sở hữu.',
         accountant: 'Cho biết thành viên làm kế toán. Chưa thêm quyền nào ngoài quyền của vai trò cơ bản.',
         viewer: 'Cho biết thành viên chỉ theo dõi số liệu kế toán. Chưa thêm quyền nào ngoài quyền của vai trò cơ bản.',
-        entity_chief_accountant: 'Mở khóa các tháng đã khóa sổ, chỉ của các pháp nhân được giao. Mỗi lần giao là một pháp nhân; có thể giao thêm. Duyệt đề xuất ghi sổ vẫn cần kế toán trưởng của cả tổ chức. Nếu đây là vai trò duy nhất của người này, hãy giao cho họ vai trò Kế toán thuê ngoài cho pháp nhân đó trước khi thu hồi.',
+        entity_chief_accountant: 'Mở khóa các tháng đã khóa sổ và đánh dấu đã nộp tờ khai GTGT, chỉ của các pháp nhân được giao. Mỗi lần giao là một pháp nhân; có thể giao thêm. Duyệt đề xuất ghi sổ vẫn cần kế toán trưởng của cả tổ chức. Nếu đây là vai trò duy nhất của người này, hãy giao cho họ vai trò Kế toán thuê ngoài cho pháp nhân đó trước khi thu hồi.',
       },
       crm: { sales: 'Chưa thêm quyền nào ngoài quyền của vai trò cơ bản.' },
       desk: { agent: 'Chưa thêm quyền nào ngoài quyền của vai trò cơ bản.' },
@@ -1107,7 +1107,7 @@ export const vi = {
       invalid: 'Mỗi ô là số tiền nguyên, không âm, tối đa 14 chữ số.',
       save: 'Lưu và đánh dấu đã nộp',
       cancel: 'Hủy',
-      onlyAdmins: 'Chỉ chủ sở hữu và quản trị viên mới đánh dấu được tờ khai đã nộp.',
+      onlyAdmins: 'Chỉ chủ sở hữu, quản trị viên và kế toán trưởng của pháp nhân này mới đánh dấu được tờ khai đã nộp.',
     },
     payment: {
       title: '{count, plural, other {Kiểm tra thanh toán không dùng tiền mặt (# hóa đơn)}}',

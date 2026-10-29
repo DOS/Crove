@@ -510,7 +510,7 @@ export function VatPage() {
             legalEntityId={entity.legalEntityId}
             carried={carried}
             deduct25={deductAmount(deduct, data.indicators.find((i) => i.code === '24')?.amount ?? '0', data.paymentChecks.suggested25)}
-            canFile={canMarkFiled(org.data?.role)}
+            canFile={data.filable ?? canMarkFiled(org.data?.role)}
           />
 
           <PaymentChecks data={data} canMark={canMarkPayment(org.data?.role)} legalEntityId={entity.legalEntityId} />

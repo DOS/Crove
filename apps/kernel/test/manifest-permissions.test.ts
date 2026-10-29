@@ -40,6 +40,7 @@ describe('module manifests declare their permissions (#1630)', () => {
     // The three gates on main: kernel.proposal.approve and its bulk form, finance.period.unlock, and the ledger policy.
     expect(uses.map((u) => `${u.by}: ${u.permission}`).sort()).toEqual([
       'command finance.period.unlock: finance.period.unlock',
+      'command finance.vat.return_mark: finance.vat.file',
       'command kernel.proposal.approve: finance.proposal.approve',
       'command kernel.proposal.approve_many: finance.proposal.approve',
       'the approval policy (LEDGER_APPROVE_PERMISSION): finance.proposal.approve',

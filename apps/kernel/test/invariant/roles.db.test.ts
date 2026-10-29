@@ -177,15 +177,13 @@ suite('role assignments on PostgreSQL (#1279)', () => {
     expect(roles.map((r) => r.key)).toEqual([...BUILTIN_ROLE_KEYS].sort());
     // The entity chief accountant (#1507) is limited to its legal entities and grants their period unlock alone.
     expect(roles.filter((r) => r.scope === 'legal_entity').map((r) => r.key)).toEqual(['external_accountant', 'finance.entity_chief_accountant']);
-    // #1508 (step 1 of 2): both chief accountants may also grant finance.vat.file (marking the VAT return filed, for
-    // their entities); step 2 expects it.
-    const vatFile = permissions.some((p) => p.permission === 'finance.vat.file');
+    // Both chief accountants mark the VAT return filed too (finance.vat.file, #1508), for their entities.
     expect(permissions).toEqual([
       { role_key: 'finance.chief_accountant', permission: 'finance.period.unlock' },
       { role_key: 'finance.chief_accountant', permission: 'finance.proposal.approve' },
-      ...(vatFile ? [{ role_key: 'finance.chief_accountant', permission: 'finance.vat.file' }] : []),
+      { role_key: 'finance.chief_accountant', permission: 'finance.vat.file' },
       { role_key: 'finance.entity_chief_accountant', permission: 'finance.period.unlock' },
-      ...(vatFile ? [{ role_key: 'finance.entity_chief_accountant', permission: 'finance.vat.file' }] : []),
+      { role_key: 'finance.entity_chief_accountant', permission: 'finance.vat.file' },
     ]);
     // The base roles are not assignable roles.
     expect(roles.map((r) => r.key)).not.toContain('owner');
@@ -511,8 +509,7 @@ suite('role assignments on PostgreSQL (#1279)', () => {
     });
     const accountantRole = await o.assign(asMfa(o.owner), o.chief, 'finance.chief_accountant');
     const permissions = await rt.query<{ permissions: string[] }>('kernel.org.get', {}, { actor: asUser(o.chief), orgId: o.orgId });
-    // #1508 (step 1 of 2): finance.vat.file may come with the role too.
-    expect(permissions.permissions.filter((p) => p !== 'finance.vat.file')).toEqual(['finance.period.unlock', 'finance.proposal.approve']);
+    expect(permissions.permissions).toEqual(['finance.period.unlock', 'finance.proposal.approve', 'finance.vat.file']);
     await expect(unlock(asUser(o.chief))).rejects.toMatchObject({ code: 'STEP_UP_REQUIRED' });
     await expect(unlock(asMfa(o.chief))).resolves.toMatchObject({ lockedThrough: null });
     // Revoked: the next unlock is refused.
@@ -628,6 +625,44 @@ suite('role assignments on PostgreSQL (#1279)', () => {
     // A member who holds it alone is limited to that entity: an org-wide role would lift them to every entity.
     await o.assign(asMfa(o.owner), o.member, 'finance.entity_chief_accountant', o.branch);
     await expect(o.assign(asMfa(o.owner), o.member, 'finance.accountant')).rejects.toMatchObject({ code: 'ROLE_GRANT_WIDENS_SCOPE', status: 409 });
+  });
+
+  it('lets a chief accountant mark the VAT return filed, an entity one only for its own entities (#1508)', async () => {
+    const o = await org();
+    await o.assign(asMfa(o.owner), o.chief, 'finance.accountant');
+    await o.assign(asMfa(o.owner), o.chief, 'finance.entity_chief_accountant', o.branch);
+    const wide = await person('wide');
+    await withAdmin((c) => c.query("INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member')", [o.orgId, wide]));
+    await o.assign(asMfa(o.owner), wide, 'finance.chief_accountant');
+    const mark = (actor: Actor, legalEntityId: string, period = '2026-09') =>
+      o.exec(actor, 'finance.vat.return_mark', { period, done: true, figures: { carriedIn: '0', deductible: '0', carriedOut: '100000' }, legalEntityId });
+    const filable = async (userId: string, legalEntityId: string) =>
+      (await rt.query<{ filable?: boolean }>('finance.vat.period', { period: '2026-09', legalEntityId }, { actor: asUser(userId), orgId: o.orgId })).filable;
+    // What the screen is told, per entity.
+    expect([await filable(o.chief, o.branch), await filable(o.chief, o.defaultEntity)]).toEqual([true, false]);
+    expect([await filable(wide, o.branch), await filable(wide, o.defaultEntity), await filable(o.member, o.branch), await filable(o.admin, o.branch)]).toEqual([
+      true,
+      true,
+      false,
+      true,
+    ]);
+    // The entity chief accountant marks its entity's return, and is refused another's: by the command, and by the
+    // database's guard for a raw insert.
+    await expect(mark(asUser(o.chief), o.branch)).resolves.toMatchObject({ done: true });
+    await expect(mark(asUser(o.chief), o.defaultEntity)).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 });
+    await expect(
+      inContext(o.chief, o.orgId, (c) =>
+        c.query(
+          `INSERT INTO crove_finance.vat_return_filed (org_id, legal_entity_id, period, status, source, carried_in_amount, deductible_amount, carried_out_amount, marked_by)
+           VALUES ($1, $2, '2026-08', 'filed', 'entered', 0, 0, 0, $3)`,
+          [o.orgId, o.defaultEntity, o.chief],
+        ),
+      ),
+    ).rejects.toMatchObject({ code: '42501', message: 'VAT_RETURN_FORBIDDEN' });
+    // The org-wide chief accountant marks any entity's; an owner and an admin as before; a member holding nothing never.
+    await expect(mark(asUser(wide), o.defaultEntity)).resolves.toMatchObject({ done: true });
+    await expect(mark(asUser(o.admin), o.branch, '2026-10')).resolves.toMatchObject({ done: true });
+    await expect(mark(asUser(o.member), o.branch, '2026-10')).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 });
   });
 
   it('never gives a viewer a role that grants a permission, and a viewer demoted after the grant holds none', async () => {

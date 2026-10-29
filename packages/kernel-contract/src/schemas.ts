@@ -958,6 +958,9 @@ export const zVatReport = z.object({
   carryForward: zVatCarryForward,
   // This period's return as marked filed, or null.
   filed: zVatFiledReturn.nullable(),
+  // Whether the signed-in member may mark this entity's return filed (#1508): an owner or an admin, or a chief
+  // accountant for the entity. Answered by finance.vat.period; the server checks again.
+  filable: z.boolean().optional(),
 });
 // Marks the period's VAT return filed (done) with its figures, or takes the mark back (#1400).
 export const zVatReturnMark = z.strictObject({
