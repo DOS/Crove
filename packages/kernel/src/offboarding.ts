@@ -300,6 +300,10 @@ export const recordExport = defineCommand({
       .where('org_id', '=', ctx.orgId)
       .where('command', '=', 'kernel.org.export.record')
       .where('outcome', '=', 'ok')
+      // The rows that stand for an export: the system's records of this format, as the purge check reads them (#1883),
+      // rebinds included, since the newest of them decides which export is current.
+      .where('actor_type', '=', 'system')
+      .where(sql<string>`detail ->> 'format'`, '=', EXPORT_FORMAT)
       .where('occurred_at', '>', sql<Date>`pg_catalog.now()`)
       .limit(1)
       .executeTakeFirst();
@@ -390,7 +394,7 @@ export const orgExportGet = defineQuery({
   access: OWNERS,
   handler: async (ctx): Promise<OrgExportView> => {
     const tenant = await ctx.trx.selectFrom('crove_kernel.tenant').select('status').where('org_id', '=', ctx.orgId).executeTakeFirstOrThrow();
-    const newest = (command: string) =>
+    const newest = (command: string, exports = false) =>
       ctx.trx
         .selectFrom('crove_kernel.audit_event')
         .select(['occurred_at', 'detail'])
@@ -399,12 +403,14 @@ export const orgExportGet = defineQuery({
         .where('outcome', '=', 'ok')
         // An agent never runs these commands; its audit rows never stand for them (issue #285).
         .where('actor_type', '<>', 'agent')
+        // The rows that stand for an export, as the record's stale check reads them (#1883).
+        .$if(exports, (q) => q.where('actor_type', '=', 'system').where(sql<string>`detail ->> 'format'`, '=', EXPORT_FORMAT))
         .orderBy('occurred_at', 'desc')
         .orderBy('id', 'desc')
         .limit(1)
         .executeTakeFirst();
     const requested = await newest('kernel.org.offboard');
-    const recorded = await newest('kernel.org.export.record');
+    const recorded = await newest('kernel.org.export.record', true);
     // A v1 record (before #212) does not parse and reads as no export.
     const detail = recorded ? zRecordedExport.safeParse(recorded.detail) : null;
     return {
@@ -477,7 +483,9 @@ async function currentExport(trx: QueryContext['trx'], orgId: string): Promise<E
     .where('org_id', '=', orgId)
     .where('command', '=', 'kernel.org.export.record')
     .where('outcome', '=', 'ok')
-    .where('actor_type', '<>', 'agent')
+    // The rows that stand for an export, as the record's stale check reads them (#1883).
+    .where('actor_type', '=', 'system')
+    .where(sql<string>`detail ->> 'format'`, '=', EXPORT_FORMAT)
     .orderBy('occurred_at', 'desc')
     .orderBy('id', 'desc')
     .limit(1)

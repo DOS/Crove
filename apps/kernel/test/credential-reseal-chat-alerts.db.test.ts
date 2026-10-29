@@ -132,6 +132,36 @@ suite('team chat alert targets resealed after a key rotation on PostgreSQL (#863
     expect(JSON.stringify(audits)).not.toContain(BOT_TOKEN.split(':')[1]);
   });
 
+  it('counts the targets under the old key with the Social module left out, apart, and reseals them once it is on (#1878)', async () => {
+    // A worker of a deployment that leaves Social out: the tables stay (ADR-0031), its commands do not.
+    const kernelOnly = new Runtime(workerDb, { manifests: TEST_MANIFESTS }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
+    expect(kernelOnly.installed('social')).toBe(false);
+    const c = await org();
+    const waiting = await save(c.orgId, c.owner, '-4012345680');
+    expect(await keyOf(waiting)).toBe(keyA.id);
+    // Not resealed, not lost from the counts and not counted twice: it keeps the previous key from being retired. (The
+    // case above left nothing under the old key.)
+    expect(await resealCredentials({ runtime: kernelOnly, broker: rotated, workerDb })).toEqual({
+      resealed: 0,
+      failed: 0,
+      leftActive: 0,
+      leftInactive: 0,
+      leftWaiting: 1,
+      skipped: false,
+    });
+    expect(await keyOf(waiting)).toBe(keyA.id);
+    // Social on again: the next pass reseals it, and nothing is left.
+    expect(await resealCredentials({ runtime: worker, broker: rotated, workerDb })).toEqual({
+      resealed: 1,
+      failed: 0,
+      leftActive: 0,
+      leftInactive: 0,
+      leftWaiting: 0,
+      skipped: false,
+    });
+    expect(await keyOf(waiting)).toBe(keyB.id);
+  });
+
   it('changes nothing when the envelope moved on since it was read, and is the worker alone', async () => {
     const o = await org();
     const id = await save(o.orgId, o.owner, '-4012345670');

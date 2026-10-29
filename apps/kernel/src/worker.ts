@@ -28,6 +28,7 @@ import { mailEventJob, processMailEvent, type MailEventJob, type MailEventRow } 
 import { MAIL_BULK_GAP_MS, MAIL_BULK_QUEUE, MAIL_SEND_QUEUE, MAIL_SWEEP_MS, mailErrorCode, purgeMail, runMailJob, sweepMail, type MailJob, type MailQueueDeps } from './mail-queue.ts';
 import { MISSING_INVOICE_SWEEP_MS, sweepMissingInvoiceReminders } from './missing-invoice-mail.ts';
 import { ExportSealer } from './export-seal.ts';
+import { AVAILABLE_MODULES } from './config.ts';
 import { JOB_SCHEMA, QUEUES, SOCIAL_PUBLISH_QUEUES, socialPublishQueue } from './jobs-schema.ts';
 import { jobGroup, jobKey, systemJobKey } from './job-keys.ts';
 import { runLinkPreviewJob } from './link-preview.ts';
@@ -395,9 +396,12 @@ export async function sweepSocialPublishing(boss: PgBoss, workerDb: Db, provider
   return due.length;
 }
 
-/** Records that this worker is alive (crove_kernel.worker_beat, crove_worker only). */
-export async function beat(workerDb: Db, instance: string): Promise<void> {
-  await sql`SELECT crove_kernel.worker_beat(${instance.slice(0, 128)})`.execute(workerDb);
+/**
+ * Records that this worker is alive and the modules whose queues it works (crove_kernel.worker_beat, crove_worker
+ * only): the prober ages only those queues, so a module left out does not read as stuck workers (#1877).
+ */
+export async function beat(workerDb: Db, instance: string, modules: readonly string[]): Promise<void> {
+  await sql`SELECT crove_kernel.worker_beat(${instance.slice(0, 128)}, ${[...modules]}::text[])`.execute(workerDb);
 }
 
 /**
@@ -1188,8 +1192,11 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     resealing = true;
     try {
       const done = await resealCredentials({ runtime: deps.runtime, broker: channels.broker, workerDb: deps.workerDb });
-      if (done.resealed + done.failed + done.leftActive + done.leftInactive > 0) {
-        console.log(`[credential-reseal] resealed ${done.resealed}, failed ${done.failed}; left under an older key: ${done.leftActive} active, ${done.leftInactive} to reconnect`);
+      if (done.resealed + done.failed + done.leftActive + done.leftInactive + done.leftWaiting > 0) {
+        console.log(
+          `[credential-reseal] resealed ${done.resealed}, failed ${done.failed}; left under an older key: ${done.leftActive} active, ${done.leftInactive} to reconnect` +
+            (done.leftWaiting > 0 ? `, ${done.leftWaiting} team chat alerts waiting for the Social module (keep CREDENTIAL_KEY_PREVIOUS)` : ''),
+        );
       }
     } catch (error) {
       console.error('[credential-reseal] sweep', error instanceof Error ? error.name : typeof error);
@@ -1655,7 +1662,8 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   const timer = setInterval(() => void relay(), 1000);
   void relay();
   const instance = deps.instance ?? hostname();
-  const heartbeat = () => beat(deps.workerDb, instance).catch((error) => console.error('[heartbeat]', error));
+  const worked = AVAILABLE_MODULES.filter((module) => module === 'kernel' || deps.runtime.installed(module));
+  const heartbeat = () => beat(deps.workerDb, instance, worked).catch((error) => console.error('[heartbeat]', error));
   const heartbeatTimer = setInterval(() => void heartbeat(), HEARTBEAT_INTERVAL_MS);
   await heartbeat();
   // Back-pressure (#894): checked every 10 s; one check at a time, none after stop. Its start and end go to the alert
