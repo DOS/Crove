@@ -14,6 +14,7 @@ import { MAX_INVITES_PER_DAY, MAX_INVITES_PER_EMAIL_PER_DAY, buildKernelCommands
 import { Runtime } from '@crove/kernel-runtime';
 import { toORPCError } from '../src/rpc.ts';
 import { TEST_MANIFESTS } from './manifests.ts';
+import { contextToken } from './context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -492,7 +493,7 @@ suite('invite mail limits on PostgreSQL (#185)', () => {
     await runtime.executeOrgless('kernel.member.invite.accept', { token }, { actor: asUser(viewer.id) });
     const asApp = <T>(userId: string, fn: (trx: Transaction<Database>) => Promise<T>) =>
       db.transaction().execute(async (trx) => {
-        await sql`SELECT crove_kernel.enter_context(${userId}::uuid, ${orgId}::uuid)`.execute(trx);
+        await sql`SELECT crove_kernel.enter_user_context(${orgId}::uuid, ${contextToken(userId, orgId)}::text)`.execute(trx);
         return fn(trx);
       });
     const gate = (email: string, limits: [number, number, number] = [50, 3, 5]) =>

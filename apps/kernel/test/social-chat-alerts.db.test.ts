@@ -17,6 +17,7 @@ import { socialCommands, socialQueries, type ChatAlertView, type PostView } from
 import { ChatAlertTestBudget, requestChatAlertTest, saveChatAlert, type ChatAlertSaveInput } from '../src/chat-alert-save.ts';
 import { CHAT_ALERT_TEST_TEXT, ChatAlertSender } from '../src/chat-alerts.ts';
 import { TEST_MANIFESTS } from './manifests.ts';
+import { contextToken } from './context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -250,7 +251,7 @@ suite('social team chat alerts on PostgreSQL (#863)', () => {
       const attempt = async (statement: string, params: unknown[] = []) => {
         await api.query('BEGIN');
         try {
-          await api.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [o.owner, o.orgId]);
+          await api.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [o.orgId, contextToken(o.owner, o.orgId)]);
           await api.query(statement, params);
         } finally {
           await api.query('ROLLBACK');

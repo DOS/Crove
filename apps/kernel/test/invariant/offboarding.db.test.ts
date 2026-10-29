@@ -13,6 +13,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, myOrgs, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
+import { contextToken } from './fixtures/context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -77,7 +78,7 @@ suite('offboarding and retention invariants (#38)', () => {
     await connect(appUrl, async (c) => {
       await c.query('BEGIN');
       try {
-        await c.query('SELECT crove_kernel.enter_context($1, $2)', [userId, orgId]);
+        await c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgId, contextToken(userId, orgId)]);
         await c.query(statement, [orgId]);
         await c.query('COMMIT');
       } catch (error) {
@@ -141,7 +142,7 @@ suite('offboarding and retention invariants (#38)', () => {
     expect(await status(org.orgId)).toBe('offboarding');
     // The admin is refused by the database itself and no longer sees the org; the owner keeps both.
     await expect(
-      db.transaction().execute((trx) => sql`SELECT crove_kernel.enter_context(${member.id}::uuid, ${org.orgId}::uuid)`.execute(trx)),
+      db.transaction().execute((trx) => sql`SELECT crove_kernel.enter_user_context(${org.orgId}::uuid, ${contextToken(member.id, org.orgId)}::text)`.execute(trx)),
     ).rejects.toThrow(/NOT_A_MEMBER/);
     expect((await myOrgs(db, member.id)).map((o) => o.orgId)).not.toContain(org.orgId);
     expect((await myOrgs(db, owner.id)).find((o) => o.orgId === org.orgId)).toMatchObject({ role: 'owner' });

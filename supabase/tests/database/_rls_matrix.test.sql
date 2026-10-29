@@ -16,6 +16,15 @@ INSERT INTO crove_kernel.party (org_id, id, name) VALUES
   (current_setting('test.org_a')::uuid, '00000000-0000-7000-8000-00000000000a', 'Party of A'),
   (current_setting('test.org_b')::uuid, '00000000-0000-7000-8000-00000000000b', 'Party of B');
 
+-- A context token for org A's owner (#1822, ADR-0028 section 9), signed as the superuser with the key the migration
+-- runner installed: crove_app enters a user's context only with one.
+SELECT set_config('test.token_a', (
+  SELECT m.msg || '.' || pg_catalog.encode(pg_catalog.sha256(k.k_opad || pg_catalog.sha256(k.k_ipad || pg_catalog.convert_to(m.msg, 'UTF8'))), 'hex')
+  FROM (SELECT 'v1.' || current_setting('test.user_a') || '.-.' || current_setting('test.org_a') || '.aal1.-.'
+               || (pg_catalog.floor(pg_catalog.date_part('epoch', pg_catalog.clock_timestamp()))::bigint + 60)::text AS msg) m,
+       crove_kernel.context_token_key k
+  WHERE k.slot = 'current'), true);
+
 SET LOCAL ROLE crove_app;
 
 -- The refused inserts name the message, not only 42501, so a lost INSERT grant ("permission denied", also 42501)
@@ -30,7 +39,7 @@ SELECT throws_ok($$
   '42501', 'new row violates row-level security policy for table "party"', 'without a context crove_app inserts no party');
 
 -- Org A's context: its own party only.
-SELECT is(crove_kernel.enter_context(current_setting('test.user_a')::uuid, current_setting('test.org_a')::uuid), 'owner',
+SELECT is(crove_kernel.enter_user_context(current_setting('test.org_a')::uuid, current_setting('test.token_a')), 'owner',
   'the owner of org A enters its context');
 SELECT is((SELECT pg_catalog.count(*) FROM crove_kernel.party WHERE org_id = current_setting('test.org_a')::uuid), 1::bigint,
   'org A sees its own party');

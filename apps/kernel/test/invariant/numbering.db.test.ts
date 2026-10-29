@@ -20,6 +20,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
+import { contextToken } from './fixtures/context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -67,7 +68,7 @@ suite('gapless numbering on PostgreSQL (#1401)', () => {
     try {
       await c.query('BEGIN');
       if (who === 'system') await c.query('SELECT crove_kernel.enter_system_context($1::uuid)', [org]);
-      else await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [who.user, org]);
+      else await c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [org, contextToken(who.user, org)]);
       const out = await fn(c);
       await c.query(rollback ? 'ROLLBACK' : 'COMMIT');
       return out;

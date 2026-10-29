@@ -18,6 +18,7 @@ import { loadConfig } from '../../src/config.ts';
 import { createHttpApp } from '../../src/http.ts';
 import { createSessionStatusSource } from '../../src/sessions.ts';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
+import { contextToken } from './fixtures/context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -302,7 +303,7 @@ suite('own session revoke without an org (issue #184)', () => {
     await client.connect();
     try {
       await client.query('BEGIN');
-      await client.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [owner.userId, orgId]);
+      await client.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgId, contextToken(owner.userId, orgId)]);
       await expect(
         client.query('SELECT * FROM crove_kernel.session_revoke_orgless($1::uuid, $2::uuid, NULL, NULL)', [owner.userId, owner.session]),
       ).rejects.toMatchObject({ code: '42501', message: 'NOT_ORGLESS' });

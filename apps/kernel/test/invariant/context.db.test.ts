@@ -9,6 +9,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime, toDomainError } from '@crove/kernel-runtime';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
+import { contextToken } from './fixtures/context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -41,7 +42,7 @@ suite('context re-entry guard on PostgreSQL (§4.5 item 1, T10)', () => {
   }
 
   const enter = (c: pg.Client, userId: string, orgId: string) =>
-    c.query<{ role: string }>('SELECT crove_kernel.enter_context($1::uuid, $2::uuid) AS role', [userId, orgId]);
+    c.query<{ role: string }>('SELECT crove_kernel.enter_user_context($1::uuid, $2::text) AS role', [orgId, contextToken(userId, orgId)]);
 
   async function context(c: pg.Client) {
     const { rows } = await c.query<{ org: string | null; user: string | null; rawOrg: string | null; rawUser: string | null }>(

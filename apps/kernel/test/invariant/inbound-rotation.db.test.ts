@@ -15,6 +15,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove
 import { Runtime } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
+import { contextToken } from './fixtures/context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -197,7 +198,7 @@ suite('inbound address rotation invariants on PostgreSQL', () => {
     // The API login role calling the definer directly as an admin is refused by the definer itself.
     await expect(
       db.transaction().execute(async (trx) => {
-        await sql`SELECT crove_kernel.enter_context(${users.admin}::uuid, ${org.orgId}::uuid)`.execute(trx);
+        await sql`SELECT crove_kernel.enter_user_context(${org.orgId}::uuid, ${contextToken(users.admin, org.orgId)}::text)`.execute(trx);
         await sql`SELECT crove_kernel.inbound_rotate()`.execute(trx);
       }),
     ).rejects.toThrow(/INBOUND_ROTATE_OWNER_ONLY/);
@@ -321,7 +322,7 @@ suite('inbound address rotation invariants on PostgreSQL', () => {
     const ownToken = await tokenOf(org.orgId);
     const asOwnerApp = (statement: RawBuilder<unknown>) =>
       db.transaction().execute(async (trx) => {
-        await sql`SELECT crove_kernel.enter_context(${users.owner}::uuid, ${org.orgId}::uuid)`.execute(trx);
+        await sql`SELECT crove_kernel.enter_user_context(${org.orgId}::uuid, ${contextToken(users.owner, org.orgId)}::text)`.execute(trx);
         await statement.execute(trx);
       });
     const attempts: Array<[string, RawBuilder<unknown>, string]> = [
@@ -370,7 +371,7 @@ suite('inbound address rotation invariants on PostgreSQL', () => {
       });
     const rotateAsOwner = async (admin: pg.Client) => {
       await admin.query('SET LOCAL ROLE crove_app');
-      await admin.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [users.owner, org.orgId]);
+      await admin.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [org.orgId, contextToken(users.owner, org.orgId)]);
       const { rows } = await admin.query<{ token: string }>('SELECT crove_kernel.inbound_rotate() AS token');
       return rows[0]?.token ?? '';
     };

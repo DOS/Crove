@@ -18,6 +18,7 @@ import type { JournalVoucherRequest, Timeline } from '@crove/kernel-contract';
 import { Runtime, type InputHashMode } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
 import { TEST_MANIFESTS } from './manifests.ts';
+import { enterUser } from './context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -61,7 +62,7 @@ suite('activity per legal entity on PostgreSQL (#1716)', () => {
     await client.connect();
     try {
       await client.query('BEGIN');
-      await client.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [userId, orgId]);
+      await enterUser(client, userId, orgId);
       const result = await fn(client);
       await client.query('COMMIT');
       return result;
@@ -77,7 +78,8 @@ suite('activity per legal entity on PostgreSQL (#1716)', () => {
   // crove_kernel.command_input_hash does not exist yet: the runtime that seeds it writes the plain hash (#1741).
   function connect(inputHash: InputHashMode = 'keyed') {
     pool = createPool({ connectionString: appUrl, max: 4 });
-    rt = new Runtime(createDb(pool), { manifests: TEST_MANIFESTS, inputHash }).register({
+    // No context token key: the database starts at a version before enter_user_context (#1822).
+    rt = new Runtime(createDb(pool), { manifests: TEST_MANIFESTS, contextTokenKey: null, inputHash }).register({
       commands: [...kernelCommands, ...financeCommands],
       queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries],
     });

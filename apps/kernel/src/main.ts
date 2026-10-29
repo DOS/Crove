@@ -19,7 +19,9 @@
 //                 apply the offboarding deletion map to an org in offboarding whose export is old enough, and close
 //                 it (issue #1024); run it in the worker's container
 //   vapid-keys    print a new VAPID key pair for browser push (issue #1238): VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY
+//   context-token-key  print a new context token key (#1822): CROVE_CONTEXT_TOKEN_KEY, for migrate and the kernel
 // It wires the open-source default adapters into the composition root (createKernel, ADR-0030).
+import { randomBytes } from 'node:crypto';
 import { applyAuthGrants, installDdlWatch, migrate, setRolePasswords } from '@crove/db/migrate';
 import { liveAuthUrl, loadConfig, type Config } from './config.ts';
 import { createKernel, defaultAdapters, type ServerRole } from './kernel.ts';
@@ -30,8 +32,8 @@ import { describeStorage } from './storage.ts';
 import { runUsageReport } from './usage-report.ts';
 import { generateVapidKeys } from './web-push.ts';
 
-type Role = 'migrate' | 'auth-grants' | 'prober' | 'usage-report' | 'pilot-check' | 'exports-rebind' | 'user-disable' | 'user-enable' | 'org-purge' | 'vapid-keys' | ServerRole;
-const ROLES: readonly Role[] = ['migrate', 'auth-grants', 'api', 'worker', 'all', 'prober', 'usage-report', 'pilot-check', 'exports-rebind', 'user-disable', 'user-enable', 'org-purge', 'vapid-keys'];
+type Role = 'migrate' | 'auth-grants' | 'prober' | 'usage-report' | 'pilot-check' | 'exports-rebind' | 'user-disable' | 'user-enable' | 'org-purge' | 'vapid-keys' | 'context-token-key' | ServerRole;
+const ROLES: readonly Role[] = ['migrate', 'auth-grants', 'api', 'worker', 'all', 'prober', 'usage-report', 'pilot-check', 'exports-rebind', 'user-disable', 'user-enable', 'org-purge', 'vapid-keys', 'context-token-key'];
 
 async function runMigrate(config: Config) {
   const adminUrl = config.ADMIN_DATABASE_URL;
@@ -41,6 +43,8 @@ async function runMigrate(config: Config) {
     dir: config.MIGRATIONS_DIR,
     log: (m) => console.log(`[migrate] ${m}`),
     ...(config.MIGRATE_LOCK_WAIT_SECONDS === undefined ? {} : { lockWaitMs: config.MIGRATE_LOCK_WAIT_SECONDS * 1000 }),
+    // Installed after the migrations, as a bind parameter (#1822); unset installs none.
+    contextTokenKey: config.CROVE_CONTEXT_TOKEN_KEY ?? null,
   });
   await setRolePasswords(adminUrl, {
     crove_app: config.CROVE_APP_DB_PASSWORD,
@@ -74,6 +78,11 @@ async function main() {
     const keys = generateVapidKeys();
     console.log(`VAPID_PUBLIC_KEY=${keys.publicKey}
 VAPID_PRIVATE_KEY=${keys.privateKey}`);
+    return;
+  }
+  // Needs no settings either: 32 random bytes, for the environment of the migrate step and the kernel alike.
+  if (role === 'context-token-key') {
+    console.log(`CROVE_CONTEXT_TOKEN_KEY=${randomBytes(32).toString('base64')}`);
     return;
   }
   const config = loadConfig();

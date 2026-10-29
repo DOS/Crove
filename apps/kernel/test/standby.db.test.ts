@@ -12,6 +12,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
 import { TEST_MANIFESTS } from './manifests.ts';
+import { contextToken } from './context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const STANDBY = process.env.CROVE_TEST_STANDBY_URL;
@@ -92,7 +93,7 @@ suite('request context on a hot standby (#105)', () => {
       for (const begin of ['BEGIN', 'BEGIN READ ONLY']) {
         await c.query(begin);
         try {
-          const entered = await c.query<{ role: string }>('SELECT crove_kernel.enter_context($1::uuid, $2::uuid) AS role', [owner, orgId]);
+          const entered = await c.query<{ role: string }>('SELECT crove_kernel.enter_user_context($1::uuid, $2::text) AS role', [orgId, contextToken(owner, orgId)]);
           expect(entered.rows[0]?.role).toBe('owner');
           const { rows } = await c.query<{ org: string; locks: number }>(
             `SELECT crove_kernel.ctx_org_id()::text AS org,
@@ -101,7 +102,7 @@ suite('request context on a hot standby (#105)', () => {
           );
           expect(rows[0]).toEqual({ org: orgId, locks: 1 });
           await c.query(`SELECT set_config('crove.ctx', '', true), set_config('crove.ctx_seal', '', true)`);
-          await expect(c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [owner, orgId])).rejects.toMatchObject({
+          await expect(c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgId, contextToken(owner, orgId)])).rejects.toMatchObject({
             code: '42501',
             message: 'CONTEXT_REENTRY',
           });
@@ -123,7 +124,7 @@ suite('request context on a hot standby (#105)', () => {
       const c = await pool.connect();
       try {
         await c.query('BEGIN');
-        await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [owner, orgId]);
+        await c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgId, contextToken(owner, orgId)]);
         await expect(c.query(`INSERT INTO crove_kernel.party (org_id, name) VALUES ($1, 'x')`, [orgId])).rejects.toMatchObject({ code: '25006' });
         await c.query('ROLLBACK');
       } finally {

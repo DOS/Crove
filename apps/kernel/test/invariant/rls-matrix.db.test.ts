@@ -25,6 +25,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
+import { contextToken } from './fixtures/context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -1564,7 +1565,7 @@ suite('generated cross-org RLS matrix on PostgreSQL (T8)', () => {
       client: app,
       org: 'A',
       enter: async (c) => {
-        await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [orgs.A.owner, orgs.A.id]);
+        await c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgs.A.id, contextToken(orgs.A.owner, orgs.A.id)]);
       },
     };
     actors.push(
@@ -1588,7 +1589,7 @@ suite('generated cross-org RLS matrix on PostgreSQL (T8)', () => {
         enter: async (c) => {
           // Entered through enter_context (as the admin connection, before switching role), never by writing the
           // context settings by hand: a hand-written context grants nothing once the context is sealed (T11).
-          await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [orgs.A.owner, orgs.A.id]);
+          await c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgs.A.id, contextToken(orgs.A.owner, orgs.A.id)]);
           await c.query('SET LOCAL ROLE crove_definer_tenant');
           const { rows } = await c.query<{ who: string }>('SELECT current_user AS who');
           if (rows[0]?.who !== 'crove_definer_tenant') throw new Error('SET ROLE crove_definer_tenant did not take effect');
@@ -1614,7 +1615,7 @@ suite('generated cross-org RLS matrix on PostgreSQL (T8)', () => {
       client: app,
       org: 'A',
       enter: async (c) => {
-        await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [accountant, orgs.A.id]);
+        await c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgs.A.id, contextToken(accountant, orgs.A.id)]);
       },
     };
   });

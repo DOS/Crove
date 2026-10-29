@@ -14,6 +14,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove
 import { Runtime } from '@crove/kernel-runtime';
 import { CURRENCY_MINOR_UNITS } from '@crove/mod-finance';
 import { TEST_MANIFESTS } from './manifests.ts';
+import { contextToken } from './context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -70,7 +71,7 @@ suite('currency amount scale (#1282)', () => {
     return withClient(appUrl, async (app) => {
       await app.query('BEGIN');
       try {
-        await app.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [userId, orgId]);
+        await app.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgId, contextToken(userId, orgId)]);
         const { rows } = await app.query<{ id: string }>(
           `SELECT crove_finance.post_journal_entry('2026-10-01', 'scale', 'test', $1::uuid, $2::jsonb) AS id`,
           [randomUUID(), JSON.stringify(lines)],
