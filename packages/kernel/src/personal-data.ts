@@ -131,13 +131,32 @@ export const PERSONAL_DATA_COLUMNS = {
 
 export type PersonalDataColumnKey = keyof typeof PERSONAL_DATA_COLUMNS;
 
-// The column names the invariant test treats as personal data. A column of crove_kernel, crove_finance, crove_social
-// or crove_crm whose name matches must be in PERSONAL_DATA_COLUMNS. Control-plane tables (the user's own sign-in
-// account and the deployment's own records) are not tenant data and are left out: the identity provider handles a
-// user's own account, and no tenant code reads them (control-plane-reads.test.ts).
+// Columns that hold personal data the finder and the erasure cannot handle yet, with the step that registers them
+// (#1874). A member's notes and to-dos (crove_notes) are free text: their title, body, tags, details, checklist and
+// folded search words, pii in the notes manifest. The finder compares whole values in email, phone and tax-code
+// columns, and its erasure sets a column to null, which a note's or a to-do's title (NOT NULL) refuses. Matching
+// inside free text, counting a member's private items without their text, and deleting them without showing them is
+// notes step N9 (#1678, ADR-0037 section 5), which moves these entries into PERSONAL_DATA_COLUMNS. Until then a former
+// member's private items are purged 30 days after their removal (#1722), and the org purge deletes every note (#1024).
+// apps/kernel/test/personal-data.test.ts asks every pii column of crove_notes to be in one list or the other.
+export const PERSONAL_DATA_PENDING = {
+  'crove_notes.note.title': 'notes step N9 (#1678)',
+  'crove_notes.note.body': 'notes step N9 (#1678)',
+  'crove_notes.note.tags': 'notes step N9 (#1678)',
+  'crove_notes.note.search': 'notes step N9 (#1678)',
+  'crove_notes.todo.title': 'notes step N9 (#1678)',
+  'crove_notes.todo.details': 'notes step N9 (#1678)',
+  'crove_notes.todo.checklist': 'notes step N9 (#1678)',
+  'crove_notes.todo.search': 'notes step N9 (#1678)',
+} as const satisfies Record<string, string>;
+
+// The column names the invariant test treats as personal data. A column of crove_kernel, crove_finance, crove_social,
+// crove_crm or crove_notes whose name matches must be in PERSONAL_DATA_COLUMNS. Control-plane tables (the user's own
+// sign-in account and the deployment's own records) are not tenant data and are left out: the identity provider
+// handles a user's own account, and no tenant code reads them (control-plane-reads.test.ts).
 export const PERSONAL_DATA_NAME_PATTERN =
   '(^|_)(email|emails|phone|phones|address|addresses|tax_code|recipient|recipients|person_name|reviewer_name|display_name|from_address|to_address|national_id|id_number|birth_date|full_name)($|_)';
-export const PERSONAL_DATA_SCHEMAS = ['crove_kernel', 'crove_finance', 'crove_social', 'crove_crm'] as const;
+export const PERSONAL_DATA_SCHEMAS = ['crove_kernel', 'crove_finance', 'crove_social', 'crove_crm', 'crove_notes'] as const;
 
 // The finder (#923): an owner or admin looks up one person by email address, phone number, or tax code or national ID
 // (digits), across the columns above that hold such a value, and gets every matching row as JSON (the search column
