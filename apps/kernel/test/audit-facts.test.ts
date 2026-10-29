@@ -334,45 +334,23 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
     const assigned = [
       ...scope.matchAll(new RegExp(`(?<![\\w$.])(?<!\\b(?:const|let|var)\\s+)${escape(name)}\\s*(?:\\*\\*|\\?\\?|\\|\\||&&|[-+*/%&|^])?=(?![=>])\\s*`, 'g')),
     ].filter((w) => ours(w.index ?? 0));
-    // A let with no value written only by plain assignments is traced; one written any other way (destructuring, a
-    // for...of) or never is not.
-    if (init === '' && (assigned.length === 0 || new RegExp(`[{[,]\\s*${escape(name)}\\s*[,}\\]]|\\bfor\\s*\\(\\s*${escape(name)}\\s+(?:of|in)\\b`).test(scope))) {
-      return false;
-    }
-    // An empty container, from the declaration or a later assignment (`let facts; facts = {}`), is read by its writes.
+    // A write the scan cannot follow (a destructuring assignment, `({ raw: facts } = input)`, or a for...of) leaves the
+    // name untraced, as does a let with no value that is never assigned.
+    if (unfollowedWrite(name, scope, from, ours) || (init === '' && assigned.length === 0)) return false;
     const isBuilt = (value: string) => BUILT.test(value) || /^new\s+(?:Map|Set)\s*</.test(value);
-    const built = isBuilt(init) || assigned.some((w) => isBuilt(valueAt(code, from + (w.index ?? 0) + w[0].length).trim()));
     // The initializer is read whatever is assigned later (`let facts = { code }; if (redact) facts = {};`).
     if (!isBuilt(init) && !listed) checkHeld(name, init, from, flag, depth);
-    // Writes to an empty container, or to an object written out (`facts.email = ...`), add to what the name holds.
-    if (built || objectish(init)) {
-      for (const w of scope.matchAll(new RegExp(`(?<![\\w$.])${escape(name)}\\s*(\\[[^\\]]*\\]|\\.\\s*[A-Za-z_$][\\w$]*)\\s*=(?![=>])\\s*`, 'g'))) {
-        if (!ours(w.index ?? 0)) continue;
-        const target = w[1] as string;
-        const key = target.startsWith('[') ? literalAt(from + (w.index ?? 0) + w[0].indexOf('[') + 1) : target.replace(/^\.\s*/, '');
-        const rhs = valueAt(code, from + (w.index ?? 0) + w[0].length).trim();
-        if (key && isClassified(key) && !/^auditValue\s*\(/.test(rhs)) flag(`${name}.${key} is a classified column and its value is not auditValue(...)`);
-        // A computed key is stored too: `previous[party.email] = true` carries the address.
-        if (target.startsWith('[') && key === undefined) checkValue(target.slice(1, -1).trim(), from + (w.index ?? 0) + w[0].indexOf('[') + 1, flag, depth);
-        if (objectish(rhs)) checkObject(rhs, from + (w.index ?? 0) + w[0].length, depth);
-        else checkValue(rhs, from + (w.index ?? 0) + w[0].length, flag, depth);
-      }
-      for (const w of scope.matchAll(new RegExp(`(?<![\\w$.])${escape(name)}\\s*\\.\\s*(push|set|add|unshift)\\s*\\(`, 'g'))) {
-        if (!ours(w.index ?? 0)) continue;
-        const open = from + (w.index ?? 0) + w[0].length - 1;
-        const args = splitTop(balanced(code, open).slice(1, -1));
-        // A Map's key names the entry, like a bracket write: a classified column's name needs its value through auditValue.
-        if (w[1] === 'set') {
-          const key = literalAt(code.indexOf(args[0] ?? '', open));
-          const rhs = args[1]?.trim() ?? '';
-          if (key && isClassified(key) && !/^auditValue\s*\(/.test(rhs)) flag(`${name}.${key} is a classified column and its value is not auditValue(...)`);
-          args.shift();
-        }
-        for (const arg of args) {
-          if (objectish(arg.trim())) checkObject(arg.trim(), code.indexOf(arg.trim(), open), depth);
-          else checkValue(arg.trim(), open, flag, depth);
-        }
-      }
+    // Writes to its properties add to what the name holds, here or in a function of this file it is handed to
+    // (`fill(facts)`, whose parameter is the same object).
+    readWrites(name, from, end, ours, flag, depth);
+    for (const call of scope.matchAll(/(?<![\w$.])([A-Za-z_$][\w$]*)\s*\(/g)) {
+      const fn = functions.find((f) => f.name === call[1]);
+      if (!fn || !ours(call.index ?? 0)) continue;
+      const open = from + (call.index ?? 0) + call[0].length - 1;
+      splitTop(balanced(code, open).slice(1, -1)).forEach((arg, i) => {
+        const param = fn.params[i];
+        if (arg.trim() === name && param !== undefined && /^[A-Za-z_$][\w$]*$/.test(param)) readWrites(param, fn.start, fn.end, () => true, flag, depth);
+      });
     }
     // A later assignment replaces what the name holds; Object.assign(name, ...) adds to it.
     for (const w of assigned) {
@@ -388,6 +366,70 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
       }
     }
     return true;
+  };
+
+  // The writes to `name`'s properties between `start` and `stop` (`name.email = ...`, `name[k] = ...`, push, set, add):
+  // each key that names a classified column needs auditValue, and each value is read.
+  const readWrites = (name: string, start: number, stop: number, own: (offset: number) => boolean, flag: (problem: string) => void, depth: number) => {
+    const scope = code.slice(start, stop);
+    for (const w of scope.matchAll(new RegExp(`(?<![\\w$.])${escape(name)}\\s*(\\[[^\\]]*\\]|\\.\\s*[A-Za-z_$][\\w$]*)\\s*=(?![=>])\\s*`, 'g'))) {
+      if (!own(w.index ?? 0)) continue;
+      const target = w[1] as string;
+      const key = target.startsWith('[') ? literalAt(start + (w.index ?? 0) + w[0].indexOf('[') + 1) : target.replace(/^\.\s*/, '');
+      const rhs = valueAt(code, start + (w.index ?? 0) + w[0].length).trim();
+      if (key && isClassified(key) && !/^auditValue\s*\(/.test(rhs)) flag(`${name}.${key} is a classified column and its value is not auditValue(...)`);
+      // A computed key is stored too: `previous[party.email] = true` carries the address.
+      if (target.startsWith('[') && key === undefined) checkValue(target.slice(1, -1).trim(), start + (w.index ?? 0) + w[0].indexOf('[') + 1, flag, depth);
+      if (objectish(rhs)) checkObject(rhs, start + (w.index ?? 0) + w[0].length, depth);
+      else checkValue(rhs, start + (w.index ?? 0) + w[0].length, flag, depth);
+    }
+    for (const w of scope.matchAll(new RegExp(`(?<![\\w$.])${escape(name)}\\s*\\.\\s*(push|set|add|unshift)\\s*\\(`, 'g'))) {
+      if (!own(w.index ?? 0)) continue;
+      const open = start + (w.index ?? 0) + w[0].length - 1;
+      const args = splitTop(balanced(code, open).slice(1, -1));
+      // A Map's key names the entry, like a bracket write: a classified column's name needs its value through auditValue.
+      if (w[1] === 'set') {
+        const key = literalAt(code.indexOf(args[0] ?? '', open));
+        const rhs = args[1]?.trim() ?? '';
+        if (key && isClassified(key) && !/^auditValue\s*\(/.test(rhs)) flag(`${name}.${key} is a classified column and its value is not auditValue(...)`);
+        args.shift();
+      }
+      for (const arg of args) {
+        if (objectish(arg.trim())) checkObject(arg.trim(), code.indexOf(arg.trim(), open), depth);
+        else checkValue(arg.trim(), open, flag, depth);
+      }
+    }
+  };
+
+  // Whether `name` is written in `scope` (starting at `from`) by a for...of or a destructuring assignment
+  // (`[facts] = rows`, `({ raw: facts } = input)`): a pattern around it, not declared, followed by `=`.
+  const unfollowedWrite = (name: string, scope: string, from: number, own: (offset: number) => boolean) => {
+    if (new RegExp(`\\bfor\\s*\\(\\s*${escape(name)}\\s+(?:of|in)\\b`).test(scope)) return true;
+    for (const m of scope.matchAll(new RegExp(`[{[,:]\\s*${escape(name)}\\s*(?=[,}\\]=])`, 'g'))) {
+      if (!own(m.index ?? 0)) continue;
+      let pos = from + (m.index ?? 0) + m[0].length;
+      for (let level = 0; level < 3; level++) {
+        let depth = 0;
+        let opener = -1;
+        for (let i = pos - 1; i >= 0; i--) {
+          const c = code[i] as string;
+          if (')]}'.includes(c)) depth++;
+          else if ('([{'.includes(c) && depth-- === 0) {
+            opener = i;
+            break;
+          }
+        }
+        if (opener === -1 || code[opener] === '(') break;
+        const after = code.slice(opener + balanced(code, opener).length);
+        if (/^\s*=(?![=>])/.test(after)) {
+          if (!/\b(?:const|let|var)\s*$/.test(code.slice(0, opener))) return true;
+          break;
+        }
+        if (!/^\s*[,}\]]/.test(after)) break;
+        pos = opener;
+      }
+    }
+    return false;
   };
 
   // What an initializer or an assignment's right side gives a name: a query's columns, an object's facts, an array's
@@ -820,6 +862,7 @@ describe('audit facts and classified columns (#1626, #1632)', () => {
 
   it('fails on aliases, reassignments, computed calls and other audit calls (#1821)', () => {
     const check = (source: string) => scan('fixture.ts', source, classified).map((f) => `${f.fact}: ${f.problem}`);
+    const untracedFacts = 'facts: the facts are a name the scan cannot trace; write them out';
     // A query's column read by the alias it was selected as.
     const aliased = "const before = await ctx.trx.selectFrom('crove_kernel.party').select(['id', 'tax_code as code']).executeTakeFirstOrThrow();";
     expect(check(`${aliased}\nctx.audit({ previous: before.code });`)).toEqual(['previous: the value reads the classified column tax_code as code outside auditValue(...)']);
@@ -842,6 +885,16 @@ describe('audit facts and classified columns (#1626, #1632)', () => {
     ]);
     expect(check('let facts = { code: party.tax_code };\nif (redact) facts = {};\nctx.audit(facts);')).toEqual([
       'code: the value reads the classified column tax_code outside auditValue(...)',
+    ]);
+    // Writes after a non-empty assignment, a renamed destructuring target, and writes through a helper the object is given.
+    expect(check('let facts: Record<string, unknown>;\nfacts = { id: 1 };\nfacts.email = input.email;\nctx.audit(facts);')).toEqual([
+      'facts: facts.email is a classified column and its value is not auditValue(...)',
+      'facts: the value reads the classified column email outside auditValue(...)',
+    ]);
+    expect(check('let facts: Record<string, unknown>;\nfacts = {};\n({ raw: facts } = input);\nctx.audit(facts);')).toEqual([untracedFacts]);
+    expect(check('function fill(facts: Record<string, unknown>) { facts.email = input.email; }\nconst facts = {};\nfill(facts);\nctx.audit(facts);')).toEqual([
+      'facts: facts.email is a classified column and its value is not auditValue(...)',
+      'facts: the value reads the classified column email outside auditValue(...)',
     ]);
     // An assignment to a parameter of the same name in a nested function is not one to the fact's variable.
     expect(check('const code = 0;\nfunction normalize(code: string) { code = party.tax_code; return code; }\nctx.audit({ code });')).toEqual([]);
@@ -879,7 +932,7 @@ describe('audit facts and classified columns (#1626, #1632)', () => {
     ]);
     expect(check('const { rows } = await sql<{ audit: boolean }>`select 1`.execute(ctx.trx);')).toEqual([]);
     // A let with no value is traced only through plain assignments; any other write fails closed.
-    const untraced = 'facts: the facts are a name the scan cannot trace; write them out';
+    const untraced = untracedFacts;
     for (const write of ['({ facts } = await load(ctx));', '[facts] = rows;', 'for (facts of list) {}', '']) {
       expect(check(`let facts;\n${write}\nctx.audit(facts);`), write).toEqual([untraced]);
     }
