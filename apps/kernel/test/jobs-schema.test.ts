@@ -28,8 +28,20 @@ describe('vendored pg-boss schema (External-tenant gate T6)', () => {
     expect(Object.fromEntries(created)).toEqual(
       Object.fromEntries(Object.values(QUEUES).map((name) => [name, name === QUEUES.agentWake ? 'stately' : 'standard'])),
     );
-    expect(queueOptions(QUEUES.agentWake)).toBe('{"policy":"stately"}');
-    expect(queueOptions(QUEUES.extract)).toBe('{"policy":"standard"}');
+    expect(queueOptions(QUEUES.agentWake)).toBe('{"policy":"stately","deadLetter":"kernel-job.dlq"}');
+    expect(queueOptions(QUEUES.extract)).toBe('{"policy":"standard","deadLetter":"kernel-job.dlq"}');
+  });
+
+  it('sends every queue but the dead letter queue to it, and creates the dead letter queue first (#1780)', () => {
+    const sql = renderJobsMigration(pgBossSchemaVersion(), null, Object.values(QUEUES));
+    const created = [...sql.matchAll(/create_queue\(q, '(\{[^']*\})'::jsonb\) FROM unnest\(ARRAY\[([^\]]*)\]\)/g)].map(([, options, names]) => ({
+      options: JSON.parse(options ?? '{}') as Record<string, unknown>,
+      names: (names ?? '').split(', ').map((name) => name.slice(1, -1)),
+    }));
+    // The dead letter queue as 20261103150000 created it, in the first statement and alone there.
+    expect(created[0]).toEqual({ options: { policy: 'standard', retryLimit: 5, retryDelay: 30, retryBackoff: true }, names: [QUEUES.deadLetter] });
+    for (const { options, names } of created.slice(1)) expect(options.deadLetter, names.join(', ')).toBe(QUEUES.deadLetter);
+    expect(created.flatMap((c) => c.names).sort()).toEqual(Object.values(QUEUES).sort());
   });
 
   it('renders an upgrade that refuses any starting version but its own', () => {
