@@ -51,6 +51,7 @@ import {
 } from './domain/cash-voucher.ts';
 import { postJournalEntry } from './ledger.ts';
 import { resolveLegalEntity } from './legal-entity.ts';
+import { latestRevision } from './source-entry.ts';
 import type { CashVoucher } from './misa.ts';
 import { JOURNAL_EXPORT_LIMIT } from './queries.ts';
 
@@ -247,7 +248,7 @@ export const vouchersList = defineQuery({
       .selectFrom('crove_finance.cash_voucher as v')
       .leftJoin('crove_kernel.party as p', (join) => join.onRef('p.org_id', '=', 'v.org_id').onRef('p.id', '=', 'v.party_id'))
       .leftJoin('crove_finance.journal_entry as j', (join) =>
-        join.onRef('j.org_id', '=', 'v.org_id').onRef('j.source_id', '=', 'v.id').on('j.source_type', '=', VOUCHER_SOURCE).on('j.reverses_entry_id', 'is', null),
+        join.onRef('j.org_id', '=', 'v.org_id').onRef('j.source_id', '=', 'v.id').on('j.source_type', '=', VOUCHER_SOURCE).on('j.reverses_entry_id', 'is', null).on(latestRevision('j')),
       )
       .leftJoin('crove_finance.journal_entry as r', (join) => join.onRef('r.org_id', '=', 'j.org_id').onRef('r.reverses_entry_id', '=', 'j.id'))
       .select([
@@ -315,7 +316,7 @@ export const cashVouchers = defineQuery({
     let query = ctx.trx
       .selectFrom('crove_finance.cash_voucher as v')
       .innerJoin('crove_finance.journal_entry as j', (join) =>
-        join.onRef('j.org_id', '=', 'v.org_id').onRef('j.source_id', '=', 'v.id').on('j.source_type', '=', VOUCHER_SOURCE).on('j.reverses_entry_id', 'is', null),
+        join.onRef('j.org_id', '=', 'v.org_id').onRef('j.source_id', '=', 'v.id').on('j.source_type', '=', VOUCHER_SOURCE).on('j.reverses_entry_id', 'is', null).on(latestRevision('j')),
       )
       .leftJoin('crove_finance.journal_entry as r', (join) => join.onRef('r.org_id', '=', 'j.org_id').onRef('r.reverses_entry_id', '=', 'j.id'))
       .leftJoin('crove_kernel.party as p', (join) => join.onRef('p.org_id', '=', 'v.org_id').onRef('p.id', '=', 'v.party_id'))

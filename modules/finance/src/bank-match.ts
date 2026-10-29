@@ -33,6 +33,7 @@ import { matchLine, type MatchCandidate } from './domain/bank-match.ts';
 import { VOUCHER_SOURCE } from './domain/cash-voucher.ts';
 import { ledgerPeriod } from './domain/ledger-reports.ts';
 import { resolveLegalEntity } from './legal-entity.ts';
+import { latestRevision } from './source-entry.ts';
 
 const REQUESTERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
@@ -101,7 +102,7 @@ export async function bankLineStates(ctx: QueryContext, ids: readonly string[]):
   const settled = await ctx.trx
     .selectFrom('crove_finance.cash_voucher as v')
     .innerJoin('crove_finance.journal_entry as e', (join) =>
-      join.onRef('e.org_id', '=', 'v.org_id').onRef('e.source_id', '=', 'v.id').on('e.source_type', '=', VOUCHER_SOURCE).on('e.reverses_entry_id', 'is', null),
+      join.onRef('e.org_id', '=', 'v.org_id').onRef('e.source_id', '=', 'v.id').on('e.source_type', '=', VOUCHER_SOURCE).on('e.reverses_entry_id', 'is', null).on(latestRevision('e')),
     )
     .leftJoin('crove_finance.journal_entry as r', (join) => join.onRef('r.org_id', '=', 'e.org_id').onRef('r.reverses_entry_id', '=', 'e.id'))
     .select(['v.id', 'v.bank_line_id', 'v.voucher_type', 'v.number'])
@@ -337,7 +338,7 @@ export const bankOpenLines = defineQuery({
           exists(
             selectFrom('crove_finance.cash_voucher as v')
               .innerJoin('crove_finance.journal_entry as e', (join) =>
-                join.onRef('e.org_id', '=', 'v.org_id').onRef('e.source_id', '=', 'v.id').on('e.source_type', '=', VOUCHER_SOURCE).on('e.reverses_entry_id', 'is', null),
+                join.onRef('e.org_id', '=', 'v.org_id').onRef('e.source_id', '=', 'v.id').on('e.source_type', '=', VOUCHER_SOURCE).on('e.reverses_entry_id', 'is', null).on(latestRevision('e')),
               )
               .select('v.id')
               .whereRef('v.org_id', '=', 'l.org_id')

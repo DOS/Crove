@@ -39,6 +39,7 @@ import { PORTAL_SYNC_CONTENT_TYPE, readSyncedList } from './domain/portal-api.ts
 import { reconcilePortalList, type CroveInvoice, type PortalRow, type Reconciliation } from './domain/portal-reconcile.ts';
 import { vatPeriod, type VatPeriod } from './domain/vat-return.ts';
 import { defaultLegalEntityId, resolveLegalEntity } from './legal-entity.ts';
+import { latestRevision } from './source-entry.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const EDITORS: readonly MemberRole[] = ['owner', 'admin', 'member'];
@@ -360,7 +361,7 @@ async function croveInvoices(ctx: QueryContext, from: string, to: string, period
     .innerJoin('crove_kernel.party as p', (join) => join.onRef('p.org_id', '=', 'd.org_id').onRef('p.id', '=', 'd.party_id'))
     .leftJoin('crove_kernel.proposal as q', (join) => join.onRef('q.org_id', '=', 'd.org_id').onRef('q.id', '=', 'd.proposal_id'))
     .leftJoin('crove_finance.journal_entry as j', (join) =>
-      join.onRef('j.org_id', '=', 'd.org_id').onRef('j.source_id', '=', 'd.id').on('j.source_type', '=', 'finance.purchase_document'),
+      join.onRef('j.org_id', '=', 'd.org_id').onRef('j.source_id', '=', 'd.id').on('j.source_type', '=', 'finance.purchase_document').on(latestRevision('j')),
     )
     .select([
       'd.id',

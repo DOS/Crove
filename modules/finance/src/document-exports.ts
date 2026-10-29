@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { zId, type DocumentExport } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineQuery } from '@crove/kernel-runtime';
+import { latestRevision } from './source-entry.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 // The most exports one history shows.
@@ -40,7 +41,7 @@ export const documentExports = defineQuery({
         FROM crove_finance.journal_entry j
         LEFT JOIN crove_finance.purchase_document_void v ON v.org_id = j.org_id AND v.document_id = j.source_id
         WHERE j.org_id = ${ctx.orgId}::uuid AND j.source_type = 'finance.purchase_document' AND j.source_id = ${found.id}::uuid
-          AND j.reverses_entry_id IS NULL
+          AND j.reverses_entry_id IS NULL AND ${latestRevision('j')}
       )
       SELECT e.id, e.occurred_at, e.actor_id, e.detail ->> 'format' AS format, e.detail ->> 'from' AS "from", e.detail ->> 'to' AS "to"
       FROM crove_kernel.audit_event e, doc
