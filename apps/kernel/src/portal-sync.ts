@@ -29,7 +29,7 @@ import {
   type PortalListResult,
   type PortalXmlResult,
 } from '@crove/kernel-contract';
-import { PORTAL_SYNC_CONTENT_TYPE, checkPortalList, normalizePortalInvoices, vatPeriod, type PortalCallError, type PortalXmlPlan } from '@crove/mod-finance';
+import { PORTAL_SYNC_CONTENT_TYPE, PortalListTooLarge, checkPortalList, normalizePortalInvoices, vatPeriod, type PortalCallError, type PortalXmlPlan } from '@crove/mod-finance';
 import { ConcurrencyLimiter } from './concurrency.ts';
 import { RateLimiter } from './rate-limit.ts';
 import { safeFilename, sniffType } from './sniff.ts';
@@ -86,6 +86,17 @@ function portalError(kind: PortalCallError): DomainError {
       return new DomainError('PORTAL_STEP_TIMEOUT', 503, 'Cổng thuế trả lời chậm nên lượt lấy dữ liệu đã tạm dừng; hãy bấm lấy lại để tiếp tục');
     case 'BAD_ANSWER':
       return new DomainError('PORTAL_BAD_ANSWER', 503, 'Cổng thuế trả lời theo cách hệ thống chưa đọc được; hãy xuất danh sách Excel từ cổng thuế rồi tải lên');
+  }
+}
+
+// The portal's answers as a list, or the finance domain's refusal of a list too large as the API's answer: 422
+// PORTAL_LIST_TOO_LARGE with the domain's message (#1680).
+function normalizeAnswers(...args: Parameters<typeof normalizePortalInvoices>): ReturnType<typeof normalizePortalInvoices> {
+  try {
+    return normalizePortalInvoices(...args);
+  } catch (error) {
+    if (error instanceof PortalListTooLarge) throw new DomainError(error.code, 422, error.message);
+    throw error;
   }
 }
 
@@ -272,7 +283,7 @@ export function createPortalSync(deps: PortalSyncDeps): PortalSync {
         );
         // Normalized and checked before anything is stored: a list Crove cannot use is said at once, and nothing is
         // filed. The worker reads the stored answer again with the same rules when it records the list.
-        const normalized = normalizePortalInvoices(answers, range);
+        const normalized = normalizeAnswers(answers, range);
         const checked = checkPortalList(normalized.list, orgTaxCode);
         if (!checked.ok) throw new DomainError('PORTAL_LIST_UNUSABLE', 422, checked.error);
         // The evidence: what the portal answered, without a time stamp, so the same answer is the same file.
