@@ -224,8 +224,9 @@ export const BUILT_IN_INDEX_METHODS: readonly string[] = ['btree', 'hash', 'gist
 export function qualifiedOutsideCatalog(definition: string): string | null {
   const code = definition.replace(/'(?:[^']|'')*'/g, "''");
   // The name after the dot is only looked at, not consumed, so `pg_catalog.text::public.t` reaches public too.
-  // A whole word, letters beyond ASCII included, as PostgreSQL reads one: `äpg_catalog.f` names the schema äpg_catalog.
-  for (const match of code.matchAll(/(?<![\p{L}\p{N}_$])([\p{L}_][\p{L}\p{N}_$]*)\s*\.(?=\s*([^\s(),:]*))/giu)) {
+  // A whole word as PostgreSQL reads one, where every character beyond ASCII is an identifier character (as in the
+  // lint's tokenizer): `äpg_catalog.f` and `€pg_catalog.f` name the schemas äpg_catalog and €pg_catalog.
+  for (const match of code.matchAll(/(?<![a-z0-9_$\u0080-￿])([a-z_\u0080-￿][a-z0-9_$\u0080-￿]*)\s*\.(?=\s*([^\s(),:]*))/gi)) {
     if ((match[1] ?? '').toLowerCase() !== 'pg_catalog') return `${match[1]}.${match[2]}`;
   }
   return null;

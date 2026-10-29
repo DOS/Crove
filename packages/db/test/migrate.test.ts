@@ -113,6 +113,8 @@ describe('migration files', () => {
       ['((cast(a AS public.t)))', /with public\.t/],
       ['((a::pg_catalog.text::public.t))', /with public\.t/],
       ['((äpg_catalog.f(a)))', /with äpg_catalog\.f/],
+      ['((€pg_catalog.f(a)))', /with €pg_catalog\.f/],
+      ['((pg_catalog€.f(a)))', /with pg_catalog€\.f/],
       ['(a crove_kernel.my_ops)', /with crove_kernel\.my_ops/],
       ['(a) WHERE public.ok(a)', /with public\.ok/],
       ['(a) WHERE a OPERATOR(crove_kernel.===) 1', /with crove_kernel\./],

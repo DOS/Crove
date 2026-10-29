@@ -58,7 +58,8 @@ const schema = z.object({
   ADMIN_DATABASE_URL: optional,
   MIGRATIONS_DIR: z.string().default(here('../../../supabase/migrations')),
   // How long `migrate` waits for another run's migration lock before it fails; unset waits as long as it takes (#1803).
-  MIGRATE_LOCK_WAIT_SECONDS: z.coerce.number().int().positive().optional(),
+  // Empty (a compose `${VAR:-}`) counts as unset; coerced, it would be 0 and fail every role's config.
+  MIGRATE_LOCK_WAIT_SECONDS: z.preprocess((v) => (typeof v === 'string' && v.trim() === '' ? undefined : v), z.coerce.number().int().positive().optional()),
   WEB_DIST: z.string().default(here('../../app/dist')),
   // Blob storage (External-tenant gate T7): local disk under STORAGE_DIR, or any S3-compatible store. The API
   // and the worker must point at the same store; with s3 they need no shared volume.

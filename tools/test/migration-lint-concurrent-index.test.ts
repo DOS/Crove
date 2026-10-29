@@ -41,6 +41,7 @@ const BAD: Record<string, [string, number]> = {
   'a user operator class': [marked('CREATE INDEX CONCURRENTLY IF NOT EXISTS a_idx ON crove_kernel.party (a crove_kernel.my_ops);\n'), 4],
   'a user operator': [marked('CREATE INDEX CONCURRENTLY IF NOT EXISTS a_idx ON crove_kernel.party (a) WHERE a OPERATOR(crove_kernel.===) 1;\n'), 4],
   'a schema name beyond ASCII': [marked('CREATE INDEX CONCURRENTLY IF NOT EXISTS a_idx ON crove_kernel.party ((äpg_catalog.f(a)));\n'), 4],
+  'a schema name led by a symbol beyond ASCII': [marked('CREATE INDEX CONCURRENTLY IF NOT EXISTS a_idx ON crove_kernel.party ((€pg_catalog.f(a)));\n'), 4],
   'another access method': [marked('CREATE INDEX CONCURRENTLY IF NOT EXISTS a_idx ON crove_kernel.party USING bloom (a);\n'), 4],
 };
 
