@@ -22,9 +22,8 @@ import { contextToken } from './fixtures/context-token.ts';
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
 const REFUSED = { code: '23514', message: 'PROPOSAL_STATUS_TRANSITION' };
-// #1853 (step 1 of 2): an effect row naming another command's proposal is about to be refused when it is written
-// (EFFECT_PROPOSAL_MISMATCH), before the move; until then the move refuses it. Step 2 expects the earlier refusal.
-const EARLIER = 'EFFECT_PROPOSAL_MISMATCH';
+// An effect row naming another command's proposal is refused when it is written, before the move (#1853).
+const WRITTEN = { code: '23514', message: 'EFFECT_PROPOSAL_MISMATCH' };
 const LINES = JSON.stringify([
   { line_no: 1, account_code: '6422', debit: '100000', credit: '0' },
   { line_no: 2, account_code: '331', debit: '0', credit: '100000' },
@@ -201,11 +200,7 @@ suite('ledger proposals executed only with their effect (#1842)', () => {
         await ran(command, proposalId)(c);
         return execute(proposalId)(c);
       });
-      if (wrongCommand) {
-        // The effect names a proposal of another command: refused when written (#1853) or at the move.
-        expect(outcome, label).toMatchObject({ ok: false, code: REFUSED.code });
-        expect([REFUSED.message, EARLIER], label).toContain(outcome.ok ? '' : outcome.message);
-      } else expect(outcome, label).toMatchObject({ ok: false, ...REFUSED });
+      expect(outcome, label).toMatchObject({ ok: false, ...(wrongCommand ? WRITTEN : REFUSED) });
     }
     // The entry committed by an earlier transaction does not carry a later move.
     expect(await asOwner(reverse(id), true)).toMatchObject({ ok: true });

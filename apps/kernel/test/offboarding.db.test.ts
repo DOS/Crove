@@ -514,6 +514,70 @@ suite('org offboarding on PostgreSQL (#38)', () => {
     const state = await purgeState();
     expect(state.refusal).toBe('export_pending');
     expect(state.exportedAt).toBe(state.own);
+
+    // A rebind waits for an export record in flight and then sees it (#1867): it never re-records the older export over
+    // one committed while it read. The database owner stands in for the export job: it takes the org's export lock,
+    // records a newer export, and commits only once the rebind is waiting.
+    const before = (await workerRuntime.query<ExportRecord>('kernel.org.export.current', {}, system))!;
+    const job = new pg.Client({ connectionString: adminUrl });
+    await job.connect();
+    try {
+      await job.query('BEGIN');
+      await job.query(`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('crove_kernel.org_export:' || $1, 0))`, [org.orgId]);
+      await job.query(
+        `INSERT INTO crove_kernel.audit_event (org_id, actor_type, command, command_id, outcome, input_sha256, detail)
+         VALUES ($1, 'system', 'kernel.org.export.record', gen_random_uuid(), 'ok', repeat('0', 64), $2::jsonb)`,
+        [
+          org.orgId,
+          JSON.stringify({
+            format: before.format,
+            manifest_key: before.manifestKey,
+            manifest_sha256: before.manifestSha256,
+            manifest_generation: before.manifestGeneration,
+            file_count: before.fileCount,
+            encryption: before.encryption,
+            expires_at: new Date(Date.parse(before.expiresAt) + 86_400_000).toISOString(),
+            parts: before.parts,
+          }),
+        ],
+      );
+      const rebinding = workerRuntime.execute('kernel.org.export.record', { ...before, rebind: true }, system).then(
+        () => 'recorded',
+        (error: { code?: string }) => error.code,
+      );
+      // The rebind is waiting on the lock.
+      for (let tries = 0; ; tries++) {
+        const waiting = await withAdmin(
+          async (admin) => (
+            await admin.query<{ n: string }>(
+              `SELECT count(*) AS n FROM pg_catalog.pg_locks
+               WHERE locktype = 'advisory' AND NOT granted AND database = (SELECT oid FROM pg_catalog.pg_database WHERE datname = pg_catalog.current_database())`,
+            )
+          ).rows[0]?.n,
+        );
+        if (Number(waiting) > 0) break;
+        if (tries > 100) throw new Error('the rebind never waited for the export lock');
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      await job.query('COMMIT');
+      expect(await rebinding).toBe('EXPORT_REBIND_MISMATCH');
+    } finally {
+      await job.end();
+    }
+
+    // A record whose transaction began before another of the org's records that took the lock first would sort under
+    // it (occurred_at is its transaction's start): it is refused, and recording in a new transaction comes after it.
+    // A row dated after this transaction's start stands for that other record.
+    const latest = (await workerRuntime.query<ExportRecord>('kernel.org.export.current', {}, system))!;
+    await withAdmin((admin) =>
+      admin.query(
+        `INSERT INTO crove_kernel.audit_event (org_id, occurred_at, actor_type, command, command_id, outcome, input_sha256, detail)
+         VALUES ($1, now() + interval '1 hour', 'system', 'kernel.org.export.record', gen_random_uuid(), 'ok', repeat('0', 64), '{}'::jsonb)`,
+        [org.orgId],
+      ),
+    );
+    await expect(workerRuntime.execute('kernel.org.export.record', record, system)).rejects.toMatchObject({ code: 'EXPORT_RECORD_STALE' });
+    await expect(workerRuntime.execute('kernel.org.export.record', { ...latest, rebind: true }, system)).rejects.toMatchObject({ code: 'EXPORT_RECORD_STALE' });
   });
 
   it('runs a streamed query in one REPEATABLE READ, READ ONLY transaction that may idle while the sink works', async () => {

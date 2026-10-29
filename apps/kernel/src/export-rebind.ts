@@ -51,7 +51,8 @@ export async function rebindExport(deps: ExportRebindDeps, orgId: string): Promi
   const manifestGeneration = await current({ key: record.manifestKey, sha256: record.manifestSha256 });
   const parts: ExportRecord['parts'] = [];
   for (const part of record.parts) parts.push({ ...part, generation: await current(part) });
-  // As a rebind: the record is checked against the export it re-records, not against today's EXPORT_TABLES (#1726).
+  // As a rebind: the record is checked against the export it re-records, not against today's EXPORT_TABLES (#1726). A
+  // refusal (another record of the org came first, #1867) is reported for the org: the newest export then is another.
   await deps.runtime.execute('kernel.org.export.record', { ...record, manifestGeneration, parts, rebind: true }, { actor: RESTORE, orgId });
   return 'rebound';
 }

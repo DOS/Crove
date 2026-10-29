@@ -155,11 +155,13 @@ suite('weekly usage report (#311)', () => {
       // An edit row of another org with the same target id does not mark org A's proposal as edited.
       await audit(orgB, at(lastStart, 33), 'kernel.proposal.edit', { actor: users.u4, target: p1, detail: { revision: 2 } });
 
-      // Org B, last week: one upload approved after 30 min, an org export (system).
+      // Org B, last week: one upload approved after 30 min, an org export (system), and a restore's re-record of that
+      // export, which is not another export (#1867).
       const fb1 = await file(orgB, 'upload', at(lastStart, 80));
       const pb1 = await proposal(orgB, fb1);
       await audit(orgB, at(lastStart, 80.5), 'kernel.proposal.approve', { actor: users.u4, target: pb1 });
       await audit(orgB, at(lastStart, 81), 'kernel.org.export.record');
+      await audit(orgB, at(lastStart, 82), 'kernel.org.export.record', { detail: { rebind: true } });
 
       // Org B, the week before: an upload approved one second before last week began, and an older upload outside
       // a 3-week report.
