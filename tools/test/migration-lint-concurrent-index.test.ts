@@ -13,6 +13,7 @@ const marked = (body: string) => `-- Indexes on the audit log, built without blo
 
 const GOOD = marked(
   'CREATE INDEX CONCURRENTLY IF NOT EXISTS audit_event_x_idx ON crove_kernel.audit_event (org_id, command);\n' +
+    'CREATE INDEX CONCURRENTLY IF NOT EXISTS audit_event_z_idx ON crove_kernel.audit_event USING hash ((pg_catalog.lower(command))) WHERE org_id IS NOT NULL AND 1.5 > 1;\n' +
     "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS outbox_event_y_key ON crove_kernel.outbox_event (org_id, (payload->>'k'))\n  WHERE status = 'pending';\n",
 );
 
@@ -34,6 +35,14 @@ const BAD: Record<string, [string, number]> = {
   'a semicolon in a string': [marked("CREATE INDEX CONCURRENTLY IF NOT EXISTS a_idx ON crove_kernel.party (a) WHERE b = 'x;y';\n"), 4],
   // A name PostgreSQL would cut to 63 bytes (security review L2).
   'a name over 63 bytes': [marked(`CREATE INDEX CONCURRENTLY IF NOT EXISTS a_${'x'.repeat(62)} ON crove_kernel.party (a);\n`), 4],
+  // User code a build outside a transaction would run, and an access method PostgreSQL does not ship (#1803).
+  'a user function': [marked('CREATE INDEX CONCURRENTLY IF NOT EXISTS a_idx ON crove_kernel.party ((crove_kernel.f(a)));\n'), 4],
+  'a cast to a user type': [marked('CREATE INDEX CONCURRENTLY IF NOT EXISTS a_idx ON crove_kernel.party ((a::pg_catalog.text::public.t));\n'), 4],
+  'a user operator class': [marked('CREATE INDEX CONCURRENTLY IF NOT EXISTS a_idx ON crove_kernel.party (a crove_kernel.my_ops);\n'), 4],
+  'a user operator': [marked('CREATE INDEX CONCURRENTLY IF NOT EXISTS a_idx ON crove_kernel.party (a) WHERE a OPERATOR(crove_kernel.===) 1;\n'), 4],
+  'a schema name beyond ASCII': [marked('CREATE INDEX CONCURRENTLY IF NOT EXISTS a_idx ON crove_kernel.party ((äpg_catalog.f(a)));\n'), 4],
+  'a schema name led by a symbol beyond ASCII': [marked('CREATE INDEX CONCURRENTLY IF NOT EXISTS a_idx ON crove_kernel.party ((€pg_catalog.f(a)));\n'), 4],
+  'another access method': [marked('CREATE INDEX CONCURRENTLY IF NOT EXISTS a_idx ON crove_kernel.party USING bloom (a);\n'), 4],
 };
 
 describe('migration lint: concurrent index builds (#1791)', () => {
@@ -48,7 +57,7 @@ describe('migration lint: concurrent index builds (#1791)', () => {
   });
 
   it('agrees with the runner on what a marked file may hold', () => {
-    expect(concurrentIndexes('a.sql', GOOD)).toHaveLength(2);
+    expect(concurrentIndexes('a.sql', GOOD)).toHaveLength(3);
     for (const [name, [sql]] of Object.entries(BAD)) expect(() => concurrentIndexes('a.sql', sql), name).toThrow(/marked -- crove:concurrent-index but/);
   });
 

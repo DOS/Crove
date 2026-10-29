@@ -12,6 +12,8 @@ export interface MigrateOptions {
   adminUrl: string;
   dir: string;
   log?: (message: string) => void;
+  // How long to wait for another run's migration lock before failing; unset waits as long as it takes (#1803).
+  lockWaitMs?: number;
 }
 
 export interface MigrationFile {
@@ -46,13 +48,7 @@ export async function migrate(options: MigrateOptions): Promise<string[]> {
   await client.connect();
   const applied: string[] = [];
   try {
-    // Polled rather than waited for (#1791): a session that waits in pg_advisory_lock holds a snapshot all the while, and
-    // a concurrent index build of the run that holds the lock waits for every older snapshot, so the two would deadlock.
-    for (;;) {
-      const { rows: lock } = await client.query<{ ok: boolean }>("SELECT pg_try_advisory_lock(hashtext('crove_migrate')) AS ok");
-      if (lock[0]?.ok) break;
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-    }
+    await takeMigrateLock(client, { log, maxWaitMs: options.lockWaitMs });
     // Once they exist, these statements change nothing, so the DDL watch has nothing to record before the mark below.
     await client.query(`
       CREATE SCHEMA IF NOT EXISTS crove_meta;
@@ -140,14 +136,68 @@ export async function migrate(options: MigrateOptions): Promise<string[]> {
   return applied;
 }
 
+export interface MigrateLockOptions {
+  log?: (message: string) => void;
+  // Fails after this long; unset waits as long as it takes.
+  maxWaitMs?: number | undefined;
+  pollMs?: number;
+  // How often a wait is logged again.
+  logEveryMs?: number;
+}
+
+// Takes the session-level lock that keeps two runs apart. Polled rather than waited for (#1791): a session that waits in
+// pg_advisory_lock holds a snapshot all the while, and a concurrent index build of the run that holds the lock waits for
+// every older snapshot, so the two would deadlock. A wait is logged with the sessions holding the lock (#1803).
+export async function takeMigrateLock(client: pg.ClientBase, options: MigrateLockOptions = {}): Promise<void> {
+  const { log = () => {}, maxWaitMs, pollMs = 1000, logEveryMs = 30_000 } = options;
+  const started = Date.now();
+  let loggedAt: number | undefined;
+  for (;;) {
+    const { rows: lock } = await client.query<{ ok: boolean }>("SELECT pg_try_advisory_lock(hashtext('crove_migrate')) AS ok");
+    if (lock[0]?.ok) {
+      if (loggedAt !== undefined) log(`took the migration lock after ${Math.round((Date.now() - started) / 1000)}s`);
+      return;
+    }
+    const waited = Date.now() - started;
+    if (maxWaitMs !== undefined && waited >= maxWaitMs) {
+      throw new Error(`another run has held the migration lock for longer than ${Math.round(maxWaitMs / 1000)}s (${await lockHolders(client)}); try again once it ends`);
+    }
+    if (loggedAt === undefined || Date.now() - loggedAt >= logEveryMs) {
+      log(`waiting for the migration lock, held by ${await lockHolders(client)} (waited ${Math.round(waited / 1000)}s)`);
+      loggedAt = Date.now();
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+}
+
+// The sessions holding the migration lock, as `pid 123 (crove-migrate, active)`, for the log.
+async function lockHolders(client: pg.ClientBase): Promise<string> {
+  try {
+    const { rows } = await client.query<{ holder: string }>(
+      `SELECT format('pid %s (%s, %s)', l.pid, coalesce(nullif(a.application_name, ''), 'no application name'), coalesce(a.state, 'state hidden')) AS holder
+       FROM pg_catalog.pg_locks l LEFT JOIN pg_catalog.pg_stat_activity a ON a.pid = l.pid
+       WHERE l.locktype = 'advisory' AND l.granted AND l.objsubid = 1
+         AND l.database = (SELECT oid FROM pg_catalog.pg_database WHERE datname = pg_catalog.current_database())
+         AND l.classid::bigint = (hashtext('crove_migrate')::bigint >> 32) & 4294967295
+         AND l.objid::bigint = hashtext('crove_migrate')::bigint & 4294967295`,
+    );
+    return rows.length > 0 ? rows.map((r) => r.holder).join(', ') : 'a session that just let it go';
+  } catch {
+    return 'another session';
+  }
+}
+
 // A migration that builds indexes without blocking writes (#1791). CREATE INDEX holds a SHARE lock on the table for the
 // whole build, so every write to a hot table (audit_event, the outbox) waits; CREATE INDEX CONCURRENTLY does not, but
 // it cannot run in a transaction. A file whose leading comment lines include CONCURRENT_INDEX_MARKER is applied outside
 // one, and may hold nothing but `CREATE [UNIQUE] INDEX CONCURRENTLY IF NOT EXISTS <name> ON <schema>.<table> ...;`
 // statements, one per index, with no comment, dollar quote, quoted identifier or backslash among them: a file applied
-// statement by statement must not do anything that would leave the database half changed. The migration lint checks the
-// same shape (tools/ci/migration-lint.mjs). Each build first drops an INVALID index of the same name, which an earlier
-// build left when it failed (a unique violation, a cancel), and drops what it leaves INVALID itself when it fails.
+// statement by statement must not do anything that would leave the database half changed. For the same reason an index
+// uses a built-in access method, names nothing of a schema other than pg_catalog, and depends on nothing outside it on
+// a probe build in a transaction rolled back first (INDEX_USER_CODE), so no user code runs during a build (#1803). The migration lint checks the same shape (tools/ci/migration-lint.mjs). Each build first drops an
+// INVALID index of the same name, which an earlier build left when it failed (a unique violation, a cancel), and drops
+// what it leaves INVALID itself when it fails; an index already there under the name must have the definition the
+// statement asks for, or IF NOT EXISTS would keep another index in its place (#1803).
 export const CONCURRENT_INDEX_MARKER = '-- crove:concurrent-index';
 
 export interface ConcurrentIndex {
@@ -155,10 +205,32 @@ export interface ConcurrentIndex {
   schema: string;
   name: string;
   table: string;
+  unique: boolean;
+  // What follows the table: [USING method] (columns) [INCLUDE (columns)] [WHERE predicate].
+  definition: string;
 }
 
 const CONCURRENT_INDEX =
-  /^CREATE\s+(?:UNIQUE\s+)?INDEX\s+CONCURRENTLY\s+IF\s+NOT\s+EXISTS\s+([a-z_][a-z0-9_]*)\s+ON\s+([a-z_][a-z0-9_]*)\.([a-z_][a-z0-9_]*)\s*(?:USING\s+[a-z_]+\s*)?\(.*\)(?:\s+INCLUDE\s*\(.*\))?(?:\s+WHERE\s+.*)?$/is;
+  /^CREATE\s+(UNIQUE\s+)?INDEX\s+CONCURRENTLY\s+IF\s+NOT\s+EXISTS\s+([a-z_][a-z0-9_]*)\s+ON\s+([a-z_][a-z0-9_]*)\.([a-z_][a-z0-9_]*)\s*((?:USING\s+([a-z_]+)\s*)?\(.*\)(?:\s+INCLUDE\s*\(.*\))?(?:\s+WHERE\s+.*)?)$/is;
+
+// The access methods PostgreSQL ships; an index may use no other (#1803).
+export const BUILT_IN_INDEX_METHODS: readonly string[] = ['btree', 'hash', 'gist', 'spgist', 'gin', 'brin'];
+
+// A schema-qualified name outside pg_catalog in an index's columns, expression or predicate: a function, a type in a
+// cast, an operator class, an operator or a collation of a schema, or null when there is none (#1803). A marked file
+// runs outside a transaction, so user code an index build calls could leave changes nothing rolls back. Unqualified
+// names are left: the builds run with search_path pinned to pg_catalog, pg_temp, PostgreSQL never looks up functions,
+// operators or operator classes in pg_temp, and the runner refuses to build while the session has temporary types.
+export function qualifiedOutsideCatalog(definition: string): string | null {
+  const code = definition.replace(/'(?:[^']|'')*'/g, "''");
+  // The name after the dot is only looked at, not consumed, so `pg_catalog.text::public.t` reaches public too.
+  // A whole word as PostgreSQL reads one, where every character beyond ASCII is an identifier character (as in the
+  // lint's tokenizer): `äpg_catalog.f` and `€pg_catalog.f` name the schemas äpg_catalog and €pg_catalog.
+  for (const match of code.matchAll(/(?<![a-z0-9_$\u0080-￿])([a-z_\u0080-￿][a-z0-9_$\u0080-￿]*)\s*\.(?=\s*([^\s(),:]*))/gi)) {
+    if ((match[1] ?? '').toLowerCase() !== 'pg_catalog') return `${match[1]}.${match[2]}`;
+  }
+  return null;
+}
 
 // The index builds of a marked file, or null for an ordinary (transactional) file. Throws on a marked file that holds
 // anything else.
@@ -186,17 +258,26 @@ export function concurrentIndexes(name: string, sql: string): ConcurrentIndex[] 
     }
     // Unquoted names fold to lower case, as PostgreSQL folds them. One longer than 63 bytes it would cut short, and the
     // index built under the shorter name would never be found.
-    const [name, schema, table] = [match[1], match[2], match[3]].map((part) => (part ?? '').toLowerCase());
+    const [name, schema, table] = [match[2], match[3], match[4]].map((part) => (part ?? '').toLowerCase());
     const long = [name, schema, table].find((part) => Buffer.byteLength(part ?? '') > 63);
     if (long !== undefined) throw refuse(`names ${long}, longer than the 63 bytes PostgreSQL keeps of a name`);
-    return { sql: statement, name: name ?? '', schema: schema ?? '', table: table ?? '' };
+    const method = match[6]?.toLowerCase();
+    if (method !== undefined && !BUILT_IN_INDEX_METHODS.includes(method)) {
+      throw refuse(`builds ${name} with the access method ${method}, which PostgreSQL does not ship (${BUILT_IN_INDEX_METHODS.join(', ')})`);
+    }
+    const definition = (match[5] ?? '').trim();
+    const qualified = qualifiedOutsideCatalog(definition);
+    if (qualified !== null) {
+      throw refuse(`builds ${name} with ${qualified}, a name of a schema other than pg_catalog: no user function, type, operator class or operator in an index built outside a transaction`);
+    }
+    return { sql: statement, name: name ?? '', schema: schema ?? '', table: table ?? '', unique: match[1] !== undefined, definition };
   });
 }
 
 // The index named `schema.name`: whether it is valid and ready, and its table; null when there is no such index.
-async function indexState(client: pg.ClientBase, index: ConcurrentIndex): Promise<{ valid: boolean; schema: string; table: string } | null> {
-  const { rows } = await client.query<{ valid: boolean; schema: string; table: string }>(
-    `SELECT i.indisvalid AND i.indisready AS valid, tn.nspname AS schema, t.relname AS table
+async function indexState(client: pg.ClientBase, index: ConcurrentIndex): Promise<{ valid: boolean; schema: string; table: string; indexdef: string } | null> {
+  const { rows } = await client.query<{ valid: boolean; schema: string; table: string; indexdef: string }>(
+    `SELECT i.indisvalid AND i.indisready AS valid, tn.nspname AS schema, t.relname AS table, pg_catalog.pg_get_indexdef(c.oid) AS indexdef
      FROM pg_catalog.pg_class c
      JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
      JOIN pg_catalog.pg_index i ON i.indexrelid = c.oid
@@ -273,6 +354,15 @@ async function buildConcurrentIndex(client: pg.ClientBase, file: string, index: 
   if (target[0]?.kind === 'p') {
     throw new Error(`migration ${file}: ${index.schema}.${index.table} is partitioned, where an index cannot be built concurrently; build it on each partition`);
   }
+  // With the pinned search_path an unqualified type is looked up in pg_temp after pg_catalog, so a temporary type of
+  // this session could stand in for one the expression names (#1803).
+  const { rows: temp } = await client.query<{ found: boolean }>(
+    'SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_type WHERE typnamespace = pg_catalog.pg_my_temp_schema()) AS found',
+  );
+  if (temp[0]?.found) throw new Error(`migration ${file}: this session has temporary types, which an index expression could resolve to; run it in a new session`);
+  // The definition the statement asks for, as PostgreSQL prints it (#1803), taken before the build so that an index
+  // already there under the name, which IF NOT EXISTS keeps, can be compared with it.
+  const wanted = await intendedDefinition(client, file, index);
   await dropInvalid();
   try {
     await client.query(index.sql);
@@ -287,6 +377,71 @@ async function buildConcurrentIndex(client: pg.ClientBase, file: string, index: 
         (built === null ? ' (another relation may have the name)' : ''),
     );
   }
+  const actual = definitionOf(built.indexdef);
+  if (actual !== wanted) {
+    throw new Error(
+      `migration ${file}: an index ${index.schema}.${index.name} already exists with another definition, so IF NOT EXISTS kept it: ${actual} instead of ${wanted}; drop or rename it by hand`,
+    );
+  }
+}
+
+// `[UNIQUE ]USING method (columns) ...` of a pg_get_indexdef: what follows the name and the table, which the caller
+// already compared, and whether it is unique.
+function definitionOf(indexdef: string): string {
+  const match = /^CREATE (UNIQUE )?INDEX \S+ ON \S+ (USING .*)$/s.exec(indexdef);
+  return match ? `${match[1] ?? ''}${match[2]}` : indexdef;
+}
+
+// What an index depends on outside pg_catalog, which the build would call (#1803): a function (a cast's function too,
+// which PostgreSQL finds by the types, not by a name in the statement), an operator, an operator class, a collation or
+// a type; and a column of a range, multirange or composite type (through a domain too) outside pg_catalog, whose
+// comparisons call that type's own functions (a range's subtype_diff).
+const INDEX_USER_CODE = `
+  SELECT pg_catalog.pg_describe_object(d.refclassid, d.refobjid, 0) AS what
+  FROM pg_catalog.pg_depend d
+  WHERE d.classid = 'pg_catalog.pg_class'::pg_catalog.regclass AND d.objid = $1::pg_catalog.regclass
+    AND CASE d.refclassid
+      WHEN 'pg_catalog.pg_proc'::pg_catalog.regclass THEN (SELECT pronamespace FROM pg_catalog.pg_proc WHERE oid = d.refobjid)
+      WHEN 'pg_catalog.pg_operator'::pg_catalog.regclass THEN (SELECT oprnamespace FROM pg_catalog.pg_operator WHERE oid = d.refobjid)
+      WHEN 'pg_catalog.pg_opclass'::pg_catalog.regclass THEN (SELECT opcnamespace FROM pg_catalog.pg_opclass WHERE oid = d.refobjid)
+      WHEN 'pg_catalog.pg_collation'::pg_catalog.regclass THEN (SELECT collnamespace FROM pg_catalog.pg_collation WHERE oid = d.refobjid)
+      WHEN 'pg_catalog.pg_type'::pg_catalog.regclass THEN (SELECT typnamespace FROM pg_catalog.pg_type WHERE oid = d.refobjid)
+    END <> 'pg_catalog'::pg_catalog.regnamespace
+  UNION ALL
+  SELECT pg_catalog.format('column %s of type %s', a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod))
+  FROM pg_catalog.pg_depend d
+  JOIN pg_catalog.pg_attribute a ON a.attrelid = d.refobjid AND a.attnum = d.refobjsubid
+  JOIN pg_catalog.pg_type t ON t.oid = a.atttypid
+  JOIN pg_catalog.pg_type b ON b.oid = CASE WHEN t.typtype = 'd' THEN t.typbasetype ELSE t.oid END
+  WHERE d.classid = 'pg_catalog.pg_class'::pg_catalog.regclass AND d.objid = $1::pg_catalog.regclass
+    AND d.refclassid = 'pg_catalog.pg_class'::pg_catalog.regclass AND d.refobjsubid > 0
+    AND b.typtype IN ('r', 'm', 'c') AND b.typnamespace <> 'pg_catalog'::pg_catalog.regnamespace`;
+
+// The definition PostgreSQL prints for the statement's index, built on an empty copy of the table's columns in a
+// transaction that is rolled back: a plain build on no rows, which leaves nothing behind and locks the table only
+// against DDL while it runs. Throws when the index would call user code (INDEX_USER_CODE), before the real build does.
+async function intendedDefinition(client: pg.ClientBase, file: string, index: ConcurrentIndex): Promise<string> {
+  const table = `${client.escapeIdentifier(index.schema)}.${client.escapeIdentifier(index.table)}`;
+  await client.query('BEGIN');
+  let userCode: string[];
+  let def: string;
+  try {
+    await client.query(`CREATE TABLE crove_meta.concurrent_index_probe (LIKE ${table})`);
+    await client.query(`CREATE ${index.unique ? 'UNIQUE ' : ''}INDEX concurrent_index_probe_idx ON crove_meta.concurrent_index_probe ${index.definition}`);
+    const { rows } = await client.query<{ def: string }>(
+      "SELECT pg_catalog.pg_get_indexdef('crove_meta.concurrent_index_probe_idx'::pg_catalog.regclass) AS def",
+    );
+    def = definitionOf(rows[0]?.def ?? '');
+    userCode = (await client.query<{ what: string }>(INDEX_USER_CODE, ['crove_meta.concurrent_index_probe_idx'])).rows.map((r) => r.what);
+  } catch (error) {
+    throw new Error(`migration ${file}: could not check the definition of ${index.schema}.${index.name}: ${(error as Error).message}`, { cause: error });
+  } finally {
+    await client.query('ROLLBACK');
+  }
+  if (userCode.length > 0) {
+    throw new Error(`migration ${file}: ${index.schema}.${index.name} would run code outside pg_catalog while it builds outside a transaction: ${userCode.join(', ')}`);
+  }
+  return def;
 }
 
 // The DDL watch (issue #1202): crove_kernel.ddl_watch() records DDL from every session except the pipeline's own,
