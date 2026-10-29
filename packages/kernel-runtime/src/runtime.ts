@@ -121,9 +121,9 @@ export interface CommandDef<I = unknown, O = unknown> {
   name: string;
   input: z.ZodType<I>;
   risk: Risk;
-  // What it does beyond its transaction; register() refuses a declared risk below deriveRisk(sideEffect) (#1563).
-  // Absent only on commands not annotated yet (tools/test lists them, and the list may only shrink).
-  sideEffect?: SideEffect;
+  // What it does beyond its transaction; register() refuses a command without one (#1637) and a declared risk below
+  // deriveRisk(sideEffect) (#1563).
+  sideEffect: SideEffect;
   access: Access;
   // A permission a user may hold through an org-wide role assignment (plan §4.6, issue #1279): a member whose role is
   // not in `access` still passes the role check when they hold it. Only with a role list as access, and only for user
@@ -269,7 +269,12 @@ export interface CommandContext extends QueryContext {
   // an approval names the git SHA of its policy).
   build: string;
   emit(type: string, payload: Record<string, unknown>): Promise<string>;
-  activity(recordType: string, recordId: string, kind: string, summary: string): Promise<void>;
+  // A timeline row about a record. options.legalEntityId names the legal entity the row belongs to when its record
+  // names none (a month's lock, a year archive, a mail; #1725): the row is then read only in contexts whose scope holds
+  // that entity. The database refuses an entity outside the writer's scope (le_scope) or other than the entity of a
+  // record whose type it maps (b_legal_entity, LEGAL_ENTITY_MISMATCH). Without it a mapped record type takes its
+  // record's entity and any other row is org-level.
+  activity(recordType: string, recordId: string, kind: string, summary: string, options?: { legalEntityId?: string }): Promise<void>;
   // Adds fields to this command's own audit row (for example the policy outcome of an approval).
   audit(detail: Record<string, unknown>): void;
   // Runs another registered command in the same transaction (audited on its own row).
@@ -432,11 +437,12 @@ export interface RuntimeOptions {
   // as before #1732, only for tests: one that shows what the plain hash gives away, and those that seed a database
   // migrated to a version before crove_kernel.command_input_hash exists.
   inputHash?: InputHashMode;
-  // The tables of the module manifests (ModuleManifest['tables'] of each module, #1710). Given, register() checks
-  // each declared write (CommandDef.writes) against them: the table is a manifest's and the classes it carries are
-  // exactly that manifest's, so P04 rests on the manifests rather than on classes a declaration builds by hand. The
-  // server passes every module's (apps/kernel createKernel); unset (tests and tools), only the shape is checked.
-  manifests?: readonly ManifestTables[];
+  // The tables of the module manifests (ModuleManifest['tables'] of each module, #1710). register() checks each
+  // declared write (CommandDef.writes) against them: the table is a manifest's and the classes it carries are exactly
+  // that manifest's, so P04 rests on the manifests rather than on classes a declaration builds by hand. Required
+  // (#1772): a runtime built without them throws, whatever path built it. The server passes every enabled module's
+  // (apps/kernel serverRuntime()); a runtime whose commands declare no writes may pass an empty list.
+  manifests: readonly ManifestTables[];
 }
 
 // One module's tables as its manifest gives them: schema -> table -> column -> data class.
@@ -727,10 +733,10 @@ function sameClasses(a: Readonly<Record<string, string>>, b: Readonly<Record<str
   return keys.length === Object.keys(b).length && keys.every((column) => Object.hasOwn(b, column) && b[column] === a[column]);
 }
 
-// Checks a command's declared writes (CommandDef.writes) against the classes they carry and, when the runtime has
-// them, against the manifests' (#1710), and answers the contact and payment columns among them
+// Checks a command's declared writes (CommandDef.writes) against the classes they carry and against the manifests'
+// (#1710, #1772), and answers the contact and payment columns among them
 // (`<schema>.<table>.<column> (<class>)`), for P04.
-function checkedWrites(command: string, writes: readonly CommandWrite[], manifests: ReadonlyMap<string, Readonly<Record<string, string>>> | null): string[] {
+function checkedWrites(command: string, writes: readonly CommandWrite[], manifests: ReadonlyMap<string, Readonly<Record<string, string>>>): string[] {
   const refuse = (why: string): never => {
     throw new Error(`command ${command}: declared writes ${why}`);
   };
@@ -752,11 +758,9 @@ function checkedWrites(command: string, writes: readonly CommandWrite[], manifes
       if (!WRITE_COLUMN.test(column)) refuse(`of ${w.table} carry classes for ${column}, which is not a column name`);
       if (!(WRITE_DATA_CLASSES as readonly string[]).includes(cls)) refuse(`of ${w.table} give column ${column} the unknown class ${String(cls)}`);
     }
-    if (manifests !== null) {
-      const known = manifests.get(w.table);
-      if (!known) refuse(`name ${w.table}, a table no module manifest has`);
-      if (!sameClasses(classes, known as Readonly<Record<string, string>>)) refuse(`of ${w.table} carry classes that are not its manifest's (build the write with tableWrite())`);
-    }
+    const known = manifests.get(w.table);
+    if (!known) refuse(`name ${w.table}, a table no module manifest has`);
+    if (!sameClasses(classes, known as Readonly<Record<string, string>>)) refuse(`of ${w.table} carry classes that are not its manifest's (build the write with tableWrite())`);
     if (!Array.isArray(w.columns) || w.columns.length === 0) refuse(`of ${w.table} name no column`);
     const seen = new Set<string>();
     for (const column of w.columns) {
@@ -901,8 +905,8 @@ export class Runtime {
   // Command -> whether an agent's proposal of it is flagged P04 (CommandInfo.contactOrPayment), derived once at
   // registration from its declared writes.
   readonly #contactOrPayment = new Map<string, boolean>();
-  // The classes of every manifest table (RuntimeOptions.manifests), or null when the runtime was given none.
-  readonly #manifestTables: ReadonlyMap<string, Readonly<Record<string, string>>> | null;
+  // The classes of every manifest table (RuntimeOptions.manifests).
+  readonly #manifestTables: ReadonlyMap<string, Readonly<Record<string, string>>>;
   // Where each transaction opens (Decision 14): tenant work on the org's cell, org-less work on the control plane.
   readonly #cells: CellResolver;
   readonly #sessions: SessionStatusSource | null;
@@ -916,7 +920,10 @@ export class Runtime {
   #savepointSeq = 0;
 
   // A plain Db is one cell that also holds the control plane (singleCell).
-  constructor(cells: CellResolver | Db, options: RuntimeOptions = {}) {
+  constructor(cells: CellResolver | Db, options: RuntimeOptions) {
+    // Read once: the check and the copy below see the same list.
+    const manifests: unknown = typeof options === 'object' && options !== null ? options.manifests : undefined;
+    if (!Array.isArray(manifests)) throw new Error('RuntimeOptions.manifests: a runtime is built with the module manifests (#1772)');
     this.#cells = isCellResolver(cells) ? cells : singleCell(cells);
     // The runtime's own frozen copy of the session source, read once: changing the object passed in (its check
     // replaced by a no-op) does not turn off the ADR-0028 check here (#1766).
@@ -934,7 +941,7 @@ export class Runtime {
     const inputHash = options.inputHash ?? 'keyed';
     if (!(INPUT_HASH_MODES as readonly string[]).includes(inputHash)) throw new Error(`unknown input hash mode ${String(inputHash)}`);
     this.inputHash = inputHash;
-    this.#manifestTables = options.manifests ? manifestTableClasses(options.manifests) : null;
+    this.#manifestTables = manifestTableClasses(manifests as readonly ManifestTables[]);
     Object.freeze(this);
   }
 
@@ -960,12 +967,13 @@ export class Runtime {
       if (c.agent !== undefined && (!validAccess(c.agent.roles, ['any']) || (c.agent.taint !== undefined && c.agent.taint !== 'propagate'))) {
         throw new Error(`command ${c.name}: agent access names a role list or 'any', and taint is 'propagate' or absent`);
       }
-      if (c.sideEffect !== undefined) {
-        if (!(SIDE_EFFECTS as readonly string[]).includes(c.sideEffect)) throw new Error(`command ${c.name}: unknown side effect ${String(c.sideEffect)}`);
-        const derived = deriveRisk(c.sideEffect);
-        if (RISK_ORDER[c.risk] < RISK_ORDER[derived]) {
-          throw new Error(`command ${c.name}: declared risk ${c.risk} is below ${derived}, the risk its side effect '${c.sideEffect}' derives (plan §4.7)`);
-        }
+      // Every command says what it does beyond its transaction (#1637): the risk it derives is the floor of its own.
+      if (typeof c.sideEffect !== 'string' || !(SIDE_EFFECTS as readonly string[]).includes(c.sideEffect)) {
+        throw new Error(`command ${c.name}: declares no side effect or an unknown one (${String(c.sideEffect)}); one of ${SIDE_EFFECTS.join(', ')}`);
+      }
+      const derived = deriveRisk(c.sideEffect);
+      if (RISK_ORDER[c.risk] < RISK_ORDER[derived]) {
+        throw new Error(`command ${c.name}: declared risk ${c.risk} is below ${derived}, the risk its side effect '${c.sideEffect}' derives (plan §4.7)`);
       }
       if (c.permission !== undefined && (typeof c.access === 'string' || !/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/.test(c.permission))) {
         throw new Error(`command ${c.name}: a permission is declared only beside a role list, as <module>.<name>`);
@@ -1454,9 +1462,9 @@ export class Runtime {
       if (closed) throw new Error(`command ${def.name}: ${what} after the handler returned`);
     };
     const ctx: CommandContext = {
-      ...this.queryContext(trx, base.orgId, base.actor, base.entered),
-      // The handler's statements go through handlerTrx, so the write check can tell them from the runtime's (#1710).
-      trx: handlerTrx,
+      // The handler's statements, and those of the queries it runs (ctx.query), go through handlerTrx, so the write
+      // check can tell them from the runtime's (#1710).
+      ...this.queryContext(handlerTrx, base.orgId, base.actor, base.entered),
       commandId,
       proposalId: base.proposalId,
       now: new Date(),
@@ -1467,7 +1475,7 @@ export class Runtime {
         const { rows } = await aside(() => sql<{ id: string }>`SELECT crove_kernel.emit(${type}, ${JSON.stringify(payload)}::jsonb, ${commandId}::uuid) AS id`.execute(trx));
         return rows[0]?.id ?? '';
       },
-      activity: async (recordType, recordId, kind, summary) => {
+      activity: async (recordType, recordId, kind, summary, options) => {
         refuseClosed('ctx.activity');
         await aside(() =>
           trx
@@ -1481,6 +1489,7 @@ export class Runtime {
               actor_id: base.actor.type === 'user' ? base.actor.userId : null,
               // The database stamps it from the sealed context too (activity_stamp_agent).
               agent_id: base.actor.type === 'agent' ? base.actor.agentId : null,
+              ...(options?.legalEntityId === undefined ? {} : { legal_entity_id: options.legalEntityId }),
             })
             .execute(),
         );

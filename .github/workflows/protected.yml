@@ -51,19 +51,28 @@ jobs:
             echo "::warning::The base branch has no tools/ci/protected-paths.mjs yet; using this PR's copy (bootstrap)."
             cp tools/ci/protected-paths.mjs "$RUNNER_TEMP/protected-paths.mjs"
           fi
+          # It prints the protected paths the PR names, so between ::stop-commands:: and a random token (#1786).
+          tok=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+          echo "::stop-commands::$tok"
           node "$RUNNER_TEMP/protected-paths.mjs" "$BASE_SHA" "$HEAD_SHA"
+          echo "::$tok::"
 
       # On every PR, protected or not (#1644): Node resolves a bare import by walking up from the importing file
       # through every node_modules directory, so a committed packages/db/test/node_modules/pg/index.js would shadow
       # pg for the invariant suite of every later run. No tracked path may be a node_modules directory, file, symlink
-      # or submodule, or sit under one. Paths are printed indented, so a name cannot pass as a workflow command.
+      # or submodule, or sit under one. Paths the PR names are printed between ::stop-commands:: and a random token, in
+      # this step, the one above and the ones below, so a name holding a newline and ::error:: cannot pass as a workflow command
+      # (#1786; the runner trims leading whitespace before it looks for ::, so indenting is not enough).
       - name: No committed node_modules
         run: |
           set -euo pipefail
           shims=$(git ls-tree -r -z --name-only "$HEAD_SHA" | { grep -zE '(^|/)node_modules(/|$)' || true; } | tr '\0' '\n')
           if [ -n "$shims" ]; then
             echo "::error::This PR commits a node_modules path, which could shadow a dependency of the invariant suite (#1644):"
+            tok=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+            echo "::stop-commands::$tok"
             printf '%s\n' "$shims" | sed 's/^/  /'
+            echo "::$tok::"
             exit 1
           fi
 
@@ -92,15 +101,27 @@ jobs:
             -printf '%P\0' | sort -z > "$RUNNER_TEMP/invariant-disk.list"
           if ! cmp -s "$base_list" "$RUNNER_TEMP/invariant-disk.list"; then
             echo "::error::The invariant files on disk do not match the base branch's list."
+            tok=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+            echo "::stop-commands::$tok"
             diff <(tr '\0' '\n' < "$base_list") <(tr '\0' '\n' < "$RUNNER_TEMP/invariant-disk.list") || true
+            echo "::$tok::"
             exit 1
           fi
           # ...with the base branch's content.
           xargs -0 git --literal-pathspecs diff --quiet "$BASE_SHA" -- < "$base_list"
-          # What the re-checks below compare with (#1647): the sha256 of each base file, taken now, before any PR code
-          # runs, and handed over as a step output, which the runner holds, rather than as a file PR code could edit.
+          # What the re-checks below compare with (#1647): the sha256 of each base file, and its type and link count (#1786:
+          # sha256sum follows a symlink, and a hard link has the same content), taken now, before any PR code runs, and
+          # handed over as step outputs, which the runner holds, rather than as files PR code could edit. Each is a
+          # regular file with one link, as git checks it out.
+          base_kinds="$RUNNER_TEMP/invariant-base.kinds"
+          xargs -0 stat --printf='%F %h %n\0' -- < "$base_list" > "$base_kinds"
+          if grep -zqvE '^regular (empty )?file 1 ' "$base_kinds"; then
+            echo "::error::The base suite on disk is not all regular files with one link each."
+            exit 1
+          fi
           echo "suite=base" >> "$GITHUB_OUTPUT"
           echo "manifest=$(xargs -0 sha256sum -z -- < "$base_list" | base64 -w0)" >> "$GITHUB_OUTPUT"
+          echo "kinds=$(base64 -w0 < "$base_kinds")" >> "$GITHUB_OUTPUT"
           changed=$(git -c core.quotePath=false diff --name-status "$BASE_SHA...$HEAD_SHA" -- ':(glob)**/test/invariant/**' vitest.invariant.config.ts \
             ':(glob)supabase/tests/database/_*.test.sql')
           {
@@ -128,38 +149,59 @@ jobs:
 
       # PR code still runs after the swap (#1647): the root lifecycle scripts of pnpm install, and the code under
       # test the suite loads. So the base suite is checked again, here and after the run (the same script, kept in
-      # step): the files on disk are exactly the base files with their base content, by the sha256 list the take step
-      # handed over before any PR code ran, and no node_modules sits under a test directory (#1644).
+      # step): the files on disk are exactly the base files, each a regular file with one link and its base content, by the
+      # types, link counts and sha256 the take step handed over before any PR code ran (#1786), and no node_modules
+      # sits under a test directory (#1644). A tripwire, not a boundary: PR code runs as the same user, with sudo.
       - name: The base suite is still on disk after the install
         if: steps.detect.outputs.protected == 'true' && steps.take.outcome == 'success'
         env:
           SUITE: ${{ steps.take.outputs.suite }}
           MANIFEST: ${{ steps.take.outputs.manifest }}
+          KINDS: ${{ steps.take.outputs.kinds }}
         run: |
           set -euo pipefail
           if [ "$SUITE" = pr ]; then echo "The PR's own copy ran (the base branch has no suite yet); nothing to re-check."; exit 0; fi
           expected="$RUNNER_TEMP/invariant-expected.sha256"
           printf '%s' "$MANIFEST" | base64 -d > "$expected"
-          if [ "$SUITE" != base ] || [ ! -s "$expected" ]; then
+          expected_kinds="$RUNNER_TEMP/invariant-expected.kinds"
+          printf '%s' "$KINDS" | base64 -d > "$expected_kinds"
+          if [ "$SUITE" != base ] || [ ! -s "$expected" ] || [ ! -s "$expected_kinds" ]; then
             echo "::error::The take step handed over no list of the base suite to re-check (#1647)."
             exit 1
           fi
-          # The files on disk, found and hashed without git (whose index, attributes, config and replace refs PR code
-          # can change): exactly the base files, each with its base content.
-          actual="$RUNNER_TEMP/invariant-actual.sha256"
+          tok=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+          # The files on disk, found, typed and hashed without git (whose index, attributes, config and replace refs PR
+          # code can change): exactly the base files, each still a regular file with one link (stat does not follow a
+          # symlink, #1786), then each with its base content.
+          listed="$RUNNER_TEMP/invariant-actual.list"
           find . -name node_modules -prune -o -path ./.git -prune -o ! -type d -regextype posix-extended \
             -regex '\./(.*/)?test/invariant/.*|\./vitest\.invariant\.config\.ts|\./supabase/tests/database/_[^/]*\.test\.sql' \
-            -printf '%P\0' | sort -z | xargs -0 -r sha256sum -z -- > "$actual"
+            -printf '%P\0' | sort -z > "$listed"
+          actual_kinds="$RUNNER_TEMP/invariant-actual.kinds"
+          xargs -0 -r stat --printf='%F %h %n\0' -- < "$listed" > "$actual_kinds"
+          if ! cmp -s "$expected_kinds" "$actual_kinds"; then
+            echo "::error::The invariant suite on disk is no longer the base branch's files: one was added or removed, or changed type or link count (#1647, #1786)."
+            echo "::stop-commands::$tok"
+            diff <(tr '\0' '\n' < "$expected_kinds") <(tr '\0' '\n' < "$actual_kinds") | sed 's/^/  /' || true
+            echo "::$tok::"
+            exit 1
+          fi
+          actual="$RUNNER_TEMP/invariant-actual.sha256"
+          xargs -0 -r sha256sum -z -- < "$listed" > "$actual"
           if ! cmp -s "$expected" "$actual"; then
-            echo "::error::The invariant suite on disk is no longer the base branch's: a file was changed, added, removed or replaced by a link (#1647)."
+            echo "::error::The invariant suite on disk is no longer the base branch's: a file's content changed (#1647)."
+            echo "::stop-commands::$tok"
             diff <(tr '\0' '\n' < "$expected") <(tr '\0' '\n' < "$actual") | sed 's/^/  /' || true
+            echo "::$tok::"
             exit 1
           fi
           # No node_modules (directory or link) under a test directory, where it would shadow a dependency (#1644).
           shims=$(find . -path ./node_modules -prune -o -path ./.git -prune -o -name node_modules -path '*/test/*' -print)
           if [ -n "$shims" ]; then
             echo "::error::A node_modules path sits under a test directory, where it could shadow a dependency of the invariant suite (#1644):"
+            echo "::stop-commands::$tok"
             printf '%s\n' "$shims" | sed 's/^/  /'
+            echo "::$tok::"
             exit 1
           fi
 
@@ -199,31 +241,51 @@ jobs:
         env:
           SUITE: ${{ steps.take.outputs.suite }}
           MANIFEST: ${{ steps.take.outputs.manifest }}
+          KINDS: ${{ steps.take.outputs.kinds }}
         run: |
           set -euo pipefail
           if [ "$SUITE" = pr ]; then echo "The PR's own copy ran (the base branch has no suite yet); nothing to re-check."; exit 0; fi
           expected="$RUNNER_TEMP/invariant-expected.sha256"
           printf '%s' "$MANIFEST" | base64 -d > "$expected"
-          if [ "$SUITE" != base ] || [ ! -s "$expected" ]; then
+          expected_kinds="$RUNNER_TEMP/invariant-expected.kinds"
+          printf '%s' "$KINDS" | base64 -d > "$expected_kinds"
+          if [ "$SUITE" != base ] || [ ! -s "$expected" ] || [ ! -s "$expected_kinds" ]; then
             echo "::error::The take step handed over no list of the base suite to re-check (#1647)."
             exit 1
           fi
-          # The files on disk, found and hashed without git (whose index, attributes, config and replace refs PR code
-          # can change): exactly the base files, each with its base content.
-          actual="$RUNNER_TEMP/invariant-actual.sha256"
+          tok=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+          # The files on disk, found, typed and hashed without git (whose index, attributes, config and replace refs PR
+          # code can change): exactly the base files, each still a regular file with one link (stat does not follow a
+          # symlink, #1786), then each with its base content.
+          listed="$RUNNER_TEMP/invariant-actual.list"
           find . -name node_modules -prune -o -path ./.git -prune -o ! -type d -regextype posix-extended \
             -regex '\./(.*/)?test/invariant/.*|\./vitest\.invariant\.config\.ts|\./supabase/tests/database/_[^/]*\.test\.sql' \
-            -printf '%P\0' | sort -z | xargs -0 -r sha256sum -z -- > "$actual"
+            -printf '%P\0' | sort -z > "$listed"
+          actual_kinds="$RUNNER_TEMP/invariant-actual.kinds"
+          xargs -0 -r stat --printf='%F %h %n\0' -- < "$listed" > "$actual_kinds"
+          if ! cmp -s "$expected_kinds" "$actual_kinds"; then
+            echo "::error::The invariant suite on disk is no longer the base branch's files: one was added or removed, or changed type or link count (#1647, #1786)."
+            echo "::stop-commands::$tok"
+            diff <(tr '\0' '\n' < "$expected_kinds") <(tr '\0' '\n' < "$actual_kinds") | sed 's/^/  /' || true
+            echo "::$tok::"
+            exit 1
+          fi
+          actual="$RUNNER_TEMP/invariant-actual.sha256"
+          xargs -0 -r sha256sum -z -- < "$listed" > "$actual"
           if ! cmp -s "$expected" "$actual"; then
-            echo "::error::The invariant suite on disk is no longer the base branch's: a file was changed, added, removed or replaced by a link (#1647)."
+            echo "::error::The invariant suite on disk is no longer the base branch's: a file's content changed (#1647)."
+            echo "::stop-commands::$tok"
             diff <(tr '\0' '\n' < "$expected") <(tr '\0' '\n' < "$actual") | sed 's/^/  /' || true
+            echo "::$tok::"
             exit 1
           fi
           # No node_modules (directory or link) under a test directory, where it would shadow a dependency (#1644).
           shims=$(find . -path ./node_modules -prune -o -path ./.git -prune -o -name node_modules -path '*/test/*' -print)
           if [ -n "$shims" ]; then
             echo "::error::A node_modules path sits under a test directory, where it could shadow a dependency of the invariant suite (#1644):"
+            echo "::stop-commands::$tok"
             printf '%s\n' "$shims" | sed 's/^/  /'
+            echo "::$tok::"
             exit 1
           fi
 
@@ -277,7 +339,11 @@ jobs:
             echo "::warning::The base branch has no tools/ci/protected-paths.mjs yet; using this PR's copy (bootstrap)."
             cp tools/ci/protected-paths.mjs "$RUNNER_TEMP/protected-paths.mjs"
           fi
+          # It prints the protected paths the PR names, so between ::stop-commands:: and a random token (#1786).
+          tok=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+          echo "::stop-commands::$tok"
           node "$RUNNER_TEMP/protected-paths.mjs" "$BASE_SHA" "$HEAD_SHA"
+          echo "::$tok::"
 
       - name: Fork PR on protected paths needs a maintainer review
         if: steps.detect.outputs.protected == 'true' && env.IS_FORK == 'true'

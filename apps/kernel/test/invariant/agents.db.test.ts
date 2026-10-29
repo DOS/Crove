@@ -13,7 +13,7 @@ import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { agentCommands, createOrg, decideApproval, eligibleApprovers, kernelCommands, kernelManifest, kernelQueries, runAgentWake, upsertIdentity } from '@crove/kernel';
 import { tableWrite } from '@crove/kernel-contract';
-import { Runtime, defineCommand, type Actor, type AgentActor, type AgentApprovers, type AgentRuntime, type CommandDef, type CommandWrite, type Risk } from '@crove/kernel-runtime';
+import { Runtime, defineCommand, defineQuery, type Actor, type AgentActor, type AgentApprovers, type AgentRuntime, type CommandDef, type CommandWrite, type QueryDef, type Risk } from '@crove/kernel-runtime';
 import { financeCommands, financeManifest, financeQueries } from '@crove/mod-finance';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
@@ -1521,6 +1521,17 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
       await Promise.all([ctx.emit('t1710.beside', { n: 1 }), raise(ctx, `beside-${suffix}`)]);
       return { ok: true };
     });
+    // A query beside an event: its statements run on the counting ctx.trx too (#1772), so the command cannot be checked.
+    const besideQuery = defineQuery({
+      name: `t1710.query_${suffix}`,
+      input: z.object({}),
+      access: 'system',
+      handler: async (ctx) => (await sql<{ one: number }>`SELECT 1 AS one`.execute(ctx.trx)).rows[0],
+    }) as QueryDef<unknown, unknown>;
+    const queryBeside = probe('query_beside', [], async (ctx) => {
+      await Promise.all([ctx.emit('t1710.query_beside', { n: 1 }), ctx.query(besideQuery.name, {})]);
+      return { ok: true };
+    });
     // Two events at once: each window would set aside the other's rows too.
     const twoEvents = probe('two_events', [], async (ctx) => {
       await Promise.all([ctx.emit('t1710.first', { n: 1 }), ctx.emit('t1710.second', { n: 2 })]);
@@ -1535,7 +1546,10 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
       await ctx.run(liar.name, {}).catch(() => null);
       return { ok: true };
     });
-    worker.register({ commands: [undeclared, empty, declared, delegates, undeclaredNested, viaNested, readOnlyNested, viaReadOnly, beside, twoEvents, liar, catches] });
+    worker.register({
+      commands: [undeclared, empty, declared, delegates, undeclaredNested, viaNested, readOnlyNested, viaReadOnly, beside, twoEvents, liar, catches, queryBeside],
+      queries: [besideQuery],
+    });
     const as = { actor: SYSTEM, orgId: orgA };
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
@@ -1543,7 +1557,7 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
         await expect(worker.execute(command.name, {}, as), command.name).rejects.toMatchObject({ code: 'INTERNAL' });
         expect(logged.mock.calls.flat().map(String).join('\n')).toContain(`command ${command.name}: wrote crove_kernel.inbox_item, which it does not declare`);
       }
-      for (const command of [beside, twoEvents, catches]) {
+      for (const command of [beside, twoEvents, catches, queryBeside]) {
         await expect(worker.execute(command.name, {}, as), command.name).rejects.toMatchObject({ code: 'INTERNAL' });
         expect(logged.mock.calls.flat().map(String).join('\n')).toContain(`command ${command.name}: its writes cannot be checked`);
       }

@@ -21,34 +21,29 @@
 // auditValue (@crove/kernel-contract) replaces a classified value with a marker naming its class. Facts whose key or value
 // names a classified column but hold internal data (an account's name, a command's name) are listed below per file,
 // each as the exact fact key and value it covers, with its reason; an entry covers nothing else in its file (#1632).
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { auditValue, columns, type DataClass, type ModuleManifest } from '@crove/kernel-contract';
-import { kernelManifest } from '@crove/kernel';
-import { crmManifest } from '@crove/mod-crm';
-import { financeManifest } from '@crove/mod-finance';
-import { socialManifest } from '@crove/mod-social';
-
-const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
-const SCANNED = ['packages', 'modules', 'apps/kernel/src'];
-
-// The control plane's classified columns (apps/kernel/test/manifest.db.test.ts declares their tables; no source may name
-// those tables, but a fact could still carry one of their values).
-const CONTROL_PLANE_CLASSIFIED = ['subject', 'email', 'display_name', 'token', 'recipient'];
+import { auditValue, columns, type DataClass } from '@crove/kernel-contract';
+import { ROOT, SCANNED, balanced, blank, classifiedColumns, snake, sources } from './source-scan.ts';
 
 // Facts whose key or value names a classified column but holds internal data, per file, with the reason. An entry is
 // `<fact key> <- <value>` (whitespace collapsed; the key itself for a shorthand property) and covers that fact only.
 const ALLOWED: Record<string, Record<string, string>> = {
-  'packages/kernel/src/agents.ts': { 'proposal_command <- info.name': 'the name of the command a proposal runs' },
+  'packages/kernel/src/agents.ts': {
+    'proposal_command <- info.name': 'the name of the command a proposal runs',
+    'title <- before.title': 'the title of a position in the org chart (crove_kernel.position.title, internal)',
+  },
+  'modules/social/src/review-links.ts': {
+    'cleared <- body === null': 'whether the reply was cleared, a boolean',
+    'member <- userId': "the removed member's user id, from the event's parsed payload (zod's .data)",
+  },
   'packages/kernel/src/proposal-reminders.ts': {
     'policy <- input': "the command's whole input, the policy's three day counts",
     'recipients <- Object.fromEntries([...recipients].map(([s, ids]) => [s, ids.length]))': 'how many members each stage reminded, a count per stage',
   },
   'packages/kernel/src/org-address.ts': { 'cleared <- email === null': 'whether the contact address was cleared, a boolean' },
   'modules/crm/src/booking-feed.ts': { 'member <- userId': "the removed member's user id, from the event's parsed payload (zod's .data)" },
-  'modules/social/src/review-links.ts': { 'member <- userId': "the removed member's user id, from the event's parsed payload (zod's .data)" },
   'modules/finance/src/accounts.ts': {
     'name <- account.name': "the previous name of an account of the org's chart (crove_finance.account.name, internal)",
     'name <- name': "the new name of an account of the org's chart (crove_finance.account.name, internal)",
@@ -62,111 +57,6 @@ const ALLOWED: Record<string, Record<string, string>> = {
   'modules/social/src/report-branding.ts': { 'name <- name': "the org's own brand name on its reports (crove_social.report_branding.display_name, internal)" },
   'modules/social/src/report-schedules.ts': { 'recipients <- recipients.length': 'the count of recipients, never their addresses' },
 };
-
-function classifiedColumns(): Set<string> {
-  const out = new Set<string>(CONTROL_PLANE_CLASSIFIED);
-  for (const manifest of [kernelManifest, financeManifest, crmManifest, socialManifest] as ModuleManifest[]) {
-    for (const tables of Object.values(manifest.tables)) {
-      for (const cols of Object.values(tables)) {
-        for (const [column, cls] of Object.entries(cols) as Array<[string, DataClass]>) if (cls !== 'internal') out.add(column);
-      }
-    }
-  }
-  return out;
-}
-
-const snake = (name: string) => name.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
-
-function sources(dir: string, out: string[] = []): string[] {
-  for (const name of readdirSync(dir)) {
-    if (name === 'node_modules' || name === 'test' || name === 'dist' || name === 'generated') continue;
-    const path = join(dir, name);
-    if (statSync(path).isDirectory()) sources(path, out);
-    else if (/\.tsx?$/.test(name) && !/\.(test|d)\.tsx?$/.test(name)) out.push(path);
-  }
-  return out;
-}
-
-// Comments blanked, and the literal text of '...', "..." and `...` strings blanked, line breaks and offsets kept, so
-// neither a comment nor a string can open or close a bracket or look like a fact key. The code inside a template's
-// ${...} stays, templates nested in it included, since an interpolation can carry a classified value.
-function blank(text: string): string {
-  let i = 0;
-  // Code up to the end of the text or, inside a template's ${...}, up to the } that closes it (not consumed).
-  const code = (inTemplate: boolean): string => {
-    let out = '';
-    let depth = 0;
-    while (i < text.length) {
-      const c = text[i] as string;
-      const next = text[i + 1];
-      if (c === '/' && next === '/') {
-        while (i < text.length && text[i] !== '\n') {
-          out += ' ';
-          i++;
-        }
-      } else if (c === '/' && next === '*') {
-        const end = text.indexOf('*/', i + 2);
-        const stop = end === -1 ? text.length : end + 2;
-        out += text.slice(i, stop).replace(/[^\n]/g, ' ');
-        i = stop;
-      } else if (c === "'" || c === '"') {
-        out += c;
-        i++;
-        while (i < text.length && text[i] !== c && text[i] !== '\n') {
-          out += text[i] === '\\' ? '  ' : ' ';
-          i += text[i] === '\\' ? 2 : 1;
-        }
-        if (i < text.length) out += text[i++];
-      } else if (c === '`') {
-        out += template();
-      } else if (inTemplate && c === '}' && depth === 0) {
-        return out;
-      } else {
-        if (inTemplate && c === '{') depth++;
-        if (inTemplate && c === '}') depth--;
-        out += c;
-        i++;
-      }
-    }
-    return out;
-  };
-  // A template literal from its opening backtick: its text blanked, each ${...} kept as code.
-  const template = (): string => {
-    let out = '`';
-    i++;
-    while (i < text.length && text[i] !== '`') {
-      if (text[i] === '\\') {
-        out += text[i + 1] === '\n' ? ' \n' : '  ';
-        i += 2;
-      } else if (text[i] === '$' && text[i + 1] === '{') {
-        out += '${';
-        i += 2;
-        out += code(true);
-        if (i < text.length) out += text[i++];
-      } else {
-        out += text[i] === '\n' ? '\n' : ' ';
-        i++;
-      }
-    }
-    if (i < text.length) out += text[i++];
-    return out;
-  };
-  return code(false);
-}
-// The text from `open` (an opening bracket) to its matching close, both included.
-function balanced(text: string, open: number): string {
-  const pairs: Record<string, string> = { '(': ')', '[': ']', '{': '}' };
-  const stack: string[] = [];
-  for (let i = open; i < text.length; i++) {
-    const c = text[i] as string;
-    if (pairs[c]) stack.push(pairs[c]);
-    else if (c === stack[stack.length - 1]) {
-      stack.pop();
-      if (stack.length === 0) return text.slice(open, i + 1);
-    }
-  }
-  return text.slice(open);
-}
 
 // The expression from `start`: up to the next comma, semicolon or closing bracket at its own depth (a semicolon ends a
 // statement, so an initializer or an assignment's right side stops there too).
@@ -397,8 +287,9 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
       if (isClassified(read[1] as string)) flag(`the value reads the classified column ${read[1]} outside auditValue(...)`);
     }
     // A read by the column's name: `row['tax_code']`.
-    for (const read of bare.matchAll(/\[\s*['"]/g)) {
-      const column = start === -1 ? undefined : literalAt(start + (read.index ?? 0) + 1);
+    // An array written out (`['title']`) is no read.
+    for (const read of bare.matchAll(/[\w$)\]]\s*\[\s*['"]/g)) {
+      const column = start === -1 ? undefined : literalAt(start + (read.index ?? 0) + read[0].indexOf('[') + 1);
       if (column && isClassified(column)) flag(`the value reads the classified column ${column} by name outside auditValue(...)`);
     }
     // A read of a row from the database by a computed key (`before[key]`): it may be any column.
@@ -524,6 +415,15 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
     }
     if (objectish(init)) {
       checkObject(init, from, depth);
+      return true;
+    }
+    // An array written out holds its elements: each, or each spread (`...(a !== b ? ['title'] : [])`), by what it holds.
+    if (init.startsWith('[') && balanced(init, 0) === init) {
+      for (const element of splitTop(init.slice(1, -1))) {
+        const item = unwrap(element.trim().replace(/^\.\.\.\s*/, ''));
+        const held = item === '' ? null : heldPart(item);
+        if (held !== null) checkValue(held.trim(), from + init.indexOf(held.trim()), flag, depth);
+      }
       return true;
     }
     const held = heldPart(init);
@@ -815,6 +715,9 @@ describe('audit facts and classified columns (#1626, #1632)', () => {
       'previous: the value reads the classified column tax_code outside auditValue(...)',
     ]);
     expect(check('const previous = {};\nprevious[party.email] = true;\nctx.audit({ previous });')).toEqual(['previous: the value reads the classified column email outside auditValue(...)']);
+    // An array of the names that changed holds the names, not the values its conditions compare.
+    expect(check("const changed = [...(before.title !== input.title ? ['title'] : []), ...(before.tax_code !== code ? ['tax_code'] : [])];\nctx.audit({ changed });")).toEqual([]);
+    expect(check('const changed = [...(flag ? [before.tax_code] : [])];\nctx.audit({ changed });')).toEqual(['changed: the value reads the classified column tax_code outside auditValue(...)']);
     // The declaration in scope is the one in the fact's block, not one in a block that has closed.
     expect(check('const code = party.tax_code;\nif (ok) { const code = 0; use(code); }\nctx.audit({ code });')).toEqual([
       'code: the value reads the classified column tax_code outside auditValue(...)',

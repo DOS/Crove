@@ -111,7 +111,7 @@ suite('member management on PostgreSQL', () => {
       detail: { target_user: member.id, role: 'admin', previous_role: 'member', changed: true, aal: 'aal2', sessionId: asMfa(owner.id).sessionId },
     });
     expect(await rows(orgId, 'activity', "kind = 'member.role_changed'")).toEqual([
-      expect.objectContaining({ record_id: member.id, actor_id: owner.id, summary: `Đổi vai trò ${member.email} từ member thành admin` }),
+      expect.objectContaining({ record_id: member.id, actor_id: owner.id, summary: 'Đổi vai trò thành viên từ member thành admin' }),
     ]);
     expect(await rows(orgId, 'outbox_event', "type = 'kernel.member.role_changed'")).toEqual([
       expect.objectContaining({ actor_id: owner.id, payload: { userId: member.id, oldRole: 'member', newRole: 'admin' } }),
@@ -138,7 +138,7 @@ suite('member management on PostgreSQL', () => {
       detail: { target_user: member.id, role: null, previous_role: 'viewer', aal: 'aal2' },
     });
     expect(await rows(orgId, 'activity', "kind = 'member.removed'")).toEqual([
-      expect.objectContaining({ record_id: member.id, summary: `Xóa thành viên ${member.email} (viewer)` }),
+      expect.objectContaining({ record_id: member.id, summary: 'Xóa thành viên (viewer)' }),
     ]);
     expect(await rows(orgId, 'outbox_event', "type = 'kernel.member.removed'")).toEqual([
       expect.objectContaining({ payload: { userId: member.id, oldRole: 'viewer' } }),

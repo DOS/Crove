@@ -188,7 +188,7 @@ export const legalEntityCreate = defineCommand({
       legalEntityId: row.id,
       entity: { name: auditValue(ENTITY, 'name', name), kind: input.kind, taxCode: auditValue(ENTITY, 'tax_code', taxCode), parentId: input.parentId },
     });
-    await ctx.activity('kernel.legal_entity', row.id, 'legal_entity.created', `Thêm pháp nhân ${name} (${KIND_LABELS[input.kind]})`);
+    await ctx.activity('kernel.legal_entity', row.id, 'legal_entity.created', `Thêm pháp nhân (${KIND_LABELS[input.kind]})`);
     return view(row);
   },
 });
@@ -241,7 +241,7 @@ export const legalEntityUpdate = defineCommand({
       values[field[key]] = auditValue(ENTITY, key, next[key]);
     }
     ctx.audit({ legalEntityId: before.id, isDefault: before.is_default, changed: changed.map((k) => field[k]), previous, values });
-    await ctx.activity('kernel.legal_entity', before.id, 'legal_entity.updated', `Sửa pháp nhân ${name}`);
+    await ctx.activity('kernel.legal_entity', before.id, 'legal_entity.updated', 'Sửa thông tin pháp nhân');
     return view(row);
   },
 });

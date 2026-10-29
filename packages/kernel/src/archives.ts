@@ -139,7 +139,7 @@ export const recordArchive = defineCommand({
     const rejected = count('rejected');
     ctx.audit({ status: input.status, stored, duplicate, rejected });
     if (input.status === 'done') {
-      await ctx.activity('kernel.file', archive.id, 'archive.expanded', `Mở ${archive.filename}: ${stored} tệp mới, ${duplicate} tệp đã có, ${rejected} tệp bỏ qua`);
+      await ctx.activity('kernel.file', archive.id, 'archive.expanded', `Mở tệp nén: ${stored} tệp mới, ${duplicate} tệp đã có, ${rejected} tệp bỏ qua`);
     } else {
       await ctx.activity('kernel.file', archive.id, 'extraction.failed', input.error ?? 'Không mở được tệp ZIP');
     }

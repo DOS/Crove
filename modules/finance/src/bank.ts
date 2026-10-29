@@ -168,6 +168,8 @@ export const bankImport = defineCommand({
       importId,
       'bank.statement_imported',
       `Nhập sao kê ${input.bankAccount}: ${preview.counts.new + preview.counts.ambiguous} dòng mới, ${preview.counts.duplicate} dòng đã có`,
+      // An import with no new line stores no bank_line to take the entity from (#1728).
+      { legalEntityId },
     );
     // Lines that need a look: the owners and admins are told (#671, finance.notification.dispatch).
     if (preview.counts.ambiguous > 0) await ctx.emit('finance.bank.imported', { importId, bankAccount: input.bankAccount, ambiguous: preview.counts.ambiguous });

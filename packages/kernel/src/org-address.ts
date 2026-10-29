@@ -35,7 +35,7 @@ export const setAddress = defineCommand({
     const before = await ctx.trx.selectFrom('crove_kernel.tenant').select('address').where('org_id', '=', ctx.orgId).executeTakeFirstOrThrow();
     if (before.address !== address) {
       await ctx.trx.updateTable('crove_kernel.tenant').set({ address }).where('org_id', '=', ctx.orgId).execute();
-      await ctx.activity('kernel.tenant', ctx.orgId, 'org.address_changed', address ? `Đặt địa chỉ của tổ chức là ${address}` : 'Xóa địa chỉ của tổ chức');
+      await ctx.activity('kernel.tenant', ctx.orgId, 'org.address_changed', address ? 'Cập nhật địa chỉ của tổ chức' : 'Xóa địa chỉ của tổ chức');
     }
     const changed = before.address !== address;
     ctx.audit({ previous: auditValue(TENANT, 'address', before.address), address: auditValue(TENANT, 'address', address), changed });

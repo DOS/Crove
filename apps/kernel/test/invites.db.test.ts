@@ -188,8 +188,8 @@ suite('member invite flows on PostgreSQL', () => {
     });
     const activity = await rows(org.orgId, 'activity', "kind IN ('invite.created', 'member.joined')");
     expect(activity.map((a) => [a.kind, a.summary])).toEqual([
-      ['invite.created', `Mời ${invitee.email} tham gia với vai trò quản trị`],
-      ['member.joined', `${invitee.email} chấp nhận lời mời và tham gia với vai trò quản trị`],
+      ['invite.created', 'Mời một người tham gia với vai trò quản trị'],
+      ['member.joined', 'Chấp nhận lời mời và tham gia với vai trò quản trị'],
     ]);
   });
 

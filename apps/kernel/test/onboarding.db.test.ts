@@ -168,7 +168,8 @@ suite('onboarding by tax code (#324)', () => {
       { previous: { redacted: 'contact' }, address: { redacted: 'contact' }, changed: true },
     ]);
     const activity = await asAdmin(async (c) => (await c.query(`SELECT summary FROM crove_kernel.activity WHERE org_id = $1 AND kind = 'org.address_changed'`, [org.orgId])).rows);
-    expect(activity).toHaveLength(2);
+    // The timeline says what changed, not the address (#1634).
+    expect(activity).toEqual([{ summary: 'Cập nhật địa chỉ của tổ chức' }, { summary: 'Cập nhật địa chỉ của tổ chức' }]);
   });
 
   it('refuses members and viewers, control characters and addresses longer than 500 characters; null or blank clears it', async () => {
