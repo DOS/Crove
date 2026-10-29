@@ -4,7 +4,8 @@
 // new record type of an entity's record that is in none of these would show that entity's activity to members limited
 // to other entities, so it fails here until it is listed. Calls are found whatever the context object is called, an
 // activity function taken out of its context (destructured, assigned, bound) fails, and a call whose record type is
-// computed must name its entity (#1728).
+// computed must name its entity (#1728). A kind written with its entity on an org-level record type (a tax obligation mark,
+// a party's entity link) is listed too, and the database holds every row of it to an entity (#1805).
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -32,11 +33,21 @@ const ENTITY_NAMED = new Map<string, string>([
   ['finance.period', "one entity's month, locked or unlocked"],
   ['kernel.mail_message', "a missing-invoice request about one entity's purchases, or a reminder row per entity"],
 ]);
+// Kinds of an org-level record type that are about one entity, written with that entity at every call (#1725, #1805).
+// Sorted.
+const ENTITY_NAMED_KINDS = new Map<string, string>([
+  ['org.tax_obligation_done', "one entity's tax obligation marked done (kernel.tenant)"],
+  ['org.tax_obligation_undone', "one entity's tax obligation mark taken back (kernel.tenant)"],
+  ['party.entity_linked', 'a party linked to one entity (kernel.party)'],
+  ['party.entity_unlinked', 'a party unlinked from one entity (kernel.party)'],
+]);
 
 interface Call {
   where: string;
   // The first argument when it is a string literal, else null (computed).
   type: string | null;
+  // The third argument when it is a string literal, else null.
+  kind: string | null;
   expression: string;
   namesEntity: boolean;
 }
@@ -111,9 +122,10 @@ function calls(file: string, text: string): Call[] {
   for (const m of text.matchAll(/\.activity\s*\(/g)) {
     const args = argumentsAt(text, (m.index ?? 0) + m[0].length - 1);
     const first = /^\s*(?:'([^']+)'|([^,]+?))\s*,/.exec(args);
+    const kind = /^[^,]*,[^,]*,\s*'([^']+)'/.exec(args)?.[1] ?? null;
     // The entity is named by the last argument: an object literal with a legalEntityId that is not undefined.
     const namesEntity = /\{[^{}]*\blegalEntityId\b(?!\s*:\s*undefined\b)[^{}]*\}\s*,?\s*$/.test(args);
-    out.push({ where: file, type: first?.[1] ?? null, expression: (first?.[1] ?? first?.[2] ?? args).trim(), namesEntity });
+    out.push({ where: file, type: first?.[1] ?? null, kind, expression: (first?.[1] ?? first?.[2] ?? args).trim(), namesEntity });
   }
   return out;
 }
@@ -207,15 +219,28 @@ describe('activity record types (#1716, #1725, #1728)', () => {
     }
   });
 
-  it('lists the entity-named record types in the database constraint that makes them name an entity', () => {
+  it('lists the entity-named record types and kinds in the database constraint that makes them name an entity', () => {
     const files = readdirSync(MIGRATIONS)
       .filter((n) => n.endsWith('.sql'))
       .sort()
       .filter((n) => readFileSync(join(MIGRATIONS, n), 'utf8').includes('ADD CONSTRAINT activity_entity_named'));
     const newest = files.at(-1);
     if (!newest) throw new Error('no migration adds the constraint activity_entity_named on crove_kernel.activity');
-    const list = /record_type NOT IN \(([^)]*)\) OR legal_entity_id IS NOT NULL/.exec(readFileSync(join(MIGRATIONS, newest), 'utf8'))?.[1] ?? '';
-    expect([...list.matchAll(/'([a-z_.]+)'/g)].map((m) => m[1]).sort(), 'the constraint and ENTITY_NAMED name the same record types').toEqual([...ENTITY_NAMED.keys()]);
+    const check = /ADD CONSTRAINT activity_entity_named\s+CHECK \(([\s\S]*?OR legal_entity_id IS NOT NULL)/.exec(readFileSync(join(MIGRATIONS, newest), 'utf8'))?.[1] ?? '';
+    const listed = (column: string) => [...(new RegExp(String.raw`${column} NOT IN \(([^)]*)\)`).exec(check)?.[1] ?? '').matchAll(/'([a-z_.]+)'/g)].map((m) => m[1]).sort();
+    expect(listed('record_type'), 'the constraint and ENTITY_NAMED name the same record types').toEqual([...ENTITY_NAMED.keys()]);
+    expect(listed('kind'), 'the constraint and ENTITY_NAMED_KINDS name the same kinds').toEqual([...ENTITY_NAMED_KINDS.keys()]);
+  });
+
+  it('lists every kind an org-level record type writes with its entity, and names the entity at every call of one', () => {
+    const named = all.filter((c) => c.type !== null && ORG_LEVEL.has(c.type) && c.namesEntity);
+    expect(
+      named.filter((c) => c.kind === null || !ENTITY_NAMED_KINDS.has(c.kind)).map((c) => `${c.where}: ${c.type} ${c.kind}`),
+      'add the kind to ENTITY_NAMED_KINDS and to activity_entity_named (a migration), with a literal kind',
+    ).toEqual([]);
+    expect([...ENTITY_NAMED_KINDS.keys()].filter((k) => !named.some((c) => c.kind === k)), 'ENTITY_NAMED_KINDS lists a kind no call names its entity for').toEqual([]);
+    expect(all.filter((c) => c.kind !== null && ENTITY_NAMED_KINDS.has(c.kind) && !c.namesEntity).map((c) => `${c.where}: ${c.kind}`), 'pass { legalEntityId } to ctx.activity').toEqual([]);
+    expect([...ENTITY_NAMED_KINDS.keys()], 'ENTITY_NAMED_KINDS is kept sorted').toEqual([...ENTITY_NAMED_KINDS.keys()].sort());
   });
 
   it('names the entity at every call of an entity-named record type, and at every computed one', () => {
