@@ -63,6 +63,8 @@ const NOT_SHOWN: Record<string, string> = {
   NOT_STREAMED: 'bug',
   INVALID_STORAGE_KEY: 'bug',
   INVALID_GENERATION: 'bug',
+  // A restore re-recording an export that is not the org's newest one (#1726): only the worker's restore receives it.
+  EXPORT_REBIND_MISMATCH: 'bug',
   // Bulk intake (#314): only the worker records an opened archive.
   NOT_ARCHIVE: 'bug',
 };
