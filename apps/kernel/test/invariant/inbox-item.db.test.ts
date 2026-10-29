@@ -29,7 +29,7 @@ suite('dead-letter Inbox items on PostgreSQL (#1747)', () => {
   let pool: pg.Pool | undefined;
   let runtime: Runtime;
   let orgId = '';
-  const users = { owner: '', admin: '' };
+  const users = { owner: '', admin: '', member: '', viewer: '' };
   // An open item and a dismissed one of the org.
   const items = { open: randomUUID(), dismissed: randomUUID() };
   const asUser = (userId: string) => ({ type: 'user' as const, userId, aal: 'aal1' as const });
@@ -92,7 +92,7 @@ suite('dead-letter Inbox items on PostgreSQL (#1747)', () => {
     }
     orgId = (await createOrg(runtime, asUser(users.owner), 'Hộp thư')).orgId;
     await admin(async (c) => {
-      await c.query(`INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'admin')`, [orgId, users.admin]);
+      await c.query(`INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'admin'), ($1, $3, 'member'), ($1, $4, 'viewer')`, [orgId, users.admin, users.member, users.viewer]);
       const detail = JSON.stringify({ queue: 'finance-portal-list', jobId: randomUUID(), retries: 0, failures: 1 });
       await c.query(
         `INSERT INTO crove_kernel.inbox_item (org_id, id, kind, dedupe_key, detail, dismissed_at, dismissed_by) VALUES
@@ -110,6 +110,23 @@ suite('dead-letter Inbox items on PostgreSQL (#1747)', () => {
     await root.connect();
     await root.query(`DROP DATABASE IF EXISTS ${dbName} WITH (FORCE)`);
     await root.end();
+  });
+
+  // #1780: the rows themselves, not only kernel.inbox.raised, are for owners, admins and the system context.
+  it('lets only owners, admins and the system context read items, and so dismiss them', async () => {
+    const count = (c: pg.Client) => c.query<{ n: number }>('SELECT count(*)::int AS n FROM crove_kernel.inbox_item WHERE org_id = $1', [orgId]).then((r) => r.rows[0]?.n);
+    expect(await inContext(appUrl, asMember(users.owner), count)).toBe(2);
+    expect(await inContext(appUrl, asMember(users.admin), count)).toBe(2);
+    expect(await inContext(workerUrl, asSystem, count)).toBe(2);
+    for (const user of [users.member, users.viewer]) {
+      expect(await inContext(appUrl, asMember(user), count)).toBe(0);
+      // An update reads the rows it changes: a member or a viewer dismisses nothing.
+      expect(
+        await inContext(appUrl, asMember(user), (c) =>
+          outcome(c.query('UPDATE crove_kernel.inbox_item SET dismissed_at = now(), dismissed_by = crove_kernel.ctx_user_id() WHERE id = $1', [items.open])),
+        ),
+      ).toEqual({ ok: true, rows: 0 });
+    }
   });
 
   it("records a dismissal only by the context's own user", async () => {
