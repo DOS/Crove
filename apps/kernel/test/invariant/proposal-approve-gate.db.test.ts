@@ -193,6 +193,25 @@ suite('the approval gate in the database (#1793)', () => {
   it("holds the same policy table as approval.ts, and nobody approves an unknown command", async () => {
     const policies = approvalPolicies();
     expect(policies.length).toBeGreaterThan(0);
+    // Every command registered as a proposal command has the same policy on both sides (nobody, when approval.ts lists
+    // none), and approval.ts lists no command that is not one: a command added on one side only fails here.
+    const registered = [...kernelCommands, ...financeCommands, prepare1793, proposal1793]
+      .filter((c) => (c as CommandDef<unknown, unknown>).access === 'proposal')
+      .map((c) => c.name);
+    expect(registered.length).toBeGreaterThan(policies.length);
+    for (const p of policies) expect(registered, `${p.command} is a registered proposal command`).toContain(p.command);
+    for (const command of registered) {
+      const expected = policies.find((p) => p.command === command) ?? { roles: [], permission: null, fourEyes: true, ledger: false };
+      const row = await admin(async (c) =>
+        (
+          await c.query<{ roles: string[]; permission: string | null; four_eyes: boolean; ledger: boolean }>(
+            'SELECT roles, permission, four_eyes, ledger FROM crove_kernel.approval_command_policy($1)',
+            [command],
+          )
+        ).rows[0],
+      );
+      expect(row, command).toEqual({ roles: [...expected.roles], permission: expected.permission, four_eyes: expected.fourEyes, ledger: expected.ledger });
+    }
     for (const p of [...policies, { command: 't1793.unknown', roles: [], permission: null, fourEyes: true, ledger: false }]) {
       const row = await admin(async (c) =>
         (
