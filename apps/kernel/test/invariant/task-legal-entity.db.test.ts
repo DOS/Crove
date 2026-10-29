@@ -81,12 +81,13 @@ suite('tasks and task comments per legal entity on PostgreSQL (#1762)', () => {
     }
   }
 
-  function connect() {
+  function connect(upgraded = false) {
     const runtimeFor = (url: string) => {
       const pool = createPool({ connectionString: url, max: 4 });
       pools.push(pool);
-      // No context token key: the database starts at a version before enter_user_context (#1822).
-      return new Runtime(createDb(pool), { manifests: TEST_MANIFESTS, contextTokenKey: null }).register({
+      // Before the upgrade no context token key: the database is at a version before enter_user_context. After it the
+      // suite's key (CROVE_CONTEXT_TOKEN_KEY, which migrate installed): #1822 step 2 revokes enter_context from crove_app.
+      return new Runtime(createDb(pool), { manifests: TEST_MANIFESTS, ...(upgraded ? {} : { contextTokenKey: null }) }).register({
         commands: [...kernelCommands, ...financeCommands],
         queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries],
       });
@@ -227,7 +228,7 @@ suite('tasks and task comments per legal entity on PostgreSQL (#1762)', () => {
     await migrate({ adminUrl, dir: MIGRATIONS });
     // Connections opened before the migration may hold plans of the tables as they were.
     for (const pool of pools.splice(0)) await pool.end();
-    connect();
+    connect(true);
   }, 300_000);
 
   afterAll(async () => {

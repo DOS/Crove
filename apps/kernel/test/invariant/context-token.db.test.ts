@@ -269,14 +269,19 @@ suite('context tokens: enter_user_context on PostgreSQL (#1822, ADR-0028 section
       new Runtime(createDb(pool), { manifests: TEST_MANIFESTS, contextTokenKey }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: 'in.test' }) });
     const ctx = { actor: asUser(users.owner), orgId: orgA };
     await expect(make(keyed, KEY).query('kernel.task.list', {}, ctx)).resolves.toBeDefined();
-    // Step 2 of #1822 revokes enter_context from crove_app: a runtime without a key is then refused, never let in.
+    // Without a key the runtime calls enter_context: let in while crove_app may call it, refused once #1822 step 2
+    // revokes it.
+    const granted = await withAdmin(
+      async (a) =>
+        (await a.query<{ can: boolean }>(`SELECT has_function_privilege('crove_app', 'crove_kernel.enter_context(uuid,uuid)', 'EXECUTE') AS can`)).rows[0]?.can,
+    );
     const keylessOutcome = await make(keyless, null)
       .query('kernel.task.list', {}, ctx)
       .then(
         () => 'entered',
         (error: unknown) => (error as { code?: string }).code ?? 'unknown',
       );
-    expect(['entered', 'FORBIDDEN', 'INTERNAL']).toContain(keylessOutcome);
+    expect(keylessOutcome).toBe(granted ? 'entered' : 'FORBIDDEN');
     // A key the database does not hold: the token path is taken, and the database refuses it.
     await expect(make(wrong, randomBytes(32).toString('base64')).query('kernel.task.list', {}, ctx)).rejects.toMatchObject({ code: 'INTERNAL' });
   });
