@@ -111,6 +111,7 @@ docker compose exec db psql -U postgres -c "SELECT verified_at, ok, batches, row
 | `chain_broken`, `window_gap`, `batch_hash_mismatch`, `chain_hash_mismatch`, `object_unreadable`, `object_out_of_order` | A batch in the store was changed, removed or replaced. With `s3` and Object Lock this should be impossible; check the bucket's lock and access logs. |
 | `object_missing` | The database recorded a batch the store does not have. |
 | `version_regressed`, `numbers_gap`, `entities_gap`, `allocations_gap`, `series_gap` | A batch of a lower version follows a higher one, or a batch does not take its numbers (versions 2 and up), legal entities (versions 3 and up), number allocations (versions 4 and up) or number series (version 5) from where the last one stopped: a worker older than #977, #1489, #1594 or #1623 wrote to the archive, or a batch was replaced. The numbers, entities or series in that stretch are not anchored. Find the deploy that ran the old worker. |
+| `series_period_mismatch` | A `number_series:` row verifies as written, but its period key does not fit the reset of its doc type (`YYYY` for yearly, `YYYY-MM` for monthly, `-` for never; #1820, `crove_kernel.archive_series_misfits`). The doc type's reset was switched, a number given out, and the reset switched back before the archiver anchored the series. Legitimate numbering never does this: the reset is locked once a doc type has numbers. |
 | `record_mismatch` | `crove_kernel.archive_batch` disagrees with the store. The store is the authority. |
 
 **What to do**

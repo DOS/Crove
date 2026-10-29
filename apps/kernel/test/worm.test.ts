@@ -293,8 +293,9 @@ describe('archive verifier across batch versions (#1624, #1623)', () => {
     return batches;
   }
 
-  // Verifies the batches as stored objects (a batch may lack a field), every one recorded in the database.
-  async function verify(batches: Array<Omit<ArchiveBatch, 'allocationsFrom' | 'seriesFrom'> & Partial<ArchiveBatch>>) {
+  // Verifies the batches as stored objects (a batch may lack a field), every one recorded in the database; `misfits` are
+  // the series archive_series_misfits() names.
+  async function verify(batches: Array<Omit<ArchiveBatch, 'allocationsFrom' | 'seriesFrom'> & Partial<ArchiveBatch>>, misfits: string[] = []) {
     const objects = new Map(batches.map((b) => [archiveKey(b.seq), new TextEncoder().encode(JSON.stringify(b))]));
     const store: ArchiveStore = {
       put: async () => {},
@@ -313,7 +314,8 @@ describe('archive verifier across batch versions (#1624, #1623)', () => {
           object_key: archiveKey(b.seq),
         }));
       }
-      const fn = /crove_kernel\.(archive_\w+_hashes)\(/.exec(query.sql)?.[1];
+      if (query.sql.includes('archive_series_misfits()')) return misfits.map((ref) => ({ ref }));
+      const fn =/crove_kernel\.(archive_\w+_hashes)\(/.exec(query.sql)?.[1];
       if (fn) {
         const [from, to] = query.parameters as [string, string];
         ranges.push({ fn, from, to });
@@ -385,5 +387,19 @@ describe('archive verifier across batch versions (#1624, #1623)', () => {
       { version: 4, ...later(3), allocationsFrom: at(2) },
     ]);
     expect((await verify(batches)).result.problems).toEqual([{ code: 'version_regressed', seq: 3 }]);
+  });
+
+  it('reports an anchored series whose period key does not fit its reset under the batch that anchored it (#1820)', async () => {
+    const batches = chain([
+      v3,
+      { version: 4, ...later(2), allocationsFrom: EPOCH },
+      { version: 5, ...later(3), allocationsFrom: at(2), seriesFrom: EPOCH },
+    ]);
+    // number_series:o:1 is anchored by batch 3; number_series:o:9 is not anchored yet and waits for its batch.
+    expect((await verify(batches, ['number_series:o:1', 'number_series:o:9'])).result.problems).toEqual([
+      { code: 'series_period_mismatch', seq: 3, ref: 'number_series:o:1' },
+    ]);
+    // Before version 5 nothing anchors a series, so the check does not run.
+    expect((await verify(batches.slice(0, 2), ['number_series:o:1'])).result.problems).toEqual([]);
   });
 });
