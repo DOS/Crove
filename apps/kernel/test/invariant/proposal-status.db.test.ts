@@ -185,7 +185,8 @@ suite('proposal status transitions on PostgreSQL (#1707)', () => {
         for (const to of STATUSES.filter((s) => s !== from)) {
           const outcome = await as(writer, (c) => c.query(move(from, to), [rows[from], owner, orgId]));
           const where = `${writer.name}: ${from} -> ${to}`;
-          if (EITHER.has(`${from}>${to}`) && !outcome.ok) {
+          // The system context (the worker executing an agent's approval) keeps the move either way.
+          if (writer.name !== 'system' && EITHER.has(`${from}>${to}`) && !outcome.ok) {
             expect(outcome, where).toMatchObject({ ok: false, ...REFUSED });
           } else if (ALLOWED.has(`${from}>${to}`)) {
             expect(outcome, where).toMatchObject({ ok: true });

@@ -277,7 +277,8 @@ suite('audit rows naming a proposal on PostgreSQL (#1695)', () => {
             try {
               await c.query(`UPDATE crove_kernel.proposal SET status = 'approved', executed_command_id = gen_random_uuid() WHERE org_id = $1 AND id = $2`, [o.orgId, pending]);
             } catch (error) {
-              if ((error as { message?: string }).message !== 'PROPOSAL_STATUS_TRANSITION') throw error;
+              const refused = error as { code?: string; message?: string };
+              if (refused.code !== '23514' || refused.message !== 'PROPOSAL_STATUS_TRANSITION') throw error;
               await c.query('ROLLBACK TO SAVEPOINT approve');
               await c.query('SELECT crove_kernel.proposal_approve($1::uuid, 1, gen_random_uuid())', [pending]);
             }
