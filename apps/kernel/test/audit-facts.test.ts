@@ -12,8 +12,14 @@
 //   as are facts handed to ctx.audit whole that are neither written out nor a traced declaration, or
 // - a fact's whole value is a parameter (a command's `input`) of a function that is not a helper read below, or a name
 //   destructured from a classified property (`const { tax_code: code } = before`).
-// Casts, parentheses and non-null assertions are seen through. A value computed before the call (a comparison,
-// arithmetic, any other call's result) holds none of what it read. A helper that passes its parameter on to ctx.audit
+// - a fact reads a query's column by the alias a classified column was selected as (`select('tax_code as code')`), or
+//   a name holds a call's result computed from a classified column (`formatTaxCode(before.tax_code)`) by a call that
+//   neither masks (auditValue, a hash) nor takes ctx, or
+// - facts are written through anything but ctx.audit(...) or a DomainError (`c.audit(...)`, a destructured `audit`)
+//   (#1821).
+// What a name is given after its declaration (`facts = { ...facts, email }`, Object.assign(name, ...)) is read like its
+// initializer. Casts, parentheses and non-null assertions are seen through. A length or size of a value is a count. A
+// value computed before the call (a comparison, arithmetic, a call that takes ctx) holds none of what it read. A helper that passes its parameter on to ctx.audit
 // has every call of it in its file read: as the facts (social's bulk-edit `audit(ctx, result, facts)`, where a call
 // whose facts are not written out is a finding) or as a fact's value (`done(reason)`); a helper with no call in its file
 // is a finding. Any other destructured name is checked by its name only, and the db tests (audit-facts.db.test.ts and
@@ -25,10 +31,35 @@ import { readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { auditValue, columns, type DataClass } from '@crove/kernel-contract';
-import { ROOT, SCANNED, balanced, blank, classifiedColumns, snake, sources } from './source-scan.ts';
+import {
+  BUILT,
+  COPY_OF,
+  QUERY,
+  ROOT,
+  SCANNED,
+  balanced,
+  blank,
+  classifiedColumns,
+  collapse,
+  escape,
+  heldPart,
+  objectish,
+  snake,
+  sources,
+  splitTop,
+  unreadProperties,
+  unwrap,
+  valueAt,
+  variables,
+} from './source-scan.ts';
+
+// A call that masks or counts what it is given: its result is no classified value (#1821).
+const MASKS = /(?:^|\.)(?:auditValue|keyedHash|hash\w*|sha\d+|digest\w*|count\w*)$/i;
 
 // Facts whose key or value names a classified column but holds internal data, per file, with the reason. An entry is
-// `<fact key> <- <value>` (whitespace collapsed; the key itself for a shorthand property) and covers that fact only.
+// `<fact key> <- <value>` (whitespace collapsed; the key itself for a shorthand property) and covers that fact only;
+// a name with a declaration is listed with its initializer, `<key> <- <name> = <initializer>`, and what is written to
+// it after the declaration is still read (#1821).
 const ALLOWED: Record<string, Record<string, string>> = {
   'packages/kernel/src/agents.ts': {
     'proposal_command <- info.name': 'the name of the command a proposal runs',
@@ -36,42 +67,27 @@ const ALLOWED: Record<string, Record<string, string>> = {
   },
   'modules/social/src/review-links.ts': {
     'cleared <- body === null': 'whether the reply was cleared, a boolean',
-    'member <- userId': "the removed member's user id, from the event's parsed payload (zod's .data)",
+    'member <- userId = data.data.userId': "the removed member's user id, from the event's parsed payload (zod's .data)",
   },
   'packages/kernel/src/proposal-reminders.ts': {
     'policy <- input': "the command's whole input, the policy's three day counts",
     'recipients <- Object.fromEntries([...recipients].map(([s, ids]) => [s, ids.length]))': 'how many members each stage reminded, a count per stage',
   },
   'packages/kernel/src/org-address.ts': { 'cleared <- email === null': 'whether the contact address was cleared, a boolean' },
-  'modules/crm/src/booking-feed.ts': { 'member <- userId': "the removed member's user id, from the event's parsed payload (zod's .data)" },
+  'modules/crm/src/booking-feed.ts': { 'member <- userId = data.data.userId': "the removed member's user id, from the event's parsed payload (zod's .data)" },
   'modules/finance/src/accounts.ts': {
     'name <- account.name': "the previous name of an account of the org's chart (crove_finance.account.name, internal)",
-    'name <- name': "the new name of an account of the org's chart (crove_finance.account.name, internal)",
+    'name <- name = input.name ?? account.name': "the new name of an account of the org's chart (crove_finance.account.name, internal)",
   },
   'modules/finance/src/bank.ts': { 'bankAccount <- input.bankAccount': 'the chart account code (112x) the statement is for, not a bank account number' },
   'modules/finance/src/missing-invoices.ts': { 'skipped <- skipped': 'the periods too large to reconcile' },
   'modules/finance/src/portal-list.ts': { 'skipped <- input.skippedCount': "the count of the portal list's skipped rows, not the rows" },
   'modules/social/src/archive.ts': { 'skipped <- result.skipped.map((s) => ({ post_id: s.postId, reason: s.reason }))': 'the post ids left out and why' },
   'modules/social/src/bulk-edit.ts': { 'skipped <- result.skipped.map((s) => ({ post_id: s.postId, reason: s.reason }))': 'the post ids left out and why' },
-  'modules/social/src/digest.ts': { 'skipped <- skipped': 'the count of digest mails that failed' },
-  'modules/social/src/report-branding.ts': { 'name <- name': "the org's own brand name on its reports (crove_social.report_branding.display_name, internal)" },
+  'modules/social/src/digest.ts': { 'skipped <- skipped = 0': 'the count of digest mails that failed' },
+  'modules/social/src/report-branding.ts': { 'name <- name = input.name ? input.name : null': "the org's own brand name on its reports (crove_social.report_branding.display_name, internal)" },
   'modules/social/src/report-schedules.ts': { 'recipients <- recipients.length': 'the count of recipients, never their addresses' },
 };
-
-// The expression from `start`: up to the next comma, semicolon or closing bracket at its own depth (a semicolon ends a
-// statement, so an initializer or an assignment's right side stops there too).
-function valueAt(text: string, start: number): string {
-  let depth = 0;
-  for (let i = start; i < text.length; i++) {
-    const c = text[i] as string;
-    if ('([{'.includes(c)) depth++;
-    else if (')]}'.includes(c)) {
-      if (depth === 0) return text.slice(start, i);
-      depth--;
-    } else if ((c === ',' || c === ';') && depth === 0) return text.slice(start, i);
-  }
-  return text.slice(start);
-}
 
 // An expression with every auditValue(...) call cut out (blanked, so offsets keep).
 function withoutAuditValue(expr: string): string {
@@ -82,88 +98,6 @@ function withoutAuditValue(expr: string): string {
     out = `${out.slice(0, at)}${' '.repeat(open - at + call.length)}${out.slice(open + call.length)}`;
   }
   return out;
-}
-
-const collapse = (s: string) => s.replace(/\s+/g, ' ').trim();
-
-// A query whose result a name holds: what it selects or returns is what a fact that holds it carries.
-const QUERY = /\b(?:selectFrom|updateTable|insertInto|deleteFrom)\s*\(|^(?:await\s+)?sql\b/;
-// An empty object, array, Map or Set, filled by the writes that follow it.
-const BUILT = /^(?:\{\s*\}|\[\s*\]|new\s+(?:Map|Set)\s*(?:<[^>]*>)?\s*\(\s*\))(?:\s+as\s+[^]*)?$/;
-// A call whose result carries the values it reads (a copy, a projection, a string of them); any other call, a comparison
-// or arithmetic computes a new value.
-const PASS_THROUGH =
-  /(?:^|\.)(?:map|flatMap|filter|slice|concat|trim|trimStart|trimEnd|toLowerCase|toUpperCase|normalize|join|sort|toSorted|toString|padStart|padEnd|at|find|values|entries|replace|replaceAll|split|substring|substr|toLocaleLowerCase|toLocaleUpperCase)$|^(?:String|Object\.fromEntries|Object\.assign|Object\.values|Object\.entries|JSON\.stringify|Array\.from|structuredClone)$/;
-// A variable copied whole by a pass-through method: `raw.trim()`, `list.slice()`, `names.join(',')`.
-const COPY_OF =
-  /(?<![\w$.])([A-Za-z_$][\w$]*)\s*!?\s*(?:\?\.|\.)\s*(?:filter|slice|concat|trim|trimStart|trimEnd|toLowerCase|toUpperCase|normalize|join|sort|toSorted|toString|padStart|padEnd|at|find|values|entries|replace|replaceAll|split|substring|substr|toLocaleLowerCase|toLocaleUpperCase)\s*\(/g;
-// Words an expression may hold that are not variables.
-const KEYWORDS = new Set(['true', 'false', 'null', 'undefined', 'await', 'new', 'typeof', 'void', 'as', 'in', 'of', 'instanceof', 'satisfies', 'const', 'this']);
-
-const escape = (name: string) => name.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
-
-// The part of a name's initializer whose values the name holds: the branches of a choice, the whole of a path, a
-// literal or a pass-through call, and null for a value computed from what it reads (`a !== b`, `count + 1`, `f(x)`).
-function heldPart(init: string): string | null {
-  // A non-null assertion (`before!.tax_code`) is not a negation: it goes before the operators are read.
-  const expr = unwrap(init.replace(/^await\s+/, ''))
-    .replace(/\s+(?:as|satisfies)\s+[^]*$/, '')
-    .replace(/([\w$)\]])!(?!=)/g, '$1');
-  let depth = 0;
-  let top = '';
-  for (let i = 0; i < expr.length; i++) {
-    const c = expr[i] as string;
-    if ('([{'.includes(c)) {
-      if (depth === 0) top += c;
-      depth++;
-    } else if (')]}'.includes(c)) {
-      depth--;
-      if (depth === 0) top += c;
-    } else if (depth === 0) {
-      // A choice at the top: its branches are what the name holds, whatever the condition compares.
-      if (c === '?' && expr[i + 1] !== '.' && expr[i + 1] !== '?' && expr[i - 1] !== '?') return expr.slice(i + 1);
-      top += c;
-    }
-  }
-  if (/===|!==|==|!=|<=|>=|[<>*%]|(?<![=!<>])!(?!=)|\s-\s/.test(top.replace(/\?\?|=>/g, ' '))) return null;
-  const call = /([A-Za-z_$][\w$.]*)\s*(?:\?\.)?\(\)\s*!?$/.exec(top);
-  if (call && !PASS_THROUGH.test(call[1] as string)) return null;
-  return expr;
-}
-
-// Whether an expression is an object written out, or a choice between objects written out (`x ? { a } : { b }`).
-// A choice with any other branch (`x ? { a } : before`) is a value, so each branch is traced.
-function objectish(expr: string): boolean {
-  // Only an object that is the whole expression: `{ code: null }.code ?? party.tax_code` is a value.
-  const bare = unwrap(expr);
-  if (bare.startsWith('{')) return balanced(bare, 0) === bare;
-  const held = heldPart(expr);
-  if (held === null || held === expr.replace(/^await\s+/, '')) return false;
-  const branches: string[] = [];
-  let depth = 0;
-  let branch = '';
-  for (let i = 0; i < held.length; i++) {
-    const c = held[i] as string;
-    if ('([{'.includes(c)) depth++;
-    else if (')]}'.includes(c)) depth--;
-    if (c === ':' && depth === 0) {
-      branches.push(branch);
-      branch = '';
-    } else branch += c;
-  }
-  return [...branches, branch].every((b) => /^\s*\(?\s*\{/.test(b));
-}
-
-// An expression without the parentheses, casts and non-null assertions around it: `(before as Row)!` is `before`.
-function unwrap(expr: string): string {
-  let out = expr.trim();
-  for (;;) {
-    let next = out.replace(/!+$/, '').trim();
-    if (next.startsWith('(') && balanced(next, 0) === next) next = next.slice(1, -1).trim();
-    next = /^([A-Za-z_$][\w$.]*)!?\s+(?:as|satisfies)\s+/.exec(next)?.[1] ?? next;
-    if (next === out) return out;
-    out = next;
-  }
 }
 
 interface Finding {
@@ -253,13 +187,14 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
   // Where the facts being read are written (the ctx.audit call, or a wrapper's call).
   let useAt = 0;
   // The declaration of `name` in scope at `at`: where its initializer starts, and the initializer.
+  // A declaration with no initializer (`let facts;`) holds nothing until it is assigned.
   const declaration = (name: string, at: number) => {
-    const decl = [...code.slice(0, at).matchAll(new RegExp(`\\b(?:const|let|var)\\s+${escape(name)}\\s*(?::[^=;]+)?=(?![=>])\\s*`, 'g'))]
+    const decl = [...code.slice(0, at).matchAll(new RegExp(`\\b(?:const|let|var)\\s+${escape(name)}\\s*(?::[^=;]+)?(?:=(?![=>])\\s*|(?=;))`, 'g'))]
       .filter((d) => inScope(d.index ?? 0, at))
       .at(-1);
     if (!decl) return undefined;
     const from = (decl.index ?? 0) + decl[0].length;
-    return { index: decl.index ?? 0, from, init: valueAt(code, from).trim() };
+    return { index: decl.index ?? 0, from, init: decl[0].includes('=') ? valueAt(code, from).trim() : '' };
   };
   const isRow = (name: string, at: number) => {
     const decl = declaration(name, at);
@@ -267,10 +202,19 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
   };
 
   // One fact: its key, then its value. A listed `<key> <- <value>` passes.
+  // A listed name with a declaration is listed with its initializer (`name <- name = input.name ?? account.name`), and
+  // what is written to it later is still read (#1821).
   const checkFact = (key: string, value: string, at: number, depth = 0) => {
     const trimmed = value.trim();
-    if (Object.hasOwn(allowed, `${key} <- ${collapse(trimmed)}`)) return;
     const flag = reporter(at, key);
+    if (/^[A-Za-z_$][\w$]*$/.test(trimmed)) {
+      const decl = enclosingAll(at).some((f) => f.params.includes(trimmed)) ? undefined : declaration(trimmed, at);
+      if (decl && Object.hasOwn(allowed, `${key} <- ${trimmed} = ${collapse(decl.init)}`)) {
+        checkName(trimmed, at, flag, depth + 1, true, true);
+        return;
+      }
+      if (!decl && Object.hasOwn(allowed, `${key} <- ${trimmed}`)) return;
+    } else if (Object.hasOwn(allowed, `${key} <- ${collapse(trimmed)}`)) return;
     if (isClassified(key) && !/^auditValue\s*\(/.test(trimmed)) {
       flag('the key names a classified column and its value is not auditValue(...)');
       return;
@@ -287,8 +231,17 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
   const checkValue = (value: string, at: number, flag: (problem: string) => void, depth: number) => {
     const start = code.indexOf(value, Math.max(0, at - 1));
     const bare = withoutAuditValue(value);
-    for (const read of bare.matchAll(/\.\s*([A-Za-z_$][\w$]*)\b(?!\s*\()/g)) {
+    // A read's length or size is a count, not the value (`party.name.length`).
+    for (const read of bare.matchAll(/\.\s*([A-Za-z_$][\w$]*)\b(?!\s*\()(?!\s*(?:\?\.|\.)\s*(?:length|size)\b)/g)) {
       if (isClassified(read[1] as string)) flag(`the value reads the classified column ${read[1]} outside auditValue(...)`);
+    }
+    // A read of a query's result by the alias a classified column was selected as (`select('tax_code as code')`).
+    for (const read of bare.matchAll(/(?<![\w$.])([A-Za-z_$][\w$]*)\s*!?\s*(?:\?\.|\.)\s*([A-Za-z_$][\w$]*)\b(?!\s*\()/g)) {
+      const decl = declaration(read[1] as string, at);
+      if (!decl || !QUERY.test(decl.init)) continue;
+      for (const [column, alias] of selected(decl.init, decl.from)) {
+        if (alias === read[2] && alias !== column && isClassified(column)) flag(`the value reads the classified column ${column} as ${alias} outside auditValue(...)`);
+      }
     }
     // A read by the column's name: `row['tax_code']`.
     // An array written out (`['title']`) is no read.
@@ -334,11 +287,14 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
 
   // A fact that is a variable of this file. A query's result is checked by the columns it selects (a whole row is
   // refused); an empty object, array, Map or Set by every write to it; an object written out key by key; any other by
-  // the part of its initializer it holds. A parameter that is the whole value is checked at the calls of its function
-  // when that function is a wrapper, and is a finding otherwise (a command's `input` handed over whole). A destructured
-  // name is a finding when it renames a classified property, and is otherwise checked by its name only. Returns
-  // whether the name was traced.
-  const checkName = (name: string, at: number, flag: (problem: string) => void, depth: number, whole = true): boolean => {
+  // the part of its initializer it holds, and a call's result by its arguments unless it masks or takes ctx (#1821).
+  // Every later assignment (`facts = { ...facts, email }`) and Object.assign(name, ...) up to the call is read the
+  // same way. A parameter that is the whole value is checked at the calls of its function when that function is a
+  // wrapper, and is a finding otherwise (a command's `input` handed over whole). A destructured name is a finding when
+  // it renames a classified property, and is otherwise checked by its name only. With `listed`, the fact is an
+  // allowlist entry naming this declaration (`name <- name = <initializer>`): its initializer is taken as listed, and
+  // only what is written to the name after it is read. Returns whether the name was traced.
+  const checkName = (name: string, at: number, flag: (problem: string) => void, depth: number, whole = true, listed = false): boolean => {
     const owner = enclosingAll(at).find((f) => f.params.includes(name));
     if (owner) {
       // A function whose returns a spread reads has its parameters bound to the call's arguments, read at the call.
@@ -361,33 +317,16 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
       return false;
     }
     const { from, init } = decl;
-    const built =BUILT.test(init) || /^new\s+(?:Map|Set)\s*</.test(init);
+    const built = BUILT.test(init) || /^new\s+(?:Map|Set)\s*</.test(init);
     // A container is read up to the fact's own call (`useAt`), even when reached through another declaration.
     const end = Math.max(at, useAt);
-    const key = `${decl.index}:${built ? end : ''}`;
+    const key = `${decl.index}:${end}`;
     if (traced.has(key)) return true;
     traced.add(key);
-    if (QUERY.test(init)) {
-      if (/\b(?:selectAll|returningAll)\s*\(/.test(init) || /^(?:await\s+)?sql\b/.test(init)) {
-        flag(`${name} is a whole row from the database; pass the columns it needs, classified ones through auditValue(...)`);
-        return true;
-      }
-      for (const pick of init.matchAll(/\.\s*(?:select|returning)\s*\(/g)) {
-        const open = (pick.index ?? 0) + pick[0].length - 1;
-        const list = balanced(init, open);
-        for (const q of list.matchAll(/['"]/g)) {
-          if ((q.index ?? 0) > 0 && /['"]/.test(list[(q.index ?? 0) - 1] as string)) continue;
-          const lit = literalAt(from + open + (q.index ?? 0));
-          const column = lit?.split(/\s+as\s+/i)[0]?.split('.').at(-1);
-          if (column && isClassified(column)) flag(`${name} holds the classified column ${column} from the database`);
-        }
-      }
-      return true;
-    }
+    const scope = code.slice(from, end);
+    // A write to another variable of the same name (in a nested function or block) is not a write to this one.
+    const ours = (offset: number) => declaration(name, from + offset)?.index === decl.index;
     if (built) {
-      const scope = code.slice(from, end);
-      // A write to another variable of the same name (in a nested function or block) is not a write to this one.
-      const ours = (offset: number) => declaration(name, from + offset)?.index === decl.index;
       for (const w of scope.matchAll(new RegExp(`(?<![\\w$.])${escape(name)}\\s*(\\[[^\\]]*\\]|\\.\\s*[A-Za-z_$][\\w$]*)\\s*=(?![=>])\\s*`, 'g'))) {
         if (!ours(w.index ?? 0)) continue;
         const target = w[1] as string;
@@ -415,11 +354,40 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
           else checkValue(arg.trim(), open, flag, depth);
         }
       }
-      return true;
+    } else if (!listed) checkHeld(name, init, from, flag, depth);
+    // A later assignment replaces what the name holds; Object.assign(name, ...) adds to it.
+    for (const w of scope.matchAll(new RegExp(`(?<![\\w$.])(?<!\\b(?:const|let|var)\\s+)${escape(name)}\\s*=(?![=>])\\s*`, 'g'))) {
+      if (!ours(w.index ?? 0)) continue;
+      const rhsFrom = from + (w.index ?? 0) + w[0].length;
+      checkHeld(name, valueAt(code, rhsFrom).trim(), rhsFrom, flag, depth);
+    }
+    for (const w of scope.matchAll(new RegExp(`\\bObject\\s*\\.\\s*assign\\s*\\(\\s*${escape(name)}\\b\\s*,`, 'g'))) {
+      if (!ours(w.index ?? 0)) continue;
+      const open = from + (w.index ?? 0) + w[0].indexOf('(');
+      for (const arg of splitTop(balanced(code, open).slice(1, -1)).slice(1)) {
+        if (objectish(arg.trim())) checkObject(arg.trim(), code.indexOf(arg.trim(), open), depth);
+        else checkValue(arg.trim(), open, flag, depth);
+      }
+    }
+    return true;
+  };
+
+  // What an initializer or an assignment's right side gives a name: a query's columns, an object's facts, an array's
+  // elements, the part of a value it holds, or the arguments of a call that computes from them.
+  const checkHeld = (name: string, init: string, from: number, flag: (problem: string) => void, depth: number) => {
+    if (QUERY.test(init)) {
+      if (/\b(?:selectAll|returningAll)\s*\(/.test(init) || /^(?:await\s+)?sql\b/.test(init)) {
+        flag(`${name} is a whole row from the database; pass the columns it needs, classified ones through auditValue(...)`);
+        return;
+      }
+      for (const [column] of selected(init, from)) {
+        if (isClassified(column)) flag(`${name} holds the classified column ${column} from the database`);
+      }
+      return;
     }
     if (objectish(init)) {
       checkObject(init, from, depth);
-      return true;
+      return;
     }
     // An array written out holds its elements: each, or each spread (`...(a !== b ? ['title'] : [])`), by what it holds.
     if (init.startsWith('[') && balanced(init, 0) === init) {
@@ -428,11 +396,46 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
         const held = item === '' ? null : heldPart(item);
         if (held !== null) checkValue(held.trim(), from + init.indexOf(held.trim()), flag, depth);
       }
-      return true;
+      return;
     }
     const held = heldPart(init);
-    if (held !== null) checkValue(held.trim(), from + init.indexOf(held.trim()), flag, depth);
-    return true;
+    if (held !== null) {
+      checkValue(held.trim(), from + init.indexOf(held.trim()), flag, depth);
+      return;
+    }
+    // A call computes a new value, but one made from a classified value may still be it (`formatTaxCode(tax_code)`):
+    // its arguments are read unless the call masks them or takes ctx (a command or query helper returning an id).
+    const call = /^([A-Za-z_$][\w$.]*)\s*(?:<[^>]*>)?\s*\(/.exec(unwrap(init.replace(/^await\s+/, '')));
+    if (!call || MASKS.test(call[1] as string)) return;
+    const expr = unwrap(init.replace(/^await\s+/, ''));
+    const list = balanced(expr, call[0].length - 1);
+    if (list.length + call[0].length - 1 !== expr.length) return;
+    const args = splitTop(list.slice(1, -1)).map((a) => a.trim());
+    if (args.includes('ctx')) return;
+    // Only an argument that reads a classified column itself counts: a row or a payload handed over is the callee's.
+    for (const arg of args) {
+      for (const read of withoutAuditValue(arg).matchAll(/\.\s*([A-Za-z_$][\w$]*)\b(?!\s*\()(?!\s*(?:\?\.|\.)\s*(?:length|size)\b)/g)) {
+        if (isClassified(read[1] as string)) flag(`${name} is computed by ${call[1]}(...) from the classified column ${read[1]}; mask it with auditValue(...)`);
+      }
+    }
+  };
+
+  // The columns a query selects or returns, each with the name it is read by (`p.tax_code as code` is read as `code`).
+  const selected = (init: string, from: number): Array<[column: string, alias: string]> => {
+    const out: Array<[string, string]> = [];
+    for (const pick of init.matchAll(/\.\s*(?:select|returning)\s*\(/g)) {
+      const open = (pick.index ?? 0) + pick[0].length - 1;
+      const list = balanced(init, open);
+      for (const q of list.matchAll(/['"]/g)) {
+        if ((q.index ?? 0) > 0 && /['"]/.test(list[(q.index ?? 0) - 1] as string)) continue;
+        const lit = literalAt(from + open + (q.index ?? 0));
+        if (!lit) continue;
+        const [source, alias] = lit.split(/\s+as\s+/i);
+        const column = source?.trim().split('.').at(-1) ?? '';
+        out.push([column, (alias ?? column).trim()]);
+      }
+    }
+    return out;
   };
 
   // Every key and value of a fact object's text, nested objects included, and its spreads.
@@ -527,6 +530,22 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
     const open = (m.index ?? 0) + m[0].length - 1;
     sites.push({ at: open, arg: `(${balanced(code, open)})` });
   }
+  // A DomainError's facts passed by name or computed (`{ audit: facts }`) are read like ctx.audit(facts).
+  for (const error of code.matchAll(/\bnew\s+DomainError\s*\(/g)) {
+    const call = balanced(code, (error.index ?? 0) + error[0].length - 1);
+    for (const m of call.matchAll(/[{,]\s*audit\s*:(?!\s*\{)\s*/g)) {
+      const at = (error.index ?? 0) + error[0].length - 1 + (m.index ?? 0) + m[0].length;
+      sites.push({ at, arg: `(${valueAt(code, at).trim()})` });
+    }
+  }
+  // The audit log is written through ctx.audit only: another receiver (`c.audit(...)`) or a destructured `audit` would
+  // write facts this scan never reads (#1821).
+  for (const m of code.matchAll(/(?<![\w$.])([A-Za-z_$][\w$]*)\s*(?:\?\.|\.)\s*audit\s*\(/g)) {
+    if (m[1] !== 'ctx') reporter(m.index ?? 0, `${m[1]}.audit(...)`)('audit facts are written through ctx.audit(...), which the scan reads; call that');
+  }
+  for (const m of code.matchAll(/\b(?:const|let|var)\s*\{[^}]*\baudit\b[^}]*\}\s*=/g)) {
+    reporter(m.index ?? 0, 'audit')('a destructured audit writes facts the scan does not read; call ctx.audit(...)');
+  }
   const wrappers: Wrapper[] = [];
   for (const site of sites) {
     useAt = site.at;
@@ -576,42 +595,6 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
   return findings;
 }
 
-// The properties of an object written out that no rule of the scan reads: anything but a spread, a shorthand, a named,
-// numeric, quoted or computed key with its value, or a method (refused on its own).
-function unreadProperties(obj: string): string[] {
-  return splitTop(obj.slice(1, -1))
-    .map((p) => p.trim())
-    .filter(
-      (p) =>
-        p !== '' &&
-        // The rest of a type argument a comma split (`x as Record<string, unknown>`).
-        !/^[\w$.[\]\s|&]*>+$/.test(p) &&
-        !/^(?:\.\.\.|[A-Za-z_$][\w$]*$|(?:[A-Za-z_$][\w$]*|\d+(?:\.\d+)?|'[^']*'|"[^"]*"|\[[^]*\])\s*:|(?:async\s+|get\s+|set\s+|\*\s*)*(?:[A-Za-z_$][\w$]*|\[[^]*\])\s*\()/.test(p),
-    );
-}
-
-// The variables an expression names: object keys, member reads, calls and keywords aside.
-function variables(expr: string): string[] {
-  const keysBlanked = expr.replace(/([{,]\s*)([A-Za-z_$][\w$]*)(\s*:)/g, (_, a: string, k: string, b: string) => `${a}${' '.repeat(k.length)}${b}`);
-  return [...keysBlanked.matchAll(/(?<![\w$.])([A-Za-z_$][\w$]*)\b(?!\s*(?:[.([]|\?\.|!\s*[.[]))/g)].map((m) => m[1] as string).filter((n) => !KEYWORDS.has(n));
-}
-
-// A list split at its top-level commas (blanked code, so no string holds a comma).
-function splitTop(list: string): string[] {
-  const out: string[] = [];
-  let depth = 0;
-  let item = '';
-  for (const c of list) {
-    if ('([{'.includes(c)) depth++;
-    else if (')]}'.includes(c)) depth--;
-    if (c === ',' && depth === 0) {
-      out.push(item);
-      item = '';
-    } else item += c;
-  }
-  return item.trim() === '' ? out : [...out, item];
-}
-
 describe('audit facts and classified columns (#1626, #1632)', () => {
   const classified = classifiedColumns();
   const files = SCANNED.flatMap((dir) => sources(join(ROOT, dir)));
@@ -631,7 +614,11 @@ describe('audit facts and classified columns (#1626, #1632)', () => {
     for (const [file, entries] of Object.entries(ALLOWED)) {
       const code = collapse(blank(readFileSync(join(ROOT, file), 'utf8')));
       for (const entry of Object.keys(entries)) {
-        const [key, value] = entry.split(' <- ') as [string, string];
+        const [key, listed] = entry.split(' <- ') as [string, string];
+        // A name listed with its initializer: the declaration is still written so.
+        const declared = /^([A-Za-z_$][\w$]*) = (.*)$/.exec(listed);
+        const value = declared ? (declared[1] as string) : listed;
+        if (declared) expect(new RegExp(`\\b${value}\\s*(?::[^=;]+)?= ${escape(declared[2] as string)}`).test(code), `${file}: ${entry}`).toBe(true);
         const shorthand = key === value && new RegExp(`[{,]\\s*${key}\\s*[,}]`).test(code);
         expect(shorthand || code.includes(`${key}: ${value}`), `${file}: ${entry}`).toBe(true);
       }
@@ -803,9 +790,48 @@ describe('audit facts and classified columns (#1626, #1632)', () => {
     ]);
   });
 
+  it('fails on aliases, reassignments, computed calls and other audit calls (#1821)', () => {
+    const check = (source: string) => scan('fixture.ts', source, classified).map((f) => `${f.fact}: ${f.problem}`);
+    // A query's column read by the alias it was selected as.
+    const aliased = "const before = await ctx.trx.selectFrom('crove_kernel.party').select(['id', 'tax_code as code']).executeTakeFirstOrThrow();";
+    expect(check(`${aliased}\nctx.audit({ previous: before.code });`)).toEqual(['previous: the value reads the classified column tax_code as code outside auditValue(...)']);
+    expect(check(`${aliased}\nctx.audit({ partyId: before.id });`)).toEqual([]);
+    // What a name is given after its declaration: an assignment, a merge, Object.assign, a declaration with no value.
+    expect(check('let facts = { id };\nfacts = { ...facts, email: p.email };\nctx.audit(facts);')).toEqual([
+      'email: the key names a classified column and its value is not auditValue(...)',
+    ]);
+    expect(check('let previous = {};\nprevious = { code: p.tax_code };\nctx.audit({ previous });')).toEqual([
+      'code: the value reads the classified column tax_code outside auditValue(...)',
+    ]);
+    expect(check('const previous = {};\nObject.assign(previous, { code: p.tax_code });\nctx.audit({ previous });')).toEqual([
+      'code: the value reads the classified column tax_code outside auditValue(...)',
+    ]);
+    expect(check('let facts;\nfacts = { email: input.email };\nctx.audit(facts);')).toEqual(['email: the key names a classified column and its value is not auditValue(...)']);
+    expect(check('let facts = { id };\nfacts = { id, done: true };\nctx.audit(facts);')).toEqual([]);
+    // A call that computes from a classified column carries it; one that masks it, counts it or takes ctx does not.
+    expect(check('const code = formatTaxCode(before.tax_code);\nctx.audit({ code });')).toEqual([
+      'code: code is computed by formatTaxCode(...) from the classified column tax_code; mask it with auditValue(...)',
+    ]);
+    expect(check('const code = keyedHash(before.tax_code);\nctx.audit({ code });')).toEqual([]);
+    expect(check('const partyId = await partyFor(ctx, booking.email);\nctx.audit({ partyId });')).toEqual([]);
+    expect(check('const source = resubmitSource(old);\nctx.audit({ source });')).toEqual([]);
+    // A length or size is a count.
+    expect(check('ctx.audit({ count: party.name.length, tagCount: before.tags?.size });')).toEqual([]);
+    // Audit facts reach the log through ctx.audit or a DomainError only, and a DomainError's facts by name are traced.
+    expect(check('c.audit({ email });')).toEqual(['c.audit(...): audit facts are written through ctx.audit(...), which the scan reads; call that']);
+    expect(check('const { audit } = ctx;\naudit({ email });')).toEqual(['audit: a destructured audit writes facts the scan does not read; call ctx.audit(...)']);
+    expect(check("const facts = { email: input.email };\nthrow new DomainError('X', 409, 'x', undefined, { audit: facts });")).toEqual([
+      'email: the key names a classified column and its value is not auditValue(...)',
+    ]);
+  });
+
   it('allows a listed fact only as listed: the same key with another value is still checked (#1632)', () => {
     const findings = (source: string) => scan('modules/finance/src/accounts.ts', source, classified).map((f) => f.fact);
-    expect(findings('ctx.audit({ code, previous: { name: account.name, active: account.active }, name, active });')).toEqual([]);
+    const declared = 'const name = input.name ?? account.name;\n';
+    expect(findings(`${declared}ctx.audit({ code, previous: { name: account.name, active: account.active }, name, active });`)).toEqual([]);
+    // A listed name is listed with its initializer: another initializer, or a later write to it, is still read (#1821).
+    expect(findings('const name = party.name;\nctx.audit({ code, name });')).toEqual(['name']);
+    expect(findings('let name = input.name ?? account.name;\nname = party.name;\nctx.audit({ code, name });')).toEqual(['name']);
     expect(findings('ctx.audit({ code, name: party.name });')).toEqual(['name']);
     expect(findings('ctx.audit({ code, owner: account.name });')).toEqual(['owner']);
   });
