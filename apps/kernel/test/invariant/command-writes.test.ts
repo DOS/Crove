@@ -210,8 +210,11 @@ function runtimeImports(raw: string, file = '', allowed: Readonly<Record<string,
     const name = m[1] ?? '';
     if (!(allowed[file] ?? []).includes(name)) problems.push(`imports ${name}`);
   }
-  // A database handle without ctx.trx's plugins: its statements would escape the declared-writes count (#1831).
-  if (/\.\s*withoutPlugins\s*\(|\.\s*getExecutor\s*\(/.test(text)) problems.push("a handle past ctx.trx's plugins");
+  // A database handle without ctx.trx's plugins, or a query compiled past them (Kysely runs a CompiledQuery without
+  // transformQuery): its statements would escape the declared-writes count and the transaction-control guard (#1831).
+  // The worker's relay runs pg-boss's own SQL on its own transaction, not a handler's.
+  if (/\b(?:withoutPlugins|getExecutor)\b/.test(text)) problems.push("a handle past ctx.trx's plugins");
+  if (/\bexecuteQuery\b|\bCompiledQuery\b/.test(text) && file !== 'apps/kernel/src/worker.ts') problems.push('a query compiled past the plugins');
   return { names, problems };
 }
 
@@ -400,6 +403,9 @@ describe('declared command writes against the manifests (#1697, #1710)', () => {
       // Past the counting plugin of ctx.trx (#1831).
       'await ctx.trx.withoutPlugins().insertInto(table).values(row).execute();',
       'const executor = ctx.trx.getExecutor();',
+      `const g = ctx.trx['withoutPlugins'];`,
+      'const { getExecutor } = ctx.trx;',
+      `await ctx.trx.executeQuery(CompiledQuery.raw('COMMIT'));`,
       // The class passed on through another module (#1771 review): kernel.ts exporting it, another file importing it.
       'export {\n  Runtime,\n};',
       'export default Runtime;',

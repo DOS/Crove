@@ -1697,6 +1697,63 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
     expect(events).toBe(0);
   });
 
+  it("refuses a handler's statement that takes control of the transaction, checked or not (#1831)", async () => {
+    const suffix = randomUUID().slice(0, 8);
+    const statements = {
+      commit: sql`COMMIT`,
+      tail: sql`SELECT 1; COMMIT`,
+      rollback: sql`ROLLBACK`,
+      begin: sql`BEGIN`,
+      runtimeSavepoint: sql`SAVEPOINT ${sql.raw('crove_try_run_1')}`,
+      runtimeRollback: sql`ROLLBACK TO SAVEPOINT ${sql.id('crove_try_run_1')}`,
+    };
+    const probes = Object.entries(statements).flatMap(([key, statement]) =>
+      [undefined, []].map(
+        (writes) =>
+          defineCommand({
+            sideEffect: 'none',
+            name: `t1831.${key}_${writes ? 'checked' : 'unchecked'}_${suffix}`,
+            input: z.object({}),
+            risk: 'R1',
+            access: 'system',
+            ...(writes ? { writes } : {}),
+            handler: async (ctx) => {
+              await statement.execute(ctx.trx);
+              return { ok: true };
+            },
+          }) as CommandDef<unknown, unknown>,
+      ),
+    );
+    // A savepoint of the handler's own, as Social's digest sets around one mail, stays allowed.
+    const own = defineCommand({
+      sideEffect: 'none',
+      name: `t1831.own_savepoint_${suffix}`,
+      input: z.object({}),
+      risk: 'R1',
+      access: 'system',
+      writes: [],
+      handler: async (ctx) => {
+        await sql`SAVEPOINT t1831_mine`.execute(ctx.trx);
+        await sql`ROLLBACK TO SAVEPOINT t1831_mine`.execute(ctx.trx);
+        await sql`RELEASE SAVEPOINT t1831_mine`.execute(ctx.trx);
+        return { ok: true };
+      },
+    }) as CommandDef<unknown, unknown>;
+    worker.register({ commands: [...probes, own] });
+    const as = { actor: SYSTEM, orgId: orgA };
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      for (const probe of probes) {
+        await expect(worker.execute(probe.name, {}, as), probe.name).rejects.toMatchObject({ code: 'INTERNAL' });
+        expect(logged.mock.calls.flat().map(String).join('\n'), probe.name).toContain(`command ${probe.name}: `);
+        expect(logged.mock.calls.flat().map(String).join('\n'), probe.name).toContain("controls the transaction, which is the runtime's");
+      }
+    } finally {
+      logged.mockRestore();
+    }
+    await expect(worker.execute(own.name, {}, as)).resolves.toEqual({ ok: true });
+  });
+
   it('runs a command as it registered: agent access set on its definition afterwards grants an agent nothing (#1766)', async () => {
     const contactWriter = defineCommand({
       sideEffect: 'none',

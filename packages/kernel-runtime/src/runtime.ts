@@ -1,6 +1,7 @@
 // The single write path. Every state change is a typed command executed through Runtime.execute(),
 // inside one transaction that enters the tenant context checked by RLS, and writes audit + outbox.
 import { sql, type KyselyPlugin, type RawBuilder, type Transaction } from 'kysely';
+import { randomUUID } from 'node:crypto';
 import { v7 as uuidv7 } from 'uuid';
 import type { z } from 'zod';
 import { contextTaint, singleCell, type CellResolver, type Database, type Db, type MemberRole } from '@crove/db';
@@ -877,6 +878,74 @@ function countWrites(counters: readonly { n: number }[], closed: () => boolean, 
   };
 }
 
+// Why a statement would take control of the transaction from the runtime, or null. The runtime opens, commits and
+// rolls back the transaction, and owns the savepoints named crove_* (a tryRun's). A handler may set, release and roll
+// back to savepoints of its own (Social's digest does, around one mail), which cannot reach past the runtime's: a
+// ROLLBACK TO a savepoint set before a tryRun's removes the runtime's savepoint too, and its own rollback then fails.
+function transactionControl(statement: string): string | null {
+  const text = statement.trim().replace(/^\(+\s*/, '').toUpperCase();
+  if (/^(?:BEGIN|START|COMMIT|END|ABORT|PREPARE)\b/.test(text)) return text.split(/\s+/)[0] ?? text;
+  const savepoint = /^(?:SAVEPOINT|RELEASE(?:\s+SAVEPOINT)?|ROLLBACK(?:\s+(?:WORK|TRANSACTION))?\s+TO(?:\s+SAVEPOINT)?)\s+"?([^\s";]+)/.exec(text);
+  if (savepoint) return savepoint[1]?.startsWith('CROVE_') ? `a savepoint of the runtime (${savepoint[1].toLowerCase()})` : null;
+  if (/^(?:SAVEPOINT|RELEASE|ROLLBACK)\b/.test(text)) return text.split(/\s+/)[0] ?? text;
+  return null;
+}
+
+// The SQL text of a raw fragment (sql`...`, sql.raw), with what is spliced into it as text (a nested raw fragment, an
+// identifier) put back in place and every value as a placeholder.
+function rawText(node: { sqlFragments?: unknown; parameters?: unknown }): string {
+  const fragments = Array.isArray(node.sqlFragments) ? (node.sqlFragments as unknown[]) : [];
+  const parameters = Array.isArray(node.parameters) ? (node.parameters as unknown[]) : [];
+  return fragments
+    .map((fragment, i) => {
+      const parameter = parameters[i] as { kind?: unknown; name?: unknown } | undefined;
+      const spliced =
+        parameter === undefined
+          ? ''
+          : parameter.kind === 'RawNode'
+            ? rawText(parameter as { sqlFragments?: unknown; parameters?: unknown })
+            : parameter.kind === 'IdentifierNode' && typeof parameter.name === 'string'
+              ? parameter.name
+              : ' ? ';
+      return `${String(fragment)}${spliced}`;
+    })
+    .join('');
+}
+
+// The SQL text of every raw fragment of a query, however deep in the query it sits.
+function rawFragments(node: unknown, out: string[] = [], seen = new Set<object>()): string[] {
+  if (typeof node !== 'object' || node === null || seen.has(node)) return out;
+  seen.add(node);
+  if ((node as { kind?: unknown }).kind === 'RawNode') {
+    out.push(rawText(node as { sqlFragments?: unknown; parameters?: unknown }));
+    return out;
+  }
+  for (const value of Object.values(node)) rawFragments(value, out, seen);
+  return out;
+}
+
+// Refuses a handler's statement that takes control of the transaction (#1831, transactionControl): in every
+// statement of a raw fragment, after comments and dollar-quoted bodies are taken out and the text is split at
+// semicolons (the simple query protocol runs several).
+function refuseTransactionControl(command: string): KyselyPlugin {
+  return {
+    transformQuery: ({ node }) => {
+      for (const text of rawFragments(node)) {
+        const plain = text
+          .replace(/\$([A-Za-z_][\w]*)?\$[\s\S]*?\$\1\$/g, ' ')
+          .replace(/--[^\n]*/g, ' ')
+          .replace(/\/\*[\s\S]*?\*\//g, ' ');
+        for (const statement of plain.split(';')) {
+          const control = transactionControl(statement);
+          if (control !== null) throw new Error(`command ${command}: ${control} controls the transaction, which is the runtime's (#1831)`);
+        }
+      }
+      return node;
+    },
+    transformResult: async ({ result }) => result,
+  };
+}
+
 // The rows inserted, updated and deleted so far in this transaction, per crove_* table (#1710). A partition counts
 // under the table at the root of its tree (pg-boss creates one per queue at runtime, and a manifest declares the
 // partitioned table: crove_jobs.job, crove_jobs.queue_stats; #1797). The counts need
@@ -1510,7 +1579,11 @@ export class Runtime {
     // The handler's own statements, counted for the scope through its ctx.trx: on the scope's counter, and in a caller's
     // scope also on the counters of the nested runs this one is part of (base.writeCounters).
     const counters: readonly { n: number }[] = scope === null ? [] : writeCheck !== null ? [scope.statements] : (base.writeCounters ?? [scope.statements]);
-    const handlerTrx = scope === null ? trx : trx.withPlugin(countWrites(counters, () => closed, def.name));
+    // Transaction control is the runtime's: a handler's raw COMMIT or ROLLBACK, or a savepoint of the runtime's, could
+    // end the command's atomicity or keep a refused nested command's writes past its rollback (#1831), whether or not
+    // its writes are checked.
+    const guardedTrx = trx.withPlugin(refuseTransactionControl(def.name));
+    const handlerTrx = scope === null ? guardedTrx : guardedTrx.withPlugin(countWrites(counters, () => closed, def.name));
     // Whether the writes of a nested command are its own to declare (it declares writes) or this command's.
     const ownsWrites = (name: string): boolean => this.#commands.get(name)?.writes !== undefined;
     // Set once the handler settled: from then on the runtime writes this command's rows, and nothing the handler
@@ -1527,7 +1600,9 @@ export class Runtime {
         () => writing.delete(promise),
         () => writing.delete(promise),
       );
-      return promise;
+      // The handler gets a promise of its own, so a failure it neither awaits nor catches is still an unhandled
+      // rejection, as before the tracking above handled the original.
+      return promise.then((value) => value);
     };
     const settleWriting = async () => {
       while (writing.size > 0) await Promise.allSettled(writing);
@@ -1554,20 +1629,20 @@ export class Runtime {
         pending(async () => {
           refuseClosed('ctx.activity');
           await aside(() =>
-          trx
-            .insertInto('crove_kernel.activity')
-            .values({
-              org_id: base.orgId,
-              record_type: recordType,
-              record_id: recordId,
-              kind,
-              summary,
-              actor_id: base.actor.type === 'user' ? base.actor.userId : null,
-              // The database stamps it from the sealed context too (activity_stamp_agent).
-              agent_id: base.actor.type === 'agent' ? base.actor.agentId : null,
-              ...(options?.legalEntityId === undefined ? {} : { legal_entity_id: options.legalEntityId }),
-            })
-            .execute(),
+            trx
+              .insertInto('crove_kernel.activity')
+              .values({
+                org_id: base.orgId,
+                record_type: recordType,
+                record_id: recordId,
+                kind,
+                summary,
+                actor_id: base.actor.type === 'user' ? base.actor.userId : null,
+                // The database stamps it from the sealed context too (activity_stamp_agent).
+                agent_id: base.actor.type === 'agent' ? base.actor.agentId : null,
+                ...(options?.legalEntityId === undefined ? {} : { legal_entity_id: options.legalEntityId }),
+              })
+              .execute(),
           );
         }),
       audit: (detail) => {
@@ -1633,7 +1708,7 @@ export class Runtime {
       this.#savepointSeq += 1;
       // With a random part: ROLLBACK TO goes to the newest savepoint of that name, so a nested handler that could guess
       // it could set its own, shadow this one, and keep its writes while the caller sees a refusal (#1797).
-      const savepoint = sql.raw(`crove_try_run_${this.#savepointSeq}_${uuidv7().replaceAll('-', '')}`);
+      const savepoint = sql.raw(`crove_try_run_${this.#savepointSeq}_${randomUUID().replaceAll('-', '')}`);
       await sql`SAVEPOINT ${savepoint}`.execute(trx);
       // Undoes the nested command. Every path that does not return its value takes it, so a handler that catches the
       // error and goes on never keeps a refused or failed command's writes, and an aborted transaction is usable again.
@@ -1750,10 +1825,13 @@ export class Runtime {
       await settleRunning();
       throw error;
     }
+    // Read before waiting: a nested command the handler left running may fail while the runtime's writes settle, and
+    // must still fail this command.
+    const leftRunning = running.size > 0;
     await settleWriting();
     // Before the runtime writes this command's rows: a nested command still running would share the connection with
     // them, and a tryRun's rollback could undo them, so the command fails instead and commits nothing.
-    if (await settleRunning()) throw new Error(`command ${def.name}: the handler returned while a nested command was still running`);
+    if ((await settleRunning()) || leftRunning) throw new Error(`command ${def.name}: the handler returned while a nested command was still running`);
     if (writeCheck !== null) {
       if (writeCheck.unmeasured) {
         throw new Error(
