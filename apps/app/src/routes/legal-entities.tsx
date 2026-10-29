@@ -1,6 +1,7 @@
 // The org's legal entities in Settings (issue #1278): owners and admins see the companies, branches and household
 // businesses the org keeps books for, add one, and change one. The default entity is the org itself: its tax code is
-// the org's and changes only through the tax code field above it. Entities are never deleted. The server enforces
+// the org's and changes only through the tax code field above it, and its name is the org's: renaming it renames the
+// org (#1317). Entities are never deleted. The server enforces
 // every rule; the screen only offers what can succeed and shows the server's reason otherwise.
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useId, useState, type FormEvent } from 'react';
@@ -15,9 +16,15 @@ import { ErrorText, FieldError, fieldControl, fieldHintId, focusFirstInvalid, Sp
 import { errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { parentChoices, parentName } from '../lib/legal-entities.ts';
 
-// The shell's switcher lists the entities with books (bookEntities.list), so an added or renamed one shows there too.
+// The shell's switcher lists the entities with books (bookEntities.list), so an added or renamed one shows there too;
+// the org's own name (me.get, org.get) follows the default entity's (#1317).
 const refresh = () =>
-  Promise.all([queryClient.invalidateQueries({ queryKey: orpc.legalEntities.list.key() }), queryClient.invalidateQueries({ queryKey: orpc.bookEntities.list.key() })]);
+  Promise.all([
+    queryClient.invalidateQueries({ queryKey: orpc.legalEntities.list.key() }),
+    queryClient.invalidateQueries({ queryKey: orpc.bookEntities.list.key() }),
+    queryClient.invalidateQueries({ queryKey: orpc.me.get.key() }),
+    queryClient.invalidateQueries({ queryKey: orpc.org.get.key() }),
+  ]);
 
 interface Draft {
   name: string;
@@ -63,6 +70,7 @@ function EntityForm({
   return (
     <form className="mt-2 space-y-2" onSubmit={submit} aria-label={entity ? t('editOf', { name: entity.name }) : t('addTitle')}>
       <Input required maxLength={200} placeholder={t('namePlaceholder')} aria-label={t('name')} value={draft.name} onChange={(e) => set('name', e.target.value)} />
+      {lockedTaxCode && <p className="text-xs text-subtle-foreground">{t('defaultNameHint')}</p>}
       <div className="flex flex-wrap gap-2">
         <NativeSelect className="min-w-48 flex-1" value={draft.kind} onChange={(e) => set('kind', e.target.value as LegalEntityKind)} aria-label={t('kind')}>
           {LEGAL_ENTITY_KINDS.map((k) => (

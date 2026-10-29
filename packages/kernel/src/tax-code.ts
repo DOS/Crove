@@ -5,11 +5,12 @@
 // place of the old and the new value: a household business's tax code is its owner's national id (auditValue, #1626),
 // and tenant_tax_code_requires_audit accepts that marker for a code that is set (20261103070000). The org's default
 // legal entity (#1278) keeps the same tax code: the database writes it with the tenant row
-// (tenant_default_entity_tax_code, #1316), and a code another legal entity of the org holds is refused.
+// (tenant_default_entity_tax_code, #1316), and a code another legal entity of the org holds is refused. A 12-digit code
+// makes the default entity a household business unless an owner or an admin chose its kind (#1317).
 import { z } from 'zod';
 import { VAT_FILING_PERIODS, auditValue, normalizeTaxCode } from '@crove/kernel-contract';
 import { DomainError, defineCommand } from '@crove/kernel-runtime';
-import { assertOrgTaxCodeFree, onWrite, setDefaultEntityTaxCode } from './legal-entities.ts';
+import { assertOrgTaxCodeFree, defaultKindForTaxCode, onWrite, setDefaultEntityTaxCode } from './legal-entities.ts';
 import { kernelManifest } from './manifest.ts';
 
 const TENANT = kernelManifest.tables.crove_kernel.tenant;
@@ -36,9 +37,17 @@ export const setTaxCode = defineCommand({
     }
     // After the tenant row, as kernel.legal_entity.update takes them. A no-op unless the default entity was left on an
     // old code before #1316.
-    await setDefaultEntityTaxCode({ trx: ctx.trx, orgId: ctx.orgId, now: ctx.now, userId: ctx.actor.type === 'user' ? ctx.actor.userId : null }, taxCode);
+    const writer = { trx: ctx.trx, orgId: ctx.orgId, now: ctx.now, userId: ctx.actor.type === 'user' ? ctx.actor.userId : null };
+    await setDefaultEntityTaxCode(writer, taxCode);
+    // A 12-digit code makes the default entity a household business, unless someone chose its kind (#1317).
+    const defaultKind = await defaultKindForTaxCode(writer, taxCode);
     const changed = before.tax_code !== taxCode;
-    ctx.audit({ previous: auditValue(TENANT, 'tax_code', before.tax_code), taxCode: auditValue(TENANT, 'tax_code', taxCode), changed });
+    ctx.audit({
+      previous: auditValue(TENANT, 'tax_code', before.tax_code),
+      taxCode: auditValue(TENANT, 'tax_code', taxCode),
+      changed,
+      ...(defaultKind ? { defaultEntityKind: defaultKind } : {}),
+    });
     return { taxCode };
   },
 });

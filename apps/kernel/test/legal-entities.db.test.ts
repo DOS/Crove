@@ -330,6 +330,85 @@ suite('legal entities on PostgreSQL (#1278)', () => {
     }
   });
 
+  it('renames the org with its default entity, and never with another entity (#1317)', async () => {
+    const o = await org('Công ty Tên Cũ');
+    const tenantName = async () => (await admin((c) => c.query<{ name: string }>('SELECT name FROM crove_kernel.tenant WHERE org_id = $1', [o.orgId]))).rows[0]?.name;
+    const [main] = await o.list(o.owner);
+    const branch = await o.exec<LegalEntity>(o.owner, 'kernel.legal_entity.create', { name: 'Chi nhánh Một', kind: 'branch', taxCode: null, parentId: main!.id });
+    const audits = async () =>
+      (
+        await admin((c) =>
+          c.query<{ detail: Record<string, unknown> }>(
+            "SELECT detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'kernel.legal_entity.update' AND outcome = 'ok' ORDER BY occurred_at, id",
+            [o.orgId],
+          ),
+        )
+      ).rows.map((r) => r.detail);
+    const activity = async () =>
+      (await admin((c) => c.query<{ kind: string }>("SELECT kind FROM crove_kernel.activity WHERE org_id = $1 AND kind = 'org.renamed'", [o.orgId]))).rows;
+
+    // Another entity's new name leaves the org's alone.
+    await o.exec(o.admin, 'kernel.legal_entity.update', { legalEntityId: branch.id, name: 'Chi nhánh Hai', kind: 'branch', taxCode: null, parentId: main!.id });
+    expect(await tenantName()).toBe('Công ty Tên Cũ');
+    // The default entity's new name is the org's, in the same command: one audit row says so, and the feed shows it.
+    await o.exec(o.admin, 'kernel.legal_entity.update', { legalEntityId: main!.id, name: 'Công ty Tên Mới', kind: 'company', taxCode: null, parentId: null });
+    expect(await tenantName()).toBe('Công ty Tên Mới');
+    expect((await o.list(o.owner)).find((e) => e.isDefault)?.name).toBe('Công ty Tên Mới');
+    const [first, second] = await audits();
+    expect(first).not.toHaveProperty('renamesOrg');
+    expect(second).toMatchObject({ legalEntityId: main!.id, isDefault: true, changed: ['name'], renamesOrg: true });
+    expect(await activity()).toHaveLength(1);
+    // A change of the default entity that keeps its name leaves the org's name as it is.
+    await o.exec(o.admin, 'kernel.legal_entity.update', { legalEntityId: main!.id, name: 'Công ty Tên Mới', kind: 'household', taxCode: null, parentId: null });
+    expect(await tenantName()).toBe('Công ty Tên Mới');
+    expect((await audits())[2]).not.toHaveProperty('renamesOrg');
+    expect(await activity()).toHaveLength(1);
+  });
+
+  it('makes the default entity a household business for a 12-digit tax code, unless its kind was chosen (#1317)', async () => {
+    const kindOf = async (o: { orgId: string }) =>
+      (await admin((c) => c.query<{ kind: string }>('SELECT kind FROM crove_kernel.legal_entity WHERE org_id = $1 AND is_default', [o.orgId]))).rows[0]?.kind;
+    const taxAudits = async (o: { orgId: string }) =>
+      (
+        await admin((c) =>
+          c.query<{ detail: Record<string, unknown> }>(
+            "SELECT detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'kernel.org.set_tax_code' AND outcome = 'ok' ORDER BY occurred_at, id",
+            [o.orgId],
+          ),
+        )
+      ).rows.map((r) => r.detail);
+
+    // A 10-digit code says nothing about the kind; a 12-digit one makes the untouched default a household, audited.
+    const household = await org('Hộ kinh doanh Mới');
+    await household.exec(household.owner, 'kernel.org.set_tax_code', { taxCode: '0101234564' });
+    expect(await kindOf(household)).toBe('company');
+    await household.exec(household.owner, 'kernel.org.set_tax_code', { taxCode: '079091001235' });
+    expect(await kindOf(household)).toBe('household');
+    // Again, or with another 12-digit code: nothing more changes, and the audit says so only once.
+    await household.exec(household.owner, 'kernel.org.set_tax_code', { taxCode: '079091001235' });
+    await household.exec(household.owner, 'kernel.org.set_tax_code', { taxCode: '079091001236' });
+    expect(await kindOf(household)).toBe('household');
+    expect((await taxAudits(household)).map((d) => d.defaultEntityKind ?? null)).toEqual([null, 'household', null, null]);
+    // Back to a 10-digit code: the kind stays what it became.
+    await household.exec(household.owner, 'kernel.org.set_tax_code', { taxCode: '0101234564' });
+    expect(await kindOf(household)).toBe('household');
+
+    // An owner who chose the kind keeps it: a company the owner set back after the 12-digit code, and a branch.
+    const chosen = await org('Công ty Đã Chọn');
+    const [main] = await chosen.list(chosen.owner);
+    await chosen.exec(chosen.owner, 'kernel.legal_entity.update', { legalEntityId: main!.id, name: main!.name, kind: 'branch', taxCode: null, parentId: null });
+    await chosen.exec(chosen.owner, 'kernel.legal_entity.update', { legalEntityId: main!.id, name: main!.name, kind: 'company', taxCode: null, parentId: null });
+    await chosen.exec(chosen.owner, 'kernel.org.set_tax_code', { taxCode: '079091001237' });
+    expect(await kindOf(chosen)).toBe('company');
+    expect((await taxAudits(chosen))[0]).not.toHaveProperty('defaultEntityKind');
+    // A rename alone is no choice of kind.
+    const renamed = await org('Hộ Đổi Tên');
+    const [renamedMain] = await renamed.list(renamed.owner);
+    await renamed.exec(renamed.owner, 'kernel.legal_entity.update', { legalEntityId: renamedMain!.id, name: 'Hộ Đổi Tên Hai', kind: 'company', taxCode: null, parentId: null });
+    await renamed.exec(renamed.owner, 'kernel.org.set_tax_code', { taxCode: '079091001238' });
+    expect(await kindOf(renamed)).toBe('household');
+  });
+
   it('backfills a default entity from the tenant row for an org without one, once, and changes nothing else', async () => {
     const legacy = await org('Hộ kinh doanh Cũ');
     const modern = await org();

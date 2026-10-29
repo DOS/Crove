@@ -11,6 +11,12 @@
 // code is the org's: the database writes it with every change of the tenant's code (tenant_default_entity_tax_code,
 // #1316, so a staff fix on the tenant row moves it too), kernel.legal_entity.update refuses to change it, and the
 // database refuses a default entity whose code is not the tenant's (legal_entity_default_tax_code).
+//
+// The default entity's name is the org's too (#1317): renaming it renames the org (crove_kernel.tenant.name) in the same
+// command and audit row, so the tax forms' taxpayer block (01/GTGT, the HTKK statements), the org switcher, mails and
+// the books name the business alike. Renaming any other entity leaves the org's name alone. Its kind follows a 12-digit
+// tax code, an owner's personal number, to 'household' (defaultKindForTaxCode), unless an owner or an admin set it.
+import { sql } from 'kysely';
 import { z } from 'zod';
 import { LEGAL_ENTITY_NAME_MAX, auditValue, normalizeTaxCode, zLegalEntityInput, type LegalEntity, type LegalEntityKind } from '@crove/kernel-contract';
 import type { LegalEntityKind as StoredKind, MemberRole } from '@crove/db';
@@ -125,6 +131,42 @@ export async function assertOrgTaxCodeFree(ctx: Trx, taxCode: string | null): Pr
 }
 
 /**
+ * The default entity's kind for the org's new tax code (#1317), inside kernel.org.set_tax_code: a 12-digit code is an
+ * owner's personal number, so the business is a household or individual one, and a default entity still on the kind it
+ * was created with ('company') becomes 'household'. Nothing else is read from a code (an older household business may
+ * hold a 10-digit one), a kind an owner or an admin chose is kept (any kernel.legal_entity.update of it that changed the
+ * kind, in the audit log), and a second call changes nothing. Returns the new kind, or null when it stays.
+ */
+export async function defaultKindForTaxCode(ctx: Pick<CommandContext, 'trx' | 'orgId' | 'now'> & { userId: string | null }, taxCode: string | null): Promise<'household' | null> {
+  if (!taxCode || !/^[0-9]{12}$/.test(taxCode)) return null;
+  const entity = await ctx.trx
+    .selectFrom('crove_kernel.legal_entity')
+    .select(['id', 'kind'])
+    .where('org_id', '=', ctx.orgId)
+    .where('is_default', '=', true)
+    .forUpdate()
+    .executeTakeFirst();
+  if (!entity || entity.kind !== 'company') return null;
+  const chosen = await ctx.trx
+    .selectFrom('crove_kernel.audit_event')
+    .select('id')
+    .where('org_id', '=', ctx.orgId)
+    .where('command', '=', 'kernel.legal_entity.update')
+    .where('outcome', '=', 'ok')
+    .where(sql<boolean>`detail ->> 'legalEntityId' = ${entity.id} AND detail -> 'changed' ? 'kind'`)
+    .limit(1)
+    .executeTakeFirst();
+  if (chosen) return null;
+  await ctx.trx
+    .updateTable('crove_kernel.legal_entity')
+    .set({ kind: 'household', updated_by: ctx.userId, updated_at: ctx.now })
+    .where('org_id', '=', ctx.orgId)
+    .where('id', '=', entity.id)
+    .execute();
+  return 'household';
+}
+
+/**
  * Sets the default entity's tax code to the org's, inside kernel.org.set_tax_code after it wrote the tenant row. The
  * database already did when the tenant's code changed; this repairs a default entity left on an old code before
  * #1316. Refuses a code another entity of the org holds.
@@ -222,6 +264,9 @@ export const legalEntityUpdate = defineCommand({
       throw new DomainError('LEGAL_ENTITY_DEFAULT_TAX_CODE', 422, 'Mã số thuế của pháp nhân mặc định là mã số thuế của tổ chức; hãy đổi ở mục Mã số thuế');
     }
     if (changed.includes('parent_id')) await assertParent(ctx, input.parentId);
+    // The default entity is the org: its new name is the org's (#1317). Only the default's.
+    const renamesOrg = before.is_default && changed.includes('name');
+    if (renamesOrg) await ctx.trx.updateTable('crove_kernel.tenant').set({ name }).where('org_id', '=', ctx.orgId).execute();
     if (changed.includes('tax_code')) await assertTaxCodeFree(ctx, taxCode, before.id);
 
     const row = await ctx.trx
@@ -240,8 +285,9 @@ export const legalEntityUpdate = defineCommand({
       previous[field[key]] = auditValue(ENTITY, key, before[key]);
       values[field[key]] = auditValue(ENTITY, key, next[key]);
     }
-    ctx.audit({ legalEntityId: before.id, isDefault: before.is_default, changed: changed.map((k) => field[k]), previous, values });
+    ctx.audit({ legalEntityId: before.id, isDefault: before.is_default, changed: changed.map((k) => field[k]), previous, values, ...(renamesOrg ? { renamesOrg } : {}) });
     await ctx.activity('kernel.legal_entity', before.id, 'legal_entity.updated', 'Sửa thông tin pháp nhân');
+    if (renamesOrg) await ctx.activity('kernel.tenant', ctx.orgId, 'org.renamed', 'Đổi tên tổ chức theo pháp nhân mặc định');
     return view(row);
   },
 });
