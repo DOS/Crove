@@ -35,6 +35,16 @@ describe('CROVE_CONTEXT_TOKEN_KEY', () => {
   it('refuses the test suites key on a public URL, and accepts it on a local one', () => {
     expect(() => loadConfig({ ...base, CROVE_CONTEXT_TOKEN_KEY: TEST_KEY })).toThrow(/test suite key/);
     expect(loadConfig({ ...base, PUBLIC_URL: 'http://localhost:8080', CROVE_CONTEXT_TOKEN_KEY: TEST_KEY }).CROVE_CONTEXT_TOKEN_KEY).toBe(TEST_KEY);
+    // Compared as bytes: the unpadded and the base64url spelling are the test key too.
+    for (const spelling of [TEST_KEY.replace(/=+$/, ''), Buffer.from(TEST_KEY, 'base64').toString('base64url')]) {
+      expect(() => loadConfig({ ...base, CROVE_CONTEXT_TOKEN_KEY: spelling }), spelling).toThrow(/test suite key/);
+    }
+  });
+
+  it('refuses a key that decodes to printable text on a public URL, a passphrase rather than random bytes', () => {
+    const passphrase = Buffer.from('correct horse battery staple, our shared key!').toString('base64');
+    expect(() => loadConfig({ ...base, CROVE_CONTEXT_TOKEN_KEY: passphrase })).toThrow(/decodes to printable text/);
+    expect(loadConfig({ ...base, PUBLIC_URL: 'http://localhost:8080', CROVE_CONTEXT_TOKEN_KEY: passphrase }).CROVE_CONTEXT_TOKEN_KEY).toBe(passphrase);
   });
 
   it('never echoes the value in an error', () => {

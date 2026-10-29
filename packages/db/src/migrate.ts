@@ -27,6 +27,16 @@ export function contextTokenKeyBytes(value: string): Buffer {
   return bytes;
 }
 
+// The logging the install turns off for its own transaction where the runner may (a superuser): parameters in logged
+// statements, statement logging, and the duration and sample logs that would print a slow or sampled statement.
+const QUIET_INSTALL_SETTINGS: ReadonlyArray<readonly [string, string]> = [
+  ['log_parameter_max_length', '0'],
+  ['log_statement', "'none'"],
+  ['log_min_duration_statement', '-1'],
+  ['log_min_duration_sample', '-1'],
+  ['log_transaction_sample_rate', '0'],
+];
+
 // Installs the context token key in the database (#1822). The runner first asks whether the database's current key
 // signed a fixed message as this key does, and sends the key only when it does not (a first install or a rotation), so
 // an ordinary deploy sends nothing secret. The key goes as a bind parameter, never in a statement's text (which
@@ -51,13 +61,19 @@ export async function installContextTokenKey(client: pg.ClientBase, key: string,
   }
   await client.query('BEGIN');
   try {
-    for (const setting of ["log_parameter_max_length = 0", "log_statement = 'none'", 'log_min_duration_statement = -1']) {
+    const loud: string[] = [];
+    for (const [name, value] of QUIET_INSTALL_SETTINGS) {
       await client.query('SAVEPOINT quiet');
-      await client.query(`SET LOCAL ${setting}`).then(
+      await client.query(`SET LOCAL ${name} = ${value}`).then(
         () => client.query('RELEASE SAVEPOINT quiet'),
-        () => client.query('ROLLBACK TO SAVEPOINT quiet'),
+        async () => {
+          loud.push(name);
+          await client.query('ROLLBACK TO SAVEPOINT quiet');
+        },
       );
     }
+    // A runner that is not a superuser may not change these: the server's own settings for them apply to the install.
+    if (loud.length > 0) log(`context token key: the runner may not turn off ${loud.join(', ')} for the install; the server's logging of them stays on`);
     const { rows } = await client.query<{ result: string }>('SELECT crove_kernel.context_token_key_install($1::bytea) AS result', [bytes]);
     await client.query('COMMIT');
     log(`context token key ${rows[0]?.result ?? 'not installed'}`);

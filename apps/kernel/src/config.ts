@@ -532,8 +532,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     if (bytes.length < 32 || bytes.length > 64) throw new Error('CROVE_CONTEXT_TOKEN_KEY must be base64 of 32 to 64 random bytes');
   }
   if (!isLocalUrl(config.PUBLIC_URL)) {
-    if (config.CROVE_CONTEXT_TOKEN_KEY !== undefined && SAMPLE_CONTEXT_TOKEN_KEYS.has(config.CROVE_CONTEXT_TOKEN_KEY.trim())) {
-      throw new Error('CROVE_CONTEXT_TOKEN_KEY is the test suite key; generate a random key before exposing Crove');
+    if (config.CROVE_CONTEXT_TOKEN_KEY !== undefined) {
+      // Compared as bytes, so the unpadded or base64url spelling of the test key is the test key too.
+      const bytes = Buffer.from(config.CROVE_CONTEXT_TOKEN_KEY.trim(), 'base64');
+      if (SAMPLE_CONTEXT_TOKEN_KEYS.some((sample) => sample.equals(bytes))) {
+        throw new Error('CROVE_CONTEXT_TOKEN_KEY is the test suite key; generate a random key before exposing Crove');
+      }
+      // A key that decodes to printable text is a passphrase, not random bytes (one in about 10^14 random keys is).
+      if (bytes.every((byte) => byte >= 0x20 && byte <= 0x7e)) {
+        throw new Error('CROVE_CONTEXT_TOKEN_KEY decodes to printable text; generate random bytes (openssl rand -base64 32) before exposing Crove');
+      }
     }
     if (config.AUTH_JWT_SECRET && SAMPLE_SECRETS.has(config.AUTH_JWT_SECRET)) {
       throw new Error('AUTH_JWT_SECRET is a sample value; generate a random secret before exposing Crove');
@@ -590,7 +598,7 @@ export const EMAIL_BUDGET_MIN_CLIENTS = 10;
 const SAMPLE_SECRETS = new Set(['local-only-jwt-secret-change-me-0123456789', 'change-me-to-a-long-random-string-0123456789']);
 // The context token key the test suites use (vitest.config.ts, vitest.invariant.config.ts): public, so never a
 // deployment's.
-const SAMPLE_CONTEXT_TOKEN_KEYS = new Set([Buffer.from('test-only-context-token-key-0123456789').toString('base64')]);
+const SAMPLE_CONTEXT_TOKEN_KEYS = [Buffer.from('test-only-context-token-key-0123456789')];
 
 // Cloudflare's published Turnstile test site keys and secrets (1x00000000000000000000AA, 1x0000000000000000000000000000000AA
 // and their 2x and 3x siblings): siteverify passes any token for the always-pass pair, so they are refused on a public URL.
