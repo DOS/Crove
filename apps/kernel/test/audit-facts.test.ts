@@ -204,6 +204,9 @@ const BUILT = /^(?:\{\s*\}|\[\s*\]|new\s+(?:Map|Set)\s*(?:<[^>]*>)?\s*\(\s*\))(?
 // or arithmetic computes a new value.
 const PASS_THROUGH =
   /(?:^|\.)(?:map|flatMap|filter|slice|concat|trim|trimStart|trimEnd|toLowerCase|toUpperCase|normalize|join|sort|toSorted|toString|padStart|padEnd|at|find|values|entries|replace|replaceAll|split|substring|substr|toLocaleLowerCase|toLocaleUpperCase)$|^(?:String|Object\.fromEntries|Object\.assign|Object\.values|Object\.entries|JSON\.stringify|Array\.from|structuredClone)$/;
+// A variable copied whole by a pass-through method: `raw.trim()`, `list.slice()`, `names.join(',')`.
+const COPY_OF =
+  /(?<![\w$.])([A-Za-z_$][\w$]*)\s*!?\s*(?:\?\.|\.)\s*(?:filter|slice|concat|trim|trimStart|trimEnd|toLowerCase|toUpperCase|normalize|join|sort|toSorted|toString|padStart|padEnd|at|find|values|entries|replace|replaceAll|split|substring|substr|toLocaleLowerCase|toLocaleUpperCase)\s*\(/g;
 // Words an expression may hold that are not variables.
 const KEYWORDS = new Set(['true', 'false', 'null', 'undefined', 'await', 'new', 'typeof', 'void', 'as', 'in', 'of', 'instanceof', 'satisfies', 'const', 'this']);
 
@@ -405,6 +408,9 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
     if (depth < 4 && held !== null) {
       const whole = unwrap(value);
       for (const name of variables(withoutAuditValue(held))) if (!isClassified(name)) checkName(name, at, flag, depth + 1, name === whole);
+      // A copy of a variable (`raw.trim()`, `list.slice()`) holds what the variable holds; a projection (`.map(...)`)
+      // holds what its callback returns, read above.
+      for (const copy of withoutAuditValue(held).matchAll(COPY_OF)) checkName(copy[1] as string, at, flag, depth + 1, false);
     }
   };
 
@@ -759,6 +765,11 @@ describe('audit facts and classified columns (#1626, #1632)', () => {
     expect(check('const raw = party.tax_code;\nconst previous = ok ? raw : null;\nctx.audit({ previous });')).toEqual([
       'previous: the value reads the classified column tax_code outside auditValue(...)',
     ]);
+    for (const copy of ['raw.trim()', 'raw.slice()', "raw.split('-').join('')"]) {
+      expect(check(`const raw = party.tax_code;\nconst previous = ${copy};\nctx.audit({ previous });`), copy).toEqual([
+        'previous: the value reads the classified column tax_code outside auditValue(...)',
+      ]);
+    }
     // The declaration in scope is the one in the fact's block, not one in a block that has closed.
     expect(check('const code = party.tax_code;\nif (ok) { const code = 0; use(code); }\nctx.audit({ code });')).toEqual([
       'code: the value reads the classified column tax_code outside auditValue(...)',
