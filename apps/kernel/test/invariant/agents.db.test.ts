@@ -1716,6 +1716,11 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
       dollarInComment: sql.raw('SELECT 1 -- $$\n; COMMIT; SELECT $$x$$'),
       commentedDollars: sql.raw('-- $a$\nCOMMIT -- $a$'),
       nestedComment: sql.raw('/* a /* b */ c */ COMMIT'),
+      lineCommentInBlock: sql.raw('/* -- */ COMMIT'),
+      dollarInIdentifier: sql.raw('SELECT 1 AS x$q$; COMMIT; SELECT 1 AS y$q$'),
+      nestedAlias: sql`${sql`SELECT 1; COMMIT; SELECT 1`.as('a')}`,
+      // Several statements in one query, none of them control: refused as well, fail closed.
+      twoSelects: sql`SELECT 1; SELECT 2`,
       // An identifier goes on over non-ASCII characters and $, and a backslash escapes once standard strings are off.
       nonAsciiIdentifier: sql.raw('SELECT 1 AS é$x$; COMMIT; SELECT 1 AS é$x$'),
       backslashQuote: sql.raw("SELECT set_config('standard_conforming_strings', 'off', true); SELECT 'x\\''; COMMIT; SELECT '1'"),
@@ -1761,12 +1766,65 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
       for (const probe of probes) {
         await expect(worker.execute(probe.name, {}, as), probe.name).rejects.toMatchObject({ code: 'INTERNAL' });
         expect(logged.mock.calls.flat().map(String).join('\n'), probe.name).toContain(`command ${probe.name}: `);
-        expect(logged.mock.calls.flat().map(String).join('\n'), probe.name).toContain("controls the transaction, which is the runtime's");
+        expect(logged.mock.calls.flat().map(String).join('\n'), probe.name).toMatch(/controls the transaction, which is the runtime's|holds several statements/);
       }
     } finally {
       logged.mockRestore();
     }
     await expect(worker.execute(own.name, {}, as)).resolves.toEqual({ ok: true });
+  });
+
+  it('refuses a statement a refused nested command starts after its handler settled, checked or not (#1831)', async () => {
+    const suffix = randomUUID().slice(0, 8);
+    const late: Array<Promise<unknown>> = [];
+    const probes = [undefined, []].map((writes) => {
+      const tag = writes ? 'checked' : 'unchecked';
+      const leaves = defineCommand({
+        sideEffect: 'none',
+        name: `t1831.late_${tag}_${suffix}`,
+        input: z.object({}),
+        risk: 'R1',
+        access: 'system',
+        ...(writes ? { writes } : {}),
+        handler: async (ctx) => {
+          // A write started on a timer, after the handler threw and its savepoint is rolled back.
+          late.push(
+            new Promise((resolve) => {
+              setTimeout(() => {
+                ctx.trx
+                  .insertInto('crove_kernel.inbox_item')
+                  .values({ org_id: ctx.orgId, kind: 'kernel.job.dead_lettered', dedupe_key: `t1831:late-${tag}-${suffix}`, detail: JSON.stringify({ queue: 't1831', jobId: randomUUID(), retries: 0 }), raised_at: ctx.now })
+                  .execute()
+                  .then(
+                    () => resolve('written'),
+                    (error: unknown) => resolve(String(error)),
+                  );
+              }, 0);
+            }),
+          );
+          throw new DomainError('CONFLICT', 409, 't1831 refused');
+        },
+      }) as CommandDef<unknown, unknown>;
+      const caller = defineCommand({
+        sideEffect: 'none',
+        name: `t1831.late_caller_${tag}_${suffix}`,
+        input: z.object({}),
+        risk: 'R1',
+        access: 'system',
+        ...(writes ? { writes } : {}),
+        handler: async (ctx) => ctx.tryRun(leaves.name, {}, { recover: () => true }),
+      }) as CommandDef<unknown, unknown>;
+      return { leaves, caller };
+    });
+    worker.register({ commands: probes.flatMap((p) => [p.leaves, p.caller]) });
+    for (const { caller } of probes) {
+      await expect(worker.execute(caller.name, {}, { actor: SYSTEM, orgId: orgA })).resolves.toMatchObject({ status: 'refused' });
+    }
+    const outcomes = await Promise.all(late);
+    expect(outcomes).toHaveLength(2);
+    for (const outcome of outcomes) expect(outcome).toMatch(/after the handler returned/);
+    const kept = await withAdmin(async (c) => (await c.query(`SELECT count(*)::int AS n FROM crove_kernel.inbox_item WHERE org_id = $1 AND dedupe_key LIKE $2`, [orgA, `t1831:late-%${suffix}`])).rows[0]?.n);
+    expect(kept).toBe(0);
   });
 
   it('runs a command as it registered: agent access set on its definition afterwards grants an agent nothing (#1766)', async () => {

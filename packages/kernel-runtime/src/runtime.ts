@@ -968,14 +968,23 @@ function transactionControl(statement: string): string | null {
 // lexer splits them (the simple query protocol runs several), once with standard strings and once with backslash
 // escapes in every string, so a statement either reading finds is refused. The handler adds no plugin after this one (the
 // invariant suite's scan refuses withPlugin in server sources), so the node it checks is the node that runs.
-function refuseTransactionControl(command: string): KyselyPlugin {
+// On top, fail closed: a query is one statement (no handler needs several in one), and no statement runs once the
+// handler settled (closed), whether or not its writes are checked: a refused nested command's late statement would
+// otherwise land after its savepoint rolled back.
+function refuseTransactionControl(command: string, closed: () => boolean = () => false): KyselyPlugin {
   const compiler = new PostgresQueryCompiler();
   return Object.freeze({
     transformQuery: ({ node, queryId }) => {
+      if (closed()) throw new Error(`command ${command}: a statement on ctx.trx after the handler returned (#1831)`);
       const text = compiler.compileQuery(node, queryId).sql;
-      for (const statement of [...sqlStatements(text), ...sqlStatements(text, true)]) {
-        const control = transactionControl(statement);
-        if (control !== null) throw new Error(`command ${command}: ${control} controls the transaction, which is the runtime's (#1831)`);
+      for (const statements of [sqlStatements(text), sqlStatements(text, true)]) {
+        if (statements.slice(1).some((statement) => statement.trim() !== '')) {
+          throw new Error(`command ${command}: one query holds several statements, which the runtime refuses (#1831)`);
+        }
+        for (const statement of statements) {
+          const control = transactionControl(statement);
+          if (control !== null) throw new Error(`command ${command}: ${control} controls the transaction, which is the runtime's (#1831)`);
+        }
       }
       return node;
     },
@@ -1619,7 +1628,7 @@ export class Runtime {
     // Transaction control is the runtime's: a handler's raw COMMIT or ROLLBACK, or a savepoint of the runtime's, could
     // end the command's atomicity or keep a refused nested command's writes past its rollback (#1831), whether or not
     // its writes are checked.
-    const guardedTrx = trx.withPlugin(refuseTransactionControl(def.name));
+    const guardedTrx = trx.withPlugin(refuseTransactionControl(def.name, () => closed));
     const handlerTrx = scope === null ? guardedTrx : guardedTrx.withPlugin(countWrites(counters, () => closed, def.name));
     // Whether the writes of a nested command are its own to declare (it declares writes) or this command's.
     const ownsWrites = (name: string): boolean => this.#commands.get(name)?.writes !== undefined;
