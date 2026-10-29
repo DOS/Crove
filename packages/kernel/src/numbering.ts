@@ -81,8 +81,9 @@ export const numberVoid = defineCommand({
     const voided = { voidId, allocationId: allocation.id, docType: allocation.doc_type, periodKey: allocation.period_key, number };
     ctx.audit({ ...voided, targetType: allocation.target_type, targetId: allocation.target_id, reason: input.reason });
     // The allocation's entity, whatever its target type: the row is read only where that entity is (#1728), and for a
-    // target type the trigger maps, the database checks it is the record's own.
-    await ctx.activity(allocation.target_type, allocation.target_id, 'number.voided', `Hủy số ${number} (${allocation.doc_type}, ${allocation.period_key}): ${input.reason}`, {
+    // target type the trigger maps, the database checks it is the record's own. The reason a member typed stays on the
+    // void row (crove_kernel.number_void), read under its entity's scope, not in the timeline's text (#1825).
+    await ctx.activity(allocation.target_type, allocation.target_id, 'number.voided', `Hủy số ${number} (${allocation.doc_type}, ${allocation.period_key})`, {
       legalEntityId: allocation.legal_entity_id,
     });
     return voided;
