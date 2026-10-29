@@ -237,9 +237,6 @@ export function OverviewPage() {
                   <Link
                     to={TARGET[key].to}
                     params={{ slug }}
-                    // The count and what it counts, as one phrase ("3 đề xuất bút toán chờ duyệt"); the hint and the
-                    // link text beside them are for the eye.
-                    aria-label={`${count} ${t(`waiting.${key}.label`, { count })}`}
                     className="flex items-center gap-3 px-4 py-3 text-sm hover:bg-muted/50 focus-visible:bg-muted/50"
                   >
                     <NavIcon name={TARGET[key].icon} className="text-muted-foreground" />

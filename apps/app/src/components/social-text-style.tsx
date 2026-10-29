@@ -48,8 +48,11 @@ export function TextStyleButtons({ targetId, value, onChange, disabled }: { targ
   return (
     <div role="group" aria-label={t('toolbar')} className="inline-flex flex-wrap items-center gap-1">
       {STYLES.map(({ style, glyph, className }) => (
-        <Button key={style} type="button" variant="ghost" size="sm" className={`h-7 px-2 ${className}`} aria-label={t(style)} title={t(style)} onMouseDown={(e) => e.preventDefault()} onClick={() => apply(style)}>
-          {glyph}
+        // The glyph is for the eye and the style's name for the ear: an aria-label would hide the glyph a voice user
+        // reads off the button (WCAG 2.5.3, #1572).
+        <Button key={style} type="button" variant="ghost" size="sm" className={`h-7 px-2 ${className}`} title={t(style)} onMouseDown={(e) => e.preventDefault()} onClick={() => apply(style)}>
+          <span aria-hidden="true">{glyph}</span>
+          <span className="sr-only">{t(style)}</span>
         </Button>
       ))}
       <Button type="button" variant="ghost" size="sm" className="h-7 px-2" title={t('plainHint')} onMouseDown={(e) => e.preventDefault()} onClick={() => apply(null)}>

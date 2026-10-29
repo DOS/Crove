@@ -4576,6 +4576,7 @@ export const vi = {
     shortcutHint: 'Ctrl + Enter: lưu và gửi duyệt. Trong trang bài đăng, Ctrl + S: lưu.',
     postTitle: 'Bài đăng',
     postSubtitle: 'Cập nhật lúc {updated}',
+    postDetails: 'Nội dung, duyệt và lịch của bài',
     back: 'Quay lại',
     save: 'Lưu',
     saveFirst: 'Lưu thay đổi trước khi gửi duyệt',
