@@ -29,6 +29,9 @@ const ALLOWED = new Set(['pending>approved', 'pending>rejected', 'pending>expire
 // Since #1793 only the system context moves a proposal to approved by an update (the worker executing an agent's
 // approval); a user's context goes through the gate (crove_kernel.proposal_approve, proposal-approve-gate.db.test.ts).
 const SYSTEM_ONLY = new Set(['pending>approved']);
+// #1816 (step 1 of 2): approved -> executed is about to need the ok row of the proposal's command, written in the same
+// transaction by the same actor, so a plain update may pass or be refused here; step 2 expects the refusal.
+const TIGHTENING = new Set(['approved>executed']);
 const REFUSED = { code: '23514', message: 'PROPOSAL_STATUS_TRANSITION' };
 const suite = ADMIN ? describe : describe.skip;
 
@@ -185,7 +188,10 @@ suite('proposal status transitions on PostgreSQL (#1707)', () => {
         for (const to of STATUSES.filter((s) => s !== from)) {
           const outcome = await as(writer, (c) => c.query(move(from, to), [rows[from], owner, orgId]));
           const where = `${writer.name}: ${from} -> ${to}`;
-          if (ALLOWED.has(`${from}>${to}`) && (writer.name === 'system' || !SYSTEM_ONLY.has(`${from}>${to}`))) {
+          if (TIGHTENING.has(`${from}>${to}`)) {
+            if (!outcome.ok) expect(outcome, where).toMatchObject(REFUSED);
+            else expect(outcome.value.rowCount, where).toBe(1);
+          } else if (ALLOWED.has(`${from}>${to}`) && (writer.name === 'system' || !SYSTEM_ONLY.has(`${from}>${to}`))) {
             expect(outcome, where).toMatchObject({ ok: true });
             expect(outcome.ok && outcome.value.rowCount, where).toBe(1);
           } else {
