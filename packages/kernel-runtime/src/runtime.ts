@@ -877,20 +877,23 @@ function countWrites(counters: readonly { n: number }[], closed: () => boolean, 
   };
 }
 
-// The rows inserted, updated and deleted so far in this transaction, per crove_* table (#1710), pg-boss's queue aside:
-// crove_jobs holds no tenant data, its tables (partitions among them) are no module's to declare, and a job is handled
-// later under its handler's own declaration, as one-write-path (#680) sets that schema aside too (#1797). The counts need
+// The rows inserted, updated and deleted so far in this transaction, per crove_* table (#1710). A partition counts
+// under the table at the root of its tree (pg-boss creates one per queue at runtime, and a manifest declares the
+// partitioned table: crove_jobs.job, crove_jobs.queue_stats; #1797). The counts need
 // track_counts, which is on by default; with it off they would read zero, so the runtime refuses to go on.
 async function tableWriteCounts(trx: Transaction<Database>): Promise<Map<string, number>> {
   // The counters pg_stat_xact_user_tables reads, for the crove_* tables this transaction changed only.
   const { rows } = await sql<{ counting: boolean; counts: Record<string, string> | null }>`
     SELECT pg_catalog.current_setting('track_counts') = 'on' AS counting,
       (SELECT pg_catalog.json_object_agg(t.name, t.n::text)
-         FROM (SELECT n.nspname || '.' || c.relname AS name,
-                      pg_catalog.pg_stat_get_xact_tuples_inserted(c.oid) + pg_catalog.pg_stat_get_xact_tuples_updated(c.oid)
-                        + pg_catalog.pg_stat_get_xact_tuples_deleted(c.oid) AS n
-                 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-                WHERE pg_catalog.starts_with(n.nspname, 'crove_') AND n.nspname <> 'crove_jobs' AND c.relkind = 'r') t
+         FROM (SELECT rn.nspname || '.' || r.relname AS name,
+                      sum(pg_catalog.pg_stat_get_xact_tuples_inserted(c.oid) + pg_catalog.pg_stat_get_xact_tuples_updated(c.oid)
+                        + pg_catalog.pg_stat_get_xact_tuples_deleted(c.oid)) AS n
+                 FROM pg_catalog.pg_class c
+                 JOIN pg_catalog.pg_class r ON r.oid = COALESCE(pg_catalog.pg_partition_root(c.oid), c.oid)
+                 JOIN pg_catalog.pg_namespace rn ON rn.oid = r.relnamespace
+                WHERE c.relkind = 'r' AND pg_catalog.starts_with(rn.nspname, 'crove_')
+                GROUP BY 1) t
         WHERE t.n > 0) AS counts`.execute(trx);
   const row = rows[0];
   if (row?.counting !== true) throw new Error('the declared-writes check needs track_counts on (#1710)');
@@ -1478,6 +1481,8 @@ export class Runtime {
               const before = await tableWriteCounts(trx);
               const asideBefore = new Map(writeCheck.aside);
               const setAsideIfUndone = async () => {
+                // A window the nested command left open (an emit it did not await) may still write, after the rollback.
+                if (windows.open > 0) writeCheck.unmeasured = true;
                 const after = await tableWriteCounts(trx);
                 // Every statement since the start is the nested command's (its handlers add to both counters).
                 if (statements.n - issued !== counter.n) writeCheck.unmeasured = true;
@@ -1606,7 +1611,9 @@ export class Runtime {
       const target = declared ? Object.freeze({ type: String(declared.type), id: String(declared.id) }) : null;
       // Unique per call, so a tryRun nested in another one never rolls back to the outer savepoint.
       this.#savepointSeq += 1;
-      const savepoint = sql.raw(`crove_try_run_${this.#savepointSeq}`);
+      // With a random part: ROLLBACK TO goes to the newest savepoint of that name, so a nested handler that could guess
+      // it could set its own, shadow this one, and keep its writes while the caller sees a refusal (#1797).
+      const savepoint = sql.raw(`crove_try_run_${this.#savepointSeq}_${uuidv7().replaceAll('-', '')}`);
       await sql`SAVEPOINT ${savepoint}`.execute(trx);
       // Undoes the nested command. Every path that does not return its value takes it, so a handler that catches the
       // error and goes on never keeps a refused or failed command's writes, and an aborted transaction is usable again.
