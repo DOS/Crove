@@ -5219,6 +5219,7 @@ export const vi = {
       INVITE_REVOKED: 'Lời mời này đã bị thu hồi',
       INVITE_SCOPE_OWNER_ONLY: 'Chỉ chủ sở hữu mới mời được người làm việc với một số pháp nhân',
       INVITE_SCOPE_STALE: 'Lời mời này không còn dùng được vì phạm vi pháp nhân đã thay đổi; hãy nhờ chủ sở hữu mời lại',
+      INVITE_SCOPE_ALREADY_MEMBER: 'Bạn đã là thành viên của tổ chức này; lời mời giới hạn theo pháp nhân không đổi được quyền của bạn, hãy nhờ chủ sở hữu điều chỉnh',
       INVITE_USED: 'Lời mời này đã được sử dụng',
       INVITE_RATE_LIMITED: 'Đã gửi quá nhiều lời mời; hãy thử lại sau',
       TOO_MANY_INVITES: 'Tổ chức đang có quá nhiều lời mời chờ; hãy thu hồi bớt',

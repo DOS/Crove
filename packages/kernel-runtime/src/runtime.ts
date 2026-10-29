@@ -512,8 +512,9 @@ export function isNeverRecovered(code: string): boolean {
   return NEVER_RECOVERED.has(code) || code.startsWith('AGENT_') || code.startsWith('SESSION_');
 }
 
-// Keys of an ok audit row that only ctx.tryRun's refusal rows carry, so ctx.audit never sets them.
-const RESERVED_OK_KEYS = ['parentCommand', 'parentCommandId'] as const;
+// Keys of an audit row only the runtime writes (a ctx.tryRun refusal's parent command, a proposal's link from a
+// command run under it, #1706), so ctx.audit never sets them.
+const RESERVED_OK_KEYS = ['parentCommand', 'parentCommandId', 'under_proposal'] as const;
 
 // A JSON copy of an error's details or audit facts, frozen all the way down (what the audit row stores is JSON), or
 // null when the value has no JSON form (a cycle, a BigInt).
@@ -1552,6 +1553,16 @@ export class Runtime {
       detail?: Record<string, unknown>;
     },
   ): Promise<void> {
+    // Only the ok row of the proposal's own command (access 'proposal', which requireProposalState admitted for this
+    // proposal) names the proposal in audit_event.proposal_id, which the database checks against that command and an
+    // approved state. Every other row written under a proposal (the edit's reviser, a command the execution runs, a
+    // refusal) names it in detail.under_proposal, which the runtime alone writes (#1706, option B). The id is the
+    // database's own text form, lower case, as the database compares it.
+    const proposalId = row.proposalId?.toLowerCase() ?? null;
+    const ownsProposal = proposalId !== null && row.outcome === 'ok' && this.#commands.get(row.command)?.access === 'proposal';
+    const detail: Record<string, unknown> = { ...(row.detail ?? actorDetail(row.actor)) };
+    delete detail.under_proposal;
+    if (proposalId !== null && !ownsProposal) detail.under_proposal = proposalId;
     await trx
       .insertInto('crove_kernel.audit_event')
       .values({
@@ -1564,8 +1575,8 @@ export class Runtime {
         target_type: row.target?.type ?? null,
         target_id: row.target?.id ?? null,
         input_sha256: this.inputHashOf(row.actor, row.command, row.input),
-        proposal_id: row.proposalId,
-        detail: JSON.stringify(row.detail ?? actorDetail(row.actor)),
+        proposal_id: ownsProposal ? proposalId : null,
+        detail: JSON.stringify(detail),
       })
       .execute();
   }

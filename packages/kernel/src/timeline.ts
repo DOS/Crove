@@ -37,10 +37,12 @@ export const proposalTimeline = defineQuery({
       .executeTakeFirst();
     if (!proposal) throw new DomainError('NOT_FOUND', 404, 'Không tìm thấy đề xuất');
     // The records the proposal's commands acted on, from its creation on (audit_event_time_idx keeps the scan to that
-    // time). Only successful commands: a refused one changed nothing.
+    // time): its own command's row names it in proposal_id, the commands its edit and execution run in
+    // detail.under_proposal (#1706). Only successful commands: a refused one changed nothing.
     const { rows: targets } = await sql<{ target_type: string; target_id: string }>`
       SELECT DISTINCT target_type, target_id FROM crove_kernel.audit_event
-      WHERE org_id = ${ctx.orgId}::uuid AND occurred_at >= ${proposal.created_at} AND proposal_id = ${proposal.id}::uuid
+      WHERE org_id = ${ctx.orgId}::uuid AND occurred_at >= ${proposal.created_at}
+        AND (proposal_id = ${proposal.id}::uuid OR detail ->> 'under_proposal' = ${proposal.id}::uuid::text)
         AND outcome = 'ok' AND target_type IS NOT NULL AND target_id IS NOT NULL
       LIMIT ${RECORD_LIMIT}`.execute(ctx.trx);
     const records = new Map<string, { type: string; id: string }>();

@@ -9,7 +9,7 @@
 // fetched through the egress guard from Pexels' image host only (the host is checked before the fetch, no redirect is
 // followed, and the answer is refused past the upload limit), its type read from the bytes (JPEG, PNG or WebP), then
 // stored and recorded like an uploaded image (image-ingest.ts, shared with the CSV import's image URLs, #1258;
-// social.media.save_stock: kernel.file.ingest with source 'social', and the credit in crove_social.media_attribution).
+// social.media.save_stock: kernel.file.ingest with source 'social', and the credit in the social module's media_attribution).
 //
 // Pexels allows 200 requests an hour per key (https://www.pexels.com/api/documentation/), and every org of the
 // deployment shares the key. So a member gets a few searches and saves a minute, an org at most a third of the

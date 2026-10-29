@@ -114,7 +114,13 @@ function where(orgId: string, filter: AuditFilter, before: AuditCursor | undefin
   else if (filter.command) parts.push(sql`command = ${filter.command}`);
   if (filter.outcome) parts.push(sql`outcome = ${filter.outcome}`);
   if (filter.targetType) parts.push(sql`target_type = ${filter.targetType}`);
-  if (filter.targetId) parts.push(sql`(target_id = ${filter.targetId}::uuid OR proposal_id = ${filter.targetId}::uuid)`);
+  // A proposal's rows: its own command's names it in proposal_id, the commands its edit and execution run name it in
+  // detail.under_proposal (#1706).
+  if (filter.targetId) {
+    parts.push(
+      sql`(target_id = ${filter.targetId}::uuid OR proposal_id = ${filter.targetId}::uuid OR detail ->> 'under_proposal' = ${filter.targetId}::uuid::text)`,
+    );
+  }
   if (filter.from) parts.push(sql`occurred_at >= (${filter.from}::date::timestamp AT TIME ZONE ${TZ})`);
   if (filter.to) parts.push(sql`occurred_at < ((${filter.to}::date + 1)::timestamp AT TIME ZONE ${TZ})`);
   // The cursor row's stored time (microseconds), not the page's millisecond copy of it, so rows within the same
