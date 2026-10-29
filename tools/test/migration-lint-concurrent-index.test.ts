@@ -104,9 +104,9 @@ describe('migration lint: concurrent index builds (#1791)', () => {
   it('skips the files on main before the rule, unless a PR adds them', () => {
     expect(lint('CREATE INDEX IF NOT EXISTS audit_event_x_idx ON crove_kernel.audit_event (org_id);', { hotIndexRule: false }).map((f) => f.rule)).not.toContain('hot-index-concurrently');
     // Pinned: the newest migration on main when the rule landed; raising it would exempt later files from the full-tree run.
-    expect(HOT_INDEX_RULE_AFTER).toBe('20261104070000');
-    expect(hotIndexRuleApplies('20261104070000_crove_kernel_proposal_status_guard.sql', false)).toBe(false);
-    expect(hotIndexRuleApplies('supabase/migrations/20261104070001_crove_kernel_x.sql', false)).toBe(true);
+    expect(HOT_INDEX_RULE_AFTER).toBe('20261104110000');
+    expect(hotIndexRuleApplies('20261104110000_crove_kernel_task_handoff_entity.sql', false)).toBe(false);
+    expect(hotIndexRuleApplies('supabase/migrations/20261104110001_crove_kernel_x.sql', false)).toBe(true);
     expect(hotIndexRuleApplies('20261013120000_crove_kernel_bootstrap.sql', true)).toBe(true);
   });
 });

@@ -1038,7 +1038,7 @@ export function hotIndexBuild(tokens) {
 
 // hot-index-concurrently applies to migrations with a version above this one, the newest on main when the rule merged
 // (as BREAKING_RULES_AFTER: the files up to it cannot be edited, and with --since every file a PR adds gets the rule).
-export const HOT_INDEX_RULE_AFTER = '20261104070000';
+export const HOT_INDEX_RULE_AFTER = '20261104110000';
 export function hotIndexRuleApplies(name, added) {
   return added || basename(name).slice(0, 14) > HOT_INDEX_RULE_AFTER;
 }
