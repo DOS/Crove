@@ -817,21 +817,26 @@ export const setTaskStatus = defineCommand({
   },
 });
 
-// Where an escalation goes: the nearest active position up the chart held by a human, otherwise the owner (null). Phase
-// 1 escalates to humans only: an agent-held supervisor would get work no template program handles (ADR-0029, Phase 1
-// as built).
-async function escalationTarget(trx: Trx, orgId: string, positionId: string): Promise<string | null> {
-  const { rows } = await sql<{ id: string; depth: number; holder_user_id: string | null; status: string }>`
-    WITH RECURSIVE up (id, depth) AS (
-      SELECT p.reports_to, 1 FROM crove_kernel.position p WHERE p.org_id = ${orgId}::uuid AND p.id = ${positionId}::uuid AND p.reports_to IS NOT NULL
-      UNION ALL
-      SELECT p.reports_to, up.depth + 1 FROM up JOIN crove_kernel.position p ON p.org_id = ${orgId}::uuid AND p.id = up.id
-      WHERE p.reports_to IS NOT NULL AND up.depth < 100
-    )
-    SELECT p.id, up.depth, p.holder_user_id, p.status
-    FROM up JOIN crove_kernel.position p ON p.org_id = ${orgId}::uuid AND p.id = up.id
-    ORDER BY up.depth`.execute(trx);
-  return rows.find((r) => r.status === 'active' && r.holder_user_id)?.id ?? null;
+// Whether whoever holds a position reads a legal entity (#1788), so a task of that entity handed to the position can be
+// listed and checked out (the RESTRICTIVE le_scope policy on task, #1762). An org-level task (null) is read by everyone.
+// The rule is the database's (crove_kernel.position_reads_legal_entity, which the task trigger applies too): a person
+// reads what enter_context seals for them, which an agent limited to some entities cannot work out from the role
+// assignments it sees; an agent, and a vacant position, read the position's le_scope.
+async function holderCovers(trx: Trx, orgId: string, positionId: string, entityId: string | null): Promise<boolean> {
+  if (entityId === null) return true;
+  const { rows } = await sql<{ covers: boolean }>`
+    SELECT crove_kernel.position_reads_legal_entity(${orgId}::uuid, ${positionId}::uuid, ${entityId}::uuid) AS covers`.execute(trx);
+  return rows[0]?.covers === true;
+}
+
+// Where an escalation goes: the nearest active position up the chart held by a human who reads the task's legal entity
+// (#1788), otherwise the owner (null), who reads every entity. The database's own target, which the task trigger
+// requires. Phase 1 escalates to humans only: an agent-held supervisor would get work no template program handles
+// (ADR-0029, Phase 1 as built).
+async function escalationTarget(trx: Trx, orgId: string, positionId: string, entityId: string | null): Promise<string | null> {
+  const { rows } = await sql<{ id: string | null }>`
+    SELECT crove_kernel.task_escalation_target(${orgId}::uuid, ${positionId}::uuid, ${entityId}::uuid) AS id`.execute(trx);
+  return rows[0]?.id ?? null;
 }
 
 async function inSubtree(trx: Trx, orgId: string, root: string, candidate: string): Promise<boolean> {
@@ -865,7 +870,7 @@ export const escalateTask = defineCommand({
     const agent = requireAgent(ctx);
     const parent = await requireLease(ctx, input.id, input.fence);
     if (parent.request_depth >= MAX_REQUEST_DEPTH) throw depthLimit();
-    const target = await escalationTarget(ctx.trx, ctx.orgId, agent.positionId);
+    const target = await escalationTarget(ctx.trx, ctx.orgId, agent.positionId, parent.legal_entity_id);
     const child = await ctx.trx
       .insertInto('crove_kernel.task')
       .values({
@@ -918,6 +923,11 @@ export const delegateTask = defineCommand({
       .where('id', '=', input.assigneePositionId)
       .executeTakeFirst();
     if (target?.status === 'archived') throw new DomainError('POSITION_ARCHIVED', 409, 'Vị trí này đã ngừng sử dụng');
+    // The child takes the parent's legal entity (#1762): a holder who cannot read it would never see the task (#1788).
+    // The task trigger refuses it too (AGENT_DELEGATION_SUBTREE); this says why.
+    if (!(await holderCovers(ctx.trx, ctx.orgId, input.assigneePositionId, parent.legal_entity_id))) {
+      throw new DomainError('OUTSIDE_LEGAL_ENTITY', 422, 'Vị trí nhận việc không được xem pháp nhân của việc này', { rule: 'delegation_legal_entity' });
+    }
     if (parent.request_depth >= MAX_REQUEST_DEPTH) throw depthLimit();
     const child = await ctx.trx
       .insertInto('crove_kernel.task')

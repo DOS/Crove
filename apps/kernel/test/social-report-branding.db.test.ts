@@ -18,6 +18,7 @@ import { MAIL_TEMPLATES } from '../src/mail-templates.ts';
 import { runMailJob, sweepMail, type MailJob } from '../src/mail-queue.ts';
 import { reportView, type PageBrand } from '../src/report-link.ts';
 import { reviewView } from '../src/review-link.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -97,8 +98,8 @@ suite('white-label client reports on PostgreSQL (#1053)', () => {
     workerPool = createPool({ connectionString: login('crove_worker', 'test-worker-pw'), max: 2 });
     db = createDb(pool);
     const registry = { commands: [...kernelCommands, ...socialCommands], queries: [...kernelQueries({ inboundDomain: null }), ...socialQueries] };
-    rt = new Runtime(db).register(registry);
-    worker = new Runtime(createDb(workerPool)).register(registry);
+    rt = new Runtime(db, { manifests: TEST_MANIFESTS }).register(registry);
+    worker = new Runtime(createDb(workerPool), { manifests: TEST_MANIFESTS }).register(registry);
   });
 
   afterAll(async () => {

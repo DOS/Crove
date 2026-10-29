@@ -18,6 +18,7 @@ import { createHttpApp } from '../src/http.ts';
 import { rebindExport, rebindExports } from '../src/export-rebind.ts';
 import { ExportSealer, exportAad } from '../src/export-seal.ts';
 import { runOrgExport, type OrgExportManifest } from '../src/org-export.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -125,7 +126,7 @@ suite('org offboarding on PostgreSQL (#38)', () => {
     workerPool = createPool({ connectionString: loginUrl('crove_worker', 'test-worker-pw'), max: 4 });
     db = createDb(pool);
     const register = (target: Db) =>
-      new Runtime(target).register({
+      new Runtime(target, { manifests: TEST_MANIFESTS }).register({
         commands: [...kernelCommands, ...financeCommands],
         queries: [...kernelQueries({ inboundDomain: 'in.test' }), ...financeQueries],
       });
@@ -459,7 +460,7 @@ suite('org offboarding on PostgreSQL (#38)', () => {
         return 'done';
       },
     });
-    const probing = new Runtime(createDb(workerPool)).register({ queries: [probe] });
+    const probing = new Runtime(createDb(workerPool), { manifests: TEST_MANIFESTS }).register({ queries: [probe] });
     const seen: unknown[] = [];
     await expect(probing.stream('kernel.test.stream_probe', {}, { actor: { type: 'system', component: 'test' }, orgId: org.orgId }, async (b) => {
       seen.push(b);

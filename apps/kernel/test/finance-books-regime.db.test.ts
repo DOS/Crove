@@ -12,6 +12,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -94,7 +95,7 @@ suite('finance books regime per legal entity (#1403)', () => {
     appPool = new pg.Pool({ connectionString: login('crove_app', 'test-app-pw'), max: 3 });
     kyselyPool = createPool({ connectionString: login('crove_app', 'test-app-pw'), max: 2 });
     const db = createDb(kyselyPool);
-    const runtime = new Runtime(db).register({
+    const runtime = new Runtime(db, { manifests: TEST_MANIFESTS }).register({
       commands: [...kernelCommands, ...financeCommands],
       queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries],
     });

@@ -14,6 +14,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { CredentialVault, Runtime, parseVaultKey } from '@crove/kernel-runtime';
 import { removeWindowMs, runPublishJob, runRemoveJob, runRemoveWatch, socialCommands, socialQueries, sweepRemovals, type PostView, type Provider } from '@crove/mod-social';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -123,8 +124,8 @@ suite('taking a post down at a set time on PostgreSQL (#861)', () => {
     appDb = createDb(appPool);
     workerDb = createDb(workerPool);
     const registry = { commands: [...kernelCommands, ...socialCommands], queries: [...kernelQueries({ inboundDomain: null }), ...socialQueries] };
-    api = new Runtime(appDb).register(registry);
-    worker = new Runtime(workerDb).register(registry);
+    api = new Runtime(appDb, { manifests: TEST_MANIFESTS }).register(registry);
+    worker = new Runtime(workerDb, { manifests: TEST_MANIFESTS }).register(registry);
   });
 
   afterAll(async () => {

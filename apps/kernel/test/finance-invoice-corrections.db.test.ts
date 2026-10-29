@@ -16,6 +16,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove
 import { Runtime, fileKey, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
 import { extractAndPropose, financeCommands, financeQueries } from '@crove/mod-finance';
 import { inProcessExtract } from './extract-service.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -126,7 +127,7 @@ suite('replacement and adjustment invoices (#916)', () => {
     pool = createPool({ connectionString: login('crove_app', 'test-app-pw'), max: 4 });
     workerPool = createPool({ connectionString: login('crove_worker', 'test-worker-pw'), max: 2 });
     const register = (target: Db) =>
-      new Runtime(target).register({ commands: [...kernelCommands, ...financeCommands], queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries] });
+      new Runtime(target, { manifests: TEST_MANIFESTS }).register({ commands: [...kernelCommands, ...financeCommands], queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries] });
     runtime = register(createDb(pool));
     workerRuntime = register(createDb(workerPool));
     owner = await upsertIdentity(createDb(pool), { issuer: 'test', subject: randomUUID(), email: `owner-${randomUUID().slice(0, 8)}@corrections.test`, name: null });

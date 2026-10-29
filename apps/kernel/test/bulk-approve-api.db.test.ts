@@ -18,6 +18,7 @@ import { createAuthenticator } from '../src/auth.ts';
 import { loadConfig } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
 import { createSessionStatusSource } from '../src/sessions.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -105,7 +106,7 @@ suite('bulk approval through the API (#315)', () => {
     const storageKey = fileKey(orgId, sha256);
     const generation = await store.put(storageKey, bytes);
     const actor = { type: 'user' as const, userId: accounts[uploader].userId, aal: 'aal1' as const };
-    const uploads = new Runtime(createDb(pool)).register({ commands: kernelCommands, queries: [] });
+    const uploads = new Runtime(createDb(pool), { manifests: TEST_MANIFESTS }).register({ commands: kernelCommands, queries: [] });
     const { fileId } = await uploads.execute<{ fileId: string }>(
       'kernel.file.ingest',
       { filename: 'hd.xml', contentType: 'application/xml', sizeBytes: bytes.byteLength, sha256, storageKey, generation, source: 'upload' },
@@ -136,8 +137,8 @@ suite('bulk approval through the API (#315)', () => {
     workerPool = createPool({ connectionString: login('crove_worker', 'test-worker-pw'), max: 2 });
     const db = createDb(pool);
     const defs = { commands: [...kernelCommands, ...financeCommands], queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries] };
-    const runtime = new Runtime(db, { sessions: createSessionStatusSource('off'), stepUp: 'required' }).register(defs);
-    worker = new Runtime(createDb(workerPool)).register(defs);
+    const runtime = new Runtime(db, { manifests: TEST_MANIFESTS, sessions: createSessionStatusSource('off'), stepUp: 'required' }).register(defs);
+    worker = new Runtime(createDb(workerPool), { manifests: TEST_MANIFESTS }).register(defs);
     const config = loadConfig({
       DATABASE_URL: login('crove_app', 'test-app-pw'),
       AUTH_JWT_SECRET: SECRET,

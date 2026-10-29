@@ -22,6 +22,7 @@ import { financeManifest } from '@crove/mod-finance';
 import { loadConfig } from '../../src/config.ts';
 import { moduleDefinitions, moduleManifests, serverRuntime } from '../../src/kernel.ts';
 import { orgPurgeCommand } from '../../src/org-purge.ts';
+import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
 const noDatabase = (): never => {
   throw new Error('no database in this test');
@@ -203,9 +204,9 @@ const PAYMENT = tableWrite(financeManifest.tables, 'crove_finance', 'bank_line',
 const INTERNAL = tableWrite(kernelManifest.tables, 'crove_kernel', 'task_comment', ['body']);
 
 const def = (extra: Partial<CommandDef<unknown, unknown>>): CommandDef<unknown, unknown> =>
-  defineCommand({ name: 't1710.reg', input: z.object({}), risk: 'R1', access: 'proposal', handler: async () => ({}), ...extra }) as CommandDef<unknown, unknown>;
+  defineCommand({ sideEffect: 'none', name: 't1710.reg', input: z.object({}), risk: 'R1', access: 'proposal', handler: async () => ({}), ...extra }) as CommandDef<unknown, unknown>;
 const withManifests = (extra: Partial<CommandDef<unknown, unknown>>) => () => new Runtime(cells, { manifests: manifests() }).register({ commands: [def(extra)] });
-const withoutManifests = (extra: Partial<CommandDef<unknown, unknown>>) => () => new Runtime(cells).register({ commands: [def(extra)] });
+const withoutManifests = (extra: Partial<CommandDef<unknown, unknown>>) => () => new Runtime(cells, { manifests: TEST_MANIFESTS }).register({ commands: [def(extra)] });
 const forged = (classes: Record<string, string>, columns: readonly string[] = ['email']): CommandWrite => ({ table: 'crove_kernel.party', classes, columns });
 
 describe('declared command writes against the manifests (#1697, #1710)', () => {
@@ -247,7 +248,7 @@ describe('declared command writes against the manifests (#1697, #1710)', () => {
       let reads = 0;
       const classes = { ...PARTY };
       Object.defineProperty(classes, 'email', { enumerable: true, get: () => (reads++ === 0 ? 'contact' : 'internal') });
-      const runtime = new Runtime(cells, options).register({ commands: [def({ writes: [forged(classes)] })] });
+      const runtime = new Runtime(cells, { manifests: TEST_MANIFESTS, ...options }).register({ commands: [def({ writes: [forged(classes)] })] });
       expect(runtime.commandInfo('t1710.reg')?.contactOrPayment).toBe(true);
     }
   });
@@ -379,14 +380,14 @@ describe('declared command writes against the manifests (#1697, #1710)', () => {
     const hidden: Record<string, unknown> = { ...def({ name: 't1766.hidden' }) };
     delete hidden.risk;
     Object.defineProperty(hidden, 'risk', { enumerable: false, value: 'R3' });
-    expect(() => new Runtime(cells).register({ commands: [hidden as unknown as CommandDef<unknown, unknown>] })).toThrow(/hidden or symbol property risk/);
+    expect(() => new Runtime(cells, { manifests: TEST_MANIFESTS }).register({ commands: [hidden as unknown as CommandDef<unknown, unknown>] })).toThrow(/hidden or symbol property risk/);
     const inherited = Object.assign(Object.create({ risk: 'R3' }) as object, { ...def({ name: 't1766.inherited' }), risk: undefined });
-    expect(() => new Runtime(cells).register({ commands: [inherited as CommandDef<unknown, unknown>] })).toThrow(/not a plain object/);
-    expect(() => new Runtime(cells).register({ commands: [def({ name: 't1766.risk', risk: 'R9' as never })] })).toThrow(/unknown risk/);
+    expect(() => new Runtime(cells, { manifests: TEST_MANIFESTS }).register({ commands: [inherited as CommandDef<unknown, unknown>] })).toThrow(/not a plain object/);
+    expect(() => new Runtime(cells, { manifests: TEST_MANIFESTS }).register({ commands: [def({ name: 't1766.risk', risk: 'R9' as never })] })).toThrow(/unknown risk/);
     // An object that names R2 when made a string is not the string R2 the agent checks compare with.
-    expect(() => new Runtime(cells).register({ commands: [def({ name: 't1766.risk_object', risk: { toString: () => 'R2' } as never })] })).toThrow(/unknown risk/);
-    expect(() => new Runtime(cells).register({ commands: [def({ name: 't1766.access', access: 'agents' as never })] })).toThrow(/access is a role list/);
-    expect(() => new Runtime(cells).register({ commands: [def({ name: 't1766.agent', access: [], writes: [], agent: { roles: 'all' as never } })] })).toThrow(
+    expect(() => new Runtime(cells, { manifests: TEST_MANIFESTS }).register({ commands: [def({ name: 't1766.risk_object', risk: { toString: () => 'R2' } as never })] })).toThrow(/unknown risk/);
+    expect(() => new Runtime(cells, { manifests: TEST_MANIFESTS }).register({ commands: [def({ name: 't1766.access', access: 'agents' as never })] })).toThrow(/access is a role list/);
+    expect(() => new Runtime(cells, { manifests: TEST_MANIFESTS }).register({ commands: [def({ name: 't1766.agent', access: [], writes: [], agent: { roles: 'all' as never } })] })).toThrow(
       /agent access names a role list/,
     );
   });
@@ -397,7 +398,7 @@ describe('declared command writes against the manifests (#1697, #1710)', () => {
     proto.agent = { roles: 'any' };
     try {
       // Read through the prototype, the inherited agent access would make it a contact writer agents run.
-      expect(() => new Runtime(cells).register({ commands: [contactWriter] })).not.toThrow();
+      expect(() => new Runtime(cells, { manifests: TEST_MANIFESTS }).register({ commands: [contactWriter] })).not.toThrow();
     } finally {
       delete proto.agent;
     }
@@ -405,11 +406,11 @@ describe('declared command writes against the manifests (#1697, #1710)', () => {
 
   it('keeps its own copy of the session source', () => {
     const source = { mode: 'db' as 'db' | 'off', liveCheckForR3: false, check: async () => {} };
-    const runtime = new Runtime(cells, { sessions: source });
+    const runtime = new Runtime(cells, { manifests: TEST_MANIFESTS, sessions: source });
     source.mode = 'off';
     source.check = async () => {};
     expect(runtime.sessionMode).toBe('db');
-    expect(() => new Runtime(cells, { sessions: { ...source, mode: 'none' as never } })).toThrow(/known mode/);
+    expect(() => new Runtime(cells, { manifests: TEST_MANIFESTS, sessions: { ...source, mode: 'none' as never } })).toThrow(/known mode/);
   });
 
   it('keeps its registry out of reach: no cast, Object.create or assignment changes a runtime', () => {

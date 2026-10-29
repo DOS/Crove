@@ -15,6 +15,7 @@ import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity, type ChannelConnectInput, type SealedChannelCredential } from '@crove/kernel';
 import { CredentialVault, parseVaultKey, Runtime, type CredentialBinding } from '@crove/kernel-runtime';
+import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -133,8 +134,8 @@ suite('channel credentials on PostgreSQL (ADR-0025)', () => {
     workerPool = createPool({ connectionString: url('crove_worker', 'test-worker-pw'), max: 4 });
     appDb = createDb(appPool);
     const defs = { commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) };
-    api = new Runtime(appDb).register(defs);
-    worker = new Runtime(createDb(workerPool)).register(defs);
+    api = new Runtime(appDb, { manifests: TEST_MANIFESTS }).register(defs);
+    worker = new Runtime(createDb(workerPool), { manifests: TEST_MANIFESTS }).register(defs);
   });
 
   afterAll(async () => {

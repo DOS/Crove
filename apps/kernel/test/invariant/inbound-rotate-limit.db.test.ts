@@ -13,6 +13,7 @@ import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { buildKernelCommands, createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
+import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -109,8 +110,8 @@ suite('inbound address rotation rate limit on PostgreSQL (#113)', () => {
     pool = createPool({ connectionString: appUrl.toString(), max: 8 });
     db = createDb(pool);
     const queries = kernelQueries({ inboundDomain: 'in.test' });
-    runtime = new Runtime(db).register({ commands: kernelCommands, queries });
-    tight = new Runtime(db).register({ commands: buildKernelCommands({ inboundRotateLimits: { perDay: 2, total: 3 } }), queries });
+    runtime = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: kernelCommands, queries });
+    tight = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: buildKernelCommands({ inboundRotateLimits: { perDay: 2, total: 3 } }), queries });
   });
 
   afterAll(async () => {
@@ -196,7 +197,7 @@ suite('inbound address rotation rate limit on PostgreSQL (#113)', () => {
       await admin.query('COMMIT');
     });
     // At 2 per day, room opens when the rotation 10 hours ago leaves the window, not the one 20 hours ago.
-    const lowered = new Runtime(db).register({
+    const lowered = new Runtime(db, { manifests: TEST_MANIFESTS }).register({
       commands: buildKernelCommands({ inboundRotateLimits: { perDay: 2, total: 50 } }),
       queries: kernelQueries({ inboundDomain: 'in.test' }),
     });

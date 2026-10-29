@@ -29,6 +29,7 @@ import { loadConfig } from '../../src/config.ts';
 import { STREAM_REDEEM_FAILURES_PER_MINUTE, createHttpApp, type HttpDeps, type StreamDeps } from '../../src/http.ts';
 import { createSessionStatusSource } from '../../src/sessions.ts';
 import { StreamHub, createDbTicketStore, createPgNotificationSource, type TicketStore } from '../../src/stream.ts';
+import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -216,7 +217,7 @@ suite('invariant: the invalidation stream', () => {
       // The test client sends X-Forwarded-For as the one trusted proxy would.
       TRUSTED_PROXY_HOPS: '1',
     });
-    runtime = new Runtime(db, { sessions: createSessionStatusSource('off'), stepUp: 'required' }).register({
+    runtime = new Runtime(db, { manifests: TEST_MANIFESTS, sessions: createSessionStatusSource('off'), stepUp: 'required' }).register({
       commands: [...kernelCommands, ...financeCommands],
       queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries],
     });

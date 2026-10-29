@@ -345,7 +345,7 @@ describe('the write-path scanner', () => {
             return sql\`DELETE FROM crove_kernel.party\`.execute(ctx.trx);
           },
         });
-        export const doThing = defineCommand({ handler: async (ctx) => ctx.trx.insertInto('t').values({}).execute() });
+        export const doThing = defineCommand({ sideEffect: 'none', handler: async (ctx) => ctx.trx.insertInto('t').values({}).execute() });
       `),
     ).toEqual(['6: updateTable in a query', '7: DELETE FROM in a query']);
   });

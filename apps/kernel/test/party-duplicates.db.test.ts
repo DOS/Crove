@@ -12,6 +12,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity, type Duplicat
 import type { Party } from '@crove/kernel-contract';
 import { Runtime } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -64,7 +65,7 @@ suite('duplicate parties (#887)', () => {
     app.password = 'test-app-pw';
     pool = createPool({ connectionString: app.toString(), max: 4 });
     db = createDb(pool);
-    rt = new Runtime(db).register({ commands: [...kernelCommands, ...financeCommands], queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries] });
+    rt = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: [...kernelCommands, ...financeCommands], queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries] });
 
     const owner = await person('owner');
     const { orgId } = await createOrg(rt, asUser(owner), `Org ${randomUUID().slice(0, 6)}`);

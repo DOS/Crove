@@ -16,6 +16,7 @@ import { Runtime } from '@crove/kernel-runtime';
 import { JOB_SCHEMA, QUEUES } from '../src/jobs-schema.ts';
 import { jobKey } from '../src/job-keys.ts';
 import { relayBatch, type JobSender, type OutboxRow } from '../src/worker.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -94,7 +95,7 @@ suite('relay batches send on the claim transaction (#1705)', () => {
     await setRolePasswords(adminUrl, { crove_app: 'test-app-pw', crove_worker: 'test-worker-pw' });
     appPool = createPool({ connectionString: login('crove_app', 'test-app-pw'), max: 2 });
     const appDb = createDb(appPool);
-    const runtime = new Runtime(appDb).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
+    const runtime = new Runtime(appDb, { manifests: TEST_MANIFESTS }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
     const owner = await upsertIdentity(appDb, { issuer: 'relay-batch-test', subject: 'owner', email: 'owner@relay-batch.test', name: null });
     ({ orgId } = await createOrg(runtime, { type: 'user', userId: owner, aal: 'aal1' }, 'Relay batch test'));
     // The worker login, for the claim and for pg-boss, as the worker connects.

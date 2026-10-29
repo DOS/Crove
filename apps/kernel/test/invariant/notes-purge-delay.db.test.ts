@@ -15,6 +15,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
 import { notesCommands, notesQueries } from '@crove/mod-notes';
+import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -85,7 +86,7 @@ suite('notes purge delays on PostgreSQL (#1733, ADR-0037)', () => {
     const pool = createPool({ connectionString: appUrl, max: 4 });
     pools.push(pool);
     const db = createDb(pool);
-    app = new Runtime(db).register({ commands: [...kernelCommands, ...notesCommands], queries: [...kernelQueries({ inboundDomain: null }), ...notesQueries] });
+    app = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: [...kernelCommands, ...notesCommands], queries: [...kernelQueries({ inboundDomain: null }), ...notesQueries] });
     for (const key of Object.keys(users) as Array<keyof typeof users>) {
       users[key] = await upsertIdentity(db, { issuer: 'notes-purge-delay', subject: key, email: `${key}@notes-purge-delay.test`, name: null });
     }

@@ -13,6 +13,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { CredentialVault, Runtime, parseVaultKey } from '@crove/kernel-runtime';
 import { localDate, localTime, nextOccurrence, runPublishJob, socialCommands, socialQueries, sweepRecurring, zonedToEpoch, type PostView, type Recurrence, type RecurringResult } from '@crove/mod-social';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -140,8 +141,8 @@ suite('social recurring posts on PostgreSQL (#979)', () => {
     appDb = createDb(appPool);
     workerDb = createDb(workerPool);
     const registry = { commands: [...kernelCommands, ...socialCommands], queries: [...kernelQueries({ inboundDomain: null }), ...socialQueries] };
-    api = new Runtime(appDb).register(registry);
-    worker = new Runtime(workerDb).register(registry);
+    api = new Runtime(appDb, { manifests: TEST_MANIFESTS }).register(registry);
+    worker = new Runtime(workerDb, { manifests: TEST_MANIFESTS }).register(registry);
   });
 
   afterAll(async () => {

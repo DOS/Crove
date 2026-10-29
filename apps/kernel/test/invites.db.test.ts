@@ -16,6 +16,7 @@ import { createAuthenticator } from '../src/auth.ts';
 import { loadConfig } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
 import { createSessionStatusSource } from '../src/sessions.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -121,7 +122,7 @@ suite('member invite flows on PostgreSQL', () => {
       MIGRATIONS_DIR: MIGRATIONS,
       WEB_DIST: '/nonexistent',
     });
-    const runtime = new Runtime(db, { sessions: createSessionStatusSource('off'), stepUp: 'required' }).register({
+    const runtime = new Runtime(db, { manifests: TEST_MANIFESTS, sessions: createSessionStatusSource('off'), stepUp: 'required' }).register({
       commands: kernelCommands,
       queries: kernelQueries({ inboundDomain: null }),
     });

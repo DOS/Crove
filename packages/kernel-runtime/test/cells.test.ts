@@ -72,6 +72,7 @@ function cells(role = 'owner') {
 }
 
 const ownerCommand = defineCommand({
+  sideEffect: 'none',
   name: 'test.touch',
   input: z.object({}),
   risk: 'R1',
@@ -80,6 +81,7 @@ const ownerCommand = defineCommand({
 });
 
 const createOrg = defineCommand({
+  sideEffect: 'none',
   name: 'test.create_org',
   input: z.object({}),
   risk: 'R1',
@@ -96,7 +98,8 @@ const ownerQuery = defineQuery({
 });
 
 function runtimeOn(resolver: CellResolver | Db) {
-  return new Runtime(resolver).register({ commands: [ownerCommand, createOrg], queries: [ownerQuery] });
+  // Its commands declare no writes, so no manifest table is needed (#1772).
+  return new Runtime(resolver, { manifests: [] }).register({ commands: [ownerCommand, createOrg], queries: [ownerQuery] });
 }
 
 describe('cell resolution', () => {

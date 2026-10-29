@@ -19,6 +19,7 @@ import { bookingRequest } from '../src/booking-page.ts';
 import { loadConfig } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
 import { RateLimiter } from '../src/rate-limit.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -56,7 +57,7 @@ suite('crm booking feed on PostgreSQL (#1382)', () => {
   }
 
   const register = (db: Db) =>
-    new Runtime(db).register({ commands: [...kernelCommands, ...crmCommands], queries: [...kernelQueries({ inboundDomain: null }), ...crmQueries] });
+    new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: [...kernelCommands, ...crmCommands], queries: [...kernelQueries({ inboundDomain: null }), ...crmQueries] });
 
   const draft = (slug: string, hostUserId: string, over: Partial<EventTypeInput> = {}): EventTypeInput => ({
     slug,

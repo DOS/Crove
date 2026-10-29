@@ -17,6 +17,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
 import { money } from '@crove/l10n-vn';
+import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -107,7 +108,7 @@ suite('posting path property (#138)', () => {
     url.password = 'test-app-pw';
     pool = createPool({ connectionString: url.toString(), max: 1 });
     const db = createDb(pool);
-    const runtime = new Runtime(db).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: 'in.test' }) });
+    const runtime = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: 'in.test' }) });
     userId = await upsertIdentity(db, { issuer: 'test', subject: 'posting-prop', email: 'prop@posting.test', name: null });
     orgId = (await createOrg(runtime, { type: 'user', userId, aal: 'aal1' }, 'Posting Property')).orgId;
     app = new pg.Client({ connectionString: url.toString() });

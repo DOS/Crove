@@ -28,6 +28,7 @@ import {
   writeArchive,
   type ArchiveBatch,
 } from '../../src/worm.ts';
+import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -131,7 +132,7 @@ suite('WORM fact stream: legal entities on PostgreSQL (#1489)', () => {
     db = createDb(pool);
     workerPool = createPool({ connectionString: login('crove_worker', 'test-worker-pw'), max: 2 });
     worker = createDb(workerPool);
-    const runtime = new Runtime(db).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
+    const runtime = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
     userId = await upsertIdentity(db, { issuer: 'test', subject: 'worm-entity', email: 'worm-entity@example.com', name: null });
     ({ orgId } = await createOrg(runtime, { type: 'user', userId, aal: 'aal1' }, 'Org entity'));
     defaultEntity = await admin(

@@ -14,6 +14,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { CredentialVault, Runtime, parseVaultKey } from '@crove/kernel-runtime';
 import { runChannelOptionJob, socialCommands, socialQueries, type ChannelOptionList } from '@crove/mod-social';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -141,8 +142,8 @@ suite('YouTube playlists and WordPress terms as channel options on PostgreSQL (#
     workerPool = createPool({ connectionString: as('crove_worker', 'test-worker-pw'), max: 2 });
     db = createDb(pool);
     const registry = { commands: [...kernelCommands, ...socialCommands], queries: [...kernelQueries({ inboundDomain: null }), ...socialQueries] };
-    rt = new Runtime(db).register(registry);
-    worker = new Runtime(createDb(workerPool)).register(registry);
+    rt = new Runtime(db, { manifests: TEST_MANIFESTS }).register(registry);
+    worker = new Runtime(createDb(workerPool), { manifests: TEST_MANIFESTS }).register(registry);
   }, 180_000);
 
   afterAll(async () => {

@@ -11,6 +11,7 @@ import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime, defineCommand, defineQuery, type Lookup } from '@crove/kernel-runtime';
+import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -42,6 +43,7 @@ const viaQuery = defineQuery({
   handler: (ctx, input) => ctx.query<string>(input.name, {}),
 });
 const viaCommand = defineCommand({
+  sideEffect: 'none',
   name: 'probe.via_command',
   input: z.object({ name: z.string() }),
   risk: 'R1',
@@ -77,7 +79,7 @@ suite('ctx.query access (ADR-0031, #199)', () => {
     pool = createPool({ connectionString: appUrl.toString(), max: 2 });
     db = createDb(pool);
     // finance is a module the deployment ships but leaves out here.
-    runtime = new Runtime(db, { absentModules: ['finance'] }).register({
+    runtime = new Runtime(db, { manifests: TEST_MANIFESTS, absentModules: ['finance'] }).register({
       commands: [...kernelCommands, viaCommand],
       queries: [...kernelQueries({ inboundDomain: null }), anyMember, adminOnly, systemOnly, viaQuery],
     });

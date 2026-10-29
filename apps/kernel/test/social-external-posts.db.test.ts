@@ -13,6 +13,7 @@ import { CredentialVault, Runtime, parseVaultKey } from '@crove/kernel-runtime';
 import { ThreadsPublisher, TikTokPublisher, YouTubePublisher, ZaloOaPublisher, type Fetch, type MetricsInput, type MetricsResult, type Publisher, type PublishResult, type RecentPostsInput, type RecentPostsResult } from '@crove/channel';
 import { socialCommands, socialQueries, sweepExternalPosts, type ExternalPostRow, type MetricsRow } from '@crove/mod-social';
 import { reportView, type ReportPage } from '../src/report-link.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -140,8 +141,8 @@ suite('social posts published outside Crove (#1054)', () => {
     appDb = createDb(appPool);
     workerDb = createDb(workerPool);
     const registry = { commands: [...kernelCommands, ...socialCommands], queries: [...kernelQueries({ inboundDomain: null }), ...socialQueries] };
-    api = new Runtime(appDb).register(registry);
-    worker = new Runtime(workerDb).register(registry);
+    api = new Runtime(appDb, { manifests: TEST_MANIFESTS }).register(registry);
+    worker = new Runtime(workerDb, { manifests: TEST_MANIFESTS }).register(registry);
   });
 
   afterAll(async () => {

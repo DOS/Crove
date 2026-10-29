@@ -13,6 +13,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove
 import { Runtime } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
 import { formatUsage, readUsage, runUsageReport, type UsageRow } from '../src/usage-report.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -69,7 +70,7 @@ suite('weekly usage report (#311)', () => {
     reporterUrl = login('crove_reporter', 'test-reporter-pw');
     appPool = createPool({ connectionString: login('crove_app', 'test-app-pw'), max: 2 });
     appDb = createDb(appPool);
-    runtime = new Runtime(appDb).register({ commands: [...kernelCommands, ...financeCommands], queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries] });
+    runtime = new Runtime(appDb, { manifests: TEST_MANIFESTS }).register({ commands: [...kernelCommands, ...financeCommands], queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries] });
     for (const key of Object.keys(users) as Array<keyof typeof users>) {
       users[key] = await upsertIdentity(appDb, { issuer: 'usage-test', subject: key, email: `${key}-${SECRET}@usage.test`, name: `${key} ${SECRET}` });
     }
