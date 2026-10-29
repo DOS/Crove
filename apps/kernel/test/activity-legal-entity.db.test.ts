@@ -76,10 +76,11 @@ suite('activity per legal entity on PostgreSQL (#1716)', () => {
 
   // The database starts before the keyed input hash's migration (20261103180000_crove_kernel_input_hash.sql), where
   // crove_kernel.command_input_hash does not exist yet: the runtime that seeds it writes the plain hash (#1741).
-  function connect(inputHash: InputHashMode = 'keyed') {
+  function connect(inputHash: InputHashMode = 'keyed', upgraded = false) {
     pool = createPool({ connectionString: appUrl, max: 4 });
-    // No context token key: the database starts at a version before enter_user_context (#1822).
-    rt = new Runtime(createDb(pool), { manifests: TEST_MANIFESTS, contextTokenKey: null, inputHash }).register({
+    // Before the upgrade no context token key: the database is at a version before enter_user_context. After it the
+    // suite's key, which migrate installed: crove_app may no longer call enter_context (#1822).
+    rt = new Runtime(createDb(pool), { manifests: TEST_MANIFESTS, ...(upgraded ? {} : { contextTokenKey: null }), inputHash }).register({
       commands: [...kernelCommands, ...financeCommands],
       queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries],
     });
@@ -184,7 +185,7 @@ suite('activity per legal entity on PostgreSQL (#1716)', () => {
     await migrate({ adminUrl, dir: MIGRATIONS });
     // Connections opened before the migration may hold plans of the table as it was.
     await pool.end();
-    connect();
+    connect('keyed', true);
     fresh = await record(voucher('Trích trước tiền điện chi nhánh tháng 10', branch));
   }, 300_000);
 

@@ -568,13 +568,10 @@ suite('kernel invariants on PostgreSQL', () => {
       );
       return Object.fromEntries(functions.map((f) => [f, roles.filter((r) => rows.some((row) => row.fn === f && row.role === r && row.can))]));
     });
-    // #1822: crove_app enters a user's context through enter_user_context; step 2 revokes enter_context from it, so
-    // either holds until then. Nobody else may call it, before or after.
-    const userContext = matrix['crove_kernel.enter_context(uuid,uuid)'];
-    expect([[], ['crove_app']]).toContainEqual(userContext);
     expect(matrix).toEqual({
       'crove_kernel.enter_system_context(uuid)': ['crove_worker'],
-      'crove_kernel.enter_context(uuid,uuid)': userContext,
+      // #1822: no login role calls it; crove_app enters a user's context through enter_user_context and a token.
+      'crove_kernel.enter_context(uuid,uuid)': [],
       'crove_kernel.org_by_inbound_token(text)': ['crove_worker'],
       'crove_kernel.inbound_enqueue(text,text,bigint,text)': ['crove_app'],
       'crove_kernel.inbound_claim(integer)': ['crove_worker'],

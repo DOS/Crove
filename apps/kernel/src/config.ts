@@ -137,8 +137,12 @@ const schema = z.object({
   AUTH_JWT_SECRET: optional,
   // The context token key (#1822, ADR-0028 section 9): base64 of 32 to 64 random bytes (`node dist/main.js
   // context-token-key` prints one). The same value goes to the migrate step, which installs it in the database, and to
-  // the kernel, which signs a token with it for every user context it enters. Unset: today's enter_context.
+  // the kernel, which signs a token with it for every user context it enters. Required by the API: the database lets
+  // crove_app enter a user's context only with such a token. CROVE_CONTEXT_TOKEN_KEY wins; else
+  // CROVE_CONTEXT_TOKEN_KEY_FILE names a file holding it, which the migrate step creates with a fresh key when it is
+  // missing (the compose stack's `keys` volume) and every other role only reads.
   CROVE_CONTEXT_TOKEN_KEY: optional,
+  CROVE_CONTEXT_TOKEN_KEY_FILE: optional.pipe(z.string().startsWith('/', 'CROVE_CONTEXT_TOKEN_KEY_FILE is an absolute path').optional()),
   AUTH_JWKS_URL: optional,
   // Required (ADR-0028): the `iss` every access token must carry. Bundled Supabase Auth: GOTRUE_JWT_ISSUER.
   AUTH_ISSUER: optional,

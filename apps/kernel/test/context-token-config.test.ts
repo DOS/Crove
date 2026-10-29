@@ -1,10 +1,14 @@
 // CROVE_CONTEXT_TOKEN_KEY (#1822, ADR-0028 section 9): the setting, the token the runtime signs with it, and the
 // migration runner's reading of it. The database side is apps/kernel/test/invariant/context-token.db.test.ts.
 import { createHmac, randomBytes } from 'node:crypto';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { contextTokenKeyBytes as runnerKeyBytes } from '@crove/db/migrate';
 import { CONTEXT_TOKEN_TTL_S, contextTokenKeyBytes, mintContextToken } from '@crove/kernel-runtime';
 import { loadConfig } from '../src/config.ts';
+import { resolveContextTokenKey } from '../src/context-token-key.ts';
 
 const base = {
   DATABASE_URL: 'postgres://localhost/x',
@@ -65,18 +69,20 @@ describe('CROVE_CONTEXT_TOKEN_KEY', () => {
 describe('mintContextToken', () => {
   it('signs the claims, lowercased, with an expiry 60 seconds after the given time', () => {
     const now = Date.UTC(2026, 9, 29, 8, 0, 0, 500);
-    const token = mintContextToken(TEST_KEY, { userId: USER.toUpperCase(), sessionId: SESSION, orgId: ORG, aal: 'aal2', mfaAt: 1_790_000_000.7 }, now);
+    const token = mintContextToken(TEST_KEY, { userId: USER.toUpperCase(), sessionId: SESSION, orgId: ORG, aal: 'aal2', mfaAt: 1_790_000_000.7, sessionCheck: 'db' }, now);
     const exp = Math.floor(now / 1000) + CONTEXT_TOKEN_TTL_S;
-    const message = `v1.${USER}.${SESSION}.${ORG}.aal2.1790000000.${exp}`;
+    const message = `v2.${USER}.${SESSION}.${ORG}.aal2.1790000000.db.${exp}`;
     expect(CONTEXT_TOKEN_TTL_S).toBe(60);
     expect(token).toBe(`${message}.${createHmac('sha256', Buffer.from(TEST_KEY, 'base64')).update(message).digest('hex')}`);
     expect(token).not.toContain(TEST_KEY);
     expect(token).not.toContain(Buffer.from(TEST_KEY, 'base64').toString('hex'));
   });
 
-  it('writes - for no session and no MFA time, and aal1 for anything but aal2', () => {
+  it('writes - for no session, no MFA time and no session check, and aal1 for anything but aal2', () => {
     const token = mintContextToken(TEST_KEY, { userId: USER, sessionId: null, orgId: ORG, aal: 'aal1', mfaAt: null }, 0);
-    expect(token.split('.').slice(0, 7)).toEqual(['v1', USER, '-', ORG, 'aal1', '-', String(CONTEXT_TOKEN_TTL_S)]);
+    expect(token.split('.').slice(0, 8)).toEqual(['v2', USER, '-', ORG, 'aal1', '-', '-', String(CONTEXT_TOKEN_TTL_S)]);
+    // A session check names the session it checked.
+    expect(() => mintContextToken(TEST_KEY, { userId: USER, sessionId: null, orgId: ORG, aal: 'aal1', mfaAt: null, sessionCheck: 'jwt' })).toThrow(/names the session/);
     // An MFA time in milliseconds by mistake (13 digits) is left out, not a token the database refuses.
     expect(mintContextToken(TEST_KEY, { userId: USER, sessionId: null, orgId: ORG, aal: 'aal2', mfaAt: 1_790_000_000_000 }, 0).split('.')[5]).toBe('-');
   });
@@ -86,7 +92,7 @@ describe('mintContextToken', () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     try {
       vi.setSystemTime(real - 8 * 24 * 60 * 60 * 1000);
-      const exp = Number(mintContextToken(TEST_KEY, { userId: USER, sessionId: null, orgId: ORG, aal: 'aal1', mfaAt: null }).split('.')[6]);
+      const exp = Number(mintContextToken(TEST_KEY, { userId: USER, sessionId: null, orgId: ORG, aal: 'aal1', mfaAt: null }).split('.')[7]);
       expect(Math.abs(exp - (Math.floor(real / 1000) + CONTEXT_TOKEN_TTL_S))).toBeLessThanOrEqual(5);
     } finally {
       vi.useRealTimers();
@@ -101,5 +107,37 @@ describe('mintContextToken', () => {
     ]) {
       expect(() => mintContextToken(TEST_KEY, { ...claims, aal: 'aal1', mfaAt: null })).toThrow(/UUIDs/);
     }
+  });
+});
+
+describe('resolveContextTokenKey', () => {
+  it('takes the setting first, else the file: migrate creates it with a fresh key, every other role only reads it', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ctxtok-'));
+    try {
+      const file = join(dir, 'keys', 'context-token.key');
+      const key = randomBytes(32).toString('base64');
+      expect(resolveContextTokenKey({ CROVE_CONTEXT_TOKEN_KEY: key, CROVE_CONTEXT_TOKEN_KEY_FILE: file }, { create: true })).toBe(key);
+      expect(existsSync(file)).toBe(false);
+      // The API before migrate made the file: no key (and the API then refuses to start), no file made.
+      expect(resolveContextTokenKey({ CROVE_CONTEXT_TOKEN_KEY: undefined, CROVE_CONTEXT_TOKEN_KEY_FILE: file }, { create: false })).toBeUndefined();
+      expect(existsSync(file)).toBe(false);
+      const made = resolveContextTokenKey({ CROVE_CONTEXT_TOKEN_KEY: undefined, CROVE_CONTEXT_TOKEN_KEY_FILE: file }, { create: true });
+      expect(made && contextTokenKeyBytes(made).length).toBe(32);
+      expect(resolveContextTokenKey({ CROVE_CONTEXT_TOKEN_KEY: undefined, CROVE_CONTEXT_TOKEN_KEY_FILE: file }, { create: false })).toBe(made);
+      expect(resolveContextTokenKey({ CROVE_CONTEXT_TOKEN_KEY: undefined, CROVE_CONTEXT_TOKEN_KEY_FILE: undefined }, { create: true })).toBeUndefined();
+      // A file that holds no usable key fails without showing what it holds.
+      const bad = join(dir, 'bad.key');
+      writeFileSync(bad, 'not a key at all\n');
+      expect(() => resolveContextTokenKey({ CROVE_CONTEXT_TOKEN_KEY: undefined, CROVE_CONTEXT_TOKEN_KEY_FILE: bad }, { create: false })).toThrow(
+        /^CROVE_CONTEXT_TOKEN_KEY must be base64 of 32 to 64 random bytes$/,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('is an absolute path in the config', () => {
+    expect(() => loadConfig({ ...base, CROVE_CONTEXT_TOKEN_KEY_FILE: 'keys/context-token.key' })).toThrow(/CROVE_CONTEXT_TOKEN_KEY_FILE/);
+    expect(loadConfig({ ...base, CROVE_CONTEXT_TOKEN_KEY_FILE: '/data/keys/context-token.key' }).CROVE_CONTEXT_TOKEN_KEY_FILE).toBe('/data/keys/context-token.key');
   });
 });
