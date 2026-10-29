@@ -1701,6 +1701,10 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     stopped = true;
     clearInterval(timer);
     clearInterval(heartbeatTimer);
+    // A clean stop works no module any more, so a module a redeploy leaves out drops out of the prober's job age at
+    // once; a worker that dies without this beat keeps its modules counted for 7 days (#1887). Sent first, beside the
+    // drain below: a job still running is not queued, and the drain may take the whole stop grace period.
+    const lastBeat = heartbeat([]);
     clearInterval(pressureTimer);
     if (socialTimer) clearInterval(socialTimer);
     if (removeTimer) clearInterval(removeTimer);
@@ -1726,9 +1730,8 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     if (lateIdTimer) clearInterval(lateIdTimer);
     await listener.end().catch(() => {});
     await boss.stop({ graceful: true, timeout: 10_000 }).catch(() => {});
-    // A clean stop works no module any more, so a module a redeploy leaves out drops out of the prober's job age at
-    // once; a worker that dies without this beat keeps its modules counted for 7 days (#1887). Waited for 5 s at most:
-    // a stop that cannot reach the database leaves the modules counted, as a death does.
-    await Promise.race([heartbeat([]), new Promise((resolve) => setTimeout(resolve, 5000).unref())]);
+    // Waited for 5 s at most after the drain: a stop that cannot reach the database leaves the modules counted, as a
+    // death does.
+    await Promise.race([lastBeat, new Promise((resolve) => setTimeout(resolve, 5000).unref())]);
   };
 }

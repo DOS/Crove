@@ -225,6 +225,10 @@ suite('prober on PostgreSQL', () => {
     expect(await queued()).toEqual({ jobs: 2, aged: true });
     await beat(workerDb, 'worker-b', []);
     expect(await queued()).toEqual({ jobs: 0, aged: false });
+    // Every worker stopped cleanly: no module is recorded, so every queue counts (the heartbeat alert fires too).
+    await beat(workerDb, 'worker-a', []);
+    expect(await queued()).toEqual({ jobs: 2, aged: true });
+    await beat(workerDb, 'worker-a', ['kernel']);
     await admin((c) => c.query(`DELETE FROM crove_kernel.worker_heartbeat WHERE instance = 'worker-b'`));
     expect(await queued()).toEqual({ jobs: 0, aged: false });
     // A live worker of an older release, which records no modules: every queue counts, as before.
