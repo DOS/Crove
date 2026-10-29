@@ -177,10 +177,15 @@ suite('role assignments on PostgreSQL (#1279)', () => {
     expect(roles.map((r) => r.key)).toEqual([...BUILTIN_ROLE_KEYS].sort());
     // The entity chief accountant (#1507) is limited to its legal entities and grants their period unlock alone.
     expect(roles.filter((r) => r.scope === 'legal_entity').map((r) => r.key)).toEqual(['external_accountant', 'finance.entity_chief_accountant']);
+    // #1508 (step 1 of 2): both chief accountants may also grant finance.vat.file (marking the VAT return filed, for
+    // their entities); step 2 expects it.
+    const vatFile = permissions.some((p) => p.permission === 'finance.vat.file');
     expect(permissions).toEqual([
       { role_key: 'finance.chief_accountant', permission: 'finance.period.unlock' },
       { role_key: 'finance.chief_accountant', permission: 'finance.proposal.approve' },
+      ...(vatFile ? [{ role_key: 'finance.chief_accountant', permission: 'finance.vat.file' }] : []),
       { role_key: 'finance.entity_chief_accountant', permission: 'finance.period.unlock' },
+      ...(vatFile ? [{ role_key: 'finance.entity_chief_accountant', permission: 'finance.vat.file' }] : []),
     ]);
     // The base roles are not assignable roles.
     expect(roles.map((r) => r.key)).not.toContain('owner');
@@ -506,7 +511,8 @@ suite('role assignments on PostgreSQL (#1279)', () => {
     });
     const accountantRole = await o.assign(asMfa(o.owner), o.chief, 'finance.chief_accountant');
     const permissions = await rt.query<{ permissions: string[] }>('kernel.org.get', {}, { actor: asUser(o.chief), orgId: o.orgId });
-    expect(permissions.permissions).toEqual(['finance.period.unlock', 'finance.proposal.approve']);
+    // #1508 (step 1 of 2): finance.vat.file may come with the role too.
+    expect(permissions.permissions.filter((p) => p !== 'finance.vat.file')).toEqual(['finance.period.unlock', 'finance.proposal.approve']);
     await expect(unlock(asUser(o.chief))).rejects.toMatchObject({ code: 'STEP_UP_REQUIRED' });
     await expect(unlock(asMfa(o.chief))).resolves.toMatchObject({ lockedThrough: null });
     // Revoked: the next unlock is refused.
