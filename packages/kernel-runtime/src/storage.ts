@@ -21,7 +21,8 @@ export interface BlobStore {
   // Throws BlobNotFoundError when nothing is stored under the key. With a versioned generation (s3:, gcs:) the store
   // reads that exact version; content: and null read the current object. Callers that hold a file reference use
   // readVerified, which also checks the sha256. With maxBytes the store refuses a larger object (BlobTooLargeError)
-  // without reading more than that; a store that ignores it is checked by readVerified after the read.
+  // without reading more than that; a store that ignores it is checked by readVerified after the read. A maxBytes that
+  // is not a whole number of bytes (assertReadCap) is refused with a RangeError before anything is read (#1189).
   get(key: string, generation?: string | null, maxBytes?: number): Promise<Uint8Array>;
   // Removes the blob; a missing key is not an error.
   delete(key: string): Promise<void>;
@@ -161,11 +162,18 @@ export async function putFile(store: BlobStore, key: string, bytes: Uint8Array, 
 // maxBytes (#1126): the size the row records, or a caller's cap. A swapped object larger than that is refused
 // (BlobTooLargeError) before it is read whole, rather than read in full and then refused by its hash.
 export async function readVerified(store: BlobStore, ref: BlobRef, maxBytes?: number): Promise<Uint8Array> {
-  if (maxBytes !== undefined && !(Number.isSafeInteger(maxBytes) && maxBytes >= 0)) throw new Error('invalid read cap');
+  assertReadCap(maxBytes);
   const bytes = await store.get(ref.key, ref.generation, maxBytes);
   if (maxBytes !== undefined && bytes.byteLength > maxBytes) throw new BlobTooLargeError(ref.key, maxBytes);
   if (sha256Hex(bytes) !== ref.sha256) throw new BlobIntegrityError(ref);
   return bytes;
+}
+
+// A read cap is a whole number of bytes, 0 or more; undefined reads uncapped. Each store checks it as well as
+// readVerified (#1189): a NaN, negative, fractional or infinite cap compares false against every size, so a store
+// that took it would read the object whole. Fails closed, before anything is read.
+export function assertReadCap(maxBytes: number | undefined): void {
+  if (maxBytes !== undefined && !(Number.isSafeInteger(maxBytes) && maxBytes >= 0)) throw new RangeError('invalid read cap');
 }
 
 export function sha256Hex(bytes: Uint8Array | string): string {
@@ -438,6 +446,7 @@ export class LocalDiskStore implements BlobStore {
   // One copy per key (see put), so the generation selects nothing; readVerified checks the bytes. With maxBytes, a
   // larger file is refused by its size before it is read (a blob is never rewritten in place, see put).
   async get(key: string, _generation?: string | null, maxBytes?: number): Promise<Uint8Array> {
+    assertReadCap(maxBytes);
     const target = this.path(key);
     try {
       if (maxBytes === undefined) return new Uint8Array(await readFile(target));
