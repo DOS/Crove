@@ -209,7 +209,7 @@ function LeScopePicker({ label, entities, value, onChange, disabled }: { label: 
       <legend className="text-subtle-foreground">{label}</legend>
       <NativeSelect
         className="mt-1 w-full"
-        aria-label={label}
+        aria-label={t('leScopeMode')}
         value={every ? 'every' : 'some'}
         disabled={disabled}
         onChange={(e) => onChange(e.target.value === 'every' ? [...EVERY_ENTITY] : defaultScope(entities))}
@@ -263,6 +263,7 @@ function PositionScope({ position, entities, manage }: { position: Position; ent
           size="sm"
           variant="outline"
           className="mt-1"
+          aria-label={t('leScopeEditOf', { title: position.title })}
           onClick={() => {
             update.reset();
             setEditing([...position.leScope]);
@@ -467,6 +468,7 @@ function AddPosition({ positions, entities, entitiesReady }: { positions: Positi
     onSuccess: () => {
       setTitle('');
       setRoleKey('');
+      setPicked(null);
       setKey(crypto.randomUUID());
     },
   };
@@ -648,7 +650,8 @@ function Templates({ perms, entities, entitiesReady }: { perms: AgentPermissions
   // The entities of the next agent installed; until the owner picks, the org's default entity, as the server would.
   const [picked, setPicked] = useState<string[] | null>(null);
   const leScope = picked ?? defaultScope(entities);
-  const scoped = perms.manage && entities.length > 1;
+  // Shown only while some template can be installed.
+  const scoped = perms.manage && entities.length > 1 && (templates.data ?? []).some((tpl) => tpl.moduleEnabled);
   return (
     <section className="mt-8">
       <h2 className="mb-3 text-sm font-semibold text-foreground">{t('templatesTitle')}</h2>
@@ -849,7 +852,8 @@ export function AgentsPage() {
   const templateRoles = useMemo(() => new Map((templates.data ?? []).map((tpl) => [tpl.key, tpl.roleKey])), [templates.data]);
   // The org's legal entities, which only owners and admins read (#1763): with one entity the screen shows no scope.
   const legalEntities = useQuery({ ...orpc.legalEntities.list.queryOptions(), enabled: perms.manage });
-  const entities: Entity[] = (legalEntities.data?.length ?? 0) > 1 ? (legalEntities.data ?? []) : [];
+  // Owners only, whatever another screen left in the cache (Settings reads the same list for admins).
+  const entities: Entity[] = perms.manage && (legalEntities.data?.length ?? 0) > 1 ? (legalEntities.data ?? []) : [];
   // Until the list is known, an owner's create and install wait: a failed or pending list is not a single entity.
   const entitiesReady = !perms.manage || legalEntities.data !== undefined;
 
@@ -865,8 +869,11 @@ export function AgentsPage() {
           <KillSwitches switches={chart.data.killSwitches} agents={chart.data.agents} perms={perms} />
           {perms.manage && <p className="mb-4 text-xs text-muted-foreground">{t('manageHint')}</p>}
           {perms.manage && legalEntities.error && (
-            <div className="mb-4">
+            <div className="mb-4 flex flex-wrap items-center gap-2">
               <ErrorText>{errorMessage(legalEntities.error)}</ErrorText>
+              <Button size="sm" variant="outline" disabled={legalEntities.isFetching} onClick={() => void legalEntities.refetch()}>
+                {t('leScopeRetry')}
+              </Button>
             </div>
           )}
           <section>

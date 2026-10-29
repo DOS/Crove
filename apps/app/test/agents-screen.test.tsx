@@ -110,6 +110,12 @@ describe('AgentsPage', () => {
     expect(html).toContain(`>${en.agents.leScopeSome}<`);
   });
 
+  it("shows an admin of a multi-entity org no positions' entities, whatever the cache holds", () => {
+    const html = page('admin', twoEntities);
+    expect(html).not.toContain(en.agents.leScopeShown.split('{')[0] as string);
+    expect(html).not.toContain(`>${en.agents.leScope}<`);
+  });
+
   it('keeps the screen as before for a single-entity org', () => {
     const html = page('owner', oneEntity);
     for (const hidden of [en.agents.leScope, en.agents.leScopeInstall, en.agents.leScopeEdit]) expect(html).not.toContain(`>${hidden}<`);
