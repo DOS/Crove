@@ -366,6 +366,15 @@ describe('declared command writes against the manifests (#1697, #1710)', () => {
     // (Agent access set on a definition after it registers grants nothing: agents.db.test.ts runs it as an agent.)
   });
 
+  it('counts a declared table that holds a contact or payment column as a write of it, since writes are checked per table', () => {
+    const name = tableWrite(kernelManifest.tables, 'crove_kernel', 'party', ['name']);
+    const runtime = new Runtime(cells, { manifests: manifests() }).register({ commands: [def({ name: 't1710.party_name', writes: [name] })] });
+    expect(runtime.commandInfo('t1710.party_name')?.contactOrPayment).toBe(true);
+    expect(() => new Runtime(cells, { manifests: manifests() }).register({ commands: [def({ name: 't1710.agent_party', access: [], agent: { roles: 'any' }, writes: [name] })] })).toThrow(
+      /crove_kernel\.party \(holds .*email \(contact\).*checked per table\), so no agent may run it/,
+    );
+  });
+
   it('refuses a definition it could copy only in part, and an unknown risk or access', () => {
     const hidden: Record<string, unknown> = { ...def({ name: 't1766.hidden' }) };
     delete hidden.risk;
