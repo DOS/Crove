@@ -234,7 +234,7 @@ Approve, edit and reject have equal visual access (reject is not hidden in a men
 ## 7. Accessibility (WCAG 2.2 AA)
 
 - Contrast: 4.5:1 for body text, 3:1 for large text, icons and meaningful borders, in both themes.
-- Text never sits on a pattern: on a dot-grid canvas (the landing page's org chart) a label gets the card's own surface behind it, so its contrast is against one solid color and a dot never falls behind a letter (#1657).
+- Text never sits on a pattern: on a dot-grid canvas (the landing page's org chart) a label gets the chart's own surface behind it, so its contrast is against one solid color and a dot never falls behind a letter (#1657).
 - Visible `:focus-visible` ring on every interactive element, never hidden behind sticky headers or banners (2.4.11).
 - Targets at least 24x24px (2.5.8); 44px on touch-first screens.
 - Semantic landmarks and heading order; icon-only buttons have `aria-label`; tables use real `<table>` markup.
