@@ -165,7 +165,13 @@ suite('team chat alert targets resealed after a key rotation on PostgreSQL (#863
   it('reseals the targets of an org being offboarded too, as it counts them (#1889)', async () => {
     const d = await org();
     const target = await save(d.orgId, d.owner, '-4012345681');
-    await admin((c) => c.query("UPDATE crove_kernel.tenant SET status = 'offboarding' WHERE org_id = $1", [d.orgId]));
+    // Moved as staff, without the triggers (the move's own audit check is kernel.org.offboard's).
+    await admin(async (c) => {
+      await c.query('BEGIN');
+      await c.query('SET LOCAL session_replication_role = replica');
+      await c.query("UPDATE crove_kernel.tenant SET status = 'offboarding' WHERE org_id = $1", [d.orgId]);
+      await c.query('COMMIT');
+    });
     const done = await resealCredentials({ runtime: worker, broker: rotated, workerDb });
     expect(await keyOf(target)).toBe(keyB.id);
     expect(done).toMatchObject({ failed: 0, leftActive: 0, leftWaiting: 0 });

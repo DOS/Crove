@@ -5,7 +5,7 @@
 -- reseal (credential_reseal_due, chat_alert_target_reseal_due) took only orgs whose status is 'active'. A usable
 -- credential or chat alert target of an org in 'offboarding' stayed counted as left to reseal and was never resealed,
 -- so the runbook's "0 active left" could not be reached until the org was purged, and retiring the previous key early
--- would have lost envelopes such an org may still need (support can return an offboarding org to 'active' before its
+-- would have lost envelopes such an org may still need (staff can reopen an offboarding org before its
 -- purge). The worker's system context enters an offboarding org (enter_system_context admits 'active' and
 -- 'offboarding'), so the scans now take both statuses. A closed org has no envelope left: the purge deletes
 -- crove_kernel.credential and crove_social.chat_alert_target with the rest of its rows (20261028130000).
