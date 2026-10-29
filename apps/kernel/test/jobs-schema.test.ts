@@ -53,7 +53,7 @@ describe('vendored pg-boss schema (External-tenant gate T6)', () => {
       expect(AVAILABLE_MODULES as readonly string[], queue).toContain(queue.split('-')[0]);
     }
     // health() lists the optional modules, whose queues alone can drop out of its job age: every module but kernel.
-    const sql = readFileSync(join(MIGRATIONS, '20261105150000_crove_kernel_health_retained_modules.sql'), 'utf8');
+    const sql = readFileSync(join(MIGRATIONS, '20261105170000_crove_kernel_health_retained_modules.sql'), 'utf8');
     const listed = /<> ALL \(ARRAY\[([^\]]*)\]\)/.exec(sql)?.[1]?.split(',').map((m) => m.trim().replaceAll("'", ''));
     expect(listed?.sort()).toEqual(AVAILABLE_MODULES.filter((m) => m !== 'kernel').sort());
   });
