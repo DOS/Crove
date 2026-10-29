@@ -410,14 +410,17 @@ local_url() {
   echo "http://127.0.0.1:$port"
 }
 
+# Asks at least once before it looks at the clock: SECONDS counts whole seconds, so with a short timeout the deadline
+# can pass before the first question, and an instance that is ready would be taken for one that never got ready (#1841).
 wait_ready() {
   local url="$1" deadline=$((SECONDS + READY_TIMEOUT))
   log "waiting for $url/readyz (up to ${READY_TIMEOUT}s)"
-  while ((SECONDS < deadline)); do
+  while :; do
     if smoke_body "$url/readyz" '"ready":true' 2>/dev/null; then
       log 'ready: every committed migration is applied'
       return 0
     fi
+    ((SECONDS < deadline)) || break
     sleep 3
   done
   err "not ready after ${READY_TIMEOUT}s: $(curl --silent --max-time 5 "$url/readyz" 2>/dev/null || echo 'no answer')"

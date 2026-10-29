@@ -199,6 +199,21 @@ describe.skipIf(!runHere)('deploy.sh', { timeout: 300_000 }, () => {
     expect(c.filter((l) => l.endsWith(' api')).length).toBe(1);
   });
 
+  it('asks for readiness at least once, however short the timeout, so a ready instance is never taken for a failed one (#1841)', () => {
+    // A timeout of 0 forces the boundary that made the case above flaky: the whole second passes before the first
+    // question, as when bash's SECONDS ticks right after the deadline is set.
+    const env = { CROVE_READY_TIMEOUT: '0', STUB_SERVICES: 'db migrate auth crove-extract api worker' };
+    const ready = deploy('v1.0.0', 'a', env);
+    expect(ready.status, ready.out).toBe(0);
+    expect(ready.out).toContain('ready: every committed migration is applied');
+    // The rollback after a worker that does not stay up gets its question too, and serves the previous release again.
+    rmSync(log);
+    const res = deploy('v1.1.0', 'b', { ...env, STUB_WORKER_DOWN_DIGEST: digest('b') });
+    expect(res.status, res.out).toBe(1);
+    expect(res.out).toContain(`rolled back to ${releaseDir('v1.0.0', 'a')}`);
+    expect(res.out).not.toContain('rollback to');
+  });
+
   it('keeps the previous release and moves on with a second deploy', () => {
     expect(deploy('v1.0.0', 'a').status).toBe(0);
     expect(deploy('v1.1.0', 'b').status).toBe(0);
