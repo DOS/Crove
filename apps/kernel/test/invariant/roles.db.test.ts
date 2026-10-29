@@ -335,6 +335,7 @@ suite('role assignments on PostgreSQL (#1279)', () => {
     await o.assign(asMfa(o.owner), o.member, 'external_accountant', o.branch);
     expect(await scopeOf(o.member, o.orgId)).toEqual([o.branch]);
     await o.exec(asMfa(o.owner), 'kernel.member.change_role', { userId: o.member, role: 'admin' });
+    await o.exec(asMfa(o.member), 'kernel.member.invite.create', { email: `pending-${randomUUID().slice(0, 8)}@roles.test`, role: 'member' });
     const orgWide = await o.assign(asMfa(o.owner), o.member, 'finance.viewer');
     // Back to member or viewer, they would read every entity with their branch role still showing: refused, unchanged.
     for (const role of ['member', 'viewer']) {
@@ -346,12 +347,20 @@ suite('role assignments on PostgreSQL (#1279)', () => {
     const roleOf = async () =>
       (await withAdmin((c) => c.query<{ role: string }>('SELECT role FROM crove_kernel.tenant_member WHERE org_id = $1 AND user_id = $2', [o.orgId, o.member]))).rows[0]?.role;
     expect(await roleOf()).toBe('admin');
+    // Nothing else of the demotion happened either: the admin invites they sent are still pending.
+    expect(
+      (
+        await withAdmin((c) =>
+          c.query(`SELECT 1 FROM crove_kernel.member_invite WHERE org_id = $1 AND invited_by = $2 AND status = 'pending'`, [o.orgId, o.member]),
+        )
+      ).rowCount,
+    ).toBe(1);
     // The first refusal is audited with the roles it would have changed (a refusal of a command is not a 403: failed).
     const refused = await withAdmin(
       async (c) =>
         (
           await c.query<{ detail: Record<string, unknown> }>(
-            `SELECT detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'kernel.member.change_role' AND outcome = 'failed' AND target_id = $2 ORDER BY id LIMIT 1`,
+            `SELECT detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'kernel.member.change_role' AND outcome = 'failed' AND target_id = $2 AND detail->>'role' = 'member'`,
             [o.orgId, o.member],
           )
         ).rows[0]?.detail,
@@ -361,6 +370,16 @@ suite('role assignments on PostgreSQL (#1279)', () => {
     await o.revoke(asMfa(o.owner), orgWide.assignmentId);
     await o.exec(asMfa(o.owner), 'kernel.member.change_role', { userId: o.member, role: 'member' });
     expect(await roleOf()).toBe('member');
+    expect(await scopeOf(o.member, o.orgId)).toEqual([o.branch]);
+    // The same holds for an owner: made owner, given an org-wide role, then refused as member until one side goes.
+    await o.exec(asMfa(o.owner), 'kernel.member.change_role', { userId: o.member, role: 'owner' });
+    const again = await o.assign(asMfa(o.owner), o.member, 'finance.viewer');
+    await expect(o.exec(asMfa(o.owner), 'kernel.member.change_role', { userId: o.member, role: 'member' })).rejects.toMatchObject({
+      code: 'ROLE_DEMOTION_MIXES_SCOPE',
+    });
+    expect(await roleOf()).toBe('owner');
+    await o.revoke(asMfa(o.owner), again.assignmentId);
+    await o.exec(asMfa(o.owner), 'kernel.member.change_role', { userId: o.member, role: 'member' });
     expect(await scopeOf(o.member, o.orgId)).toEqual([o.branch]);
     // An admin holding org-wide roles only is demoted as before.
     await o.assign(asMfa(o.owner), o.admin, 'finance.viewer');

@@ -165,8 +165,9 @@ export const changeMemberRole = defineCommand({
     if (previousRole === 'owner' && owners <= 1) throw LAST_OWNER(input.userId, input.role);
     // An owner or admin made member or viewer must not hold org-wide and legal-entity roles together (#1367): as a
     // member they would read every entity (any org-wide role lifts the scope, enter_context) while their entity roles
-    // still show, a scope no grant could have made (ROLE_GRANT_WIDENS_SCOPE refuses an org-wide role to a member limited
-    // to some entities). Whoever demotes them decides which side goes first.
+    // still show. For one limited to some entities before a promotion, the demotion would widen what they read, which
+    // ROLE_GRANT_WIDENS_SCOPE refuses a grant to do; every mixed demotion is refused rather than tracking how the roles
+    // came. Whoever demotes them decides which side goes first.
     if ((previousRole === 'owner' || previousRole === 'admin') && (input.role === 'member' || input.role === 'viewer')) {
       const held = await ctx.trx
         .selectFrom('crove_kernel.role_assignment')
@@ -178,7 +179,7 @@ export const changeMemberRole = defineCommand({
         throw new DomainError(
           'ROLE_DEMOTION_MIXES_SCOPE',
           409,
-          'Người này đang có cả vai trò cho cả tổ chức lẫn vai trò theo pháp nhân. Đổi họ thành Thành viên hoặc Chỉ xem lúc này sẽ cho họ xem mọi pháp nhân trong khi các vai trò theo pháp nhân vẫn hiện; hãy thu hồi một trong hai loại vai trò trước',
+          'Thành viên này đang có cả vai trò cho cả tổ chức lẫn vai trò theo pháp nhân, nên chưa đổi được thành Thành viên hoặc Chỉ xem. Hãy thu hồi các vai trò cho cả tổ chức để họ chỉ xem các pháp nhân đó, hoặc thu hồi các vai trò theo pháp nhân để họ xem mọi pháp nhân, rồi đổi lại',
           undefined,
           { audit: { target_user: input.userId, role: input.role, previous_role: previousRole } },
         );

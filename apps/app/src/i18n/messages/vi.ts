@@ -5280,7 +5280,7 @@ export const vi = {
       ROLE_ASSIGNMENT_NOT_FOUND: 'Không tìm thấy vai trò này của thành viên',
       ROLE_PRIVILEGED_FOR_VIEWER: 'Người có vai trò Chỉ xem không được giao vai trò có quyền duyệt hay mở khóa sổ; hãy đổi họ thành Thành viên trước',
       ROLE_GRANT_WIDENS_SCOPE: 'Thành viên này đang chỉ được xem một số pháp nhân. Giao vai trò cho cả tổ chức sẽ cho họ xem mọi pháp nhân, nên không giao được. Nếu muốn họ làm việc với cả tổ chức, hãy thu hồi các vai trò theo pháp nhân trước; pháp nhân cuối cùng chỉ gỡ được khi đổi họ thành Quản trị hoặc xóa họ khỏi tổ chức rồi mời lại',
-      ROLE_DEMOTION_MIXES_SCOPE: 'Người này đang có cả vai trò cho cả tổ chức lẫn vai trò theo pháp nhân. Đổi họ thành Thành viên hoặc Chỉ xem lúc này sẽ cho họ xem mọi pháp nhân trong khi các vai trò theo pháp nhân vẫn hiện; hãy thu hồi một trong hai loại vai trò trước',
+      ROLE_DEMOTION_MIXES_SCOPE: 'Thành viên này đang có cả vai trò cho cả tổ chức lẫn vai trò theo pháp nhân, nên chưa đổi được thành Thành viên hoặc Chỉ xem. Hãy thu hồi các vai trò cho cả tổ chức để họ chỉ xem các pháp nhân đó, hoặc thu hồi các vai trò theo pháp nhân để họ xem mọi pháp nhân, rồi đổi lại',
       ROLE_REVOKE_WIDENS_SCOPE: 'Đây là pháp nhân cuối cùng mà thành viên này được xem. Thu hồi thì họ sẽ xem được mọi pháp nhân; nếu họ không còn làm việc cho tổ chức, hãy xóa họ khỏi tổ chức',
       UNKNOWN_PRESET: 'Không có quy tắc duyệt này',
       NO_CHIEF_ACCOUNTANT: 'Hãy giao vai trò kế toán trưởng cho một thành viên trước khi chọn quy tắc chỉ kế toán trưởng duyệt bút toán',
