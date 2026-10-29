@@ -8,6 +8,7 @@
 import {
   EXPORT_FORMAT,
   EXPORT_MAX_PARTS,
+  EXPORT_RECORD_STALE,
   type ExportBatch,
   type ExportEncryption,
   type ExportPart,
@@ -18,6 +19,8 @@ import { exportKey, sha256Hex, type Actor, type BlobStore, type Runtime } from '
 import { exportAad, type ExportSealer } from './export-seal.ts';
 
 const SYSTEM: Actor = { type: 'system', component: 'org-export' };
+// Times the job records a finished export when another record of the org came first (#1867).
+const RECORD_ATTEMPTS = 3;
 // NDJSON bytes per stored chunk (before sealing). A chunk is held in memory while it is sealed and written.
 export const EXPORT_CHUNK_BYTES = 8 * 1024 * 1024;
 export const DEFAULT_EXPORT_RETENTION_DAYS = 35;
@@ -131,6 +134,15 @@ export async function runOrgExport(deps: OrgExportDeps, orgId: string, options: 
     expiresAt,
     parts,
   };
-  await deps.runtime.execute('kernel.org.export.record', record, { actor: SYSTEM, orgId });
+  // A record whose transaction began before another of the org's records that took the export lock first is refused
+  // (#1867); a new transaction records it after that one.
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await deps.runtime.execute('kernel.org.export.record', record, { actor: SYSTEM, orgId });
+      break;
+    } catch (error) {
+      if (attempt >= RECORD_ATTEMPTS || (error as { code?: string }).code !== EXPORT_RECORD_STALE) throw error;
+    }
+  }
   return record;
 }

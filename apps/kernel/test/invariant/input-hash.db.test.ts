@@ -3,9 +3,9 @@
 // deployment's hash key, which no runtime role can read, bound to the org of the sealed context, the actor and the
 // command. Whoever holds the row and a guess of a private note (ADR-0037) cannot confirm it, as they could with the
 // plain SHA-256; the same input hashes differently in two orgs, for two actors and in two deployments; a retry still
-// replays, also against a row claimed before the switch; the WORM verifier passes over plain and keyed rows alike; the
-// runtime the server builds (createKernel) and a runtime built without the option (the default, #1741) write keyed
-// rows; and an agent run and the system hash under their own keys.
+// replays, and one against a row claimed before the switch never runs the command again (#1750); the WORM verifier
+// passes over plain and keyed rows alike; the runtime the server builds (createKernel) and a runtime built without
+// the option (the default, #1741) write keyed rows; and an agent run and the system hash under their own keys.
 // Part of the invariant suite; it imports package code under test, never helpers from outside test/invariant/. Set
 // CROVE_TEST_ADMIN_URL to a superuser URL; each run makes its own database.
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
@@ -273,7 +273,7 @@ suite('keyed input hash on PostgreSQL (#1732)', () => {
     expect(nested).toBe(`k1:${await hmacOf(orgs.a, `user:${users.ownerA}`, 'test.refused', canonical({ id }))}`);
   });
 
-  it('keeps idempotency: a retry replays, another input is refused, and a row claimed with the plain hash still replays', async () => {
+  it('keeps idempotency: a retry replays, another input is refused, and a row claimed with the plain hash never runs again', async () => {
     const actor = asUser(users.ownerA);
     const key = randomUUID();
     const title = `Ghi chú ${randomUUID().slice(0, 8)}`;
@@ -288,16 +288,26 @@ suite('keyed input hash on PostgreSQL (#1732)', () => {
     expect(stored.notes).toBe(1);
     expect(stored.request).toBe(`k1:${await hmacOf(orgs.a, `user:${users.ownerA}`, CREATE, canonical(parsedNote(title)))}`);
 
-    // A key claimed before the switch holds the plain SHA-256 of the same input: the retry replays its answer.
+    // A key claimed before the switch holds the plain SHA-256 of the same input. While the runtime still compares such
+    // a row with the plain hash (#1742) the retry replays its answer; once that legacy branch is gone (#1750) the row
+    // matches no keyed hash and the retry is refused as another request. Either way the command never runs again.
+    // #1750 lands in two steps (AGENTS.md), so both answers pass here until it does.
     const legacy = randomUUID();
+    const legacyTitle = `cũ ${randomUUID().slice(0, 8)}`;
     await admin((c) =>
       c.query(
         `INSERT INTO crove_kernel.idempotency_key (org_id, actor_key, key, command, request_sha256, response) VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
-        [orgs.a, `user:${users.ownerA}`, legacy, CREATE, sha256(canonical(parsedNote('cũ'))), JSON.stringify({ value: { noteId: 'legacy', revision: 1 } })],
+        [orgs.a, `user:${users.ownerA}`, legacy, CREATE, sha256(canonical(parsedNote(legacyTitle))), JSON.stringify({ value: { noteId: 'legacy', revision: 1 } })],
       ),
     );
-    expect(await keyed.execute(CREATE, { title: 'cũ' }, { actor, orgId: orgs.a, idempotencyKey: legacy })).toEqual({ noteId: 'legacy', revision: 1 });
+    const retried = await keyed.execute(CREATE, { title: legacyTitle }, { actor, orgId: orgs.a, idempotencyKey: legacy }).then(
+      (value) => ({ value }),
+      (error: { code?: string }) => ({ code: error.code }),
+    );
+    expect([{ value: { noteId: 'legacy', revision: 1 } }, { code: 'IDEMPOTENCY_MISMATCH' }]).toContainEqual(retried);
     expect(await refusalCode(keyed.execute(CREATE, { title: 'mới' }, { actor, orgId: orgs.a, idempotencyKey: legacy }))).toBe('IDEMPOTENCY_MISMATCH');
+    const reran = await admin(async (c) => (await c.query<{ n: number }>('SELECT count(*)::int AS n FROM crove_notes.note WHERE org_id = $1 AND title = $2', [orgs.a, legacyTitle])).rows[0]?.n);
+    expect(reran).toBe(0);
     // A keyed row never matches the plain hash: a stored 'k1:' value is compared with the keyed hash only.
     const forged = randomUUID();
     await admin((c) =>

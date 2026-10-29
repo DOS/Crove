@@ -105,6 +105,8 @@ suite('invites scoped to legal entities on PostgreSQL (#1281)', () => {
       await app.end();
     }
   }
+  const inviteStatus = (orgId: string, inviteId: string) =>
+    admin(async (c) => (await c.query<{ status: string }>('SELECT status FROM crove_kernel.member_invite WHERE org_id = $1 AND id = $2', [orgId, inviteId])).rows[0]?.status);
   const acceptAudit = (orgId: string, userId: string) =>
     admin(
       async (c) =>
@@ -227,32 +229,60 @@ suite('invites scoped to legal entities on PostgreSQL (#1281)', () => {
     expect(await assignments(o.orgId, gone.id)).toEqual([]);
   });
 
+  it('revokes a demoted owner\'s scoped invites in the same command, and keeps the invites an admin may still send (#1458)', async () => {
+    const o = await org();
+    const coOwner = await person('demoted');
+    await admin((c) => c.query("INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'owner')", [o.orgId, coOwner.id]));
+    const scoped = await invite(o.orgId, coOwner.id, (await person('scoped')).email, 'member', [o.a]);
+    const plain = await invite(o.orgId, coOwner.id, (await person('plain-member')).email, 'member');
+    const asAdmin = await invite(o.orgId, coOwner.id, (await person('admin-to-be')).email, 'admin');
+    await runtime.execute('kernel.member.change_role', { userId: coOwner.id, role: 'admin' }, { actor: asMfa(o.owner.id), orgId: o.orgId });
+    expect(await inviteStatus(o.orgId, scoped.inviteId)).toBe('revoked');
+    expect(await inviteStatus(o.orgId, asAdmin.inviteId)).toBe('revoked');
+    expect(await inviteStatus(o.orgId, plain.inviteId)).toBe('pending');
+    const revokedBy = await admin(
+      async (c) => (await c.query<{ revoked_by: string }>('SELECT revoked_by FROM crove_kernel.member_invite WHERE org_id = $1 AND id = $2', [o.orgId, scoped.inviteId])).rows[0]?.revoked_by,
+    );
+    expect(revokedBy).toBe(o.owner.id);
+    const audit = await admin(
+      async (c) =>
+        (
+          await c.query<{ detail: { revoked_invites: string[] } }>(
+            `SELECT detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'kernel.member.change_role' AND outcome = 'ok' AND target_id = $2`,
+            [o.orgId, coOwner.id],
+          )
+        ).rows[0]?.detail,
+    );
+    expect([...(audit?.revoked_invites ?? [])].sort()).toEqual([scoped.inviteId, asAdmin.inviteId].sort());
+    // Promoted back to owner, nothing is restored or revoked: the revoked invite stays revoked, the plain one pending.
+    await runtime.execute('kernel.member.change_role', { userId: coOwner.id, role: 'owner' }, { actor: asMfa(o.owner.id), orgId: o.orgId });
+    expect(await inviteStatus(o.orgId, scoped.inviteId)).toBe('revoked');
+    expect(await inviteStatus(o.orgId, plain.inviteId)).toBe('pending');
+    const promotion = await admin(
+      async (c) =>
+        (
+          await c.query<{ detail: { revoked_invites: string[]; role: string } }>(
+            `SELECT detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'kernel.member.change_role' AND outcome = 'ok' AND target_id = $2 AND detail->>'role' = 'owner'`,
+            [o.orgId, coOwner.id],
+          )
+        ).rows[0]?.detail,
+    );
+    expect(promotion?.revoked_invites).toEqual([]);
+  });
+
   it('never changes an existing member\'s access', async () => {
     const o = await org();
     const member = await person('member');
     await accept(tokenOf(await invite(o.orgId, o.owner.id, member.email, 'member')), member.id);
     expect(await scopeOf(member.id, o.orgId)).toEqual(['*']);
-    // A scoped invite still pending when its invitee joined another way. Accepting it kept what they have and ignored
-    // the scope until #1459, which refuses it instead (409 INVITE_SCOPE_ALREADY_MEMBER) and changes nothing, the invite
-    // still pending: either holds until that lands. Their access is untouched either way.
+    // A scoped invite still pending when its invitee joined another way: refused (#1459), with nothing changed and the
+    // invite still pending, rather than accepted with its scope ignored.
     const second = await person('second');
     const pending = await invite(o.orgId, o.owner.id, second.email, 'viewer', [o.a]);
     await admin((c) => c.query("INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member')", [o.orgId, second.id]));
-    const outcome = await accept(tokenOf(pending), second.id).then(
-      (value) => ({ ok: true as const, value }),
-      (error: { code?: string; status?: number }) => ({ ok: false as const, code: error.code, status: error.status }),
-    );
-    if (outcome.ok) {
-      expect(outcome.value).toMatchObject({ role: 'member' });
-      expect(await acceptAudit(o.orgId, second.id)).toMatchObject({ already_member: true, scope_applied: false, legal_entity_ids: [o.a] });
-    } else {
-      expect(outcome).toEqual({ ok: false, code: 'INVITE_SCOPE_ALREADY_MEMBER', status: 409 });
-      expect(await acceptAudit(o.orgId, second.id)).toBeUndefined();
-      const status = await admin(
-        async (c) => (await c.query<{ status: string }>('SELECT status FROM crove_kernel.member_invite WHERE org_id = $1 AND id = $2', [o.orgId, pending.inviteId])).rows[0]?.status,
-      );
-      expect(status).toBe('pending');
-    }
+    await expect(accept(tokenOf(pending), second.id)).rejects.toMatchObject({ code: 'INVITE_SCOPE_ALREADY_MEMBER', status: 409 });
+    expect(await acceptAudit(o.orgId, second.id)).toBeUndefined();
+    expect(await inviteStatus(o.orgId, pending.inviteId)).toBe('pending');
     expect(await membership(o.orgId, second.id)).toBe('member');
     expect(await assignments(o.orgId, second.id)).toEqual([]);
     expect(await scopeOf(second.id, o.orgId)).toEqual(['*']);
