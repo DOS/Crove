@@ -147,14 +147,14 @@ function parseJournalVoucher(kind: string, raw: unknown): JournalVoucherProposal
 
 // The kinds whose revision names the legal entity it posts to (#1543): an invoice, a cash voucher and a general journal
 // voucher. No other kind's payload is read for it.
-const ENTITY_NAMING_KINDS: readonly string[] = [PURCHASE_KIND, VOUCHER_KIND, JOURNAL_VOUCHER_KIND];
+const ENTITY_NAMING_KINDS: ReadonlySet<string> = new Set([PURCHASE_KIND, VOUCHER_KIND, JOURNAL_VOUCHER_KIND]);
 
 // The legal entity a proposal shows, the same in kernel.inbox.list and kernel.inbox.get (#1625): the one its revision
 // names (`named`, the payload's legalEntityId) when its kind names one and the value is an id, else the proposal's own
 // (#1538), the entity row security scopes it by, which an edit never moves (#1764). Shown only: who sees the proposal
 // is decided by its own entity, never by this.
 export function revisionLegalEntity(kind: string, named: unknown, own: string): string {
-  if (ENTITY_NAMING_KINDS.includes(kind) && typeof named === 'string') {
+  if (ENTITY_NAMING_KINDS.has(kind) && typeof named === 'string') {
     const id = zId.safeParse(named);
     if (id.success) return id.data.toLowerCase();
   }
@@ -240,6 +240,7 @@ export const inboxList = defineQuery({
         sql<string | null>`left(payload #>> '{buyer,name}', 500)`.as('buyer_name'),
         // The legal entity the revision names (#1543), read as kernel.inbox.get reads it (revisionLegalEntity, #1625),
         // and the proposal's own (#1538): the entity of its reading or of its request, which an edit never moves (#1764).
+        // Cut at 64 characters, which no longer value can make a uuid of.
         sql<string | null>`left(payload ->> 'legalEntityId', 64)`.as('named_entity'),
         'legal_entity_id',
         // A voucher (#327) and a general journal voucher (#888) keep their total and date at the top of their payload.
