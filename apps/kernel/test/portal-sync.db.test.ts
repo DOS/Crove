@@ -526,6 +526,18 @@ suite('assisted tax portal sync (#325)', () => {
     expect(await files()).toBe(before);
   });
 
+  // Over the byte cap outside the list step there is no list to be too large: the answer is one the system cannot read.
+  it('answers an oversized captcha as an unreadable answer, not a list too large (#1938)', async () => {
+    portal.options.outage = { status: 200, body: JSON.stringify({ key: 'k1', content: `<svg>${'x'.repeat(300 * 1024)}</svg>` }), contentType: 'application/json' };
+    try {
+      const big = await rpc('portalSync/captcha', owner, { period: PERIOD });
+      expect(big.status).toBe(503);
+      expect(big.body.code).toBe('PORTAL_BAD_ANSWER');
+    } finally {
+      portal.options.outage = null;
+    }
+  });
+
   it('says the portal is down, without its words', async () => {
     portal.options.outage = { status: 503, body: 'Service Unavailable: upstream secret detail', contentType: 'text/plain' };
     try {

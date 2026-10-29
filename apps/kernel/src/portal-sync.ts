@@ -201,7 +201,9 @@ export function createPortalSync(deps: PortalSyncDeps): PortalSync {
       // and invoice); a refusal or an unreadable answer closes it.
       const outcome = RETRYABLE.has(kind) ? 'retry' : 'failed';
       await runtime.execute('finance.portal_sync.call_end', { key, outcome, error: kind }, opts);
-      if (error instanceof TaxPortalError) throw portalError(error.kind);
+      // An answer over the byte cap is a list too large only on the list step; a captcha, a login or an XML answer that
+      // big is one the system cannot read (#1938). The call keeps its own kind above.
+      if (error instanceof TaxPortalError) throw portalError(kind === 'TOO_LARGE' && begin.step !== 'list' ? 'BAD_ANSWER' : kind);
       throw error;
     }
     const externalRef = ref?.(result);

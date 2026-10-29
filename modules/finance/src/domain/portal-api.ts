@@ -7,8 +7,8 @@ import { EXTRACT_LIMITS, zExtractedPortalList, type ExtractedPortalList, type Po
 import { parseTaxCode } from '@crove/l10n-vn';
 
 // What the person reads for PORTAL_LIST_TOO_LARGE, whichever cap stopped the list (#1938): the portal client's (rows,
-// pages or bytes of one answer, apps/kernel/src/tax-portal.ts), the evidence file's size, or this module's row limit
-// over every answer. Each cause asks the same of them, so one code and one message, the app's own wording
+// pages or bytes of one answer, apps/kernel/src/tax-portal.ts) on the list step, the evidence file's size, or this
+// module's row limit over every answer. An oversized captcha, login or XML answer is PORTAL_BAD_ANSWER instead. Each cause asks the same of them, so one code and one message, the app's own wording
 // (apps/app/src/i18n/messages, kernelErrors).
 export const PORTAL_LIST_TOO_LARGE_MESSAGE = 'Danh sách của kỳ này quá lớn để lấy một lần; hãy xuất danh sách Excel từ cổng thuế rồi tải lên';
 
