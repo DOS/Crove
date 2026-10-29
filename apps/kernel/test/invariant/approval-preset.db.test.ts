@@ -330,6 +330,59 @@ suite('approval policy presets on PostgreSQL (#1402)', () => {
     await expect(o.exec(asMfa(o.owner), 'kernel.member.role.revoke', { assignmentId: second.assignmentId })).resolves.toMatchObject({ assignmentId: second.assignmentId });
   });
 
+  // #1933: a change made without an idempotency key holds nothing on the org's tenant row before its keep guard runs.
+  // The guard used to read the preset (founder) before it locked and return at once, so a switch to the accountant
+  // preset still counted the holder whose revoke was not committed yet, and both committed. The revoke here runs in a
+  // session left open, as the owner, without an idempotency row, while the owner's switch runs through the command.
+  it('never ends on the accountant preset without a chief accountant when a revoke without an idempotency key races the switch (#1933)', async () => {
+    const o = await org();
+    const { assignmentId } = await o.exec<{ assignmentId: string }>(asMfa(o.owner), 'kernel.member.role.assign', {
+      userId: o.chief,
+      roleKey: 'finance.chief_accountant',
+      legalEntityId: null,
+    });
+    const remover = await connect(appUrl);
+    await remover.query('BEGIN');
+    try {
+      await remover.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [o.orgId, contextToken(o.owner, o.orgId)]);
+      // The last chief accountant's assignment is deleted, and not committed yet.
+      await remover.query('SELECT * FROM crove_kernel.role_assignment_revoke($1::uuid)', [assignmentId]);
+      let settled = false;
+      const switching = o.setPreset(asMfa(o.owner), 'accountant').then(
+        (value) => {
+          settled = true;
+          return value;
+        },
+        (error: { code?: string }) => {
+          settled = true;
+          return error.code;
+        },
+      );
+      // The switch finishes (the old guard held nothing), or waits for the revoke's row lock on the tenant row (a wait on
+      // the revoke's transaction or on the row itself, never a passing lock such as a relation extension).
+      for (let tries = 0; !settled; tries++) {
+        const { rows } = await withAdmin((c) =>
+          c.query(
+            `SELECT 1 FROM pg_catalog.pg_locks l JOIN pg_catalog.pg_stat_activity a ON a.pid = l.pid
+             WHERE NOT l.granted AND l.locktype IN ('transactionid', 'tuple') AND a.usename = 'crove_app'
+               AND a.datname = pg_catalog.current_database()`,
+          ),
+        );
+        if (rows.length > 0) break;
+        if (tries > 400) throw new Error('the switch neither finished nor waited');
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      expect(settled).toBe(false);
+      await remover.query('COMMIT');
+      // Once the revoke committed, the switch counts no chief accountant.
+      expect(await switching).toBe('NO_CHIEF_ACCOUNTANT');
+    } finally {
+      await remover.query('ROLLBACK').catch(() => {});
+    }
+    expect(await o.policy()).toEqual({ preset: 'founder', version: 1 });
+    expect(await withAdmin(async (c) => (await c.query('SELECT 1 FROM crove_kernel.role_assignment WHERE id = $1', [assignmentId])).rowCount)).toBe(0);
+  });
+
   it('refuses the switch to an AI agent', async () => {
     const o = await org();
     await o.exec(asMfa(o.owner), 'kernel.member.role.assign', { userId: o.chief, roleKey: 'finance.chief_accountant', legalEntityId: null });
