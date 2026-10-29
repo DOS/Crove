@@ -130,6 +130,8 @@ describe('legal entity scope', () => {
     expect(toggleScopeEntity(['e1', 'e3'], 'e1', false, entities)).toEqual(['e3']);
     expect(toggleScopeEntity(['*'], 'e2', true, entities)).toEqual(['e2']);
     expect(toggleScopeEntity(['e2'], 'e2', false, entities)).toEqual([]);
+    // An id the list does not hold is kept.
+    expect(toggleScopeEntity(['e9', 'e1'], 'e2', true, entities)).toEqual(['e1', 'e2', 'e9']);
   });
 
   it('names a scope for display, or null for every entity', () => {

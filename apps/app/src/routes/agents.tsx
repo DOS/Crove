@@ -18,6 +18,7 @@ import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/
 import { useFormat } from '../i18n/provider.tsx';
 import {
   EVERY_ENTITY,
+  LE_SCOPE_MAX,
   agentPermissions,
   budgetUsage,
   chartTree,
@@ -222,7 +223,12 @@ function LeScopePicker({ label, entities, value, onChange, disabled }: { label: 
           {entities.map((e) => (
             <li key={e.id}>
               <label className="flex min-h-6 items-center gap-2 text-foreground">
-                <Checkbox checked={value.includes(e.id)} disabled={disabled} onCheckedChange={(checked) => onChange(toggleScopeEntity(value, e.id, checked, entities))} />
+                <Checkbox
+                  checked={value.includes(e.id)}
+                  // The commands take at most LE_SCOPE_MAX entities one by one; more is every entity.
+                  disabled={disabled || (!value.includes(e.id) && value.length >= LE_SCOPE_MAX)}
+                  onCheckedChange={(checked) => onChange(toggleScopeEntity(value, e.id, checked, entities))}
+                />
                 <span className="break-words">{e.name}</span>
               </label>
             </li>
@@ -257,7 +263,9 @@ function PositionScope({ position, entities, manage }: { position: Position; ent
   const names = scopeNames(position.leScope, entities);
   return (
     <div className="mt-1">
-      <p className="text-xs text-subtle-foreground">{t('leScopeShown', { names: names === null ? t('leScopeEvery') : names.join(', ') })}</p>
+      <p className="text-xs text-subtle-foreground">
+        {t('leScopeShown', { names: names === null ? t('leScopeEvery') : names.length > 0 ? names.join(', ') : t('leScopeUnnamed') })}
+      </p>
       {manage && editing === null && (
         <Button
           size="sm"

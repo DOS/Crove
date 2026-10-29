@@ -57,12 +57,17 @@ export type LeScope = readonly string[];
 
 export const isEveryEntity = (scope: LeScope): boolean => scope.includes('*');
 
-// Some entities with `id` turned on or off, in the order of `entities` (the server keeps what it is sent).
+// The most entities a position names one by one (the commands' limit); past it, every entity is the choice.
+export const LE_SCOPE_MAX = 50;
+
+// Some entities with `id` turned on or off, in the order of `entities` (the server keeps what it is sent). An id the
+// list does not hold (an entity the reader cannot see) is kept, so a change never drops it unseen.
 export function toggleScopeEntity(scope: LeScope, id: string, on: boolean, entities: ReadonlyArray<{ id: string }>): string[] {
   const chosen = new Set(isEveryEntity(scope) ? [] : scope);
   if (on) chosen.add(id);
   else chosen.delete(id);
-  return entities.filter((e) => chosen.has(e.id)).map((e) => e.id);
+  const listed = new Set(entities.map((e) => e.id));
+  return [...entities.filter((e) => chosen.has(e.id)).map((e) => e.id), ...[...chosen].filter((c) => !listed.has(c))];
 }
 
 // What a new position starts with until the owner picks: the org's default entity, as the server gives it.

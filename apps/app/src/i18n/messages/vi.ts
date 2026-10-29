@@ -2410,6 +2410,7 @@ export const vi = {
     leScopeEditOf: 'Đổi pháp nhân của vị trí {title}',
     leScopeMode: 'Phạm vi',
     leScopeRetry: 'Tải lại danh sách pháp nhân',
+    leScopeUnnamed: 'bạn không xem được',
     leScopeInstall: 'Pháp nhân của tác tử sẽ cài',
     stepUpLeScope: 'đổi pháp nhân của vị trí {title}',
     save: 'Lưu',

@@ -2411,6 +2411,7 @@ export const en = {
     leScopeEditOf: 'Change legal entities of {title}',
     leScopeMode: 'Scope',
     leScopeRetry: 'Load the legal entities again',
+    leScopeUnnamed: 'not shown to you',
     leScopeInstall: 'Legal entities of the agent to install',
     stepUpLeScope: 'change the legal entities of {title}',
     save: 'Save',

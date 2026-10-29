@@ -211,7 +211,10 @@ test('the agents screen with its legal-entity pickers passes the 360px and axe w
   await expect(page.getByRole('main').getByText('Chi nhánh Đà Nẵng').first()).toBeVisible();
   await page.goto(`/o/${slug}/agents`);
   await expect(page.getByRole('main').getByRole('group', { name: 'Pháp nhân', exact: true })).toBeVisible();
-  await expect(page.getByRole('main').getByRole('checkbox', { name: 'Chi nhánh Đà Nẵng' }).first()).toBeVisible();
+  // Both pickers start on the default entity: the new branch is not chosen in either.
+  const branch = page.getByRole('main').getByRole('checkbox', { name: 'Chi nhánh Đà Nẵng' });
+  await expect(branch.first()).toBeVisible();
+  for (const box of await branch.all()) await expect(box).not.toBeChecked();
   expect(await phoneWidthProblems(page, [`/o/${slug}/agents`])).toEqual([]);
 });
 
