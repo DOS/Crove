@@ -135,6 +135,10 @@ const schema = z.object({
   PUBLIC_AUTH_URL: optional,
   PUBLIC_AUTH_ANON_KEY: optional,
   AUTH_JWT_SECRET: optional,
+  // The context token key (#1822, ADR-0028 section 9): base64 of 32 to 64 random bytes (`node dist/main.js
+  // context-token-key` prints one). The same value goes to the migrate step, which installs it in the database, and to
+  // the kernel, which signs a token with it for every user context it enters. Unset: today's enter_context.
+  CROVE_CONTEXT_TOKEN_KEY: optional,
   AUTH_JWKS_URL: optional,
   // Required (ADR-0028): the `iss` every access token must carry. Bundled Supabase Auth: GOTRUE_JWT_ISSUER.
   AUTH_ISSUER: optional,
@@ -523,7 +527,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (config.CHANNEL_X_CLIENT_ID && !/^[A-Za-z0-9_-]{16,64}$/.test(config.CHANNEL_X_CLIENT_ID)) throw new Error('CHANNEL_X_CLIENT_ID is the OAuth 2.0 client id of the X app');
   if (Boolean(config.CHANNEL_ZALO_APP_ID) !== Boolean(config.CHANNEL_ZALO_APP_SECRET)) throw new Error('set both CHANNEL_ZALO_APP_ID and CHANNEL_ZALO_APP_SECRET, or neither');
   if (config.CHANNEL_ZALO_APP_ID && !/^\d{1,32}$/.test(config.CHANNEL_ZALO_APP_ID)) throw new Error('CHANNEL_ZALO_APP_ID is the numeric id of the Zalo app');
+  if (config.CROVE_CONTEXT_TOKEN_KEY !== undefined) {
+    const bytes = /^[A-Za-z0-9+/_-]+={0,2}$/.test(config.CROVE_CONTEXT_TOKEN_KEY.trim()) ? Buffer.from(config.CROVE_CONTEXT_TOKEN_KEY.trim(), 'base64') : Buffer.alloc(0);
+    if (bytes.length < 32 || bytes.length > 64) throw new Error('CROVE_CONTEXT_TOKEN_KEY must be base64 of 32 to 64 random bytes');
+  }
   if (!isLocalUrl(config.PUBLIC_URL)) {
+    if (config.CROVE_CONTEXT_TOKEN_KEY !== undefined && SAMPLE_CONTEXT_TOKEN_KEYS.has(config.CROVE_CONTEXT_TOKEN_KEY.trim())) {
+      throw new Error('CROVE_CONTEXT_TOKEN_KEY is the test suite key; generate a random key before exposing Crove');
+    }
     if (config.AUTH_JWT_SECRET && SAMPLE_SECRETS.has(config.AUTH_JWT_SECRET)) {
       throw new Error('AUTH_JWT_SECRET is a sample value; generate a random secret before exposing Crove');
     }
@@ -577,6 +588,9 @@ export const EMAIL_BUDGET_MIN_CLIENTS = 10;
 
 // Values shipped in docker-compose.yml and .env.example. Fine on localhost, never on a public URL.
 const SAMPLE_SECRETS = new Set(['local-only-jwt-secret-change-me-0123456789', 'change-me-to-a-long-random-string-0123456789']);
+// The context token key the test suites use (vitest.config.ts, vitest.invariant.config.ts): public, so never a
+// deployment's.
+const SAMPLE_CONTEXT_TOKEN_KEYS = new Set([Buffer.from('test-only-context-token-key-0123456789').toString('base64')]);
 
 // Cloudflare's published Turnstile test site keys and secrets (1x00000000000000000000AA, 1x0000000000000000000000000000000AA
 // and their 2x and 3x siblings): siteverify passes any token for the always-pass pair, so they are refused on a public URL.

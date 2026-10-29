@@ -1,7 +1,7 @@
 // Built-in migration runner: applies supabase/migrations/*.sql in order, one transaction per file (but a file marked to
 // build indexes concurrently, #1791), recording a ledger in crove_meta.schema_migrations. Works on any PostgreSQL 17; no
 // Supabase CLI.
-import { createHash } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import pg from 'pg';
@@ -14,6 +14,57 @@ export interface MigrateOptions {
   log?: (message: string) => void;
   // How long to wait for another run's migration lock before failing; unset waits as long as it takes (#1803).
   lockWaitMs?: number;
+  // The deployment's context token key (#1822, ADR-0028 section 9), base64 of 32 to 64 bytes, installed after the
+  // migrations. Unset: CROVE_CONTEXT_TOKEN_KEY from the environment, when set; null: none is installed.
+  contextTokenKey?: string | null;
+}
+
+// Decodes a context token key (base64, 32 to 64 bytes). The error never shows the value.
+export function contextTokenKeyBytes(value: string): Buffer {
+  const trimmed = value.trim();
+  const bytes = /^[A-Za-z0-9+/_-]+={0,2}$/.test(trimmed) ? Buffer.from(trimmed, 'base64') : Buffer.alloc(0);
+  if (bytes.length < 32 || bytes.length > 64) throw new Error('CROVE_CONTEXT_TOKEN_KEY must be base64 of 32 to 64 random bytes');
+  return bytes;
+}
+
+// Installs the context token key in the database (#1822). The runner first asks whether the database's current key
+// signed a fixed message as this key does, and sends the key only when it does not (a first install or a rotation), so
+// an ordinary deploy sends nothing secret. The key goes as a bind parameter, never in a statement's text (which
+// pg_stat_statements and statement logs keep), in a transaction that turns parameter and statement logging off for
+// itself where the runner may (a superuser); a server that logs every parameter regardless (pgaudit, settings a
+// runner cannot override) logs it on that run only. The function keeps the key it replaces as the previous one.
+export async function installContextTokenKey(client: pg.ClientBase, key: string, log: (message: string) => void = () => {}): Promise<void> {
+  const bytes = contextTokenKeyBytes(key);
+  // A database migrated only up to a version before the key's migration (tests of older states) has no installer.
+  const { rows: found } = await client.query<{ present: boolean }>(
+    "SELECT pg_catalog.to_regprocedure('crove_kernel.context_token_key_install(bytea)') IS NOT NULL AS present",
+  );
+  if (found[0]?.present !== true) {
+    log('context token key not installed: the database has no crove_kernel.context_token_key_install yet');
+    return;
+  }
+  const check = createHmac('sha256', bytes).update('crove context token key check', 'utf8').digest('hex');
+  const { rows: same } = await client.query<{ matches: boolean }>('SELECT crove_kernel.context_token_key_matches($1) AS matches', [check]);
+  if (same[0]?.matches === true) {
+    log('context token key unchanged');
+    return;
+  }
+  await client.query('BEGIN');
+  try {
+    for (const setting of ["log_parameter_max_length = 0", "log_statement = 'none'", 'log_min_duration_statement = -1']) {
+      await client.query('SAVEPOINT quiet');
+      await client.query(`SET LOCAL ${setting}`).then(
+        () => client.query('RELEASE SAVEPOINT quiet'),
+        () => client.query('ROLLBACK TO SAVEPOINT quiet'),
+      );
+    }
+    const { rows } = await client.query<{ result: string }>('SELECT crove_kernel.context_token_key_install($1::bytea) AS result', [bytes]);
+    await client.query('COMMIT');
+    log(`context token key ${rows[0]?.result ?? 'not installed'}`);
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  }
 }
 
 export interface MigrationFile {
@@ -128,6 +179,8 @@ export async function migrate(options: MigrateOptions): Promise<string[]> {
     if (violations.length > 0) {
       throw new Error(`database hardening check failed (External-tenant gate T17):\n  - ${violations.join('\n  - ')}`);
     }
+    const contextTokenKey = options.contextTokenKey === undefined ? process.env.CROVE_CONTEXT_TOKEN_KEY : options.contextTokenKey;
+    if (contextTokenKey?.trim()) await installContextTokenKey(client, contextTokenKey, log);
   } finally {
     await unmarkPipelineSession(client).catch(() => {});
     await client.query("SELECT pg_advisory_unlock(hashtext('crove_migrate'))").catch(() => {});

@@ -24,6 +24,7 @@ import { createHttpApp } from '../src/http.ts';
 import { createSessionStatusSource } from '../src/sessions.ts';
 import { inProcessExtract } from './extract-service.ts';
 import { TEST_MANIFESTS } from './manifests.ts';
+import { contextToken } from './context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -381,7 +382,7 @@ suite('finance books per legal entity, part 2b (#1280)', () => {
       await c.connect();
       try {
         await c.query('BEGIN');
-        await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [scopedId, org.orgId]);
+        await c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [org.orgId, contextToken(scopedId, org.orgId)]);
         const sha = randomUUID().replaceAll('-', '').padEnd(64, '0');
         await c.query(
           `INSERT INTO crove_kernel.file (org_id, sha256, storage_key, filename, content_type, size_bytes, source, upload_entity_id)
@@ -423,7 +424,7 @@ suite('finance books per legal entity, part 2b (#1280)', () => {
       await c.connect();
       try {
         await c.query('BEGIN');
-        await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [owner.userId, org.orgId]);
+        await c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [org.orgId, contextToken(owner.userId, org.orgId)]);
         await c.query(`UPDATE crove_kernel.proposal SET payload = jsonb_set(payload, '{legalEntityId}', to_jsonb($2::text)) WHERE id = $1`, [proposalId, defaultEntity]);
         return null;
       } catch (error) {

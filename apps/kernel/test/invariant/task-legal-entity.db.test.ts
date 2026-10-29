@@ -22,6 +22,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove
 import { Runtime, type AgentActor } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
+import { enterUser } from './fixtures/context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -72,7 +73,7 @@ suite('tasks and task comments per legal entity on PostgreSQL (#1762)', () => {
     await c.connect();
     try {
       await c.query('BEGIN');
-      await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [userId, orgId]);
+      await enterUser(c, userId, orgId);
       return await fn(c);
     } finally {
       await c.query('ROLLBACK').catch(() => {});
@@ -84,7 +85,8 @@ suite('tasks and task comments per legal entity on PostgreSQL (#1762)', () => {
     const runtimeFor = (url: string) => {
       const pool = createPool({ connectionString: url, max: 4 });
       pools.push(pool);
-      return new Runtime(createDb(pool), { manifests: TEST_MANIFESTS }).register({
+      // No context token key: the database starts at a version before enter_user_context (#1822).
+      return new Runtime(createDb(pool), { manifests: TEST_MANIFESTS, contextTokenKey: null }).register({
         commands: [...kernelCommands, ...financeCommands],
         queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries],
       });

@@ -23,6 +23,7 @@ import { createHttpApp } from '../src/http.ts';
 import { createSessionStatusSource } from '../src/sessions.ts';
 import { inProcessExtract } from './extract-service.ts';
 import { TEST_MANIFESTS } from './manifests.ts';
+import { contextToken } from './context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -535,7 +536,7 @@ suite('journal reversal through the API, and voided purchase documents (#165)', 
     await client.connect();
     try {
       await client.query('BEGIN');
-      await client.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [owner.userId, org.orgId]);
+      await client.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [org.orgId, contextToken(owner.userId, org.orgId)]);
       await client.query(`SELECT crove_finance.post_journal_entry('2026-10-16'::date, 'Đảo trực tiếp', 'test', $1::uuid, $2::jsonb, $3::uuid)`, [
         randomUUID(),
         JSON.stringify(mirror),
@@ -608,7 +609,7 @@ suite('journal reversal through the API, and voided purchase documents (#165)', 
       await client.connect();
       try {
         await client.query('BEGIN');
-        await client.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [owner.userId, org.orgId]);
+        await client.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [org.orgId, contextToken(owner.userId, org.orgId)]);
         const { rows } = await client.query<{ id: string }>(
           `SELECT crove_finance.post_journal_entry('2026-10-01'::date, 'Có dòng ngoài phạm vi', 'test', $1::uuid, $2::jsonb) AS id`,
           [randomUUID(), JSON.stringify(lines)],

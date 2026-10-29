@@ -27,7 +27,7 @@ function fakeDb(role: string) {
   const connection: DatabaseConnection = {
     async executeQuery<R>(query: CompiledQuery): Promise<QueryResult<R>> {
       statements.push(query.sql);
-      const rows = query.sql.includes('crove_kernel.enter_context(') ? [{ role }] : [];
+      const rows = /crove_kernel\.enter_(?:user_)?context\(/.test(query.sql) ? [{ role }] : [];
       return { rows: rows as R[] };
     },
     // oxlint-disable-next-line require-yield
@@ -109,7 +109,7 @@ describe('cell resolution', () => {
     expect(resolver.resolveTenant).toHaveBeenCalledTimes(1);
     expect(resolver.resolveTenant).toHaveBeenCalledWith(ORG);
     expect(resolver.controlPlane).not.toHaveBeenCalled();
-    expect(tenant.some((s) => s.includes('enter_context'))).toBe(true);
+    expect(tenant.some((s) => /enter_(?:user_)?context/.test(s))).toBe(true);
     expect(tenant.some((s) => s.includes('audit_event'))).toBe(true);
     expect(control).toEqual([]);
   });
@@ -152,7 +152,7 @@ describe('cell resolution', () => {
     await expect(runtimeOn(resolver).executeOrgless('test.create_org', {}, { actor: USER })).resolves.toBe('created');
     expect(resolver.controlPlane).toHaveBeenCalledTimes(1);
     expect(resolver.resolveTenant).not.toHaveBeenCalled();
-    expect(control.some((s) => s.includes('enter_context'))).toBe(true);
+    expect(control.some((s) => /enter_(?:user_)?context/.test(s))).toBe(true);
     expect(tenant).toEqual([]);
   });
 

@@ -16,6 +16,7 @@ import { tableWrite } from '@crove/kernel-contract';
 import { DomainError, Runtime, defineCommand, defineQuery, type Actor, type AgentActor, type AgentApprovers, type AgentRuntime, type CommandDef, type CommandWrite, type QueryDef, type Risk } from '@crove/kernel-runtime';
 import { financeCommands, financeManifest, financeQueries } from '@crove/mod-finance';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
+import { contextToken } from './fixtures/context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -427,13 +428,13 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
     const { actor } = await liveAgent(orgA, owner);
     // The org's only human is the owner; an agent holds a chief accountant position. Eligible approvers: the owner.
     const snapshot = await db.transaction().execute(async (trx) => {
-      await sql`SELECT crove_kernel.enter_context(${owner}::uuid, ${orgA}::uuid)`.execute(trx);
+      await sql`SELECT crove_kernel.enter_user_context(${orgA}::uuid, ${contextToken(owner, orgA)}::text)`.execute(trx);
       return eligibleApprovers(trx, orgA, 'finance.purchase.record');
     });
     expect(snapshot).toEqual([owner]);
     const proposal = { command: 'finance.purchase.record', status: 'pending', eligible_approvers: [owner, actor.agentId], authors: [] };
     const asAgent = await db.transaction().execute(async (trx) => {
-      await sql`SELECT crove_kernel.enter_context(${owner}::uuid, ${orgA}::uuid)`.execute(trx);
+      await sql`SELECT crove_kernel.enter_user_context(${orgA}::uuid, ${contextToken(owner, orgA)}::text)`.execute(trx);
       return {
         agent: await decideApproval(trx, orgA, actor as Actor, proposal, { lock: false }),
         owner: await decideApproval(trx, orgA, asUser(owner), proposal, { lock: false }),
@@ -519,7 +520,7 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
     try {
       for (const c of [one, two]) {
         await c.query('BEGIN');
-        await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [owner, orgA]);
+        await c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgA, contextToken(owner, orgA)]);
       }
       await one.query('UPDATE crove_kernel.position SET reports_to = $1 WHERE id = $2', [t, s]);
       const second = two.query('UPDATE crove_kernel.position SET reports_to = $1 WHERE id = $2', [s, t]).then(
@@ -537,7 +538,7 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
     // Other isolation levels would walk an old snapshot, so they are refused.
     await expect(
       db.transaction().setIsolationLevel('repeatable read').execute(async (trx) => {
-        await sql`SELECT crove_kernel.enter_context(${owner}::uuid, ${orgA}::uuid)`.execute(trx);
+        await sql`SELECT crove_kernel.enter_user_context(${orgA}::uuid, ${contextToken(owner, orgA)}::text)`.execute(trx);
         await sql`UPDATE crove_kernel.position SET reports_to = ${p}::uuid WHERE id = ${s}::uuid`.execute(trx);
       }),
     ).rejects.toThrow(/POSITION_CHART_ISOLATION/);
@@ -851,7 +852,7 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
     expect(stamped).toEqual({ actor_id: null, agent_id: actor.agentId });
     // A user context cannot attribute its activity to an agent.
     const asHuman = await db.transaction().execute(async (trx) => {
-      await sql`SELECT crove_kernel.enter_context(${owner}::uuid, ${orgA}::uuid)`.execute(trx);
+      await sql`SELECT crove_kernel.enter_user_context(${orgA}::uuid, ${contextToken(owner, orgA)}::text)`.execute(trx);
       const { rows: inserted } = await sql<{ agent_id: string | null }>`
         INSERT INTO crove_kernel.activity (org_id, record_type, record_id, kind, summary, actor_id, agent_id)
         VALUES (${orgA}::uuid, 't18', ${randomUUID()}::uuid, 't18', 'x', ${owner}::uuid, ${actor.agentId}::uuid) RETURNING agent_id`.execute(trx);
@@ -2028,7 +2029,7 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
   it('keeps humans for R3 and four-eyes: agent authors never count, and the requesting agent never reviews its proposal', async () => {
     // P10 counts only humans: an agent author neither blocks nor satisfies four-eyes.
     const decided = await db.transaction().execute(async (trx) => {
-      await sql`SELECT crove_kernel.enter_context(${owner}::uuid, ${orgA}::uuid)`.execute(trx);
+      await sql`SELECT crove_kernel.enter_user_context(${orgA}::uuid, ${contextToken(owner, orgA)}::text)`.execute(trx);
       const base = { command: 'finance.purchase.record', status: 'pending', eligible_approvers: [owner] };
       const agentAuthor = { type: 'agent', id: randomUUID(), run: randomUUID() };
       return {

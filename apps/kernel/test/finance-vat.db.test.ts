@@ -23,6 +23,7 @@ import { createHttpApp } from '../src/http.ts';
 import { createSessionStatusSource } from '../src/sessions.ts';
 import { inProcessExtract } from './extract-service.ts';
 import { TEST_MANIFESTS } from './manifests.ts';
+import { contextToken } from './context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -676,7 +677,7 @@ suite('VAT working per month or quarter (#316)', () => {
       const c = await pool.connect();
       try {
         await c.query('BEGIN');
-        if (contextOrg) await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [userId, contextOrg]);
+        if (contextOrg) await c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [contextOrg, contextToken(userId, contextOrg)]);
         else await c.query('SET LOCAL ROLE crove_tenant');
         if (statement === 'INSERT') {
           await c.query(
