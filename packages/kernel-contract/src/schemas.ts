@@ -1121,6 +1121,9 @@ export const zTaskStatus = z.enum(['todo', 'in_progress', 'waiting', 'in_review'
 // A non-negative amount with up to 6 decimals (ai_run cost), as a decimal string.
 export const zAiAmount = z.string().regex(/^\d{1,12}(\.\d{1,6})?$/, 'decimal string');
 export const zJobDescription = z.record(z.string(), z.unknown());
+// The legal entities a position's agent works in (#1538, #1763): every entity ('*' alone) or some of the org's, by id.
+// A new position whose owner names none gets the org's default entity.
+export const zPositionLeScope = z.union([z.tuple([z.literal('*')]), z.array(zId).min(1).max(50)]);
 
 // Who holds a position: a member, or an agent, which the chart always labels as AI (ADR-0029 section 9).
 export const zPositionHolder = z
@@ -1143,6 +1146,8 @@ export const zChart = z.object({
       status: zPositionStatus,
       jobDescription: z.unknown(),
       holder: zPositionHolder,
+      // Its legal entities: ['*'], or the ids of those the reader may see (#1763).
+      leScope: z.array(z.string()),
     }),
   ),
   agents: z.array(

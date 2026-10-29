@@ -43,17 +43,22 @@ const member = { userId: 'u1', email: 'an@example.com', displayName: 'An' };
 const chart = {
   root: [{ userId: 'u1', email: 'an@example.com', displayName: 'An' }],
   positions: [
-    { id: 'p1', title: 'Chief accountant', module: 'accounting', roleKey: 'accountant', reportsTo: null, status: 'active', jobDescription: null, holder: { type: 'agent', agentId: 'a1', name: 'Kế toán AI', ai: true } },
-    { id: 'p2', title: 'Clerk', module: 'accounting', roleKey: 'clerk', reportsTo: 'p1', status: 'active', jobDescription: null, holder: { type: 'user', userId: 'u1', email: 'an@example.com', displayName: 'An', ai: false } },
+    { id: 'p1', title: 'Chief accountant', module: 'accounting', roleKey: 'accountant', reportsTo: null, status: 'active', jobDescription: null, holder: { type: 'agent', agentId: 'a1', name: 'Kế toán AI', ai: true }, leScope: ['*'] },
+    { id: 'p2', title: 'Clerk', module: 'accounting', roleKey: 'clerk', reportsTo: 'p1', status: 'active', jobDescription: null, holder: { type: 'user', userId: 'u1', email: 'an@example.com', displayName: 'An', ai: false }, leScope: ['e2'] },
   ],
   agents: [{ id: 'a1', templateKey: 'accountant', displayName: 'Kế toán AI', status: 'active', maxRisk: 'R1', dailyRunCap: 50 }],
   killSwitches: [],
 };
 const templates = [{ key: 'accountant', module: 'accounting', title: 'Accountant', roleKey: 'accountant', maxRisk: 'R1', dailyRunCap: 50, jobDescription: null, moduleEnabled: true }];
 
-function page(role: string | null): string {
+const ENTITY = { kind: 'company', taxCode: null, parentId: null, createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-01T00:00:00Z' };
+const oneEntity = [{ ...ENTITY, id: 'e1', name: 'Công ty An', isDefault: true }];
+const twoEntities = [...oneEntity, { ...ENTITY, id: 'e2', name: 'Chi nhánh Hà Nội', kind: 'branch', isDefault: false }];
+
+function page(role: string | null, entities = oneEntity): string {
   const qc = client.current;
   qc.clear();
+  qc.setQueryData(['legalEntities', 'list'], entities);
   qc.setQueryData(['org', 'get'], { role, members: [member] });
   qc.setQueryData(['chart', 'get'], chart);
   qc.setQueryData(['chart', 'templates'], templates);
@@ -90,6 +95,25 @@ describe('AgentsPage', () => {
     expect(html).toContain(`>${en.agents.stop}<`);
     expect(html).toContain(`>${en.agents.budgetsTitle}<`);
     for (const hidden of [en.agents.addPosition, en.agents.holder, en.agents.save, en.agents.install, en.agents.setBudget]) expect(html).not.toContain(`>${hidden}<`);
+  });
+
+  // #1763: the legal-entity picker and each position's entities appear only for an owner of an org with several.
+  it('shows an owner of a multi-entity org each position\'s entities and the pickers', () => {
+    const html = page('owner', twoEntities);
+    const [chief, clerk] = positionCards(html);
+    expect(chief).toContain(en.agents.leScopeShown.replace('{names}', en.agents.leScopeEvery));
+    expect(clerk).toContain(en.agents.leScopeShown.replace('{names}', 'Chi nhánh Hà Nội'));
+    expect(chief).toContain(`>${en.agents.leScopeEdit}<`);
+    // The add-position form and the templates each offer the picker, starting on the default entity.
+    expect(html).toContain(`>${en.agents.leScope}<`);
+    expect(html).toContain(`>${en.agents.leScopeInstall}<`);
+    expect(html).toContain(`>${en.agents.leScopeSome}<`);
+  });
+
+  it('keeps the screen as before for a single-entity org', () => {
+    const html = page('owner', oneEntity);
+    for (const hidden of [en.agents.leScope, en.agents.leScopeInstall, en.agents.leScopeEdit]) expect(html).not.toContain(`>${hidden}<`);
+    expect(html).not.toContain(en.agents.leScopeShown.split('{')[0] as string);
   });
 
   it.each(['member', 'viewer', null])('shows a %s the chart and the AI labels only', (role) => {

@@ -1281,12 +1281,18 @@ export const chartGet = defineQuery({
         'p.job_description',
         'p.holder_user_id',
         'p.holder_agent_id',
+        'p.le_scope',
         'a.display_name as agent_name',
         'a.status as agent_status',
       ])
       .where('p.org_id', '=', ctx.orgId)
       .orderBy('p.created_at')
       .execute();
+    // A position's legal entities name only those the reader may see (the legal entities' scope policy keeps the
+    // others out of this read), so a member limited to some entities learns no other entity's id (#1763).
+    const visible = new Set(
+      (await ctx.trx.selectFrom('crove_kernel.legal_entity').select('id').where('org_id', '=', ctx.orgId).execute()).map((e) => e.id),
+    );
     const agents = await ctx.trx
       .selectFrom('crove_kernel.agent')
       .select(['id', 'template_key', 'display_name', 'status', 'max_risk', 'daily_run_cap'])
@@ -1318,6 +1324,7 @@ export const chartGet = defineQuery({
         reportsTo: p.reports_to,
         status: p.status,
         jobDescription: p.job_description,
+        leScope: p.le_scope.includes('*') ? ['*'] : p.le_scope.filter((id) => visible.has(id)),
         holder: p.holder_agent_id
           ? { type: 'agent' as const, agentId: p.holder_agent_id, name: p.agent_name, status: p.agent_status, ai: true }
           : p.holder_user_id

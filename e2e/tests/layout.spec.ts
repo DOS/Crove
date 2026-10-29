@@ -197,6 +197,24 @@ test('every sidebar screen and the detail pages pass the 360px and axe walk on a
   expect(problems).toEqual([]);
 });
 
+// The agents screen of an org with two legal entities (#1763): its owner gets the legal-entity pickers (the new
+// position's and the next installed agent's, both open on the default entity's checkbox), and the screen still fits
+// 360px and passes the axe scan, in light and dark.
+test('the agents screen with its legal-entity pickers passes the 360px and axe walk (#1763)', async ({ page }) => {
+  test.setTimeout(120_000);
+  await signInNewUser(page, newEmail('layout-a11y-entities'));
+  const slug = await createOrg(page, 'Công ty Hai pháp nhân');
+  await page.getByRole('navigation').getByRole('link', { name: 'Cài đặt' }).click();
+  const add = page.getByRole('form', { name: 'Thêm pháp nhân' });
+  await add.getByLabel('Tên pháp nhân').fill('Chi nhánh Đà Nẵng');
+  await add.getByRole('button', { name: 'Thêm', exact: true }).click();
+  await expect(page.getByRole('main').getByText('Chi nhánh Đà Nẵng').first()).toBeVisible();
+  await page.goto(`/o/${slug}/agents`);
+  await expect(page.getByRole('main').getByRole('group', { name: 'Pháp nhân', exact: true })).toBeVisible();
+  await expect(page.getByRole('main').getByRole('checkbox', { name: 'Chi nhánh Đà Nẵng' }).first()).toBeVisible();
+  expect(await phoneWidthProblems(page, [`/o/${slug}/agents`])).toEqual([]);
+});
+
 // The Social home's nine tabs at phone width (#1043): they wrap inside the screen, and the page never scrolls sideways.
 // Its own user, created confirmed without the sign-up form, so it draws nothing from the sign-up budget.
 test.describe('at phone width', () => {
