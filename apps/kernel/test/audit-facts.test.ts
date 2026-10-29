@@ -243,9 +243,24 @@ function heldPart(init: string): string | null {
 }
 
 // Whether an expression is an object written out, or a choice between objects written out (`x ? { a } : { b }`).
+// A choice with any other branch (`x ? { a } : before`) is a value, so each branch is traced.
 function objectish(expr: string): boolean {
+  if (/^\(?\s*\{/.test(expr)) return true;
   const held = heldPart(expr);
-  return /^\(?\s*\{/.test(expr) || (held !== null && held !== expr.replace(/^await\s+/, '') && /^\s*\(?\s*\{/.test(held));
+  if (held === null || held === expr.replace(/^await\s+/, '')) return false;
+  const branches: string[] = [];
+  let depth = 0;
+  let branch = '';
+  for (let i = 0; i < held.length; i++) {
+    const c = held[i] as string;
+    if ('([{'.includes(c)) depth++;
+    else if (')]}'.includes(c)) depth--;
+    if (c === ':' && depth === 0) {
+      branches.push(branch);
+      branch = '';
+    } else branch += c;
+  }
+  return [...branches, branch].every((b) => /^\s*\(?\s*\{/.test(b));
 }
 
 // An expression without the parentheses, casts and non-null assertions around it: `(before as Row)!` is `before`.
@@ -344,6 +359,8 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
   const traced = new Set<string>();
   // Functions whose returns a spread of their call reads as facts.
   const spreadRead = new Set<Fn>();
+  // Where the facts being read are written (the ctx.audit call, or a wrapper's call).
+  let useAt = 0;
   // The declaration of `name` in scope at `at`: where its initializer starts, and the initializer.
   const declaration = (name: string, at: number) => {
     const decl = [...code.slice(0, at).matchAll(new RegExp(`\\b(?:const|let|var)\\s+${escape(name)}\\s*(?::[^=;]+)?=(?![=>])\\s*`, 'g'))]
@@ -411,6 +428,12 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
       // A copy of a variable (`raw.trim()`, `list.slice()`) holds what the variable holds; a projection (`.map(...)`)
       // holds what its callback returns, read above.
       for (const copy of withoutAuditValue(held).matchAll(COPY_OF)) checkName(copy[1] as string, at, flag, depth + 1, false);
+      // A projection that returns its element whole (`rows.map((r) => r)`, `.map((r) => ({ ...r }))`) is a copy too.
+      for (const m of withoutAuditValue(held).matchAll(/(?<![\w$.])([A-Za-z_$][\w$]*)\s*(?:\?\.|\.)\s*(?:map|flatMap)\s*\(\s*\(?\s*([A-Za-z_$][\w$]*)\s*(?::[^)=]*)?\)?\s*=>/g)) {
+        const body = unwrap(valueAt(held, (m.index ?? 0) + m[0].length));
+        const element = escape(m[2] as string);
+        if (body === m[2] || new RegExp(`\\.\\.\\.\\s*${element}\\b(?!\\s*(?:[.[]|\\?\\.))`).test(body)) checkName(m[1] as string, at, flag, depth + 1, false);
+      }
     }
   };
 
@@ -444,7 +467,9 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
     }
     const { from, init } = decl;
     const built =BUILT.test(init) || /^new\s+(?:Map|Set)\s*</.test(init);
-    const key = `${decl.index}:${built ? at : ''}`;
+    // A container is read up to the fact's own call (`useAt`), even when reached through another declaration.
+    const end = Math.max(at, useAt);
+    const key = `${decl.index}:${built ? end : ''}`;
     if (traced.has(key)) return true;
     traced.add(key);
     if (QUERY.test(init)) {
@@ -465,7 +490,7 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
       return true;
     }
     if (built) {
-      const scope = code.slice(from, at);
+      const scope = code.slice(from, end);
       // A write to another variable of the same name (in a nested function or block) is not a write to this one.
       const ours = (offset: number) => declaration(name, from + offset)?.index === decl.index;
       for (const w of scope.matchAll(new RegExp(`(?<![\\w$.])${escape(name)}\\s*(\\[[^\\]]*\\]|\\.\\s*[A-Za-z_$][\\w$]*)\\s*=(?![=>])\\s*`, 'g'))) {
@@ -578,6 +603,7 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
   }
   const wrappers: Wrapper[] = [];
   for (const site of sites) {
+    useAt = site.at;
     const inner = unwrap(site.arg.slice(1, -1));
     // A parameter inside auditValue(...) is masked there, so it does not make its function a wrapper.
     const audited = withoutAuditValue(site.arg);
@@ -609,6 +635,7 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
       const open = (call.index ?? 0) + call[0].length - 1;
       const arg = splitTop(balanced(code, open).slice(1, -1))[w.param]?.trim() ?? '';
       const at = arg === '' ? open : code.indexOf(arg, open);
+      useAt = at;
       const flag = reporter(at, `${w.fn.name}(...)`);
       if (!w.whole) checkValue(arg, at, flag, 0);
       else if (arg.startsWith('{')) checkObject(arg, at);
@@ -770,6 +797,15 @@ describe('audit facts and classified columns (#1626, #1632)', () => {
         'previous: the value reads the classified column tax_code outside auditValue(...)',
       ]);
     }
+    // A choice with a row in one branch, a container written after another object holds it, and a whole-element copy.
+    expect(check(`${row}\nconst facts = flag ? { id: 1 } : before;\nctx.audit(facts);`)).toHaveLength(1);
+    expect(check('const previous = {};\nconst facts = { previous };\nprevious.code = party.tax_code;\nctx.audit(facts);')).toEqual([
+      'previous: the value reads the classified column tax_code outside auditValue(...)',
+    ]);
+    expect(check(`${picked.replace('before', 'rows')}\nconst copied = rows.map((r) => r);\nctx.audit({ copied });`)).toEqual([
+      'copied: rows holds the classified column tax_code from the database',
+    ]);
+    expect(check(`${picked.replace('before', 'rows')}\nconst ids = rows.map((r) => r.id);\nctx.audit({ ids });`)).toEqual([]);
     // The declaration in scope is the one in the fact's block, not one in a block that has closed.
     expect(check('const code = party.tax_code;\nif (ok) { const code = 0; use(code); }\nctx.audit({ code });')).toEqual([
       'code: the value reads the classified column tax_code outside auditValue(...)',
