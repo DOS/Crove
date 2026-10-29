@@ -6,9 +6,9 @@
 // the owners at the root (no position). The task keeps its entity, its parent and its history; a lease an agent held on
 // it ends (an in-progress task starts again as todo). The database moves them set-based and writes an activity row per
 // task (crove_kernel.task_reroute: a few statements whatever the count, its targets locked first, a task moved only to
-// a locked one, more rounds until none is stranded, a deadlock retried once), so a narrowing never waits on how many
-// tasks there are. One event per new holder and entity (kernel.task.rerouted) becomes one notice for whoever has them
-// now (kernel.notification.dispatch).
+// a locked one, more rounds until none is stranded, each task answered once, a deadlock retried once), so a narrowing
+// never waits on how many tasks there are. One event per new holder and entity (kernel.task.rerouted) becomes one
+// notice for whoever has them now (kernel.notification.dispatch).
 import { sql } from 'kysely';
 import type { CommandContext } from '@crove/kernel-runtime';
 
