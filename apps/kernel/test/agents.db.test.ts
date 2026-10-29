@@ -10,6 +10,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, runAgentWake, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
 import { financeAgentPrograms, financeCommands, financeQueries, reviewText } from '@crove/mod-finance';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -99,7 +100,7 @@ suite('agent positions, tasks and wake-ups on PostgreSQL (ADR-0029 Phase 1)', ()
       const registry = withFinance
         ? { commands: [...kernelCommands, ...financeCommands], queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries] }
         : { commands: [...kernelCommands], queries: [...kernelQueries({ inboundDomain: null })] };
-      return { db, runtime: new Runtime(db).register(registry) };
+      return { db, runtime: new Runtime(db, { manifests: TEST_MANIFESTS }).register(registry) };
     };
     const api = runtimeFor('crove_app', 'test-app-pw');
     app = api.runtime;

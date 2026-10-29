@@ -21,6 +21,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime, type AgentActor } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
+import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -83,7 +84,7 @@ suite('tasks and task comments per legal entity on PostgreSQL (#1762)', () => {
     const runtimeFor = (url: string) => {
       const pool = createPool({ connectionString: url, max: 4 });
       pools.push(pool);
-      return new Runtime(createDb(pool)).register({
+      return new Runtime(createDb(pool), { manifests: TEST_MANIFESTS }).register({
         commands: [...kernelCommands, ...financeCommands],
         queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries],
       });

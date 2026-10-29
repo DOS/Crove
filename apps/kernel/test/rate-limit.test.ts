@@ -7,6 +7,7 @@ import type { AuthUser } from '../src/auth.ts';
 import { loadConfig } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
 import { RateLimiter } from '../src/rate-limit.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const base = { DATABASE_URL: 'postgres://localhost/x', AUTH_JWT_SECRET: 'x'.repeat(32), AUTH_ISSUER: 'crove-auth', WEB_DIST: '/nonexistent' };
 
@@ -121,12 +122,12 @@ describe('rate limit and refusal audit configuration', () => {
 
   it('refuses refusal audit limits out of range in the runtime too', () => {
     const db = {} as Db;
-    expect(() => new Runtime(db, { refusalAudit: { perActor: 0, perOrg: 1, windowSeconds: 60 } })).toThrow(/perActor/);
-    expect(() => new Runtime(db, { refusalAudit: { perActor: 1, perOrg: 1_000_000, windowSeconds: 60 } })).toThrow(/perOrg/);
-    expect(() => new Runtime(db, { refusalAudit: { perActor: 1, perOrg: 1, windowSeconds: 30 } })).toThrow(/windowSeconds/);
-    expect(() => new Runtime(db, { refusalAudit: { perActor: 5, perOrg: 9, windowSeconds: 60, reserve: 6 } })).toThrow(/reserve/);
-    expect(() => new Runtime(db, { refusalAudit: { perActor: 5, perOrg: 9, windowSeconds: 60, reserve: -1 } })).toThrow(/reserve/);
-    expect(() => new Runtime(db, { refusalAudit: 'unbounded' })).not.toThrow();
+    expect(() => new Runtime(db, { manifests: TEST_MANIFESTS, refusalAudit: { perActor: 0, perOrg: 1, windowSeconds: 60 } })).toThrow(/perActor/);
+    expect(() => new Runtime(db, { manifests: TEST_MANIFESTS, refusalAudit: { perActor: 1, perOrg: 1_000_000, windowSeconds: 60 } })).toThrow(/perOrg/);
+    expect(() => new Runtime(db, { manifests: TEST_MANIFESTS, refusalAudit: { perActor: 1, perOrg: 1, windowSeconds: 30 } })).toThrow(/windowSeconds/);
+    expect(() => new Runtime(db, { manifests: TEST_MANIFESTS, refusalAudit: { perActor: 5, perOrg: 9, windowSeconds: 60, reserve: 6 } })).toThrow(/reserve/);
+    expect(() => new Runtime(db, { manifests: TEST_MANIFESTS, refusalAudit: { perActor: 5, perOrg: 9, windowSeconds: 60, reserve: -1 } })).toThrow(/reserve/);
+    expect(() => new Runtime(db, { manifests: TEST_MANIFESTS, refusalAudit: 'unbounded' })).not.toThrow();
   });
 });
 

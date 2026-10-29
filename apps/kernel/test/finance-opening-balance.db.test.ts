@@ -19,6 +19,7 @@ import { createAuthenticator } from '../src/auth.ts';
 import { loadConfig } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
 import { createSessionStatusSource } from '../src/sessions.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -141,7 +142,7 @@ suite('opening balances from Excel (#320)', () => {
     appUrl.password = 'test-app-pw';
     pool = createPool({ connectionString: appUrl.toString(), max: 6 });
     db = createDb(pool);
-    runtime = new Runtime(db, { sessions: createSessionStatusSource('off'), stepUp: 'required' }).register({
+    runtime = new Runtime(db, { manifests: TEST_MANIFESTS, sessions: createSessionStatusSource('off'), stepUp: 'required' }).register({
       commands: [...kernelCommands, ...financeCommands],
       queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries],
     });

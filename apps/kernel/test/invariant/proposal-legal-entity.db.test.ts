@@ -22,6 +22,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime, defineCommand, type AgentActor, type CommandDef, type InputHashMode } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
+import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -33,6 +34,7 @@ const suite = ADMIN ? describe : describe.skip;
 // A preparer agents may run (it writes nothing), which names the entity it is given, and an R1 proposal command agents
 // with the chief accountant role key may approve.
 const prepare1538 = defineCommand({
+  sideEffect: 'none',
   name: 't1538.prepare',
   input: z.object({ legalEntityId: z.string().optional() }),
   risk: 'R0',
@@ -43,6 +45,7 @@ const prepare1538 = defineCommand({
   handler: async (_ctx, input) => ({ kind: 't1538', command: 't1538.prop', title: 'T1538', payload: input.legalEntityId ? { legalEntityId: input.legalEntityId } : { n: 1 } }),
 }) as CommandDef<unknown, unknown>;
 const proposal1538 = defineCommand({
+  sideEffect: 'none',
   name: 't1538.prop',
   input: z.object({ payload: z.unknown(), acceptFailedChecks: z.boolean().optional() }),
   risk: 'R1',
@@ -102,7 +105,7 @@ suite('proposals per legal entity and agent position scopes on PostgreSQL (#1538
     const runtimeFor = (url: string) => {
       const pool = createPool({ connectionString: url, max: 4 });
       pools.push(pool);
-      return new Runtime(createDb(pool), { inputHash }).register({
+      return new Runtime(createDb(pool), { manifests: TEST_MANIFESTS, inputHash }).register({
         commands: [...kernelCommands, ...financeCommands, prepare1538, proposal1538],
         queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries],
       });

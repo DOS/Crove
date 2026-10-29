@@ -22,6 +22,7 @@ import { createAuthenticator } from '../../src/auth.ts';
 import { loadConfig } from '../../src/config.ts';
 import { createHttpApp } from '../../src/http.ts';
 import { createSessionStatusSource } from '../../src/sessions.ts';
+import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -203,7 +204,7 @@ suite('tokens issued to OAuth clients by Supabase Auth on PostgreSQL (issue #272
     for (const mode of MODES) {
       const config = configs[mode];
       expect(config.AUTH_SESSION_CHECK).toBe(mode);
-      const runtime = new Runtime(db, { sessions: createSessionStatusSource(mode), stepUp: 'required' }).register({
+      const runtime = new Runtime(db, { manifests: TEST_MANIFESTS, sessions: createSessionStatusSource(mode), stepUp: 'required' }).register({
         commands: [...kernelCommands, ...financeCommands],
         queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries],
       });

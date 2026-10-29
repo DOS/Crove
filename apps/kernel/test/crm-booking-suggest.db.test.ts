@@ -20,6 +20,7 @@ import { createAuthenticator } from '../src/auth.ts';
 import { loadConfig } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
 import { createSessionStatusSource } from '../src/sessions.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -114,8 +115,8 @@ suite('booking suggestions from a client message (#1440)', () => {
     pool = createPool({ connectionString: appUrl.toString(), max: 4 });
     db = createDb(pool);
     const modules = { commands: [...kernelCommands, ...crmCommands], queries: [...kernelQueries({ inboundDomain: null }), ...crmQueries] };
-    rt = new Runtime(db).register(modules);
-    const runtime = new Runtime(db, { sessions: createSessionStatusSource('off'), stepUp: 'required' }).register(modules);
+    rt = new Runtime(db, { manifests: TEST_MANIFESTS }).register(modules);
+    const runtime = new Runtime(db, { manifests: TEST_MANIFESTS, sessions: createSessionStatusSource('off'), stepUp: 'required' }).register(modules);
     const config = loadConfig({ DATABASE_URL: appUrl.toString(), AUTH_JWT_SECRET: SECRET, AUTH_ISSUER: ISSUER, AUTH_SESSION_CHECK: 'off', MIGRATIONS_DIR: MIGRATIONS, WEB_DIST: '/nonexistent' });
     // The reader as the kernel wires it, with the recorded model in place of the endpoint.
     const reader = new SchedulingReader({ baseURL: 'http://localhost:1/v1', apiKey: null, model: 'test' }, generate);

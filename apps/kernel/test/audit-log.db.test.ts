@@ -10,6 +10,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { AUDIT_CSV_HEAD, createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { AUDIT_EXPORT_LIMIT, AUDIT_PAGE_SIZE, type AuditEntry, type AuditExport, type AuditFilter, type AuditPage } from '@crove/kernel-contract';
 import { Runtime } from '@crove/kernel-runtime';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -97,7 +98,7 @@ suite('audit log for owners and admins on PostgreSQL (#672)', () => {
     app.password = 'test-app-pw';
     pool = createPool({ connectionString: app.toString(), max: 4 });
     db = createDb(pool);
-    rt = new Runtime(db).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
+    rt = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
   });
 
   afterAll(async () => {

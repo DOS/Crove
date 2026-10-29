@@ -17,6 +17,7 @@ import { loadConfig, type Config } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
 import { classifySmtpError, createLogProvider, type MailProvider, type OutboundMail } from '@crove/mail';
 import { createSessionStatusSource } from '../src/sessions.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -183,7 +184,7 @@ suite('invite mail on PostgreSQL', () => {
       MIGRATIONS_DIR: MIGRATIONS,
       WEB_DIST: '/nonexistent',
     });
-    runtime = new Runtime(db, { sessions: createSessionStatusSource('off'), stepUp: 'required' }).register({
+    runtime = new Runtime(db, { manifests: TEST_MANIFESTS, sessions: createSessionStatusSource('off'), stepUp: 'required' }).register({
       commands: kernelCommands,
       queries: kernelQueries({ inboundDomain: null }),
     });

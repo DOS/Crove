@@ -16,6 +16,7 @@ import { createMailMessage, createOrg, kernelCommands, kernelQueries, upsertIden
 import { DomainError, Runtime, defineCommand, defineQuery, inboundKey, newInboundBlobId, sha256Hex, type BlobStore, type UserActor } from '@crove/kernel-runtime';
 import { acceptInboundEmail, processInboundEmail } from '../src/inbound.ts';
 import { inProcessExtract } from './extract-service.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -40,6 +41,7 @@ class MemoryStore implements BlobStore {
 }
 
 const sendTest = defineCommand({
+  sideEffect: 'none',
   name: 'kernel.mail_test.send',
   input: z.object({ to: z.string(), stream: z.enum(['system', 'transactional', 'marketing']), sourceId: z.string().uuid().optional() }),
   risk: 'R1',
@@ -165,8 +167,8 @@ suite('bounces of SMTP mail (#539)', () => {
     workerPool = createPool({ connectionString: login('crove_worker', 'test-worker-pw'), max: 2 });
     db = createDb(pool);
     const registry = { commands: [...kernelCommands, sendTest], queries: [...kernelQueries({ inboundDomain: DOMAIN }), tokenOf] };
-    runtime = new Runtime(db).register(registry);
-    workerRuntime = new Runtime(createDb(workerPool)).register(registry);
+    runtime = new Runtime(db, { manifests: TEST_MANIFESTS }).register(registry);
+    workerRuntime = new Runtime(createDb(workerPool), { manifests: TEST_MANIFESTS }).register(registry);
     extract = inProcessExtract();
     owner = actor(await upsertIdentity(db, { issuer: 'mail-bounce', subject: `owner-${randomUUID()}`, email: `owner-${dbName}@mail.test`, name: null }));
     other = actor(await upsertIdentity(db, { issuer: 'mail-bounce', subject: `other-${randomUUID()}`, email: `other-${dbName}@mail.test`, name: null }));

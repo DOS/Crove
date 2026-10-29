@@ -14,6 +14,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove
 import { Runtime, fileKey, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
 import { extractAndPropose, financeCommands, financeQueries } from '@crove/mod-finance';
 import { inProcessExtract } from './extract-service.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -114,7 +115,7 @@ suite('uploads of a member limited to a legal entity (#1280)', () => {
       const pool = createPool({ connectionString: url, max: 4 });
       pools.push(pool);
       const db: Db = createDb(pool);
-      return { db, runtime: new Runtime(db).register({ commands: [...kernelCommands, ...financeCommands], queries: [...kernelQueries({ inboundDomain: 'in.test' }), ...financeQueries] }) };
+      return { db, runtime: new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: [...kernelCommands, ...financeCommands], queries: [...kernelQueries({ inboundDomain: 'in.test' }), ...financeQueries] }) };
     };
     const api = register(login('crove_app', 'test-app-pw'));
     runtime = api.runtime;

@@ -12,6 +12,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove
 import type { EventType, EventTypeInput } from '@crove/kernel-contract';
 import { Runtime } from '@crove/kernel-runtime';
 import { crmCommands, crmQueries } from '@crove/mod-crm';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -84,7 +85,7 @@ suite('crm event types on PostgreSQL (#1314)', () => {
     app.password = 'test-app-pw';
     pool = createPool({ connectionString: app.toString(), max: 4 });
     db = createDb(pool);
-    rt = new Runtime(db).register({ commands: [...kernelCommands, ...crmCommands], queries: [...kernelQueries({ inboundDomain: null }), ...crmQueries] });
+    rt = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: [...kernelCommands, ...crmCommands], queries: [...kernelQueries({ inboundDomain: null }), ...crmQueries] });
   });
 
   afterAll(async () => {

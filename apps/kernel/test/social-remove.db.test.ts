@@ -12,6 +12,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { CredentialVault, Runtime, parseVaultKey } from '@crove/kernel-runtime';
 import { runPublishJob, runRemoveJob, socialCommands, socialQueries, type ActivityItem, type PostView } from '@crove/mod-social';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -113,8 +114,8 @@ suite('removing a published post on PostgreSQL (#860)', () => {
     workerPool = createPool({ connectionString: as('crove_worker', 'test-worker-pw'), max: 4 });
     appDb = createDb(appPool);
     const registry = { commands: [...kernelCommands, ...socialCommands], queries: [...kernelQueries({ inboundDomain: null }), ...socialQueries] };
-    api = new Runtime(appDb).register(registry);
-    worker = new Runtime(createDb(workerPool)).register(registry);
+    api = new Runtime(appDb, { manifests: TEST_MANIFESTS }).register(registry);
+    worker = new Runtime(createDb(workerPool), { manifests: TEST_MANIFESTS }).register(registry);
   });
 
   afterAll(async () => {

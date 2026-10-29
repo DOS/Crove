@@ -14,6 +14,7 @@ import { LINK_PREVIEW_PER_MINUTE, socialCommands, socialQueries, type LinkPrevie
 import type { ExtractClient } from '@crove/extract-contract';
 import { runLinkPreviewJob } from '../src/link-preview.ts';
 import { inProcessExtract } from './extract-service.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -76,8 +77,8 @@ suite('social link previews on PostgreSQL (#641)', () => {
     workerPool = createPool({ connectionString: as('crove_worker', 'test-worker-pw'), max: 2 });
     db = createDb(pool);
     const registry = { commands: [...kernelCommands, ...socialCommands], queries: [...kernelQueries({ inboundDomain: null }), ...socialQueries] };
-    rt = new Runtime(db).register(registry);
-    worker = new Runtime(createDb(workerPool)).register(registry);
+    rt = new Runtime(db, { manifests: TEST_MANIFESTS }).register(registry);
+    worker = new Runtime(createDb(workerPool), { manifests: TEST_MANIFESTS }).register(registry);
     extract = inProcessExtract();
   });
 

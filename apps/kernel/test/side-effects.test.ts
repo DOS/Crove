@@ -9,6 +9,7 @@ import { crmCommands } from '@crove/mod-crm';
 import { financeCommands } from '@crove/mod-finance';
 import { socialCommands } from '@crove/mod-social';
 import { orgPurgeCommand } from '../src/org-purge.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 // Commands whose R3 is policy, not side effect: who may change membership and roles (pinned so an annotation cannot
 // lower them).
@@ -26,7 +27,7 @@ describe('declared risk and side effects (#1563)', () => {
   });
 
   it('refuses to register a command whose risk is below the risk its side effect derives', () => {
-    const runtime = new Runtime({} as Db);
+    const runtime = new Runtime({} as Db, { manifests: TEST_MANIFESTS });
     const def = (risk: 'R1' | 'R3', sideEffect: 'financial' | 'internal') =>
       ({ name: `test.side_effect_${risk}_${sideEffect}`, input: {} as never, risk, sideEffect, access: ['owner'], handler: async () => null }) as unknown as CommandDef<unknown, unknown>;
     expect(() => runtime.register({ commands: [def('R1', 'financial')] })).toThrow(/declared risk R1 is below R3/);
@@ -34,7 +35,7 @@ describe('declared risk and side effects (#1563)', () => {
   });
 
   it('registers every module with its declared risks', () => {
-    expect(() => new Runtime({} as Db).register({ commands: all() })).not.toThrow();
+    expect(() => new Runtime({} as Db, { manifests: TEST_MANIFESTS }).register({ commands: all() })).not.toThrow();
   });
 
   it('declares a side effect on every command of every module (#1563, #1577, #1578, #1579)', () => {

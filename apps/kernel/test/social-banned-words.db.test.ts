@@ -13,6 +13,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove
 import { Runtime } from '@crove/kernel-runtime';
 import { socialCommands, socialQueries, type BannedWordView, type PostView } from '@crove/mod-social';
 import { styleSelection, styleText } from '@crove/mod-social/contract';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -108,8 +109,8 @@ suite('social banned words on PostgreSQL (#1055)', () => {
     workerPool = createPool({ connectionString: as('crove_worker', 'test-worker-pw'), max: 4 });
     db = createDb(appPool);
     const registry = { commands: [...kernelCommands, ...socialCommands], queries: [...kernelQueries({ inboundDomain: null }), ...socialQueries] };
-    rt = new Runtime(db).register(registry);
-    worker = new Runtime(createDb(workerPool)).register(registry);
+    rt = new Runtime(db, { manifests: TEST_MANIFESTS }).register(registry);
+    worker = new Runtime(createDb(workerPool), { manifests: TEST_MANIFESTS }).register(registry);
   });
 
   afterAll(async () => {

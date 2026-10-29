@@ -27,6 +27,7 @@ import { notesCommands, notesQueries } from '@crove/mod-notes';
 import { loadConfig } from '../../src/config.ts';
 import { createKernel, defaultAdapters, type IdentityPort } from '../../src/kernel.ts';
 import { LocalArchiveStore, verifyArchive, writeArchive } from '../../src/worm.ts';
+import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -152,6 +153,7 @@ suite('keyed input hash on PostgreSQL (#1732)', () => {
     // A nested command that is refused, and one that runs it under ctx.tryRun and goes on (#429).
     const zThing = z.object({ id: z.string().uuid() });
     const refused = defineCommand({
+      sideEffect: 'none',
       name: 'test.refused',
       input: zThing,
       risk: 'R1',
@@ -162,6 +164,7 @@ suite('keyed input hash on PostgreSQL (#1732)', () => {
       },
     });
     const tries = defineCommand({
+      sideEffect: 'none',
       name: 'test.tries',
       input: zThing,
       risk: 'R1',
@@ -172,12 +175,12 @@ suite('keyed input hash on PostgreSQL (#1732)', () => {
       commands: [...kernelCommands, ...financeCommands, ...notesCommands, refused, tries],
       queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries, ...notesQueries],
     };
-    keyed = new Runtime(db, { inputHash: 'keyed' }).register(defs);
+    keyed = new Runtime(db, { manifests: TEST_MANIFESTS, inputHash: 'keyed' }).register(defs);
     // System and agent actors run as the worker role, which alone enters their contexts.
-    keyedWorker = new Runtime(worker, { inputHash: 'keyed' }).register(defs);
+    keyedWorker = new Runtime(worker, { manifests: TEST_MANIFESTS, inputHash: 'keyed' }).register(defs);
     // Said explicitly: the plain SHA-256 a runtime wrote before #1732, whatever the default (#1741).
-    plain = new Runtime(db, { inputHash: 'sha256' }).register(defs);
-    byDefault = new Runtime(db).register(defs);
+    plain = new Runtime(db, { manifests: TEST_MANIFESTS, inputHash: 'sha256' }).register(defs);
+    byDefault = new Runtime(db, { manifests: TEST_MANIFESTS }).register(defs);
 
     const tag = randomUUID().slice(0, 8);
     const person = (name: string) => upsertIdentity(db, { issuer: 'test', subject: `${name}-${tag}`, email: `${name}-${tag}@example.com`, name: null });

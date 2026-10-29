@@ -29,6 +29,7 @@ import { loadConfig } from '../../src/config.ts';
 import { createHttpApp, type StreamDeps } from '../../src/http.ts';
 import { createSessionStatusSource } from '../../src/sessions.ts';
 import { StreamHub, createDbTicketStore, createPgNotificationSource } from '../../src/stream.ts';
+import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -229,7 +230,7 @@ suite('invariant: the hints of to-dos and notes reach only the members who may r
       WEB_DIST: '/nonexistent',
       TRUSTED_PROXY_HOPS: '1',
     });
-    runtime = new Runtime(db, { sessions: createSessionStatusSource('off'), stepUp: 'required' }).register({
+    runtime = new Runtime(db, { manifests: TEST_MANIFESTS, sessions: createSessionStatusSource('off'), stepUp: 'required' }).register({
       commands: [...kernelCommands],
       queries: [...kernelQueries({ inboundDomain: null })],
     });
