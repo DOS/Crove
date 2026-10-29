@@ -823,6 +823,7 @@ export interface KernelFileTable {
   hold_attempted_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   hold_attempts: Generated<number>;
   hold_error: string | null;
+  upload_entity_id: string | null;
 }
 
 /** crove_kernel.file_upload */

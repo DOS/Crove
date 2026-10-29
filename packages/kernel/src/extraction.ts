@@ -128,7 +128,7 @@ export async function uploaderEntity(ctx: CommandContext, uploader: string | nul
 async function lockFile(ctx: CommandContext, fileId: string) {
   const file = await ctx.trx
     .selectFrom('crove_kernel.file')
-    .select(['id', 'filename', 'created_by', 'content_type'])
+    .select(['id', 'filename', 'created_by', 'content_type', 'upload_entity_id'])
     .where('org_id', '=', ctx.orgId)
     .where('id', '=', fileId)
     .forUpdate()
@@ -268,7 +268,8 @@ export const recordExtraction = defineCommand({
         .limit(1)
         .executeTakeFirst();
       if (existing) return { extractionId: existing.id, proposalId: null, duplicate: true };
-      const entity = await uploaderEntity(ctx, file.created_by);
+      // The entity the upload named (#1764), else the uploader's own.
+      const entity = file.upload_entity_id ?? (await uploaderEntity(ctx, file.created_by));
       run = await ctx.trx
         .insertInto('crove_kernel.extraction')
         .values({ org_id: ctx.orgId, file_id: input.fileId, ...(entity ? { legal_entity_id: entity } : {}), ...outcome })

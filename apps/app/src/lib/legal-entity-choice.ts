@@ -27,9 +27,8 @@ export function chooseEntity(entities: readonly VisibleEntity[], kept: string | 
   return (entities.find((e) => e.isDefault) ?? entities[0])?.id ?? null;
 }
 
-// The entity the Inbox list shows beside a proposal (#1543), only to a caller who sees several: the one its revision
-// names, else, for a proposal approval records in the approver's default entity (an invoice or a voucher that names
-// none), the default one. Nothing for an entity the caller does not see: with the default out of sight, approval
+// The entity the Inbox list shows beside a proposal (#1543), only to a caller who sees several: the one the list gives
+// (its revision's, else the proposal's own since #1764), else, for an older row that gives none, the default one. Nothing for an entity the caller does not see: with the default out of sight, approval
 // refuses to guess (LEGAL_ENTITY_REQUIRED), so neither does the list.
 export function listedEntity(entities: readonly VisibleEntity[], legalEntityId: string | null, postsToDefault: boolean): VisibleEntity | null {
   if (entities.length < 2) return null;
