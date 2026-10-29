@@ -169,9 +169,11 @@ export const changeMemberRole = defineCommand({
     );
     // Pending invites the member could no longer issue are revoked in the same transaction, after the membership locks
     // (the order every invite path uses): an admin or owner who becomes a member or viewer loses every invite, an
-    // owner who becomes an admin loses their admin invites (only owners grant admin). Accepting re-checks the
-    // inviter's role as well, as a backstop for any other path (#134).
+    // owner who becomes an admin loses their admin invites (only owners grant admin) and their scoped invites (only
+    // owners scope an invite to legal entities, #1458). Accepting re-checks the inviter's role as well, as a backstop
+    // for any other path (#134, INVITE_SCOPE_STALE).
     const lostRoles: Array<'admin' | 'member' | 'viewer'> = input.role === 'owner' ? [] : input.role === 'admin' ? ['admin'] : ['admin', 'member', 'viewer'];
+    const losesScoped = previousRole === 'owner' && input.role !== 'owner';
     const revokedInvites =
       lostRoles.length === 0
         ? []
@@ -181,7 +183,7 @@ export const changeMemberRole = defineCommand({
             .where('org_id', '=', ctx.orgId)
             .where('invited_by', '=', input.userId)
             .where('status', '=', 'pending')
-            .where('role', 'in', lostRoles)
+            .where((eb) => (losesScoped ? eb.or([eb('role', 'in', lostRoles), eb('legal_entity_ids', 'is not', null)]) : eb('role', 'in', lostRoles)))
             .returning('id')
             .execute();
     ctx.audit({ revoked_invites: revokedInvites.map((r) => r.id) });
@@ -197,7 +199,7 @@ export const changeMemberRole = defineCommand({
 // Removes a member. Deleting the tenant_member row is the revocation: enter_context and my_orgs read membership
 // in every transaction, so the member's next request is refused, with any token or session. An owner cannot
 // remove themselves, and the org always keeps an owner. Its audit row (outcome ok, target the user) starts the 30 days
-// before crove_notes.member_items_purge removes their private notes (#1733): another way to end a membership must
+// before the notes module's member_items_purge removes their private notes (#1733): another way to end a membership must
 // record the same row.
 export const removeMember = defineCommand({
   name: 'kernel.member.remove',
