@@ -12,7 +12,8 @@ import { z } from 'zod';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
-import { approvalPolicies, createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
+import { sql } from 'kysely';
+import { approvalPolicies, createOrg, decideApproval, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime, defineCommand, type AgentActor, type CommandDef } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
 
@@ -55,6 +56,9 @@ suite('the approval gate in the database (#1793)', () => {
   let second = '';
   let member = '';
   let viewer = '';
+  let chief = '';
+  let scopedChief = '';
+  let removed = '';
   let orgId = '';
   let otherOrg = '';
 
@@ -141,6 +145,9 @@ suite('the approval gate in the database (#1793)', () => {
     second = await person('admin');
     member = await person('member');
     viewer = await person('viewer');
+    chief = await person('chief');
+    scopedChief = await person('scoped-chief');
+    removed = await person('removed');
     ({ orgId } = await createOrg(app, asUser(owner), 'T1793'));
     ({ orgId: otherOrg } = await createOrg(app, asUser(owner), 'T1793 khác'));
     await admin(async (c) => {
@@ -148,8 +155,24 @@ suite('the approval gate in the database (#1793)', () => {
         [second, 'admin'],
         [member, 'member'],
         [viewer, 'viewer'],
+        [chief, 'member'],
+        [scopedChief, 'member'],
       ] as const) {
         await c.query('INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, $3)', [orgId, user, role]);
+      }
+      // A chief accountant org-wide (holds the ledger's approval permission) and one limited to the default entity (an
+      // entity-scoped assignment grants no approval).
+      const entity = (await c.query<{ id: string }>('SELECT id FROM crove_kernel.legal_entity WHERE org_id = $1 AND is_default', [orgId])).rows[0]?.id as string;
+      for (const [user, scope] of [
+        [chief, null],
+        [scopedChief, entity],
+      ] as const) {
+        await c.query(`INSERT INTO crove_kernel.role_assignment (org_id, user_id, role_key, legal_entity_id, granted_by) VALUES ($1, $2, 'finance.chief_accountant', $3, $4)`, [
+          orgId,
+          user,
+          scope,
+          owner,
+        ]);
       }
     });
   }, 300_000);
@@ -176,6 +199,52 @@ suite('the approval gate in the database (#1793)', () => {
         ).rows[0],
       );
       expect(row, p.command).toEqual({ roles: [...p.roles], permission: p.permission, four_eyes: p.fourEyes, ledger: p.ledger });
+    }
+  });
+
+  it('decides every case exactly as decideApproval does (P09 presets, P10, P12, a removed member, not pending)', { timeout: 300_000 }, async () => {
+    const db = createDb(pools[0] as pg.Pool);
+    const user = (id: string) => ({ type: 'user' as const, id });
+    const snapshots = [[owner, second, chief, scopedChief, viewer, member], [owner], [owner, removed], [chief], [second, chief]];
+    const authorSets: unknown[][] = [[], [user(owner)], [user(owner), user(second), user(chief)], [user(second)], [{ type: 'agent', id: randomUUID(), run: randomUUID() }], [{ type: 'user' }]];
+    const actors = [owner, second, member, viewer, chief, scopedChief];
+    const cases: Array<{ preset: string; command: string; status: string; snapshot: string[]; authors: unknown[] }> = [];
+    for (const preset of ['founder', 'accountant']) {
+      for (const snapshot of snapshots) for (const authors of authorSets) cases.push({ preset, command: LEDGER_COMMAND, status: 'pending', snapshot, authors });
+      cases.push({ preset, command: 't1793.unknown', status: 'pending', snapshot: [owner], authors: [] });
+      cases.push({ preset, command: LEDGER_COMMAND, status: 'executed', snapshot: [owner], authors: [] });
+      cases.push({ preset, command: LEDGER_COMMAND, status: 'pending', snapshot: [], authors: [] });
+    }
+    // One staff connection for the whole table.
+    const a = new pg.Client({ connectionString: adminUrl });
+    await a.connect();
+    try {
+      let checked = 0;
+      for (const c of cases) {
+        await a.query('UPDATE crove_kernel.tenant SET approval_preset = $2 WHERE org_id = $1', [orgId, c.preset]);
+        for (const actor of actors) {
+          const ts = await db.transaction().execute(async (trx) => {
+            await sql`SELECT crove_kernel.enter_context(${actor}::uuid, ${orgId}::uuid)`.execute(trx);
+            return decideApproval(trx, orgId, asUser(actor), { command: c.command, status: c.status, eligible_approvers: c.snapshot, authors: c.authors }, { lock: false });
+          });
+          const inDb = (
+            await a.query<{ d: { reason: string; eligibleCount: number; selfApproved: boolean; fourEyes: string; preset: string; version: number } }>(
+              'SELECT crove_kernel.proposal_approval_decide($1::uuid, $2, $3, $4::uuid[], $5::jsonb, $6::uuid, false) AS d',
+              [orgId, c.command, c.status, c.snapshot, JSON.stringify(c.authors), actor],
+            )
+          ).rows[0]?.d;
+          const where = JSON.stringify({ ...c, actor });
+          expect(
+            { reason: inDb?.reason, eligibleCount: inDb?.eligibleCount, selfApproved: inDb?.selfApproved, fourEyes: inDb?.fourEyes, orgPolicy: { preset: inDb?.preset, version: inDb?.version } },
+            where,
+          ).toEqual({ reason: ts.reason, eligibleCount: ts.eligibleCount, selfApproved: ts.selfApproved, fourEyes: ts.fourEyes, orgPolicy: ts.orgPolicy });
+          checked += 1;
+        }
+      }
+      expect(checked).toBe(cases.length * actors.length);
+    } finally {
+      await a.query(`UPDATE crove_kernel.tenant SET approval_preset = 'founder' WHERE org_id = $1`, [orgId]);
+      await a.end();
     }
   });
 
