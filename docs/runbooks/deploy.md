@@ -162,6 +162,16 @@ ROLLBACK;
 
 Both migrations rewrite or alter the finance tables under ACCESS EXCLUSIVE locks until they commit (a few hundred milliseconds for a few thousand journal lines in testing). On a large ledger, deploy them in a quiet window.
 
+### No large relay hold pending (#1782, `20261104020000_crove_kernel_relay_hold_mark.sql`)
+
+This migration adds `outbox_pending.held_type` and builds an index on the pending queue. Its header says the index is built under a SHARE lock, but that is wrong: `ADD COLUMN` takes an ACCESS EXCLUSIVE lock on `crove_kernel.outbox_pending` and keeps it until the migration commits. So the index is built under that lock, and for that time `crove_kernel.emit()` (every command that emits an event), the relay and the prober's `crove_kernel.health()` wait. The build is short on a short queue and long on a large held backlog. Before tagging the first release that contains it, check that no `relay:<event type>` kill switch is holding a large backlog (`pnpm ops:kill-switch status`, [incidents.md](incidents.md) §7), and release or let drain any that is. The pending queue should be short:
+
+```sql
+BEGIN READ ONLY;
+SELECT pg_catalog.count(*) AS pending FROM crove_kernel.outbox_pending;
+ROLLBACK;
+```
+
 ## Deploy a release
 
 1. Merge to `main` and wait for CI. Run the [pre-deploy checks](#pre-deploy-checks) of every migration the release adds that has one.

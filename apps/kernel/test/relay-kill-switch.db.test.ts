@@ -272,6 +272,91 @@ suite('a kill switch per relay type on PostgreSQL (#1696)', () => {
     expect(await pending()).toEqual([]);
   });
 
+  // Claims until a pass comes back empty, at `limit` rows a pass; returns what each pass claimed.
+  const passes = async (limit: number) => {
+    const out: Array<Array<{ event_id: string; type: string }>> = [];
+    for (let i = 0; i < 200; i++) {
+      const rows = await claim(limit);
+      if (rows.length === 0) return out;
+      out.push(rows);
+    }
+    throw new Error('the outbox never drained');
+  };
+  const marked = () => admin(async (c) => Number((await c.query<{ n: string }>('SELECT count(*)::text AS n FROM crove_kernel.outbox_pending WHERE held_type IS NOT NULL')).rows[0]?.n));
+
+  it('refuses a NULL limit, held types or not, before it claims or marks anything (#1782)', async () => {
+    await drain();
+    const waiting = await add(OTHER);
+    await expect(claim(null as unknown as number)).rejects.toMatchObject({ code: '22023', message: 'OUTBOX_CLAIM_LIMIT_INVALID' });
+    await set(`relay:${HELD}`, true);
+    const held = await add(HELD);
+    await expect(claim(null as unknown as number)).rejects.toMatchObject({ code: '22023', message: 'OUTBOX_CLAIM_LIMIT_INVALID' });
+    expect(await marked()).toBe(0);
+    expect(await pending()).toEqual([waiting, held]);
+    await set(`relay:${HELD}`, false);
+    expect(await claim()).toEqual([
+      { event_id: waiting, type: OTHER },
+      { event_id: held, type: HELD },
+    ]);
+  });
+
+  it('relays an event emitted during a partial drain after the last row of the released type (#1782)', async () => {
+    await drain();
+    // Another type stays held, so the claim drains the released type through its marks, a pass at a time.
+    const KEEP = 'test.relay.keep';
+    await set(`relay:${KEEP}`, true);
+    await set(`relay:${HELD}`, true);
+    const held = await addMany(HELD, 250);
+    expect(await claim()).toEqual([]);
+    expect(await marked()).toBe(250);
+    await set(`relay:${HELD}`, false);
+    // The first pass of the drain, then an event of a type never held, then the rest.
+    const first = await claim();
+    expect(first.map((r) => r.event_id)).toEqual(held.slice(0, 100));
+    const fresh = await add(OTHER);
+    const rest = await passes(100);
+    expect(rest.flat().map((r) => r.event_id)).toEqual([...held.slice(100), fresh]);
+    expect(rest.at(-1)?.at(-1)).toEqual({ event_id: fresh, type: OTHER });
+    expect(await pending()).toEqual([]);
+    await set(`relay:${KEEP}`, false);
+  });
+
+  it('drains two types released together in queue order, a pass at a time (#1782)', async () => {
+    await drain();
+    const KEEP = 'test.relay.keep';
+    const SECOND = 'test.relay.second';
+    await set(`relay:${KEEP}`, true);
+    await set(`relay:${HELD}`, true);
+    await set(`relay:${SECOND}`, true);
+    // Interleaved, and unevenly: three of one type, then a run of the other, then both again.
+    const order: string[] = [];
+    for (const type of [HELD, SECOND, HELD, HELD, SECOND, SECOND, SECOND, HELD, SECOND, HELD]) order.push(await add(type));
+    expect(await claim()).toEqual([]);
+    expect(await marked()).toBe(order.length);
+    await set(`relay:${HELD}`, false);
+    await set(`relay:${SECOND}`, false);
+    const drained = await passes(2);
+    expect(drained.every((batch) => batch.length <= 2)).toBe(true);
+    expect(drained.flat().map((r) => r.event_id)).toEqual(order);
+    expect(await pending()).toEqual([]);
+    await set(`relay:${KEEP}`, false);
+  });
+
+  it('marks about 10000 held rows a pass, and the rest on the next (#1782)', async () => {
+    await drain();
+    await set(`relay:${HELD}`, true);
+    const held = await addMany(HELD, 10050);
+    const other = await add(OTHER);
+    // The first pass stops marking at the cap, before it reaches the newer row of another type.
+    expect(await claim()).toEqual([]);
+    expect(await marked()).toBe(10000);
+    // The next pass marks the rest and claims that row.
+    expect(await claim()).toEqual([{ event_id: other, type: OTHER }]);
+    expect(await marked()).toBe(10050);
+    await set(`relay:${HELD}`, false);
+    expect((await passes(5000)).flat().map((r) => r.event_id)).toEqual(held);
+  });
+
   it('accepts only an event type as a relay key, flipped by the database owner alone, with its history kept', async () => {
     for (const key of ['relay:', 'relay:kernel', 'relay:Kernel.File', 'relay:kernel.*', 'relay:kernel..file', `relay:a.${'b'.repeat(200)}`, 'social', 'relays:kernel.file']) {
       await expect(set(key, true), key).rejects.toMatchObject({ code: '23514' });
