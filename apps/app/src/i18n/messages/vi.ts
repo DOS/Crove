@@ -181,6 +181,7 @@ export const vi = {
     kinds: {
       kernel_approval_waiting: 'Đề xuất chờ bạn duyệt',
       kernel_file_unreadable: 'Tệp không đọc được',
+      kernel_task_rerouted: 'Việc chuyển đến tôi vì người giữ vị trí không còn xem được',
       finance_bank_attention: 'Sao kê ngân hàng có dòng cần xem lại',
       finance_portal_attention: 'Đối chiếu với cổng thuế cần xem lại',
       finance_period_closing: 'Kỳ sắp đến hạn nộp tờ khai mà chưa khóa sổ',
@@ -189,6 +190,8 @@ export const vi = {
     text: {
       approval_waiting: 'Đề xuất chờ bạn duyệt: {title}',
       file_unreadable: 'Không đọc được tệp {filename}',
+      task_rerouted: 'Việc chuyển đến bạn: {title}',
+      tasks_rerouted: '{count, plural, other {# việc}} chuyển đến bạn',
       bank_attention: 'Sao kê tài khoản {account} có {lines, plural, other {# dòng}} cần xem lại',
       portal_attention: 'Đối chiếu cổng thuế {period}: {missing, plural, other {# hóa đơn}} chưa có trong {brand}, {mismatch, plural, other {# hóa đơn}} lệch số tiền',
       portal_failed: 'Không đọc được bảng kê hóa đơn của cổng thuế {period}',

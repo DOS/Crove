@@ -24,7 +24,18 @@
 //                         writes qualified by that schema. A statement may touch another crove_* schema only with
 //                         a waiver comment on the line right before it, `-- migration-lint: cross-module <reason>`,
 //                         with a reason; the lint lists every waiver it accepted (decision on #1213: Social adds its
-//                         tables to crove_kernel.org_purge in its own feature migration, as the owner allowed);
+//                         tables to crove_kernel.org_purge in its own feature migration, as the owner allowed); the
+//                         writes of a WITH count too, in a data-modifying CTE, after the CTE list (past SEARCH and
+//                         CYCLE) and in CREATE TABLE ... AS WITH (#1225);
+//   owner-to              hand a function, procedure or aggregate (ALTER ... OWNER TO) only to the NOLOGIN roles
+//                         definer functions run as, crove_definer_tenant and crove_auth_reader, and nothing else to
+//                         any role but the runner (CURRENT_USER); never REASSIGN OWNED, SET ROLE, SET SESSION
+//                         AUTHORIZATION or set_config('role'): login roles own nothing, and a table's owner bypasses
+//                         its RLS (#1225);
+//   string-mode           not change standard_conforming_strings or client_encoding (SET, SET NAMES, RESET, ALTER ...
+//                         SET, set_config, quoted or escaped names too), nor call set_config with a name that is not
+//                         one string literal: either changes where PostgreSQL ends a string and this lexer does not,
+//                         for this file and the next ones on the runner's connection (#1225);
 //   function-revoke       REVOKE ALL ON FUNCTION <name> ... FROM PUBLIC after every new CREATE FUNCTION or PROCEDURE
 //                         (one no earlier migration created, or one this file dropped first);
 //   contract-header       put `-- crove:contract adr=<id>` (the ADR that records the change, a file in docs/adr) on the
@@ -52,12 +63,14 @@
 // function is called, not when the migration is applied.
 //
 // Known blind spots (the lint reads statement shapes; the invariant suite and the security review cover the rest):
-//   - writes in a CTE (WITH d AS (DELETE FROM ...) SELECT ...) and SELECT ... INTO a new table;
-//   - ALTER ... SET SCHEMA and ALTER ... OWNER TO, which move or hand over an object without touching its schema rule;
+//   - SELECT ... INTO a new table;
+//   - ALTER ... SET SCHEMA, which moves an object without touching its schema rule (contract-header still asks for an
+//     ADR);
+//   - writes the lint does not read as statements: the query of FOR r IN <query> LOOP in a DO body, PREPARE ... AS
+//     <write> then EXECUTE, EXPLAIN ANALYZE <write>, COPY (<write> RETURNING ...) TO ...;
 //   - PREPARE TRANSACTION;
 //   - EXECUTE of a variable or an expression (only a string literal, or format()'s literal format string, is read);
 //   - a function body the same file then calls (SELECT f()), whose statements run at migration time;
-//   - SET standard_conforming_strings = off, which changes how '...' strings end and so where statements split;
 //   - a hot table named by a bare placeholder or crove_kernel.%I in an EXECUTE, an index of a hot table whose name
 //     does not say so, a hot table locked by a function the file calls (apply_tenant_rls and the like), and the
 //     table of ALTER or DROP STATISTICS (the statistics object's name does not say it);
@@ -437,6 +450,13 @@ export function touchedObjects(tokens) {
       } else if (kind !== undefined && kind !== 'role' && kind !== 'user' && kind !== 'group' && kind !== 'publication' && kind !== 'subscription' && kind !== 'event') {
         push(qualifiedName(tokens, named(k)));
       }
+      // CREATE TABLE ... AS WITH d AS (DELETE ...) SELECT ...: the WITH's writes run too (#1225).
+      for (let j = k + 1; j < tokens.length; j++) {
+        if (isWord(tokens[j], 'with') && isWord(tokens[j - 1], 'as') && !isPunct(tokens[j + 1], '(')) {
+          withWrites(tokens.slice(j), objects, schemas);
+          break;
+        }
+      }
       break;
     }
     case 'alter': {
@@ -507,10 +527,129 @@ export function touchedObjects(tokens) {
     case 'refresh':
       push(qualifiedName(tokens, skipWords(tokens, 3, 'concurrently')));
       break;
+    case 'with':
+      withWrites(tokens, objects, schemas);
+      break;
     default:
       break;
   }
   return { objects, schemas };
+}
+
+// The writes of a WITH statement (#1225), added to objects and schemas: each data-modifying CTE (WITH d AS (DELETE FROM
+// ...) SELECT ...) and the statement after the CTE list (WITH a AS (...) INSERT INTO ...), each read as the write it
+// is. A CTE body starts right after its parenthesis; the main statement is the first word at depth 0 that starts a
+// statement where a CTE name cannot stand (DELETE FROM, INSERT INTO, MERGE INTO, UPDATE <table>), after the SEARCH and
+// CYCLE clauses too. FOR [NO KEY] UPDATE and ON CONFLICT DO UPDATE are not statements. Each body is read once.
+function withWrites(tokens, objects, schemas) {
+  let depth = 0;
+  for (let k = 1; k < tokens.length; k++) {
+    if (isPunct(tokens[k], '(')) depth++;
+    else if (isPunct(tokens[k], ')')) depth--;
+    if (isPunct(tokens[k - 1], '(') && isWord(tokens[k], 'insert', 'update', 'delete', 'merge', 'with')) {
+      const end = skipParens(tokens, k - 1) - 1;
+      const inner = touchedObjects(tokens.slice(k, end));
+      objects.push(...inner.objects);
+      schemas.push(...inner.schemas);
+      // Past the body: its closing parenthesis comes next and closes the depth its opening one counted.
+      k = end - 1;
+      continue;
+    }
+    const next = tokens[k + 1];
+    const main =
+      depth === 0 &&
+      !isWord(tokens[k - 1], 'for', 'do', 'key') &&
+      ((isWord(tokens[k], 'delete') && isWord(next, 'from')) ||
+        (isWord(tokens[k], 'insert', 'merge') && isWord(next, 'into')) ||
+        (isWord(tokens[k], 'update') && (next?.t === 'word' || next?.t === 'qident') && !isWord(next, 'as', 'set')));
+    if (main) {
+      const inner = touchedObjects(tokens.slice(k));
+      objects.push(...inner.objects);
+      schemas.push(...inner.schemas);
+      return;
+    }
+  }
+}
+
+// The roles a migration may hand an object to (#1225). A function, procedure, routine or aggregate may go to the NOLOGIN
+// roles definer functions run as (crove_definer_tenant, crove_auth_reader); any object may stay the runner's own
+// (CURRENT_USER, CURRENT_ROLE, SESSION_USER, as keywords). No table, schema or other object goes to another role: its
+// owner bypasses the table's RLS and its grants. Login roles own nothing (AGENTS.md, "Tenancy").
+const DEFINER_OWNER_ROLES = new Set(['crove_definer_tenant', 'crove_auth_reader']);
+const RUNNER_KEYWORDS = new Set(['current_user', 'current_role', 'session_user']);
+const ROUTINE_KINDS = new Set(['function', 'procedure', 'routine', 'aggregate']);
+
+// The hand-overs of ownership a statement makes, as [{ role, line, what, allowed }]: ALTER ... OWNER TO <role>, CREATE
+// SCHEMA ... AUTHORIZATION <role>, REASSIGN OWNED (every object of a role at once), and a switch of the session's role
+// (SET ROLE, SET SESSION AUTHORIZATION, set_config('role' or 'session_authorization')), which makes every object the
+// file creates afterwards that role's. A role is a word (lowercase) or a quoted name (exactly as written).
+export function ownerHandOvers(tokens) {
+  const head = tokens[0];
+  const roleOf = (token) => (token?.t === 'word' ? { name: token.v, keyword: true } : token?.t === 'qident' ? { name: token.v, keyword: false } : undefined);
+  const allows = (role, routine) => role !== undefined && ((role.keyword && RUNNER_KEYWORDS.has(role.name)) || (routine && DEFINER_OWNER_ROLES.has(role.name)));
+  const label = (role) => (role === undefined ? 'a role the lint cannot read' : role.name);
+  if (isWord(head, 'reassign')) return [{ role: 'every object of a role', line: head.line, what: 'REASSIGN OWNED', allowed: false }];
+  const out = [];
+  if (isWord(head, 'alter')) {
+    const routine = isWord(tokens[1]) && ROUTINE_KINDS.has(tokens[1].v);
+    let depth = 0;
+    for (let k = 1; k < tokens.length; k++) {
+      if (isPunct(tokens[k], '(')) depth++;
+      else if (isPunct(tokens[k], ')')) depth--;
+      // RENAME [COLUMN | CONSTRAINT | ATTRIBUTE | VALUE] owner TO ... renames something called owner.
+      const renamed = isWord(tokens[k - 1], 'rename') || (isWord(tokens[k - 1], 'column', 'constraint', 'attribute', 'value') && isWord(tokens[k - 2], 'rename'));
+      if (depth === 0 && isWord(tokens[k], 'owner') && isWord(tokens[k + 1], 'to') && !renamed) {
+        const role = roleOf(tokens[k + 2]);
+        out.push({ role: label(role), line: tokens[k].line, what: 'OWNER TO', allowed: allows(role, routine) });
+      }
+    }
+  }
+  if (isWord(head, 'create') && isWord(tokens[1], 'schema')) {
+    const at = findWord(tokens, 2, 'authorization');
+    if (at !== -1) {
+      const role = roleOf(tokens[at + 1]);
+      out.push({ role: label(role), line: tokens[at].line, what: 'CREATE SCHEMA ... AUTHORIZATION', allowed: allows(role, false) });
+    }
+  }
+  if (isWord(head, 'set')) {
+    const k = skipWords(tokens, 1, 'local', 'session');
+    if (isWord(tokens[k], 'role', 'authorization', 'session_authorization')) out.push({ role: 'the session', line: head.line, what: 'SET ROLE or SESSION AUTHORIZATION', allowed: false });
+  }
+  for (const name of settingsNamed(tokens)) {
+    if (name === 'role' || name === 'session_authorization') out.push({ role: 'the session', line: head.line, what: `set_config('${name}')`, allowed: false });
+  }
+  return out;
+}
+
+// The settings a statement names through set_config(<name>, ...), decoded and lowercased; '?' for a name that is not
+// one string literal (built from pieces or held in a variable), which the lint cannot read.
+function settingsNamed(tokens) {
+  const names = [];
+  for (let k = 0; k < tokens.length; k++) {
+    if (!isWord(tokens[k], 'set_config') || !isPunct(tokens[k + 1], '(')) continue;
+    const arg = tokens[k + 2];
+    names.push(arg?.t === 'string' && isPunct(tokens[k + 3], ',') ? arg.body.toLowerCase() : '?');
+  }
+  return names;
+}
+
+// Settings that change how this lint's lexer and PostgreSQL read the files after them (#1225): with
+// standard_conforming_strings off, a backslash escapes in '...'; with a client encoding such as SJIS, BIG5 or GBK, a
+// multibyte character may end in a byte that reads as a quote or a backslash. The runner applies every file on one
+// connection, so a session-level change reaches later files too.
+const STRING_SETTINGS = new Set(['standard_conforming_strings', 'client_encoding']);
+
+// Whether a statement changes how strings are read (#1225): SET, RESET or ALTER ... SET of a setting in STRING_SETTINGS
+// (quoted names too: PostgreSQL matches them in any case), SET NAMES, a set_config of one of them, a set_config of a name
+// the lint cannot read, or a string that names one (a set_config built some other way, an EXECUTE).
+export function changesStringMode(tokens) {
+  if (isWord(tokens[0], 'set') && isWord(tokens[skipWords(tokens, 1, 'local', 'session')], 'names')) return true;
+  if (settingsNamed(tokens).some((name) => name === '?' || STRING_SETTINGS.has(name))) return true;
+  return tokens.some(
+    (t) =>
+      ((t.t === 'word' || t.t === 'qident') && STRING_SETTINGS.has(t.v.toLowerCase())) ||
+      (t.t === 'string' && [...STRING_SETTINGS].some((name) => t.body.toLowerCase().includes(name))),
+  );
 }
 
 // The roles a GRANT (or ALTER DEFAULT PRIVILEGES ... GRANT) gives to.
@@ -1207,6 +1346,18 @@ export function lintMigration(file, sql, {
     }
     if (isWord(head, 'drop') && isWord(tokens[1], 'schema')) report(head.line, 'no-drop-schema', 'DROP SCHEMA is not allowed in a migration');
     if (isWord(head, 'truncate')) report(head.line, 'no-truncate', 'TRUNCATE is not allowed in a migration');
+    // Ownership goes only to the roles definer functions run as (#1225): an object a login role owns escapes its grants
+    // and policies.
+    for (const { role, line, what, allowed } of ownerHandOvers(tokens)) {
+      if (!allowed) {
+        report(line, 'owner-to', `${what} (${role}) hands objects to a role that may not own them: a migration gives a function, procedure or aggregate only to ${[...DEFINER_OWNER_ROLES].join(' or ')}, the roles definer functions run as, and leaves everything else the runner's; login roles own nothing`);
+      }
+    }
+    // A string setting changed, PostgreSQL and this lint's lexer would disagree on where a string ends, and a statement
+    // could hide in what the lint reads as a string (#1225).
+    if (changesStringMode(tokens)) {
+      report(head.line, 'string-mode', `a migration changes neither ${[...STRING_SETTINGS].join(' nor ')} (nor a setting set_config names by anything but a string literal): with them changed, strings end where this lint does not see them end`);
+    }
 
     if (isWord(head, 'grant') || (isWord(head, 'alter') && isWord(tokens[1], 'default'))) {
       const at = isWord(head, 'grant') ? 0 : findWord(tokens, 2, 'grant');

@@ -38,6 +38,8 @@ function useLine() {
         return t('text.approval_waiting', { title: n.detail.title ?? '' });
       case 'kernel.file_unreadable':
         return t('text.file_unreadable', { filename: n.detail.filename ?? '' });
+      case 'kernel.task_rerouted':
+        return n.detail.count ? t('text.tasks_rerouted', { count: Number(n.detail.count) }) : t('text.task_rerouted', { title: n.detail.title ?? '' });
       case 'finance.bank_attention':
         return t('text.bank_attention', { account: n.detail.bankAccount ?? '', lines: Number(n.detail.lines ?? 0) });
       case 'finance.portal_attention':
@@ -103,6 +105,8 @@ export function NotificationsPage() {
     else if (target?.to === 'portal') void navigate({ to: '/o/$slug/portal-invoices', params: { slug } });
     else if (target?.to === 'ledger') void navigate({ to: '/o/$slug/ledger', params: { slug } });
     else if (target?.to === 'myWork') void navigate({ to: '/o/$slug/my-work', params: { slug } });
+    else if (target?.to === 'task') void navigate({ to: '/o/$slug/tasks/$id', params: { slug, id: target.id } });
+    else if (target?.to === 'tasks') void navigate({ to: '/o/$slug/tasks', params: { slug } });
   };
   // A kind this version of the app does not know (a newer module) is left out rather than shown blank.
   const items = (list.data?.items ?? []).filter((n) => isKnownKind(n.kind));

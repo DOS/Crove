@@ -3,7 +3,8 @@
 
 // The kinds a member can turn off, by module, in the order the settings list them.
 export const NOTIFICATION_KINDS = {
-  kernel: ['kernel.approval_waiting', 'kernel.file_unreadable'],
+  // A task that came to me because its holder can no longer read its legal entity (#1799).
+  kernel: ['kernel.approval_waiting', 'kernel.file_unreadable', 'kernel.task_rerouted'],
   finance: ['finance.bank_attention', 'finance.portal_attention', 'finance.period_closing'],
   // A to-do's reminder (#1675): it holds no text, the to-do shows in My work.
   notes: ['notes.todo_due'],
@@ -27,17 +28,21 @@ export type NotificationTarget =
   | { to: 'bank'; account?: string }
   | { to: 'portal' }
   | { to: 'ledger' }
-  | { to: 'myWork' };
+  | { to: 'myWork' }
+  | { to: 'task'; id: string }
+  | { to: 'tasks' };
 
 // What an item opens: the proposal waiting for approval, the Inbox (where a file that failed to read is listed), the
 // bank account with lines to look at, the tax-portal check, the ledger, where the period is locked, or My work, where
-// the reminded to-do is.
+// the reminded to-do is, or the task that came to me (else the task list).
 export function notificationTarget(item: { kind: string; subjectId: string | null; detail: Record<string, string> }): NotificationTarget | null {
   switch (item.kind) {
     case 'kernel.approval_waiting':
       return item.subjectId ? { to: 'proposal', id: item.subjectId } : { to: 'inbox' };
     case 'kernel.file_unreadable':
       return { to: 'inbox' };
+    case 'kernel.task_rerouted':
+      return item.subjectId ? { to: 'task', id: item.subjectId } : { to: 'tasks' };
     case 'finance.bank_attention':
       return item.detail.bankAccount ? { to: 'bank', account: item.detail.bankAccount } : { to: 'bank' };
     case 'finance.portal_attention':
