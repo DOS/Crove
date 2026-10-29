@@ -9,6 +9,9 @@
 //   is valid (12-digit individual codes are CCCD numbers since Circular 86/2024, covered above);
 // - an email address outside the reserved example domains (RFC 2606 and RFC 6761: example.com, example.net,
 //   example.org, .test, .example, .invalid, .localhost) and the public addresses on the allowlist.
+// And, by its name alone, any office, data, archive, database or photo file (DOCUMENT) outside a fixtures directory
+// (#1640): the scan cannot read inside most of these (compressed or binary), and an accounting export committed by
+// mistake is the likeliest way real data reaches this repository.
 //
 // Values made up on purpose pass without an entry (see looksSynthetic). Anything else that is not personal data goes on
 // the allowlist, tools/ci/pii-scan-allowlist.json: each entry names a kind, the paths, domains or values it covers, and a
@@ -19,6 +22,7 @@
 //   matched value is always masked: the repository is public, and a CI log must not repeat what it found.
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readFileSync } from 'node:fs';
+import { isAbsolute, normalize, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 // Province and city codes of the CCCD's first three digits (Circular 07/2016/TT-BCA, unchanged by the 2025 merger of
@@ -42,6 +46,15 @@ const EMAIL = /(?<![\w.%])[A-Za-z0-9_][A-Za-z0-9._%+-]*@((?:[A-Za-z0-9-]+\.)+[A-
 const RESERVED_DOMAIN = /(^|\.)(example\.(com|net|org)|test|example|invalid|localhost)$/i;
 // Where test data lives: an individual's tax code is only looked for there (a company's is public).
 const FIXTURE_PATH = /(^|\/)(test|tests|__tests__|fixtures|__fixtures__|testdata|mocks|__mocks__|e2e|seed|seeds)\/|\.(test|spec)\.([cm]?[jt]sx?|sql)$|(fixture|seed)[^/]*$/i;
+// Office, data, archive, database and photo files, by extension (#1640): outside a fixture directory they fail unless
+// a `document` entry names them. Their content is compressed or binary (CSV and TSV are read too), and a real export,
+// a backup or a photo of an ID card is how real data would reach the repository. UI images (PNG, SVG, WebP, GIF) are
+// not on the list.
+export const DOCUMENT = /\.(pdf|xps|rtf|docx?|docm|dot|dotx|dotm|xlsx?|xlsm|xlsb|xlt|xltx|xltm|xla|xlam|ods|ots|odt|ott|odp|odg|pptx?|pptm|pps|ppsx|ppsm|potx|csv|tsv|numbers|pages|key|dbf|mdb|accdb|sqlite3?|db|bak|msg|pst|ost|zip|7z|rar|gz|tgz|tar|bz2|xz|zst|jpe?g|heic|heif|tiff?|bmp)$/i;
+// Where a document may live without an entry: a fixtures or testdata directory, by its exact name, inside another
+// directory (a package's test/fixtures/, not a top-level fixtures/ an export could be dropped into). Not the looser
+// FIXTURE_PATH of the tax-code search, which also takes a test or seed directory and any name with "fixture" or "seed".
+const DOCUMENT_FIXTURE_DIR = /\/(fixtures|__fixtures__|testdata)\//;
 // Files that are not text are skipped: a NUL byte in the first 8 KiB, unless the file starts with a UTF-16 byte order
 // mark (an Excel "Unicode text" export, for one), which is decoded and scanned.
 const BINARY_PROBE = 8192;
@@ -160,7 +173,7 @@ export function entryAllows(entry, finding, path) {
     (entry.values === undefined || entry.values.some((v) => v.toLowerCase() === finding.value.toLowerCase()));
 }
 
-const KINDS = new Set(['cccd', 'mobile', 'tax-code', 'email']);
+const KINDS = new Set(['cccd', 'mobile', 'tax-code', 'email', 'document']);
 const DOMAIN_NAME = /^[a-z0-9-]+(\.[a-z0-9-]+)+$/;
 // Second-level public suffixes such as com.vn, edu.vn, gov.vn or co.uk: as broad as a bare TLD.
 const PUBLIC_SUFFIX = /^(com|net|org|edu|gov|ac|co|int|info|biz|name|health|pro)\.[a-z]{2}$/;
@@ -183,6 +196,10 @@ export function allowlistErrors(allowlist) {
       if (!Array.isArray(entry[k]) || entry[k].length === 0 || !entry[k].every((v) => typeof v === 'string' && v.length > 0)) errors.push(`entry ${i}: ${k} must be a non-empty list of strings`);
     }
     if (entry.domains !== undefined && entry.kind !== 'email') errors.push(`entry ${i}: domains apply to email only`);
+    // A document entry names its files, each one exactly: a directory prefix would let any later export in.
+    if (entry.kind === 'document' && (entry.values !== undefined || entry.paths === undefined || (Array.isArray(entry.paths) && entry.paths.some((p) => typeof p === 'string' && p.endsWith('/'))))) {
+      errors.push(`entry ${i}: a document entry names exact file paths only`);
+    }
     // A bare TLD ("vn"), a public suffix ("com.vn"), a webmail domain without paths ("gmail.com") or a top-level
     // directory ("apps/") would exempt far more than one reason can cover.
     for (const d of Array.isArray(entry.domains) ? entry.domains : []) {
@@ -208,6 +225,12 @@ export function scanFiles(paths, read, allowlist) {
   const skipped = [];
   for (const given of paths) {
     const path = given.replaceAll('\\', '/');
+    if (DOCUMENT.test(path) && !DOCUMENT_FIXTURE_DIR.test(path)) {
+      const finding = { line: 1, kind: 'document', value: path };
+      const entry = allowlist.findIndex((e) => entryAllows(e, finding, path));
+      if (entry === -1) findings.push({ path, ...finding });
+      else used.add(entry);
+    }
     const text = read(given);
     if (text === null) {
       skipped.push(path);
@@ -264,6 +287,13 @@ export function commandProperty(value) {
   return value.replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A').replace(/:/g, '%3A').replace(/,/g, '%2C');
 }
 
+// The paths git tracks. `git ls-files -z` prints them on one stream: Node's default 1 MiB buffer runs out near 15k
+// paths (#1640), so the buffer allows 256 MiB. `run` is execFileSync, or a stand-in in the tests.
+export const LS_FILES_MAX_BUFFER = 256 * 1024 * 1024;
+export function trackedPaths(run = execFileSync, command = 'git', args = ['ls-files', '-z']) {
+  return run(command, args, { encoding: 'utf8', maxBuffer: LS_FILES_MAX_BUFFER }).split('\0').filter(Boolean);
+}
+
 // The allowlist from its JSON text: { allowlist, errors }. Invalid JSON is an error, not an exception, so its message
 // (which can quote the file) never reaches the log.
 export function loadAllowlist(text) {
@@ -282,11 +312,21 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   for (const e of errors) console.error(`::error file=${ALLOWLIST_PATH}::${commandData(e)}`);
   if (errors.length > 0) process.exit(1);
   const args = process.argv.slice(2);
-  const paths = args.length > 0 ? args : execFileSync('git', ['ls-files', '-z'], { encoding: 'utf8' }).split('\0').filter(Boolean);
+  // Paths named on the command line are judged from the working directory, as git lists them: an absolute path's
+  // own ancestors (a checkout under a directory named fixtures) must not exempt it.
+  const inside = (a) => {
+    const rel = relative(process.cwd(), a);
+    return rel.startsWith('..') || isAbsolute(rel) ? a : rel;
+  };
+  const paths = args.length > 0 ? args.map((a) => (isAbsolute(a) ? inside(a) : normalize(a))) : trackedPaths();
   const { findings, skipped } = scanFiles(paths, readText, allowlist);
   // Paths only, so a skipped file that should have been scanned is visible in the log.
   for (const path of skipped) console.log(`pii-scan: skipped ${commandData(path)} (binary, symlink or missing)`);
   for (const f of findings) {
+    if (f.kind === 'document') {
+      console.error(`::error file=${commandProperty(f.path)}::an office, data, archive, database, key or photo file outside a fixtures directory, whose content this scan cannot read: move it under a fixtures directory if it is synthetic test data, or add a reasoned document entry naming it to tools/ci/pii-scan-allowlist.json`);
+      continue;
+    }
     console.error(`::error file=${commandProperty(f.path)},line=${f.line}::line ${f.line} holds what looks like personal data (${f.kind} ${mask(f.kind, f.value)}); use a synthetic value (an address at example.com, a number that fails the check), or add a reasoned entry to tools/ci/pii-scan-allowlist.json`);
   }
   if (findings.length > 0) process.exitCode = 1;

@@ -116,15 +116,16 @@ suite('outbound mail in the kernel (#538)', () => {
   });
 
   it('hashes an address under a key no runtime role can read, folding the spellings of one inbox', async () => {
-    const hash = await hashOf('Anna.Le+news@GMAIL.com ');
+    // Synthetic Gmail addresses: Gmail issues no username with an underscore (#1640).
+    const hash = await hashOf('Te.St_User+news@GMAIL.com ');
     expect(hash).toMatch(/^[0-9a-f]{64}$/);
-    expect(await hashOf('annale@gmail.com')).toBe(hash);
-    expect(await hashOf('annale@googlemail.com')).toBe(hash);
+    expect(await hashOf('test_user@gmail.com')).toBe(hash);
+    expect(await hashOf('test_user@googlemail.com')).toBe(hash);
     // Dots matter outside Gmail; another address is another hash; nothing is hashed for an empty address.
-    expect(await hashOf('anna.le@example.com')).not.toBe(await hashOf('annale@example.com'));
+    expect(await hashOf('te.st_user@example.com')).not.toBe(await hashOf('test_user@example.com'));
     expect(await hashOf('')).toBeNull();
     // Keyed: not the plain SHA-256 of the folded address.
-    const plain = await admin(async (c) => (await c.query<{ h: string }>("SELECT encode(sha256(convert_to('annale@gmail.com', 'UTF8')), 'hex') AS h")).rows[0]?.h);
+    const plain = await admin(async (c) => (await c.query<{ h: string }>("SELECT encode(sha256(convert_to('test_user@gmail.com', 'UTF8')), 'hex') AS h")).rows[0]?.h);
     expect(hash).not.toBe(plain);
     // The tenant role calls the hash; no runtime role reads the key.
     for (const role of ['crove_app', 'crove_worker', 'crove_tenant', 'crove_definer_tenant']) {

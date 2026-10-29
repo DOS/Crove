@@ -55,14 +55,13 @@
       "a.b@googlemail.com",
       "a.b@sub.gmail.com",
       "ab@gmail.com",
-      "anna.le+news@gmail.com",
-      "annale@gmail.com",
-      "annale@googlemail.com",
-      "chi.lan+bao.cao@gmail.com",
-      "chi.lan@gmail.com",
-      "chilan@gmail.com",
-      "crove@gmail.com",
-      "me@gmail.com",
+      "re.port_user+bao.cao@gmail.com",
+      "re.port_user@gmail.com",
+      "report_user@gmail.com",
+      "te.st_user+news@gmail.com",
+      "test_tag@gmail.com",
+      "test_user@gmail.com",
+      "test_user@googlemail.com",
       "x@gmail.com"
     ],
     "paths": [
@@ -74,7 +73,7 @@
       "docs/runbooks/pilot-readiness.md",
       "supabase/migrations/20261018130000_crove_kernel_invite_mail_limit_followups.sql"
     ],
-    "reason": "Gmail's dot, plus-tag and googlemail.com aliasing is the behavior under test or explained; each address is pinned, so a new Gmail address here still fails"
+    "reason": "Gmail's dot, plus-tag and googlemail.com aliasing is the behavior under test or explained; each address is pinned, so a new Gmail address here still fails. None can be a real account (#1640): Gmail issues no username shorter than six characters (ab, x) or with an underscore (test_user, report_user)"
   },
   {
     "kind": "email",
