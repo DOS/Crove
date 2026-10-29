@@ -131,9 +131,13 @@ function stripComments(source: string): string {
   return out;
 }
 
+// Node modules that run code past the import graph (a child process, a thread, the inspector, a REPL, a cluster
+// worker), by the server source that may import them and why (#1824). None does today.
+const PROCESS_MODULES_ALLOWED: Readonly<Record<string, readonly string[]>> = {};
+
 // The names a file imports the Runtime class under as a value (an alias too), and what it does that could reach the
 // class some other way: import the runtime package whole, re-export from it, import a module whose name is computed.
-function runtimeImports(raw: string): { names: string[]; problems: string[] } {
+function runtimeImports(raw: string, file = '', allowed: Readonly<Record<string, readonly string[]>> = PROCESS_MODULES_ALLOWED): { names: string[]; problems: string[] } {
   const text = stripComments(raw);
   const names: string[] = [];
   const problems: string[] = [];
@@ -183,6 +187,20 @@ function runtimeImports(raw: string): { names: string[]; problems: string[] } {
     if (m[2] === 'vm' || !/^\s*\{\s*createRequire\s*\}\s*$/.test(m[1] ?? '')) problems.push(`imports ${m[2]}`);
   }
   if (/\bvm\s*\./.test(text)) problems.push('the vm module');
+  // A property of process, globalThis or Module named at run time (#1824): `process['getBuiltin' + 'Module']` or
+  // `Module['_lo' + 'ad']` reach what the name checks above refuse. Bracket access, optional too, Reflect.get or a
+  // descriptor of it, and a computed key in destructuring; `process.env[name]` stays allowed.
+  if (
+    /(?<![\w$.])(?:process|globalThis|Module)\s*(?:\?\.\s*)?\[/.test(text) ||
+    /\b(?:Reflect\s*\.\s*get|Object\s*\.\s*getOwnPropertyDescriptor)\s*\(\s*(?:process|globalThis|Module)\b/.test(text) ||
+    /\{[^{}]*\[[^{}]*\}\s*=\s*(?:process|globalThis|Module)\b/.test(text)
+  ) {
+    problems.push('a computed property of process, globalThis or Module');
+  }
+  for (const m of text.matchAll(/\b(?:(?:import|export)\b[^;]*?\bfrom|import)\s*['"`](?:node:)?(worker_threads|child_process|inspector|repl|cluster)['"`]/g)) {
+    const name = m[1] ?? '';
+    if (!(allowed[file] ?? []).includes(name)) problems.push(`imports ${name}`);
+  }
   return { names, problems };
 }
 
@@ -299,7 +317,7 @@ describe('declared command writes against the manifests (#1697, #1710)', () => {
     const problems: string[] = [];
     const importers: Array<{ file: string; names: string[]; text: string }> = [];
     for (const { file, text } of sources) {
-      const found = runtimeImports(text);
+      const found = runtimeImports(text, file);
       for (const problem of found.problems) problems.push(`${file}: ${problem}`);
       if (found.names.length > 0) importers.push({ file, names: found.names, text });
     }
@@ -373,9 +391,31 @@ describe('declared command writes against the manifests (#1697, #1710)', () => {
       'export default Runtime;',
       `import { Runtime } from './kernel.ts';`,
       `import { Runtime as R } from './kernel.ts';`,
+      // A property of process, globalThis or Module named at run time (#1824).
+      `const m = process['getBuiltin' + 'Module']('vm');`,
+      `const load = Module['_lo' + 'ad'];`,
+      'const g = globalThis[name];',
+      `const b = process?.['bind' + 'ing'];`,
+      'const f = Reflect.get(process, key);',
+      'const d = Object.getOwnPropertyDescriptor(Module, key);',
+      'const { [key]: f } = globalThis;',
+      // Code run past the import graph, outside the allowlist (#1824).
+      `import { spawn } from 'node:child_process';`,
+      `import { Worker } from 'worker_threads';`,
+      `import 'node:child_process';`,
+      `export { Session } from 'node:inspector';`,
+      `import { start } from 'node:repl';`,
+      `import cluster from 'node:cluster';`,
     ]) {
       expect(scan(source).problems, source).not.toEqual([]);
     }
+    // Plain property access stays allowed, a local name that merely ends in one of the three too, and an import
+    // the allowlist names for its file.
+    for (const source of ['const v = process.env[name];', 'const x = job.process[0];', 'const first = rows[0];', 'const t = process.hrtime.bigint();']) {
+      expect(scan(source), source).toEqual({ names: [], problems: [] });
+    }
+    expect(runtimeImports(`import { spawn } from 'node:child_process';`, 'apps/kernel/src/x.ts', { 'apps/kernel/src/x.ts': ['child_process'] })).toEqual({ names: [], problems: [] });
+    expect(runtimeImports(`import { spawn } from 'node:child_process';`, 'apps/kernel/src/y.ts', { 'apps/kernel/src/x.ts': ['child_process'] }).problems).toEqual(['imports child_process']);
   });
 
   it('refuses a getter or setter in a manifest', () => {
