@@ -31,8 +31,9 @@ BEGIN
      AND (NEW.dismissed_at IS DISTINCT FROM OLD.dismissed_at OR NEW.dismissed_by IS DISTINCT FROM OLD.dismissed_by) THEN
     -- A dismissal stays as made: nobody re-dismisses it in their own name or opens the item again.
     RAISE EXCEPTION 'INBOX_ITEM_DISMISSED' USING ERRCODE = '42501';
-  ELSIF NEW.dismissed_at IS NOT NULL THEN
-    -- Dismissed now: dated by the database, so a backdated dismissal cannot have the item pruned early (#1781).
+  ELSIF OLD.dismissed_at IS NULL AND NEW.dismissed_at IS NOT NULL THEN
+    -- Dismissed now: dated by the database, so a backdated dismissal cannot have the item pruned early (#1781). A
+    -- dismissed item written back unchanged keeps its date.
     NEW.dismissed_at := pg_catalog.now();
   END IF;
   RETURN NEW;

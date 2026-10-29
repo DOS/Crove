@@ -153,8 +153,14 @@ suite('dead-letter Inbox items on PostgreSQL (#1747)', () => {
         message: expect.stringContaining('INBOX_ITEM_DISMISSED'),
       });
     }
-    // Writing the same values again changes nothing, and is allowed.
-    expect(await inContext(appUrl, asMember(users.admin), (c) => outcome(change('dismissed_at = dismissed_at')(c)))).toEqual({ ok: true, rows: 1 });
+    // Writing the same values again changes nothing, and is allowed: the dismissal keeps its date (#1781).
+    const kept = await inContext(appUrl, asMember(users.admin), async (c) => {
+      const before = (await c.query<{ at: string }>('SELECT dismissed_at::text AS at FROM crove_kernel.inbox_item WHERE id = $1', [items.dismissed])).rows[0]?.at;
+      const result = await outcome(change('dismissed_at = dismissed_at')(c));
+      const after = (await c.query<{ at: string }>('SELECT dismissed_at::text AS at FROM crove_kernel.inbox_item WHERE id = $1', [items.dismissed])).rows[0]?.at;
+      return { result, same: before !== undefined && before === after };
+    });
+    expect(kept).toEqual({ result: { ok: true, rows: 1 }, same: true });
   });
 
   it('lets only the system context change the detail, and only of an open item', async () => {
