@@ -11,19 +11,20 @@
 // - a fact spreads a call: the returns of a function of the same file are read as facts, any other call is a finding,
 //   as are facts handed to ctx.audit whole that are neither written out nor a traced declaration, or
 // - a fact's whole value is a parameter (a command's `input`) of a function that is not a helper read below, or a name
-//   destructured from a classified property (`const { tax_code: code } = before`).
+//   destructured from a classified property (`const { tax_code: code } = before`), or
 // - a fact reads a query's column by the alias a classified column was selected as (`select('tax_code as code')`), or
 //   a name holds a call's result computed from a classified column (`formatTaxCode(before.tax_code)`) by a call that
-//   neither masks (auditValue, a hash) nor takes ctx, or
-// - facts are written through anything but ctx.audit(...) or a DomainError (`c.audit(...)`, a destructured `audit`)
-//   (#1821).
-// What a name is given after its declaration (`facts = { ...facts, email }`, Object.assign(name, ...)) is read like its
-// initializer. Casts, parentheses and non-null assertions are seen through. A length or size of a value is a count. A
-// value computed before the call (a comparison, arithmetic, a call that takes ctx) holds none of what it read. A helper that passes its parameter on to ctx.audit
-// has every call of it in its file read: as the facts (social's bulk-edit `audit(ctx, result, facts)`, where a call
-// whose facts are not written out is a finding) or as a fact's value (`done(reason)`); a helper with no call in its file
-// is a finding. Any other destructured name is checked by its name only, and the db tests (audit-facts.db.test.ts and
-// each command's own) check what the rows hold.
+//   neither masks it (auditValue, a hash, a count, a yes or no) nor takes ctx, or
+// - facts are written through anything but a call of ctx.audit or a DomainError's `audit:` (`c.audit(...)`, a
+//   destructured `audit`, `ctx['audit']`) (#1821).
+// What a name is given after its declaration (`facts = { ...facts, email }`, `name += ...`, Object.assign(name, ...),
+// `facts.email = ...` on an object written out) is read like its initializer; a `let` with no value written any other
+// way is not traced. Casts, parentheses and non-null assertions are seen through. A length or size of a value is a
+// count. A value computed before the call (a comparison, arithmetic, a call that takes ctx) holds none of what it read.
+// A helper that passes its parameter on to ctx.audit has every call of it in its file read: as the facts (social's
+// bulk-edit `audit(ctx, result, facts)`, where a call whose facts are not written out is a finding) or as a fact's value
+// (`done(reason)`); a helper with no call in its file is a finding. Any other destructured name is checked by its name
+// only, and the db tests (audit-facts.db.test.ts and each command's own) check what the rows hold.
 // auditValue (@crove/kernel-contract) replaces a classified value with a marker naming its class. Facts whose key or value
 // names a classified column but hold internal data (an account's name, a command's name) are listed below per file,
 // each as the exact fact key and value it covers, with its reason; an entry covers nothing else in its file (#1632).
@@ -53,8 +54,9 @@ import {
   variables,
 } from './source-scan.ts';
 
-// A call that masks or counts what it is given: its result is no classified value (#1821).
-const MASKS = /(?:^|\.)(?:auditValue|keyedHash|hash\w*|sha\d+|digest\w*|count\w*)$/i;
+// A call whose result is no classified value though it reads one (#1821): a mask (auditValue, a keyed hash), a count, or
+// a yes or no (`Boolean(x)`, `isValidTaxCode(x)`, `hasEmail(x)`).
+const MASKS = /(?:^|\.)(?:auditValue|keyedHash|hashText|sha256|count|Boolean|is[A-Z]\w*|has[A-Z]\w*)$/;
 
 // Facts whose key or value names a classified column but holds internal data, per file, with the reason. An entry is
 // `<fact key> <- <value>` (whitespace collapsed; the key itself for a shorthand property) and covers that fact only;
@@ -317,16 +319,32 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
       return false;
     }
     const { from, init } = decl;
-    const built = BUILT.test(init) || /^new\s+(?:Map|Set)\s*</.test(init);
     // A container is read up to the fact's own call (`useAt`), even when reached through another declaration.
     const end = Math.max(at, useAt);
     const key = `${decl.index}:${end}`;
     if (traced.has(key)) return true;
     traced.add(key);
     const scope = code.slice(from, end);
-    // A write to another variable of the same name (in a nested function or block) is not a write to this one.
-    const ours = (offset: number) => declaration(name, from + offset)?.index === decl.index;
-    if (built) {
+    // A write to another variable of the same name (declared, or a parameter, in a nested function or block) is not a
+    // write to this one.
+    const ours = (offset: number) =>
+      declaration(name, from + offset)?.index === decl.index &&
+      !enclosingAll(from + offset).some((f) => f.params.includes(name) && !(f.start <= decl.index && decl.index < f.end));
+    // Plain and compound assignments (`name = ...`, `name += ...`, `name ??= ...`).
+    const assigned = [
+      ...scope.matchAll(new RegExp(`(?<![\\w$.])(?<!\\b(?:const|let|var)\\s+)${escape(name)}\\s*(?:\\*\\*|\\?\\?|\\|\\||&&|[-+*/%&|^])?=(?![=>])\\s*`, 'g')),
+    ].filter((w) => ours(w.index ?? 0));
+    // A let with no value written only by plain assignments is traced; one written any other way (destructuring, a
+    // for...of) or never is not.
+    if (init === '' && (assigned.length === 0 || new RegExp(`[{[,]\\s*${escape(name)}\\s*[,}\\]]|\\bfor\\s*\\(\\s*${escape(name)}\\s+(?:of|in)\\b`).test(scope))) {
+      return false;
+    }
+    // An empty container, from the declaration or a later assignment (`let facts; facts = {}`), is read by its writes.
+    const isBuilt = (value: string) => BUILT.test(value) || /^new\s+(?:Map|Set)\s*</.test(value);
+    const built = isBuilt(init) || assigned.some((w) => isBuilt(valueAt(code, from + (w.index ?? 0) + w[0].length).trim()));
+    if (!built && !listed) checkHeld(name, init, from, flag, depth);
+    // Writes to an empty container, or to an object written out (`facts.email = ...`), add to what the name holds.
+    if (built || objectish(init)) {
       for (const w of scope.matchAll(new RegExp(`(?<![\\w$.])${escape(name)}\\s*(\\[[^\\]]*\\]|\\.\\s*[A-Za-z_$][\\w$]*)\\s*=(?![=>])\\s*`, 'g'))) {
         if (!ours(w.index ?? 0)) continue;
         const target = w[1] as string;
@@ -354,10 +372,9 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
           else checkValue(arg.trim(), open, flag, depth);
         }
       }
-    } else if (!listed) checkHeld(name, init, from, flag, depth);
+    }
     // A later assignment replaces what the name holds; Object.assign(name, ...) adds to it.
-    for (const w of scope.matchAll(new RegExp(`(?<![\\w$.])(?<!\\b(?:const|let|var)\\s+)${escape(name)}\\s*=(?![=>])\\s*`, 'g'))) {
-      if (!ours(w.index ?? 0)) continue;
+    for (const w of assigned) {
       const rhsFrom = from + (w.index ?? 0) + w[0].length;
       checkHeld(name, valueAt(code, rhsFrom).trim(), rhsFrom, flag, depth);
     }
@@ -520,31 +537,41 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
     }
   };
 
-  // The audit facts of this file: ctx.audit(...)'s argument and `audit: { ... }`.
+  // The audit facts of this file: ctx.audit(...)'s argument (ctx?.audit too), every `audit: { ... }`, every `audit:` that
+  // names a variable (`{ audit: facts }`, a DomainError's or an options object's), and any other `audit:` value inside a
+  // DomainError's arguments (#1821). An `audit:` holding a type, a route or a function (the runtime's own) is none.
   const sites: Array<{ at: number; arg: string }> = [];
-  for (const m of code.matchAll(/\bctx\s*\.\s*audit\s*\(/g)) {
+  for (const m of code.matchAll(/\bctx\s*(?:\?\.|\.)\s*audit\s*\(/g)) {
     const open = (m.index ?? 0) + m[0].length - 1;
     sites.push({ at: open, arg: balanced(code, open) });
   }
-  for (const m of code.matchAll(/\baudit\s*:\s*\{/g)) {
-    const open = (m.index ?? 0) + m[0].length - 1;
-    sites.push({ at: open, arg: `(${balanced(code, open)})` });
+  const errorArgs = [...code.matchAll(/\bnew\s+DomainError\s*\(/g)].map((e) => {
+    const open = (e.index ?? 0) + e[0].length - 1;
+    return { start: open, end: open + balanced(code, open).length };
+  });
+  for (const m of code.matchAll(/[{,]\s*audit\s*:\s*/g)) {
+    const at = (m.index ?? 0) + m[0].length;
+    const value = valueAt(code, at).trim();
+    const inError = errorArgs.some((e) => e.start < at && at < e.end);
+    if (code[at] === '{') sites.push({ at, arg: `(${balanced(code, at)})` });
+    else if (/^[A-Za-z_$][\w$]*$/.test(value) && !/^(?:boolean|string|number|bigint|unknown|any|never|object)$/.test(value)) sites.push({ at, arg: `(${value})` });
+    else if (inError) sites.push({ at, arg: `(${value})` });
   }
-  // A DomainError's facts passed by name or computed (`{ audit: facts }`) are read like ctx.audit(facts).
-  for (const error of code.matchAll(/\bnew\s+DomainError\s*\(/g)) {
-    const call = balanced(code, (error.index ?? 0) + error[0].length - 1);
-    for (const m of call.matchAll(/[{,]\s*audit\s*:(?!\s*\{)\s*/g)) {
-      const at = (error.index ?? 0) + error[0].length - 1 + (m.index ?? 0) + m[0].length;
-      sites.push({ at, arg: `(${valueAt(code, at).trim()})` });
-    }
-  }
-  // The audit log is written through ctx.audit only: another receiver (`c.audit(...)`) or a destructured `audit` would
-  // write facts this scan never reads (#1821).
+  // The audit log is written through a call of ctx.audit only. Another receiver (`c.audit(...)`), ctx.audit reached
+  // without a call (`ctx['audit']`, `ctx.audit.call(...)`, `const w = ctx.audit`) or a bare `audit(...)` that is no
+  // function of this file (a destructured `audit`) writes facts this scan never reads (#1821).
   for (const m of code.matchAll(/(?<![\w$.])([A-Za-z_$][\w$]*)\s*(?:\?\.|\.)\s*audit\s*\(/g)) {
     if (m[1] !== 'ctx') reporter(m.index ?? 0, `${m[1]}.audit(...)`)('audit facts are written through ctx.audit(...), which the scan reads; call that');
   }
-  for (const m of code.matchAll(/\b(?:const|let|var)\s*\{[^}]*\baudit\b[^}]*\}\s*=/g)) {
-    reporter(m.index ?? 0, 'audit')('a destructured audit writes facts the scan does not read; call ctx.audit(...)');
+  for (const m of code.matchAll(/\bctx\s*(?:(?:\?\.|\.)\s*audit\b(?!\s*\()|\[)/g)) {
+    reporter(m.index ?? 0, 'ctx.audit')('ctx.audit is reached without a call the scan reads; call ctx.audit(...)');
+  }
+  for (const m of code.matchAll(/(?<![\w$.])audit\s*\(/g)) {
+    const open = (m.index ?? 0) + m[0].length - 1;
+    // A function of this file named audit (a helper read below), its definition, or a method signature.
+    if (/\bfunction\s+$/.test(code.slice(0, m.index)) || /^\s*(?::|\{)/.test(code.slice(open + balanced(code, open).length))) continue;
+    if (functions.some((f) => f.name === 'audit')) continue;
+    reporter(m.index ?? 0, 'audit(...)')('a bare audit(...) writes facts the scan does not read; call ctx.audit(...)');
   }
   const wrappers: Wrapper[] = [];
   for (const site of sites) {
@@ -808,18 +835,50 @@ describe('audit facts and classified columns (#1626, #1632)', () => {
     ]);
     expect(check('let facts;\nfacts = { email: input.email };\nctx.audit(facts);')).toEqual(['email: the key names a classified column and its value is not auditValue(...)']);
     expect(check('let facts = { id };\nfacts = { id, done: true };\nctx.audit(facts);')).toEqual([]);
+    expect(check('let facts: Record<string, unknown>;\nfacts = {};\nfacts.email = input.email;\nctx.audit(facts);')).toEqual([
+      'facts: facts.email is a classified column and its value is not auditValue(...)',
+      'facts: the value reads the classified column email outside auditValue(...)',
+    ]);
+    // An assignment to a parameter of the same name in a nested function is not one to the fact's variable.
+    expect(check('const code = 0;\nfunction normalize(code: string) { code = party.tax_code; return code; }\nctx.audit({ code });')).toEqual([]);
     // A call that computes from a classified column carries it; one that masks it, counts it or takes ctx does not.
     expect(check('const code = formatTaxCode(before.tax_code);\nctx.audit({ code });')).toEqual([
       'code: code is computed by formatTaxCode(...) from the classified column tax_code; mask it with auditValue(...)',
     ]);
     expect(check('const code = keyedHash(before.tax_code);\nctx.audit({ code });')).toEqual([]);
+    expect(check('const known = Boolean(party.email);\nctx.audit({ known });')).toEqual([]);
+    expect(check('const where = countryOf(party.address);\nctx.audit({ where });')).toEqual([
+      'where: where is computed by countryOf(...) from the classified column address; mask it with auditValue(...)',
+    ]);
+    // A write to an object written out adds to it.
+    expect(check('const facts = { id: 1 };\nfacts.email = p.email;\nctx.audit(facts);')).toEqual([
+      'facts: facts.email is a classified column and its value is not auditValue(...)',
+      'facts: the value reads the classified column email outside auditValue(...)',
+    ]);
     expect(check('const partyId = await partyFor(ctx, booking.email);\nctx.audit({ partyId });')).toEqual([]);
     expect(check('const source = resubmitSource(old);\nctx.audit({ source });')).toEqual([]);
     // A length or size is a count.
     expect(check('ctx.audit({ count: party.name.length, tagCount: before.tags?.size });')).toEqual([]);
     // Audit facts reach the log through ctx.audit or a DomainError only, and a DomainError's facts by name are traced.
     expect(check('c.audit({ email });')).toEqual(['c.audit(...): audit facts are written through ctx.audit(...), which the scan reads; call that']);
-    expect(check('const { audit } = ctx;\naudit({ email });')).toEqual(['audit: a destructured audit writes facts the scan does not read; call ctx.audit(...)']);
+    const bare = 'audit(...): a bare audit(...) writes facts the scan does not read; call ctx.audit(...)';
+    expect(check('const { audit } = ctx;\naudit({ email });')).toEqual([bare]);
+    expect(check('const { trx: { x }, audit } = ctx;\naudit({ email });')).toEqual([bare]);
+    expect(check('defineCommand({ handler: async ({ audit }, input) => {\n  audit({ email: input.email });\n} });')).toEqual([bare]);
+    expect(check('ctx?.audit({ email: p.email });')).toEqual(['email: the key names a classified column and its value is not auditValue(...)']);
+    for (const reach of ["ctx['audit']({ id });", 'ctx.audit.call(ctx, { id });', 'const w = ctx.audit;\nw({ id });']) {
+      expect(check(reach), reach).toEqual(['ctx.audit: ctx.audit is reached without a call the scan reads; call ctx.audit(...)']);
+    }
+    // Facts under `audit:` anywhere, by name too; a type is none.
+    expect(check("const options = { audit: facts };\nthrow new DomainError('X', 409, 'x', undefined, options);")).toEqual([
+      'facts: the facts are a name the scan cannot trace; write them out',
+    ]);
+    expect(check('const { rows } = await sql<{ audit: boolean }>`select 1`.execute(ctx.trx);')).toEqual([]);
+    // A let with no value is traced only through plain assignments; any other write fails closed.
+    const untraced = 'facts: the facts are a name the scan cannot trace; write them out';
+    for (const write of ['({ facts } = await load(ctx));', '[facts] = rows;', 'for (facts of list) {}', '']) {
+      expect(check(`let facts;\n${write}\nctx.audit(facts);`), write).toEqual([untraced]);
+    }
     expect(check("const facts = { email: input.email };\nthrow new DomainError('X', 409, 'x', undefined, { audit: facts });")).toEqual([
       'email: the key names a classified column and its value is not auditValue(...)',
     ]);
@@ -832,6 +891,7 @@ describe('audit facts and classified columns (#1626, #1632)', () => {
     // A listed name is listed with its initializer: another initializer, or a later write to it, is still read (#1821).
     expect(findings('const name = party.name;\nctx.audit({ code, name });')).toEqual(['name']);
     expect(findings('let name = input.name ?? account.name;\nname = party.name;\nctx.audit({ code, name });')).toEqual(['name']);
+    expect(findings('let name = input.name ?? account.name;\nname += party.name;\nctx.audit({ code, name });')).toEqual(['name']);
     expect(findings('ctx.audit({ code, name: party.name });')).toEqual(['name']);
     expect(findings('ctx.audit({ code, owner: account.name });')).toEqual(['owner']);
   });

@@ -144,7 +144,6 @@ export function valueAt(text: string, start: number): string {
   return text.slice(start);
 }
 
-
 export const collapse = (s: string) => s.replace(/\s+/g, ' ').trim();
 
 // A query whose result a name holds: what it selects or returns is what a fact that holds it carries.
@@ -226,7 +225,6 @@ export function unwrap(expr: string): string {
     out = next;
   }
 }
-
 
 // The properties of an object written out that no rule of the scan reads: anything but a spread, a shorthand, a named,
 // numeric, quoted or computed key with its value, or a method (refused on its own).
