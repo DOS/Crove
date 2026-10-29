@@ -177,6 +177,8 @@ export const periodUnlock = defineCommand({
   permissionScope: 'legal_entity',
   handler: async (ctx, input): Promise<PeriodLockState> => {
     const entity = await resolveLegalEntity(ctx, input.legalEntityId);
+    // An entity chief accountant unlocks only its own entities' months (#1507); unlock_period() checks again.
+    ctx.permissionEntity(entity);
     ctx.audit({ month: input.month, reason: input.reason, legalEntityId: entity });
     try {
       await sql`SELECT crove_finance.unlock_period(${`${input.month}-01`}::date, ${entity}::uuid)`.execute(ctx.trx);
