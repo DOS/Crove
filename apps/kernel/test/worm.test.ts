@@ -17,6 +17,7 @@ import {
   archiveKey,
   batchSha256,
   chainSha256,
+  verifyArchive,
   writeArchive,
   type ArchiveBatch,
   type ArchiveS3Sender,
@@ -131,6 +132,32 @@ describe('batch and chain hashes', () => {
   });
 });
 
+// A database whose every query `answer` answers from memory.
+function fakeDb(answer: (query: CompiledQuery) => unknown[]): Db {
+  const connection: DatabaseConnection = {
+    executeQuery: async <R>(query: CompiledQuery) => ({ rows: answer(query) }) as QueryResult<R>,
+    streamQuery: () => {
+      throw new Error('not used');
+    },
+  };
+  return new Kysely({
+    dialect: {
+      createAdapter: () => new PostgresAdapter(),
+      createDriver: () => ({
+        init: async () => {},
+        acquireConnection: async () => connection,
+        beginTransaction: async () => {},
+        commitTransaction: async () => {},
+        rollbackTransaction: async () => {},
+        releaseConnection: async () => {},
+        destroy: async () => {},
+      }),
+      createIntrospector: (k) => new PostgresIntrospector(k),
+      createQueryCompiler: () => new PostgresQueryCompiler(),
+    },
+  }) as unknown as Db;
+}
+
 // A database that answers the archive definers from memory: batches are due up to `due`, and archive_record refuses a
 // sequence that does not follow the head, as the real one does (40001).
 function fakeArchiveDb(due: number) {
@@ -152,28 +179,7 @@ function fakeArchiveDb(due: number) {
     }
     return [];
   };
-  const connection: DatabaseConnection = {
-    executeQuery: async <R>(query: CompiledQuery) => ({ rows: answer(query) }) as QueryResult<R>,
-    streamQuery: () => {
-      throw new Error('not used');
-    },
-  };
-  const db = new Kysely({
-    dialect: {
-      createAdapter: () => new PostgresAdapter(),
-      createDriver: () => ({
-        init: async () => {},
-        acquireConnection: async () => connection,
-        beginTransaction: async () => {},
-        commitTransaction: async () => {},
-        rollbackTransaction: async () => {},
-        releaseConnection: async () => {},
-        destroy: async () => {},
-      }),
-      createIntrospector: (k) => new PostgresIntrospector(k),
-      createQueryCompiler: () => new PostgresQueryCompiler(),
-    },
-  }) as unknown as Db;
+  const db = fakeDb(answer);
   // Another run writing and recording a batch first, as the winner of a race does.
   const recordFirst = (batch: ArchiveBatch) => {
     [state.head, state.chain] = [batch.seq, batch.chainSha256];
@@ -235,5 +241,149 @@ describe('archive writer races (#1004)', () => {
     await expect(writeArchive(db, store, { lagSeconds: 600 })).rejects.toBeInstanceOf(ArchiveObjectExistsError);
     expect(store.puts).toBe(4);
     expect(state.head).toBe(0);
+  });
+});
+
+// The verifier over batches of every version (#1624, #1623), with a fake row-hash source: each archive_*_hashes
+// function gives the rows `rowsOf` returns for its name and range, and the database records every batch in the store.
+describe('archive verifier across batch versions (#1624, #1623)', () => {
+  const EPOCH = new Date(0).toISOString();
+  const at = (minutes: number) => new Date(Date.parse('2026-10-21T00:00:00.000Z') + minutes * 60_000).toISOString();
+  type Rows = Array<[string, string]>;
+  type Range = { fn: string; from: string; to: string };
+  type Spec = Partial<ArchiveBatch> & { version: ArchiveBatch['version'] };
+
+  // An allocation and a series made before the switch: anchored only by a batch that takes its rows from the epoch.
+  const early: Record<string, Rows> = {
+    archive_allocation_hashes: [['number:o:1', 'a'.repeat(64)]],
+    archive_series_hashes: [['number_series:o:1', 'b'.repeat(64)]],
+  };
+  const rowsOf = ({ fn, from }: Range): Rows => (from === EPOCH ? (early[fn] ?? []) : []);
+
+  // Batch `seq` covers [at(seq - 1), at(seq)), the first from the epoch. A spec sets its version and its *From fields;
+  // its rows are what rowsOf gives for them, as the writer computes them.
+  function chain(specs: Spec[]): ArchiveBatch[] {
+    const batches: ArchiveBatch[] = [];
+    let prev = GENESIS_SHA256;
+    specs.forEach((spec, i) => {
+      const seq = i + 1;
+      const window = { from: seq === 1 ? EPOCH : at(seq - 1), to: at(seq) };
+      const ranges: Array<[number, string, string | undefined]> = [
+        [4, 'archive_allocation_hashes', spec.allocationsFrom],
+        [5, 'archive_series_hashes', spec.seriesFrom],
+      ];
+      const rows = ranges
+        .filter(([version]) => spec.version >= version)
+        .flatMap(([, fn, from]) => rowsOf({ fn, from: from ?? window.from, to: window.to }))
+        .sort((a, b) => (a[0] < b[0] ? -1 : 1));
+      const batchHash = batchSha256(rows);
+      const batch: ArchiveBatch = {
+        format: 'crove-archive',
+        ...spec,
+        seq,
+        window,
+        prevChainSha256: prev,
+        rows,
+        batchSha256: batchHash,
+        chainSha256: chainSha256(prev, seq, window.from, window.to, batchHash),
+      };
+      batches.push(batch);
+      prev = batch.chainSha256;
+    });
+    return batches;
+  }
+
+  // Verifies the batches as stored objects (a batch may lack a field), every one recorded in the database.
+  async function verify(batches: Array<Omit<ArchiveBatch, 'allocationsFrom' | 'seriesFrom'> & Partial<ArchiveBatch>>) {
+    const objects = new Map(batches.map((b) => [archiveKey(b.seq), new TextEncoder().encode(JSON.stringify(b))]));
+    const store: ArchiveStore = {
+      put: async () => {},
+      get: async (key) => objects.get(key) ?? null,
+      list: async (prefix) => [...objects.keys()].filter((k) => k.startsWith(prefix)).sort(),
+      describe: () => 'memory',
+    };
+    const ranges: Range[] = [];
+    const db = fakeDb((query) => {
+      if (query.sql.includes('archive_batches()')) {
+        return batches.map((b) => ({
+          seq: String(b.seq),
+          window_from: new Date(b.window.from),
+          window_to: new Date(b.window.to),
+          chain_sha256: b.chainSha256,
+          object_key: archiveKey(b.seq),
+        }));
+      }
+      const fn = /crove_kernel\.(archive_\w+_hashes)\(/.exec(query.sql)?.[1];
+      if (fn) {
+        const [from, to] = query.parameters as [string, string];
+        ranges.push({ fn, from, to });
+        return rowsOf({ fn, from, to }).map(([ref, row_sha256]) => ({ ref, row_sha256 }));
+      }
+      return [];
+    });
+    return { result: await verifyArchive(db, store), ranges };
+  }
+
+  const v3: Spec = { version: 3, numbersFrom: EPOCH, entitiesFrom: EPOCH };
+  // The numbers and entities of batch `seq`, after the first version 3 batch.
+  const later = (seq: number) => ({ numbersFrom: at(seq - 1), entitiesFrom: at(seq - 1) });
+
+  it('verifies version 3, 4 and 5 batches, each read back with its own version and range', async () => {
+    const batches = chain([
+      v3,
+      { version: 4, ...later(2), allocationsFrom: EPOCH },
+      { version: 4, ...later(3), allocationsFrom: at(2) },
+      { version: 5, ...later(4), allocationsFrom: at(3), seriesFrom: EPOCH },
+      { version: 5, ...later(5), allocationsFrom: at(4), seriesFrom: at(4) },
+    ]);
+    const { result, ranges } = await verify(batches);
+    expect(result).toMatchObject({ ok: true, batches: 5, problems: [] });
+    // The rows made before each switch are anchored once, by the first batch of the version that adds them.
+    expect(batches.map((b) => b.rows.map(([ref]) => ref))).toEqual([[], ['number:o:1'], [], ['number_series:o:1'], []]);
+    expect(ranges.filter((r) => r.fn === 'archive_allocation_hashes').map((r) => r.from)).toEqual([EPOCH, at(2), at(3), at(4)]);
+    expect(ranges.filter((r) => r.fn === 'archive_series_hashes').map((r) => r.from)).toEqual([EPOCH, at(4)]);
+  });
+
+  it('reports a version 4 batch without allocationsFrom, or a version 5 one without seriesFrom, as unreadable', async () => {
+    const [first, second] = chain([v3, { version: 4, ...later(2), allocationsFrom: EPOCH }]) as [ArchiveBatch, ArchiveBatch];
+    const { allocationsFrom: _allocations, ...noAllocations } = second;
+    expect((await verify([first, noAllocations])).result.problems).toEqual([{ code: 'object_unreadable', seq: 2 }]);
+
+    const [head, v5] = chain([v3, { version: 5, ...later(2), allocationsFrom: EPOCH, seriesFrom: EPOCH }]) as [ArchiveBatch, ArchiveBatch];
+    const { seriesFrom: _series, ...noSeries } = v5;
+    expect((await verify([head, noSeries])).result.problems).toEqual([{ code: 'object_unreadable', seq: 2 }]);
+  });
+
+  it('reports allocations_gap when the first version 4 batch after a version 3 one does not take its allocations from the epoch', async () => {
+    // A writer that skipped the allocations made before the switch: the batch holds no row for them, and the rows
+    // recomputed over its own range agree, so only the gap shows.
+    const batches = chain([v3, { version: 4, ...later(2), allocationsFrom: at(1) }]);
+    expect(batches[1]?.rows).toEqual([]);
+    expect((await verify(batches)).result.problems).toEqual([{ code: 'allocations_gap', seq: 2 }]);
+  });
+
+  it("reports allocations_gap when a later version 4 batch does not take its allocations from its window's start", async () => {
+    const batches = chain([v3, { version: 4, ...later(2), allocationsFrom: EPOCH }, { version: 4, ...later(3), allocationsFrom: at(1) }]);
+    expect((await verify(batches)).result.problems).toEqual([{ code: 'allocations_gap', seq: 3 }]);
+  });
+
+  it("reports series_gap when the first version 5 batch does not take its series from the epoch, or a later one not from its window's start", async () => {
+    const skipped = chain([v3, { version: 5, ...later(2), allocationsFrom: EPOCH, seriesFrom: at(1) }]);
+    expect((await verify(skipped)).result.problems).toEqual([{ code: 'series_gap', seq: 2 }]);
+    const shifted = chain([
+      v3,
+      { version: 5, ...later(2), allocationsFrom: EPOCH, seriesFrom: EPOCH },
+      { version: 5, ...later(3), allocationsFrom: at(2), seriesFrom: at(1) },
+    ]);
+    expect((await verify(shifted)).result.problems).toEqual([{ code: 'series_gap', seq: 3 }]);
+  });
+
+  it('reports a version 4 batch after a version 5 one as a regression', async () => {
+    const batches = chain([
+      v3,
+      { version: 5, ...later(2), allocationsFrom: EPOCH, seriesFrom: EPOCH },
+      { version: 4, ...later(3), allocationsFrom: at(2) },
+    ]);
+    expect((await verify(batches)).result.problems).toEqual([{ code: 'version_regressed', seq: 3 }]);
   });
 });
