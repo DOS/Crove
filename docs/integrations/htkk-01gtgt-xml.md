@@ -97,8 +97,8 @@ itself (S2, row formulas). Crove keeps what was filed, so the next return can st
   VAT return (`org.markTaxObligation`) goes through this command. In the database, `vat_return_filed_guard` refuses an
   insert by anyone but an owner or admin of the org in context, or a holder of `finance.vat.file` org-wide or for the
   row's legal entity (#1508), naming themselves, and
-  `vat_return_filed_requires_audit` lets a row commit only with the command's audit row; no role updates or deletes a
-  row. The record is kept with the books (the org purge never deletes it).
+  `vat_return_filed_requires_audit` lets a row commit only with the command's audit row for the same user, period and
+  legal entity (#1923); no role updates or deletes a row. The record is kept with the books (the org purge never deletes it).
 - **Which return is the previous one:** the month, and the quarter when that month ends one, that end the day before
   the period starts; the same kind first. So 2026-07 looks for 2026-06, then 2026-Q2; 2026-Q3 looks for 2026-Q2, then
   2026-06 (an org that changed its filing period, #318). Crove's reading, for the accountant to confirm (question 8).

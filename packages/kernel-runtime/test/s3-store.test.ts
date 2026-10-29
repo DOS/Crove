@@ -472,6 +472,29 @@ describe('generations (ADR-0013)', () => {
   });
 });
 
+// #1189: a NaN, negative, fractional or infinite cap compares false against every size, so a store that took it would
+// read the object whole. The store refuses it before any request.
+describe('read caps that are not a whole number of bytes (#1189)', () => {
+  const BAD_CAPS = [Number.NaN, -1, 1.5, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 2 ** 53];
+
+  it('are refused by get before any request', async () => {
+    const { store, sent } = fakeStore(() => ({ Body: body(bytes), ContentLength: bytes.byteLength }));
+    for (const cap of BAD_CAPS) await expect(store.get(key, null, cap), String(cap)).rejects.toThrow(RangeError);
+    await expect(store.get(key, 'v1', Number.NaN)).rejects.toThrow(/invalid read cap/);
+    expect(sent).toEqual([]);
+    // A whole cap still reads.
+    expect(await store.get(key, null, bytes.byteLength)).toEqual(bytes);
+  });
+
+  it('are refused by a staged read before any request', async () => {
+    const presigner = createS3Client({ bucket: 'crove-files', region: 'us-east-1', accessKeyId: 'k', secretAccessKey: 's' });
+    const { store, sent } = fakeStore(() => ({ Body: body(bytes), ContentLength: bytes.byteLength }), { presigner });
+    const staging = newStagingKey();
+    for (const cap of BAD_CAPS) await expect(store.direct?.readStaged(staging, cap), String(cap)).rejects.toThrow(/invalid read cap/);
+    expect(sent).toEqual([]);
+  });
+});
+
 describe('staged reads (plan §7.6 step 2)', () => {
   const staging = newStagingKey();
 

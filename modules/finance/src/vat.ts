@@ -38,6 +38,7 @@ import {
   type VatPeriod,
 } from './domain/vat-return.ts';
 import { resolveLegalEntity } from './legal-entity.ts';
+import { latestRevision } from './source-entry.ts';
 import { needsPaymentCheck, nonCashThreshold, paymentMethodKind, type PaymentMethodKind } from './domain/non-cash-payment.ts';
 import { HtkkAmountError, form01XmlValues } from './domain/vat-01gtgt-xml.ts';
 
@@ -171,9 +172,9 @@ function invoiceView(
 
 // The recorded documents of one direction in the period, except those voided by a reversal (#165), oldest first:
 // purchases for the input side, by posting date (#478), and sales (#313) for the output side, by invoice date. The
-// party is the supplier or the customer. Each document has exactly one entry of its own: journal_entry is unique by
-// source, and a document commits only together with its entry (purchase_document_entry, #560), so the inner join drops
-// none. A reversal is an entry of another source.
+// party is the supplier or the customer. Each document has one entry in force: of its revisions (#1283) the join keeps
+// the latest (#1338), and a document commits only together with its entry (purchase_document_entry, #560), so the
+// inner join drops none. A reversal is an entry of another source.
 interface PeriodInvoice {
   view: VatInvoiceView;
   paymentMethod: string | null;
@@ -185,7 +186,7 @@ async function periodInvoices(ctx: QueryContext, period: VatPeriod, direction: D
     .selectFrom('crove_finance.purchase_document as d')
     .innerJoin('crove_kernel.party as p', (join) => join.onRef('p.org_id', '=', 'd.org_id').onRef('p.id', '=', 'd.party_id'))
     .innerJoin('crove_finance.journal_entry as j', (join) =>
-      join.onRef('j.org_id', '=', 'd.org_id').onRef('j.source_id', '=', 'd.id').on('j.source_type', '=', 'finance.purchase_document'),
+      join.onRef('j.org_id', '=', 'd.org_id').onRef('j.source_id', '=', 'd.id').on('j.source_type', '=', 'finance.purchase_document').on(latestRevision('j')),
     )
     .select(['d.id', 'd.invoice_date', 'j.entry_date', 'd.invoice_series', 'd.invoice_number', 'd.subtotal', 'd.vat_amount', 'd.total', 'd.payment_method', 'p.name', 'p.tax_code'])
     .where('d.org_id', '=', ctx.orgId)
@@ -409,7 +410,8 @@ export const vatPeriodQuery = defineQuery({
 });
 
 // Whether the signed-in member may mark this entity's VAT return filed (#1508): an owner or an admin, or finance.vat.file
-// org-wide or for the entity. finance.vat.return_mark and vat_return_filed_guard decide again.
+// org-wide or for the entity. finance.vat.return_mark and vat_return_filed_guard decide again; roles.db.test.ts pins this
+// answer to what the command does, per member and entity (#1923).
 async function mayFileVat(ctx: QueryContext, legalEntityId: string): Promise<boolean> {
   if (ctx.actor.type !== 'user') return false;
   if (ctx.role === 'owner' || ctx.role === 'admin') return true;

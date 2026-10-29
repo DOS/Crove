@@ -27,6 +27,7 @@ import {
 import { assertUsableAccounts, isInactiveDefaultRefusal } from './accounts.ts';
 import { postJournalEntry } from './ledger.ts';
 import { resolveLegalEntity } from './legal-entity.ts';
+import { latestRevision } from './source-entry.ts';
 import { learnFromApproval } from './categorization.ts';
 import { postReversal } from './reversal.ts';
 import { invoiceLabel, journalMemo } from './memo.ts';
@@ -172,12 +173,13 @@ async function correctedDocument(ctx: CommandContext, legalEntityId: string, dir
 // The posted entry of a document in force, which a replacement reverses.
 async function documentEntry(ctx: CommandContext, documentId: string) {
   const entry = await ctx.trx
-    .selectFrom('crove_finance.journal_entry')
-    .select(['id', 'entry_date', 'description', 'source_type', 'source_id'])
-    .where('org_id', '=', ctx.orgId)
-    .where('source_type', '=', 'finance.purchase_document')
-    .where('source_id', '=', documentId)
-    .where('reverses_entry_id', 'is', null)
+    .selectFrom('crove_finance.journal_entry as e')
+    .select(['e.id', 'e.entry_date', 'e.description', 'e.source_type', 'e.source_id'])
+    .where('e.org_id', '=', ctx.orgId)
+    .where('e.source_type', '=', 'finance.purchase_document')
+    .where('e.source_id', '=', documentId)
+    .where('e.reverses_entry_id', 'is', null)
+    .where(latestRevision('e'))
     .executeTakeFirst();
   if (!entry) throw new DomainError('INTERNAL', 500, 'Không tìm thấy bút toán của hóa đơn gốc');
   return entry;
