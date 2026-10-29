@@ -402,4 +402,86 @@ suite('delegation and escalation within the task legal entity on PostgreSQL (#17
       await c.end();
     }
   });
+
+  // The clauses that keep member_covers_legal_entity inside the org of the context and its state (#1898): a person who
+  // is a member of another org only, assignments a member holds in another org, and an org being offboarded, where
+  // only owners still count. Asked in the system context of each org (the worker's, every entity in scope).
+  it('answers only for members and assignments of the org in context, and only owners while it is offboarded (#1898)', async () => {
+    const db = createDb(pools[0] as pg.Pool);
+    const person = (name: string) => upsertIdentity(db, { issuer: 't1898', subject: randomUUID(), email: `${name}-${randomUUID().slice(0, 8)}@t1898.test`, name: null });
+    const [ownerB, limitedHere, plainHere, memberB] = [await person('owner-b'), await person('limited-here'), await person('plain-here'), await person('member-b')];
+    const { orgId: orgB, slug: slugB } = await createOrg(app, asUser(ownerB), 'T1898');
+    const defaultOfB = await admin(
+      async (c) => (await c.query<{ id: string }>('SELECT id FROM crove_kernel.legal_entity WHERE org_id = $1 AND is_default', [orgB])).rows[0]?.id as string,
+    );
+    await admin(async (c) => {
+      const join = (org: string, user: string, role: string) =>
+        c.query('INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, $3)', [org, user, role]);
+      const assign = (org: string, user: string, roleKey: string, entity: string | null) =>
+        c.query('INSERT INTO crove_kernel.role_assignment (org_id, user_id, role_key, legal_entity_id, granted_by) VALUES ($1, $2, $3, $4, $5)', [
+          org,
+          user,
+          roleKey,
+          entity,
+          org === orgId ? owner : ownerB,
+        ]);
+      // Limited to the default entity here, org-wide in B: here they read the default entity alone.
+      await join(orgId, limitedHere, 'member');
+      await assign(orgId, limitedHere, 'external_accountant', defaultEntity);
+      await join(orgB, limitedHere, 'member');
+      await assign(orgB, limitedHere, 'finance.viewer', null);
+      // No assignment here, limited in B: here they read every entity.
+      await join(orgId, plainHere, 'member');
+      await join(orgB, plainHere, 'member');
+      await assign(orgB, plainHere, 'external_accountant', defaultOfB);
+      await join(orgB, memberB, 'member');
+    });
+
+    const url = new URL(adminUrl);
+    url.username = 'crove_worker';
+    url.password = 'test-worker-pw';
+    const c = new pg.Client({ connectionString: url.toString() });
+    await c.connect();
+    const inSystem = async <T>(org: string, fn: (covers: (user: string, entity: string | null) => Promise<boolean | undefined>) => Promise<T>) => {
+      await c.query('BEGIN');
+      try {
+        await c.query('SELECT crove_kernel.enter_system_context($1::uuid)', [org]);
+        return await fn(async (user, entity) =>
+          (await c.query<{ v: boolean }>('SELECT crove_kernel.member_covers_legal_entity($1::uuid, $2::uuid) AS v', [user, entity])).rows[0]?.v,
+        );
+      } finally {
+        await c.query('ROLLBACK').catch(() => {});
+      }
+    };
+    try {
+      await inSystem(orgId, async (covers) => {
+        // A member of another org only, an owner there included, is no holder here.
+        expect(await covers(ownerB, branch)).toBe(false);
+        expect(await covers(memberB, null)).toBe(false);
+        // Another org's assignments count for nothing here, neither an org-wide one nor an entity one.
+        expect(await covers(limitedHere, branch)).toBe(false);
+        expect(await covers(limitedHere, defaultEntity)).toBe(true);
+        expect(await covers(plainHere, branch)).toBe(true);
+      });
+      // B's own answers, in B's context.
+      await inSystem(orgB, async (covers) => {
+        expect(await covers(limitedHere, defaultOfB)).toBe(true);
+        expect(await covers(plainHere, defaultOfB)).toBe(true);
+        expect(await covers(memberB, defaultOfB)).toBe(true);
+        expect(await covers(owner, defaultOfB)).toBe(false);
+      });
+      // B being offboarded (through its command, which the audit trigger requires): only its owners still count, members
+      // cover nothing, org-level or not.
+      await app.execute('kernel.org.offboard', { confirmSlug: slugB }, { actor: asMfa(ownerB), orgId: orgB });
+      await inSystem(orgB, async (covers) => {
+        expect(await covers(ownerB, defaultOfB)).toBe(true);
+        expect(await covers(ownerB, null)).toBe(true);
+        expect(await covers(memberB, defaultOfB)).toBe(false);
+        expect(await covers(memberB, null)).toBe(false);
+        expect(await covers(limitedHere, defaultOfB)).toBe(false);
+      });
+    } finally {
+      await c.end();
+    }
+  });
 });
