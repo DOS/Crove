@@ -17,6 +17,8 @@
 //   no-transaction        not BEGIN, COMMIT, ROLLBACK or END: the runner owns the transaction;
 //   no-drop-schema        not DROP SCHEMA;
 //   no-truncate           not TRUNCATE;
+//   no-indirect           not PREPARE (nor the SQL EXECUTE of a prepared statement), EXPLAIN or COPY: each runs a
+//                         statement this lint does not read, or a server file or program (#1859);
 //   no-public-grant       not GRANT to anon, authenticated or PUBLIC;
 //   policy-drop-first     DROP POLICY IF EXISTS <name> ON <table> before every CREATE POLICY <name> ON <table>;
 //   module-schema         touch only the schema of the file's module (<version>_crove_<module>_<desc>.sql touches
@@ -59,15 +61,14 @@
 // on main when they landed; hot-index-concurrently the files up to HOT_INDEX_RULE_AFTER. A marked file's indexes need
 // no retry block: a concurrent build takes no lock that blocks writes.
 // DO bodies are linted too: their PL/pgSQL is split into statements and each SQL statement is checked like a top-level
-// one, and so is every statement of the command string an EXECUTE runs. Function bodies are not: they run when the
+// one, and so is every statement of the command string an EXECUTE runs, the query of a FOR r IN <query> LOOP and a
+// cursor's query (OPEN c FOR <query>, c CURSOR FOR <query>) (#1859). Function bodies are not: they run when the
 // function is called, not when the migration is applied.
 //
 // Known blind spots (the lint reads statement shapes; the invariant suite and the security review cover the rest):
 //   - SELECT ... INTO a new table;
 //   - ALTER ... SET SCHEMA, which moves an object without touching its schema rule (contract-header still asks for an
 //     ADR);
-//   - writes the lint does not read as statements: the query of FOR r IN <query> LOOP in a DO body, PREPARE ... AS
-//     <write> then EXECUTE, EXPLAIN ANALYZE <write>, COPY (<write> RETURNING ...) TO ...;
 //   - PREPARE TRANSACTION;
 //   - EXECUTE of a variable or an expression (only a string literal, or format()'s literal format string, is read);
 //   - a function body the same file then calls (SELECT f()), whose statements run at migration time;
@@ -307,7 +308,10 @@ function findWord(tokens, from, ...words) {
 
 // Strips the PL/pgSQL control structure in front of a statement (labels, BEGIN, DECLARE, IF ... THEN, LOOP heads,
 // EXCEPTION WHEN ... THEN, END IF), leaving the statement it guards. Returns [] for a piece that is only structure.
-export function stripControl(tokens) {
+// The words a query starts with, where a loop or a cursor takes one (#1859); EXECUTE for a dynamic query.
+const QUERY_HEADS = new Set(['select', 'with', 'insert', 'update', 'delete', 'merge', 'values', 'table', 'execute']);
+
+export function stripControl(tokens, queries = []) {
   let rest = tokens;
   for (;;) {
     const head = rest[0];
@@ -328,6 +332,9 @@ export function stripControl(tokens) {
     } else if (isWord(head, 'for', 'foreach', 'while')) {
       const loop = findWord(rest, 1, 'loop');
       if (loop === -1) return rest;
+      // FOR r IN <query> LOOP runs the query (#1859): handed back in `queries` for the caller to lint.
+      const at = isWord(head, 'for') ? findWord(rest, 1, 'in') : -1;
+      if (at !== -1 && at < loop) queries.push(rest.slice(skipWords(rest, at + 1, 'reverse'), loop));
       rest = rest.slice(loop + 1);
     } else {
       return rest;
@@ -1321,10 +1328,27 @@ export function lintMigration(file, sql, {
   // EXECUTE whose command string holds the statement, where its contract header goes.
   const TOP = { retry: () => false, anchorLine: undefined };
   const lintStatement = (raw, nested, ctx = TOP) => {
-    const tokens = nested ? stripControl(raw) : raw;
+    // The queries of the loops this statement starts with (FOR r IN <query> LOOP), linted as statements of their own.
+    const loopQueries = [];
+    const tokens = nested ? stripControl(raw, loopQueries) : raw;
+    for (const query of loopQueries) if (isWord(query[0]) && QUERY_HEADS.has(query[0].v)) lintStatement(query, true, ctx);
     const head = tokens[0];
     if (!head) return;
     order++;
+    // A cursor's query, run when the cursor is opened: OPEN c [[NO] SCROLL] FOR <query>, and a DECLARE section's
+    // c [[NO] SCROLL] CURSOR [(args)] FOR | IS <query> (#1859).
+    if (nested) {
+      const open = isWord(head, 'open') ? findWord(tokens, 1, 'for') : -1;
+      const cursor = findWord(tokens, 1, 'cursor');
+      const at = open !== -1 ? open : cursor !== -1 ? findWord(tokens, cursor + 1, 'for', 'is') : -1;
+      if (at !== -1 && isWord(tokens[at + 1]) && QUERY_HEADS.has(tokens[at + 1].v)) lintStatement(tokens.slice(at + 1), true, ctx);
+    }
+    // Statements that run another statement the lint does not read, and that no migration needs (#1859): PREPARE (and
+    // the SQL EXECUTE of a prepared statement; a DO body's EXECUTE runs a string the lint reads), EXPLAIN (ANALYZE runs
+    // its statement) and COPY (a query's writes, a server file or a program).
+    if (isWord(head, 'prepare', 'explain', 'copy') || (!nested && isWord(head, 'execute'))) {
+      report(head.line, 'no-indirect', `${head.v.toUpperCase()} is not allowed in a migration: it runs a statement this lint does not read (or a server file or program, for COPY); write the statement itself`);
+    }
 
     for (const token of tokens) {
       if (isWord(token, 'concurrently') && !marked) {
