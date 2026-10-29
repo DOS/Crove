@@ -264,6 +264,18 @@ describe('a module turned off, outside /o/$slug (ADR-0031 §3, #1660)', () => {
     expect(await answer('/clients')).toEqual({ path: '/clients', notFound: false });
   });
 
+  it('shows the not-found page at the root outside an org, and inside the org frame for a mistyped org address', async () => {
+    session.modules = ['kernel'];
+    const shownBy = async (address: string) => {
+      const r = createRouter({ routeTree: router.routeTree, history: createMemoryHistory({ initialEntries: [address] }), isServer: false });
+      await r.load();
+      return r.state.matches.filter((m) => (m as { _notFound?: boolean })._notFound === true || isNotFound(m.error)).map((m) => m.routeId);
+    };
+    expect(await shownBy('/-/review')).toEqual(['__root__']);
+    expect(await shownBy('/nowhere')).toEqual(['__root__']);
+    expect(await shownBy('/o/acme/nope')).toEqual(['/o/$slug']);
+  });
+
   it('keeps public links public: no sign-in asked, installed or not', async () => {
     session.token = null;
     try {

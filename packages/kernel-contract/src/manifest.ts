@@ -119,7 +119,8 @@ export type NavDeclaration =
 export interface OutsideRouteDeclaration {
   // The full path, as the router writes it: '/-/share', '/-/b/$org/$type'.
   readonly path: string;
-  // Opened without an account (a client's or a visitor's link): the module guard adds no sign-in.
+  // Opened without an account (a client's or a visitor's link): its route asks for no sign-in, and the module guard
+  // runs before any (apps/app/test/module-screens.test.ts checks both).
   readonly public?: true;
 }
 

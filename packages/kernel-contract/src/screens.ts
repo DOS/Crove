@@ -88,7 +88,8 @@ const SOCIAL_SCREENS = {
   outside: [
     // A page shared into a new draft (#1235), before the org is known.
     { path: '/-/share' },
-    // Where a channel provider's OAuth dialog sends the browser back (S6), one address for every org.
+    // Where a channel provider's OAuth dialog sends the browser back (S6), one address for every org. The call that
+    // finishes it is the kernel's, but only social's channel screen starts an attempt.
     { path: '/channels/oauth/$provider/callback' },
     // A client's review and report links (#589, #643): the token in the fragment is the only credential.
     { path: '/-/review', public: true },

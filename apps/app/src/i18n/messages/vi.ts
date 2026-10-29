@@ -19,7 +19,7 @@ export const vi = {
     error: 'Đã có lỗi xảy ra',
     unknownError: 'Lỗi không xác định',
     notFound: 'Không tìm thấy trang này',
-    notFoundHint: 'Địa chỉ không đúng, hoặc hệ thống này không dùng chức năng của trang này.',
+    notFoundHint: 'Đường dẫn không đúng, hoặc hệ thống này chưa bật chức năng của trang.',
     httpError: 'Lỗi {status}',
     serverUnreachable: 'Không kết nối được máy chủ {brand}.',
     configLoadFailed: 'Không tải được cấu hình',
