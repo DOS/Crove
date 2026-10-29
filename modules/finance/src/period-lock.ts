@@ -45,6 +45,19 @@ async function mayUnlock(ctx: QueryContext, entity: string): Promise<boolean> {
   return rows[0]?.may === true;
 }
 
+// The last locked day of one legal entity (the one named, else resolveLegalEntity's), or null: what a preparer checks a
+// date against. The screen's state is periodLockState.
+export async function periodLockedThrough(ctx: QueryContext, legalEntityId?: string): Promise<string | null> {
+  const entity = await resolveLegalEntity(ctx, legalEntityId);
+  const row = await ctx.trx
+    .selectFrom('crove_finance.period_lock')
+    .select('locked_through')
+    .where('org_id', '=', ctx.orgId)
+    .where('legal_entity_id', '=', entity)
+    .executeTakeFirst();
+  return row?.locked_through ?? null;
+}
+
 // The lock of one legal entity (#1280: each entity locks its own months): the one named, else resolveLegalEntity's.
 export async function periodLockState(ctx: QueryContext, legalEntityId?: string): Promise<PeriodLockState> {
   const entity = await resolveLegalEntity(ctx, legalEntityId);
