@@ -147,10 +147,14 @@ suite('role assignments on PostgreSQL (#1279)', () => {
       permissions: (await c.query<{ role_key: string; permission: string }>('SELECT role_key, permission FROM crove_kernel.role_permission ORDER BY 1, 2')).rows,
     }));
     expect(roles.map((r) => r.key)).toEqual([...BUILTIN_ROLE_KEYS].sort());
-    expect(roles.filter((r) => r.scope === 'legal_entity').map((r) => r.key)).toEqual(['external_accountant']);
+    // #1507 (step 1 of 2): an entity chief accountant role, limited to its legal entities and granting their period
+    // unlock alone, may be seeded; step 2 expects it.
+    const entityChief = roles.some((r) => r.key === 'finance.entity_chief_accountant');
+    expect(roles.filter((r) => r.scope === 'legal_entity').map((r) => r.key)).toEqual(entityChief ? ['external_accountant', 'finance.entity_chief_accountant'] : ['external_accountant']);
     expect(permissions).toEqual([
       { role_key: 'finance.chief_accountant', permission: 'finance.period.unlock' },
       { role_key: 'finance.chief_accountant', permission: 'finance.proposal.approve' },
+      ...(entityChief ? [{ role_key: 'finance.entity_chief_accountant', permission: 'finance.period.unlock' }] : []),
     ]);
     // The base roles are not assignable roles.
     expect(roles.map((r) => r.key)).not.toContain('owner');
