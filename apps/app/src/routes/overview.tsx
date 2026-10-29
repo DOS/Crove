@@ -23,7 +23,7 @@ import { getConfig } from '../lib/auth.ts';
 import { deadlineTone } from '../lib/clients.ts';
 import { allCounted, waitingItems, type WaitingKey } from '../lib/overview.ts';
 import { SAFETY_POLL_MS, pollEvery, useStreamLive } from '../lib/stream-hook.ts';
-import { canMarkTaxDone, entityToMark } from '../lib/tax-calendar.ts';
+import { entityToMark, markableEntities } from '../lib/tax-calendar.ts';
 import { useWorkNotifications } from './notifications.tsx';
 
 
@@ -128,11 +128,12 @@ function AppCards({ slug, vat, vatLoaded }: { slug: string; vat: { period: strin
 }
 
 // A due of the org, marked done by each legal entity on its own (#1553): with several entities the row names the ones
-// still open and marks the entity chosen in the shell.
-function DueRow({ due, canMark, severalEntities, chosen }: { due: TaxDueView; canMark: boolean; severalEntities: boolean; chosen: string | null }) {
+// still open and marks the entity chosen in the shell, when the server says the reader may mark it there (#1917).
+function DueRow({ due, severalEntities, chosen }: { due: TaxDueView; severalEntities: boolean; chosen: string | null }) {
   const tt = useTranslations('taxCalendar');
   const periodLabel = usePeriodLabel();
-  const markFor = entityToMark(due.openEntities, chosen);
+  const open = entityToMark(due.openEntities, chosen);
+  const markFor = markableEntities(due).some((e) => e.id === open) ? open : null;
   const markName = due.openEntities.find((e) => e.id === markFor)?.name ?? '';
   const done = useMutation({
     mutationFn: () => client.org.markTaxObligation({ obligation: due.obligation, period: due.period, done: true, ...(markFor ? { legalEntityId: markFor } : {}) }),
@@ -155,7 +156,7 @@ function DueRow({ due, canMark, severalEntities, chosen }: { due: TaxDueView; ca
         )}
       </TableCell>
       <TableCell className="px-4 py-3 text-right">
-        {canMark && markFor && (
+        {markFor && (
           <Button size="sm" variant="outline" onClick={() => done.mutate()} disabled={done.isPending}>
             {done.isPending ? <Spinner className="text-current" /> : null}
             {severalEntities ? tt('markDoneFor', { entity: markName }) : tt('markDone')}
@@ -303,7 +304,7 @@ export function OverviewPage() {
             <div className="overflow-x-auto">
               <DataTable head={[tt('columns.due'), tt('columns.obligation'), tt('columns.period'), '']}>
                 {dues.map((d) => (
-                  <DueRow key={`${d.obligation}:${d.period}`} due={d} canMark={canMarkTaxDone(role, d.obligation, financeOn)} severalEntities={books.entities.length > 1} chosen={books.entityId} />
+                  <DueRow key={`${d.obligation}:${d.period}`} due={d} severalEntities={books.entities.length > 1} chosen={books.entityId} />
                 ))}
               </DataTable>
             </div>
