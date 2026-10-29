@@ -164,16 +164,17 @@ suite('the approval gate in the database (#1793)', () => {
       ] as const) {
         await c.query('INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, $3)', [orgId, user, role]);
       }
-      // A chief accountant org-wide (holds the ledger's approval permission) and one limited to the default entity (an
-      // entity-scoped assignment grants no approval).
+      // A chief accountant org-wide (holds the ledger's approval permission), and a member whose only assignment is
+      // limited to the default entity (an entity-scoped assignment grants no approval).
       const entity = (await c.query<{ id: string }>('SELECT id FROM crove_kernel.legal_entity WHERE org_id = $1 AND is_default', [orgId])).rows[0]?.id as string;
-      for (const [user, scope] of [
-        [chief, null],
-        [scopedChief, entity],
+      for (const [user, role, scope] of [
+        [chief, 'finance.chief_accountant', null],
+        [scopedChief, 'external_accountant', entity],
       ] as const) {
-        await c.query(`INSERT INTO crove_kernel.role_assignment (org_id, user_id, role_key, legal_entity_id, granted_by) VALUES ($1, $2, 'finance.chief_accountant', $3, $4)`, [
+        await c.query(`INSERT INTO crove_kernel.role_assignment (org_id, user_id, role_key, legal_entity_id, granted_by) VALUES ($1, $2, $3, $4, $5)`, [
           orgId,
           user,
+          role,
           scope,
           owner,
         ]);

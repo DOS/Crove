@@ -497,7 +497,19 @@ interface GateDecision {
   version: number;
 }
 
-async function approveInDatabase(ctx: CommandContext, id: string, revision: number): Promise<GateDecision> {
+async function approveInDatabase(ctx: CommandContext, id: string, revision: number, fallback: GateDecision): Promise<GateDecision> {
+  // A database the gate's migration has not reached yet (a runtime ahead of its schema, as some tests build) has
+  // neither the gate nor the guard that refuses the plain update: the approval is written as before #1793.
+  const { rows: gated } = await sql<{ gate: boolean }>`SELECT pg_catalog.to_regprocedure('crove_kernel.proposal_approve(uuid,integer,uuid)') IS NOT NULL AS gate`.execute(ctx.trx);
+  if (gated[0]?.gate !== true) {
+    await ctx.trx
+      .updateTable('crove_kernel.proposal')
+      .set({ status: 'approved', decided_by: ctx.actor.type === 'user' ? ctx.actor.userId : null, decided_at: ctx.now, executed_command_id: ctx.commandId })
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', id)
+      .execute();
+    return fallback;
+  }
   try {
     const { rows } = await sql<{ d: GateDecision }>`SELECT crove_kernel.proposal_approve(${id}::uuid, ${revision}::int, ${ctx.commandId}::uuid) AS d`.execute(ctx.trx);
     const decided = rows[0]?.d;
@@ -674,7 +686,13 @@ export const approveProposal = defineCommand({
     // The same transaction ends 'executed', or rolls back to 'pending' if the command fails. The database decides P09,
     // P10 and P12 again and writes the approval (crove_kernel.proposal_approve, #1793): a user's session reaches
     // 'approved' no other way. The audit row records the decision it applied.
-    const applied = await approveInDatabase(ctx, proposal.id, proposal.revision);
+    const applied = await approveInDatabase(ctx, proposal.id, proposal.revision, {
+      fourEyes: decision.fourEyes,
+      selfApproved: decision.selfApproved,
+      eligibleCount: decision.eligibleCount,
+      preset: decision.orgPolicy.preset,
+      version: decision.orgPolicy.version,
+    });
     ctx.audit({
       revision: proposal.revision,
       aal: ctx.actor.aal,

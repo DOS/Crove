@@ -69,7 +69,7 @@ const NOBODY: CommandPolicy = { roles: [], permission: null, fourEyes: true };
 // The policy table as the database's approval gate must hold it too (crove_kernel.approval_command_policy, #1793):
 // apps/kernel/test/invariant/proposal-approve-gate.db.test.ts compares the two.
 export function approvalPolicies(): Array<{ command: string; roles: readonly string[]; permission: string | null; fourEyes: boolean; ledger: boolean }> {
-  return Object.entries(POLICIES).map(([command, p]) => ({ command, roles: p.roles, permission: p.permission, fourEyes: p.fourEyes, ledger: p === LEDGER }));
+  return Object.entries(POLICIES).map(([command, p]) => ({ command, ...p, ledger: p === LEDGER }));
 }
 
 // The version of the approval rules in this file (plan §4.7 recorded outcome: policy_version). Raise it with any change
