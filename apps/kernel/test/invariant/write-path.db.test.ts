@@ -16,6 +16,7 @@ import { createDb, createPool } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime, defineCommand, defineQuery, type QueryContext } from '@crove/kernel-runtime';
+import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -41,7 +42,7 @@ suite('one write path on PostgreSQL (#680)', () => {
   const party = (ctx: QueryContext) =>
     ctx.trx.insertInto('crove_kernel.party').values({ org_id: ctx.orgId, name: `write-path ${randomUUID()}` }).returning('id').executeTakeFirstOrThrow();
   const writingQuery = defineQuery({ name: 'test.write_path.query_writes', input: z.object({}), access: ['owner'], handler: (ctx) => party(ctx) });
-  const writingCommand = defineCommand({ name: 'test.write_path.command_writes', input: z.object({}), risk: 'R0', access: ['owner'], handler: (ctx) => party(ctx) });
+  const writingCommand = defineCommand({ sideEffect: 'none', name: 'test.write_path.command_writes', input: z.object({}), risk: 'R0', access: ['owner'], handler: (ctx) => party(ctx) });
 
   beforeAll(async () => {
     const root = new pg.Client({ connectionString: ADMIN });
@@ -58,7 +59,7 @@ suite('one write path on PostgreSQL (#680)', () => {
     appUrl.password = 'test-app-pw';
     pool = createPool({ connectionString: appUrl.toString(), max: 2 });
     const db = createDb(pool);
-    runtime = new Runtime(db).register({ commands: [...kernelCommands, writingCommand], queries: [...kernelQueries({ inboundDomain: null }), writingQuery] });
+    runtime = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: [...kernelCommands, writingCommand], queries: [...kernelQueries({ inboundDomain: null }), writingQuery] });
     owner = await upsertIdentity(db, { issuer: 'write-path.test', subject: randomUUID(), email: `owner-${randomUUID()}@write-path.test`, name: null });
     ({ orgId } = await createOrg(runtime, { type: 'user', userId: owner, aal: 'aal1' }, 'Write path'));
   });

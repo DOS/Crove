@@ -12,6 +12,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
 import { pruneSecurityEvents } from '../../src/worker.ts';
+import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -84,7 +85,7 @@ suite('security_event: refusals before membership on PostgreSQL (#1006)', () => 
     db = createDb(pool);
     workerPool = createPool({ connectionString: workerUrl, max: 2 });
     workerDb = createDb(workerPool);
-    runtime = new Runtime(db).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: 'in.test' }) });
+    runtime = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: 'in.test' }) });
     owner = await user('owner');
     ({ orgId: orgA } = await createOrg(runtime, asUser(owner), `Org A ${randomUUID().slice(0, 8)}`));
   });

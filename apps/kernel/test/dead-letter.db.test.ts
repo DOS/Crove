@@ -19,6 +19,7 @@ import { Runtime } from '@crove/kernel-runtime';
 import { pruneInboxItems, takeDeadLetter } from '../src/dead-letter.ts';
 import { jobGroup, jobKey } from '../src/job-keys.ts';
 import { JOB_SCHEMA, QUEUES } from '../src/jobs-schema.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -98,7 +99,7 @@ suite('dead letters raise an Inbox item in their own org (#1720)', () => {
     await setRolePasswords(adminUrl, { crove_app: 'test-app-pw', crove_worker: 'test-worker-pw' });
     pool = createPool({ connectionString: loginUrl('crove_app', 'test-app-pw'), max: 4 });
     workerPool = createPool({ connectionString: loginUrl('crove_worker', 'test-worker-pw'), max: 2 });
-    const register = (db: ReturnType<typeof createDb>) => new Runtime(db).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
+    const register = (db: ReturnType<typeof createDb>) => new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
     const db = createDb(pool);
     runtime = register(db);
     workerRuntime = register(createDb(workerPool));

@@ -17,6 +17,7 @@ import { zClientOverviews } from '@crove/kernel-contract';
 import { clientOverviews, createOrg, kernelCommands, kernelQueries, upsertIdentity, type ClientOverview } from '@crove/kernel';
 import { Runtime, defineQuery } from '@crove/kernel-runtime';
 import { AGENDA_STATUSES, socialCommands, socialOverviewContributions, socialQueries, type PostView, type SocialClientFigures } from '@crove/mod-social';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -110,7 +111,7 @@ suite('Social figures on the multi-client home on PostgreSQL (#1261)', () => {
     app.password = 'test-app-pw';
     pool = createPool({ connectionString: app.toString(), max: 6 });
     db = createDb(pool);
-    rt = new Runtime(db).register({ commands: [...kernelCommands, ...socialCommands], queries: [...kernelQueries({ inboundDomain: null, overview: socialOverviewContributions }), ...socialQueries] });
+    rt = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: [...kernelCommands, ...socialCommands], queries: [...kernelQueries({ inboundDomain: null, overview: socialOverviewContributions }), ...socialQueries] });
 
     owner = await person('owner');
     freelancer = await person('freelancer');
@@ -201,9 +202,9 @@ suite('Social figures on the multi-client home on PostgreSQL (#1261)', () => {
   it('shows no Social figures on a deployment without the Social module, and the other figures as before', async () => {
     const withSocial = await home(owner);
     // The contribution is named, but the runtime leaves Social out: the lookup answers not_installed and adds nothing.
-    const kernelOnly = new Runtime(db, { absentModules: ['social'] }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null, overview: socialOverviewContributions }) });
+    const kernelOnly = new Runtime(db, { manifests: TEST_MANIFESTS, absentModules: ['social'] }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null, overview: socialOverviewContributions }) });
     // And a deployment whose composition root names no contribution at all.
-    const unnamed = new Runtime(db).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
+    const unnamed = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
     for (const runtime of [kernelOnly, unnamed]) {
       const rows = await home(owner, runtime);
       for (const row of rows) {
@@ -227,7 +228,7 @@ suite('Social figures on the multi-client home on PostgreSQL (#1261)', () => {
         return { ok: true };
       },
     });
-    const runtime = new Runtime(db).register({
+    const runtime = new Runtime(db, { manifests: TEST_MANIFESTS }).register({
       commands: [...kernelCommands, ...socialCommands],
       queries: [...kernelQueries({ inboundDomain: null, overview: [...socialOverviewContributions, { module: 'broken', query: 'broken.figures' }] }), ...socialQueries, broken],
     });

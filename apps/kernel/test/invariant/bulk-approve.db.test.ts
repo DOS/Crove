@@ -25,6 +25,7 @@ import { DomainError, Runtime, defineCommand, fileKey, sha256Hex, type BlobStore
 import { extractAndPropose, financeCommands, financeQueries } from '@crove/mod-finance';
 import { sql } from 'kysely';
 import { z } from 'zod';
+import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -182,7 +183,7 @@ suite('bulk approval on PostgreSQL (#315)', () => {
       return url.toString();
     };
     const register = (target: Db) =>
-      new Runtime(target).register({
+      new Runtime(target, { manifests: TEST_MANIFESTS }).register({
         commands: [...kernelCommands, ...financeCommands],
         queries: [...kernelQueries({ inboundDomain: 'in.test' }), ...financeQueries],
       });
@@ -320,7 +321,7 @@ suite('bulk approval on PostgreSQL (#315)', () => {
             }
           : def,
     );
-    const clocked = new Runtime(db).register({ commands: skewing, queries: [...kernelQueries({ inboundDomain: 'in.test' }), ...financeQueries] });
+    const clocked = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: skewing, queries: [...kernelQueries({ inboundDomain: 'in.test' }), ...financeQueries] });
     const now = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + skewMs);
     try {
       expect(await refusalOf(clocked.execute('kernel.proposal.approve_many', { items }, { actor: asMfa(admin, 30), orgId }))).toEqual({
@@ -484,6 +485,7 @@ suite('bulk approval on PostgreSQL (#315)', () => {
     const zThing = z.object({ id: z.string().uuid() });
     const target = (input: { id: string }) => ({ type: 'test.thing', id: input.id });
     const refuse = defineCommand({
+      sideEffect: 'none',
       name: 'test.refuse',
       input: zThing,
       risk: 'R1',
@@ -495,6 +497,7 @@ suite('bulk approval on PostgreSQL (#315)', () => {
       },
     });
     const unauthenticated = defineCommand({
+      sideEffect: 'none',
       name: 'test.unauthenticated',
       input: zThing,
       risk: 'R1',
@@ -504,7 +507,7 @@ suite('bulk approval on PostgreSQL (#315)', () => {
         throw new DomainError('UNAUTHENTICATED', 401, 'x');
       },
     });
-    const fine = defineCommand({ name: 'test.fine', input: zThing, risk: 'R1', access: ['owner'], target, handler: async () => ({ done: true }) });
+    const fine = defineCommand({ sideEffect: 'none', name: 'test.fine', input: zThing, risk: 'R1', access: ['owner'], target, handler: async () => ({ done: true }) });
     const codeOf = async (attempt: Promise<unknown>) => {
       try {
         await attempt;
@@ -514,6 +517,7 @@ suite('bulk approval on PostgreSQL (#315)', () => {
       }
     };
     const forge = defineCommand({
+      sideEffect: 'none',
       name: 'test.forge',
       input: zThing,
       risk: 'R1',
@@ -533,7 +537,7 @@ suite('bulk approval on PostgreSQL (#315)', () => {
         };
       },
     });
-    const forging = new Runtime(db).register({
+    const forging = new Runtime(db, { manifests: TEST_MANIFESTS }).register({
       commands: [...kernelCommands, ...financeCommands, refuse, unauthenticated, fine, forge],
       queries: [...kernelQueries({ inboundDomain: 'in.test' }), ...financeQueries],
     });
@@ -571,16 +575,16 @@ suite('bulk approval on PostgreSQL (#315)', () => {
   const zThingInput = z.object({ id: z.string().uuid() });
   const thingTarget = (input: { id: string }) => ({ type: 'test.thing', id: input.id });
   const ownerCommand = <O>(name: string, handler: CommandDef<{ id: string }, O>['handler'], risk: 'R1' | 'R3' = 'R1') =>
-    defineCommand({ name, input: zThingInput, risk, access: ['owner'], target: thingTarget, handler });
+    defineCommand({ sideEffect: 'none', name, input: zThingInput, risk, access: ['owner'], target: thingTarget, handler });
   const fineCommand = ownerCommand('test.fine', async () => ({ done: true }));
   const runtimeWith = (...commands: CommandDef<any, any>[]) =>
-    new Runtime(db).register({
+    new Runtime(db, { manifests: TEST_MANIFESTS }).register({
       commands: [...kernelCommands, ...financeCommands, ...commands],
       queries: [...kernelQueries({ inboundDomain: 'in.test' }), ...financeQueries],
     });
   // The same in the server's mode: input hashes keyed under the deployment's key (#1732).
   const keyedRuntimeWith = (...commands: CommandDef<any, any>[]) =>
-    new Runtime(db, { inputHash: 'keyed' }).register({
+    new Runtime(db, { manifests: TEST_MANIFESTS, inputHash: 'keyed' }).register({
       commands: [...kernelCommands, ...financeCommands, ...commands],
       queries: [...kernelQueries({ inboundDomain: 'in.test' }), ...financeQueries],
     });
@@ -656,6 +660,7 @@ suite('bulk approval on PostgreSQL (#315)', () => {
     const { orgId, owner } = await orgWith('Bulk audit never', []);
     const zCoded = z.object({ id: z.string().uuid(), code: z.string(), status: z.union([z.literal(403), z.literal(409), z.literal(422)]) });
     const coded = defineCommand({
+      sideEffect: 'none',
       name: 'test.coded',
       input: zCoded,
       risk: 'R1',
@@ -712,6 +717,7 @@ suite('bulk approval on PostgreSQL (#315)', () => {
     const { orgId, owner } = await orgWith('Bulk audit discard', []);
     const zWrite = z.object({ id: z.string().uuid(), fail: z.enum(['declined', 'never', 'sql']) });
     const writesThenFails = defineCommand({
+      sideEffect: 'none',
       name: 'test.writes_then_fails',
       input: zWrite,
       risk: 'R1',
@@ -803,6 +809,7 @@ suite('bulk approval on PostgreSQL (#315)', () => {
     cyclic.self = cyclic;
     const zKind = z.object({ id: z.string().uuid(), kind: z.enum(['cycle', 'bigint']) });
     const odd = defineCommand({
+      sideEffect: 'none',
       name: 'test.odd_facts',
       input: zKind,
       risk: 'R1',

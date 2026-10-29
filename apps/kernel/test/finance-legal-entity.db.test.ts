@@ -19,6 +19,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove
 import { Runtime } from '@crove/kernel-runtime';
 import { findPeriodBalanceDifferences } from '../src/period-balance.ts';
 import { GENESIS_SHA256, LocalArchiveStore, archiveKey, batchSha256, chainSha256, verifyArchive, type ArchiveBatch } from '../src/worm.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -151,7 +152,7 @@ suite('finance books per legal entity (#1280)', () => {
     worker = createDb(workerPool);
     // The database is still before the keyed input hash's migration (20261103180000_crove_kernel_input_hash.sql), where
     // crove_kernel.command_input_hash does not exist yet: this runtime writes the plain hash (#1741).
-    const runtime = new Runtime(db, { inputHash: 'sha256' }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
+    const runtime = new Runtime(db, { manifests: TEST_MANIFESTS, inputHash: 'sha256' }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
     owner = await upsertIdentity(db, { issuer: 'test', subject: randomUUID(), email: 'owner@le-books.test', name: null });
     member = await upsertIdentity(db, { issuer: 'test', subject: randomUUID(), email: 'member@le-books.test', name: null });
     ({ orgId } = await createOrg(runtime, { type: 'user', userId: owner, aal: 'aal1' }, 'Sổ theo pháp nhân'));

@@ -27,6 +27,7 @@ import {
   writeArchive,
   type ArchiveStore,
 } from '../../src/worm.ts';
+import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -108,7 +109,7 @@ suite('WORM fact stream: archive and tamper detection on PostgreSQL (#891)', () 
     db = createDb(pool);
     workerPool = createPool({ connectionString: login('crove_worker', 'test-worker-pw'), max: 2 });
     worker = createDb(workerPool);
-    runtime = new Runtime(db).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
+    runtime = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
     for (const name of ['a', 'b']) {
       const userId = await upsertIdentity(db, { issuer: 'test', subject: `worm-${name}`, email: `worm-${name}@example.com`, name: null });
       const { orgId } = await createOrg(runtime, { type: 'user', userId, aal: 'aal1' }, `Org ${name.toUpperCase()}`);

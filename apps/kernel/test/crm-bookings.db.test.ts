@@ -13,6 +13,7 @@ import { isVietnamHoliday, zonedDate, zonedInstant, type BookingItem, type Event
 import { Runtime } from '@crove/kernel-runtime';
 import { crmCommands, crmQueries } from '@crove/mod-crm';
 import { bookingManageAsk, bookingManageView, bookingRequest, bookingStatus, bookingView } from '../src/booking-page.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -50,7 +51,7 @@ suite('the public booking page on PostgreSQL (#1318)', () => {
   }
 
   const register = (db: Db) =>
-    new Runtime(db).register({ commands: [...kernelCommands, ...crmCommands], queries: [...kernelQueries({ inboundDomain: null }), ...crmQueries] });
+    new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: [...kernelCommands, ...crmCommands], queries: [...kernelQueries({ inboundDomain: null }), ...crmQueries] });
 
   // An org whose member hosts a 30-minute call, bookable all day every day in Vietnam time.
   async function org(over: Partial<{ dailyLimit: number | null; minNoticeMin: number }> = {}) {

@@ -21,6 +21,7 @@ import { Runtime, defineCommand, fileKey, sha256Hex, type BlobStore } from '@cro
 import { extractAndPropose, financeCommands, financeQueries } from '@crove/mod-finance';
 import { actorOf, createAuthenticator } from '../../src/auth.ts';
 import { loadConfig } from '../../src/config.ts';
+import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -158,7 +159,7 @@ suite('kernel invariants on PostgreSQL', () => {
     appUrl = loginUrl('crove_app', 'test-app-pw');
     workerUrl = loginUrl('crove_worker', 'test-worker-pw');
     const register = (target: Db) =>
-      new Runtime(target).register({
+      new Runtime(target, { manifests: TEST_MANIFESTS }).register({
         commands: [...kernelCommands, ...financeCommands],
         queries: [...kernelQueries({ inboundDomain: 'in.test' }), ...financeQueries],
       });
@@ -514,7 +515,7 @@ suite('kernel invariants on PostgreSQL', () => {
     const fresh = asMfa(admin, 60);
     await expect(approve(fresh)).resolves.toMatchObject({ journalEntryId: expect.any(String) });
     // A deployment that turned P11 off (local only) approves without MFA.
-    const relaxed = new Runtime(db, { stepUp: 'off' }).register({
+    const relaxed = new Runtime(db, { manifests: TEST_MANIFESTS, stepUp: 'off' }).register({
       commands: [...kernelCommands, ...financeCommands],
       queries: [...kernelQueries({ inboundDomain: 'in.test' }), ...financeQueries],
     });
@@ -1142,6 +1143,7 @@ suite('kernel invariants on PostgreSQL', () => {
     const lineNo = payload.lines[0]?.lineNo ?? 1;
     // A command with a bug: it runs a proposal's command with a proposal id it did not approve.
     const rogue = defineCommand({
+      sideEffect: 'none',
       name: 'kernel.test_rogue_execute',
       input: z.object({ proposalId: z.uuid(), command: z.string() }),
       risk: 'R1',
@@ -1155,7 +1157,7 @@ suite('kernel invariants on PostgreSQL', () => {
           { proposalId: input.proposalId },
         ),
     });
-    const gated = new Runtime(db).register({ commands: [...kernelCommands, ...financeCommands, rogue] });
+    const gated = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: [...kernelCommands, ...financeCommands, rogue] });
     const runRogue = (command: string) => gated.execute('kernel.test_rogue_execute', { proposalId: id, command }, { actor: asMfa(admin), orgId });
     const refused = { code: 'FORBIDDEN', status: 403, details: { rule: 'proposal_state' } };
     const documents = () =>

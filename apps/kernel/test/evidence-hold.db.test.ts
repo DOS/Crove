@@ -17,6 +17,7 @@ import { BlobNotFoundError, Runtime, fileKey, sha256Hex, type BlobRef, type Blob
 import { extractAndPropose, financeCommands, financeQueries } from '@crove/mod-finance';
 import { holdErrorText, runEvidenceHolds, type EvidenceHoldState } from '../src/evidence-hold.ts';
 import { inProcessExtract } from './extract-service.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -156,7 +157,7 @@ suite('retention holds on evidence files (#1009)', () => {
     workerPool = createPool({ connectionString: login('crove_worker', 'test-worker-pw'), max: 2 });
     workerDb = createDb(workerPool);
     const register = (target: Db) =>
-      new Runtime(target).register({ commands: [...kernelCommands, ...financeCommands], queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries] });
+      new Runtime(target, { manifests: TEST_MANIFESTS }).register({ commands: [...kernelCommands, ...financeCommands], queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries] });
     runtime = register(db);
     workerRuntime = register(workerDb);
     owner = await upsertIdentity(db, { issuer: 'test', subject: randomUUID(), email: `owner-${randomUUID().slice(0, 8)}@holds.test`, name: null });

@@ -23,6 +23,7 @@ import { Runtime, type BlobStore } from '@crove/kernel-runtime';
 import { loadConfig } from '../../src/config.ts';
 import { createHttpApp } from '../../src/http.ts';
 import { createSessionStatusSource } from '../../src/sessions.ts';
+import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -176,7 +177,7 @@ suite('an invited address cannot be pre-claimed by an earlier sign-up (#563)', (
     appUrl.password = 'test-app-pw';
     pool = createPool({ connectionString: appUrl.toString(), max: 4 });
     db = createDb(pool);
-    runtime = new Runtime(db).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
+    runtime = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
 
     // The fake Supabase Auth's /signup: a new address gets an unconfirmed account with the password sent; an address
     // that already has an unconfirmed account keeps it unchanged, password included ("do not update the user"), and
@@ -224,7 +225,7 @@ suite('an invited address cannot be pre-claimed by an earlier sign-up (#563)', (
   ]) {
     it(`${policy.name}: someone without the link cannot create the invitee's account first, so the account the invitee confirms and accepts with is the invitee's`, async () => {
       const app = appWith(policy.env);
-      const upstreamAuth = new Runtime(db, { sessions: createSessionStatusSource('db'), stepUp: 'off' }).register({
+      const upstreamAuth = new Runtime(db, { manifests: TEST_MANIFESTS, sessions: createSessionStatusSource('db'), stepUp: 'off' }).register({
         commands: kernelCommands,
         queries: kernelQueries({ inboundDomain: null }),
       });

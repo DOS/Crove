@@ -19,6 +19,7 @@ import { createAuthenticator } from '../../src/auth.ts';
 import { loadConfig } from '../../src/config.ts';
 import { createHttpApp } from '../../src/http.ts';
 import { createSessionStatusSource } from '../../src/sessions.ts';
+import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -143,7 +144,7 @@ suite('sessions on PostgreSQL with the jwt session check (ADR-0028, Crove Cloud)
       WEB_DIST: '/nonexistent',
     });
     expect(config.AUTH_SESSION_CHECK).toBe('jwt');
-    runtime = new Runtime(db, { sessions: createSessionStatusSource(config.AUTH_SESSION_CHECK), stepUp: 'required' }).register({
+    runtime = new Runtime(db, { manifests: TEST_MANIFESTS, sessions: createSessionStatusSource(config.AUTH_SESSION_CHECK), stepUp: 'required' }).register({
       commands: [...kernelCommands, ...financeCommands],
       queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries],
     });

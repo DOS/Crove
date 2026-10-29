@@ -15,6 +15,7 @@ import { Runtime } from '@crove/kernel-runtime';
 import { EXIT, evaluateHealth, probeOnce, readHealth, runProber, type ProberConfig } from '../src/prober.ts';
 import { JOB_SCHEMA, QUEUES } from '../src/jobs-schema.ts';
 import { beat } from '../src/worker.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -79,7 +80,7 @@ suite('prober on PostgreSQL', () => {
     workerDb = createDb(workerPool);
     appPool = createPool({ connectionString: login('crove_app', 'test-app-pw'), max: 2 });
     const appDb = createDb(appPool);
-    const runtime = new Runtime(appDb).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
+    const runtime = new Runtime(appDb, { manifests: TEST_MANIFESTS }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
     const owner = await upsertIdentity(appDb, { issuer: 'prober-test', subject: 'owner', email: 'owner@prober.test', name: null });
     ({ orgId } = await createOrg(runtime, { type: 'user', userId: owner, aal: 'aal1' }, 'Prober test'));
 

@@ -26,6 +26,7 @@ import { loadConfig } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
 import { MediaUrlBudget, createMediaUrls } from '../src/media-urls.ts';
 import { createSessionStatusSource } from '../src/sessions.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -140,7 +141,7 @@ suite('images, labels and a first comment in the CSV import (#1258)', () => {
     db = createDb(pool);
     dir = await mkdtemp(join(tmpdir(), 'crove-csv-media-'));
     const store = new LocalDiskStore(dir);
-    const runtime = new Runtime(db, { sessions: createSessionStatusSource('off'), stepUp: 'required' }).register({
+    const runtime = new Runtime(db, { manifests: TEST_MANIFESTS, sessions: createSessionStatusSource('off'), stepUp: 'required' }).register({
       commands: [...kernelCommands, ...socialCommands],
       queries: [...kernelQueries({ inboundDomain: null }), ...socialQueries],
     });

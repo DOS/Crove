@@ -16,6 +16,7 @@ import { Runtime, type BlobStore } from '@crove/kernel-runtime';
 import { loadConfig } from '../src/config.ts';
 import type { InviteChecks } from '../src/auth-signup-policy.ts';
 import { createHttpApp } from '../src/http.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -150,7 +151,7 @@ suite('sign-up policy through the /auth/v1 proxy (#350)', () => {
     appUrl.username = 'crove_app';
     appUrl.password = 'test-app-pw';
     pool = createPool({ connectionString: appUrl.toString(), max: 4 });
-    runtime = new Runtime(createDb(pool)).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
+    runtime = new Runtime(createDb(pool), { manifests: TEST_MANIFESTS }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
 
     upstream = createServer((req, res) => {
       let raw = '';

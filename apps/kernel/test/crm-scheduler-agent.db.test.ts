@@ -13,6 +13,7 @@ import { isVietnamHoliday, zonedDate, zonedInstant, type EventTypeInput } from '
 import { Runtime, type AgentProgram } from '@crove/kernel-runtime';
 import { crmAgentPrograms, crmCommands, crmQueries, proposalText, type NextSlots } from '@crove/mod-crm';
 import { bookingManageAsk, bookingRequest } from '../src/booking-page.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -117,7 +118,7 @@ suite('the crm.scheduler agent on PostgreSQL (#1434)', () => {
       const pool = createPool({ connectionString: url.toString(), max: 4 });
       pools.push(pool);
       const d = createDb(pool);
-      return { db: d, runtime: new Runtime(d).register({ commands: [...kernelCommands, ...crmCommands], queries: [...kernelQueries({ inboundDomain: null }), ...crmQueries] }) };
+      return { db: d, runtime: new Runtime(d, { manifests: TEST_MANIFESTS }).register({ commands: [...kernelCommands, ...crmCommands], queries: [...kernelQueries({ inboundDomain: null }), ...crmQueries] }) };
     };
     const api = runtimeFor('crove_app', 'test-app-pw');
     app = api.runtime;

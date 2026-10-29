@@ -10,18 +10,19 @@ import type { CellResolver } from '@crove/db';
 import { kernelCommands } from '@crove/kernel';
 import { Runtime, defineCommand, type CommandDef } from '@crove/kernel-runtime';
 import { financeCommands } from '@crove/mod-finance';
+import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
 const noDatabase = (): never => {
   throw new Error('no database in this test');
 };
 const cells: CellResolver = { resolveTenant: async () => noDatabase(), controlPlane: () => noDatabase() };
-const runtime = () => new Runtime(cells);
+const runtime = () => new Runtime(cells, { manifests: TEST_MANIFESTS });
 
 const base = { input: z.object({}), risk: 'R1' as const, handler: async () => ({}) };
-const record = defineCommand({ ...base, name: 'test.thing.record', access: 'proposal' });
-const list = defineCommand({ ...base, name: 'test.thing.list', access: ['owner'] });
-const reviser = (name: string, revises: string) => defineCommand({ ...base, name, access: 'proposal_revision', revises });
-const editor = (name = 'test.proposal.edit') => defineCommand({ ...base, name, access: ['owner', 'admin', 'member'], proposalEditor: true });
+const record = defineCommand({ sideEffect: 'none', ...base, name: 'test.thing.record', access: 'proposal' });
+const list = defineCommand({ sideEffect: 'none', ...base, name: 'test.thing.list', access: ['owner'] });
+const reviser = (name: string, revises: string) => defineCommand({ sideEffect: 'none', ...base, name, access: 'proposal_revision', revises });
+const editor = (name = 'test.proposal.edit') => defineCommand({ sideEffect: 'none', ...base, name, access: ['owner', 'admin', 'member'], proposalEditor: true });
 
 describe('reviser registry (#216)', () => {
   it('has the kernel edit command as the one proposal editor, and the shipped registry validates', () => {
@@ -39,14 +40,14 @@ describe('reviser registry (#216)', () => {
   });
 
   it('refuses a proposal editor that users do not run, a malformed declaration and a second editor', () => {
-    expect(() => runtime().register({ commands: [defineCommand({ ...base, name: 'test.editor', access: 'system', proposalEditor: true })] })).toThrow(
+    expect(() => runtime().register({ commands: [defineCommand({ sideEffect: 'none', ...base, name: 'test.editor', access: 'system', proposalEditor: true })] })).toThrow(
       /run by users/,
     );
-    expect(() => runtime().register({ commands: [defineCommand({ ...base, name: 'test.editor', access: 'proposal', proposalEditor: true })] })).toThrow(
+    expect(() => runtime().register({ commands: [defineCommand({ sideEffect: 'none', ...base, name: 'test.editor', access: 'proposal', proposalEditor: true })] })).toThrow(
       /run by users/,
     );
     expect(() =>
-      runtime().register({ commands: [defineCommand({ ...base, name: 'test.editor', access: 'proposal_revision', revises: record.name, proposalEditor: true })] }),
+      runtime().register({ commands: [defineCommand({ sideEffect: 'none', ...base, name: 'test.editor', access: 'proposal_revision', revises: record.name, proposalEditor: true })] }),
     ).toThrow(/run by users/);
     expect(() => runtime().register({ commands: [{ ...editor(), proposalEditor: 'yes' } as unknown as CommandDef] })).toThrow(/proposalEditor: true/);
     expect(() => runtime().register({ commands: [editor('test.a'), editor('test.b')] })).toThrow(/test\.a is already the proposal editor/);
