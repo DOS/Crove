@@ -17,6 +17,9 @@ import {
   commandProperty,
   decodeText,
   companyTaxCode,
+  DOCUMENT,
+  LS_FILES_MAX_BUFFER,
+  trackedPaths,
   entryAllows,
   loadAllowlist,
   looksSynthetic,
@@ -267,7 +270,7 @@ describe('G5 PII scan (#1628)', () => {
     ])).toEqual([
       'entry 0: names no paths, domains or values',
       'entry 1: needs a reason',
-      'entry 2: kind must be one of cccd, mobile, tax-code, email',
+      'entry 2: kind must be one of cccd, mobile, tax-code, email, document',
       'entry 3: domains apply to email only',
       'entry 4: paths must be a non-empty list of strings',
       'entry 5: unknown field path',
@@ -280,10 +283,83 @@ describe('G5 PII scan (#1628)', () => {
     ]);
   });
 
+  it('fails on an office or data file outside a fixture directory unless an entry names it (#1640)', () => {
+    const allowed = { kind: 'document', paths: ['docs/templates/import.xlsx'], reason: 'a blank import template, no rows' };
+    const texts: Record<string, string | null> = {
+      'exports/so-cai-2026.xlsx': null,
+      'docs/templates/import.xlsx': null,
+      'reports/ledger.CSV': 'account,amount\n111,1000\n',
+      'docs/manual.pdf': null,
+      'packages/agent/test/fixtures/documents/invoice.pdf': null,
+      'apps/extract/testdata/invoice.xlsx': null,
+      'docs/notes.md': 'a@example.com',
+      // Only a fixtures or testdata directory, by its exact name, holds documents without an entry (review probes):
+      // not a test, e2e, mocks or seed directory, not a name with "fixture" or "seed" in it, not another letter case.
+      'apps/kernel/test/khach-hang.xlsx': null,
+      'test/a.xlsx': null,
+      'seed/a.xlsx': null,
+      'exports/so-cai-seed.xlsx': null,
+      'exports/fixture-export.xlsx': null,
+      'docs/Fixtures/a.pdf': null,
+      'backup/khach-hang.zip': null,
+      'scans/cccd.jpg': null,
+      'fixtures/real.xlsx': null,
+    };
+    const { findings, unused } = scanFiles(Object.keys(texts), (p: string) => texts[p] ?? null, [allowed]);
+    expect(findings.map((f: { path: string; kind: string; line: number }) => [f.path, f.kind, f.line])).toEqual(
+      [
+        'exports/so-cai-2026.xlsx', 'reports/ledger.CSV', 'docs/manual.pdf', 'apps/kernel/test/khach-hang.xlsx', 'test/a.xlsx', 'seed/a.xlsx',
+        'exports/so-cai-seed.xlsx', 'exports/fixture-export.xlsx', 'docs/Fixtures/a.pdf', 'backup/khach-hang.zip', 'scans/cccd.jpg',
+        'fixtures/real.xlsx',
+      ].map((path) => [path, 'document', 1]),
+    );
+    expect(unused).toEqual([]);
+    for (const name of ['a.pdf', 'a.doc', 'a.docx', 'a.dotx', 'a.xls', 'a.xlsx', 'a.xlsm', 'a.xltx', 'a.ods', 'a.odt', 'a.pptx', 'a.pptm', 'a.ppsx', 'a.csv', 'a.tsv', 'a.rtf', 'a.numbers', 'a.dbf', 'a.mdb', 'a.sqlite', 'a.zip', 'a.xlsx.gz', 'a.7z', 'a.jpg', 'a.HEIC', 'a.tiff', 'a.dot', 'a.xlam', 'a.pps', 'a.ott', 'a.bak', 'a.pst', 'a.zst', 'a.bmp']) expect(DOCUMENT.test(name), name).toBe(true);
+    for (const name of ['a.md', 'a.ts', 'a.pdf.md', 'csv.ts', 'icon.png', 'logo.svg', 'a.webp', 'a.woff2', 'a.json']) expect(DOCUMENT.test(name), name).toBe(false);
+    // A document entry names exact files: no directory prefix, no values, never everything.
+    expect(allowlistErrors([
+      { kind: 'document', paths: ['docs/templates/'], reason: 'a reason that is long enough' },
+      { kind: 'document', values: ['a.xlsx'], paths: ['a.xlsx'], reason: 'a reason that is long enough' },
+      { kind: 'document', domains: ['x.vn'], reason: 'a reason that is long enough' },
+      allowed,
+    ])).toEqual([
+      'entry 0: a document entry names exact file paths only',
+      'entry 1: a document entry names exact file paths only',
+      'entry 2: domains apply to email only',
+      'entry 2: a document entry names exact file paths only',
+    ]);
+    // The step fails on a planted export and names it, without a line of its content.
+    const file = join(dir, 'so-cai-thang-10.xlsx');
+    writeFileSync(file, Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x00]));
+    const run = spawnSync(process.execPath, [SCRIPT, file], { encoding: 'utf8' });
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain('an office, data, archive, database, key or photo file outside a fixtures directory');
+  });
+
+  it('lists 20k tracked paths without running out of buffer (#1640)', () => {
+    // 20,000 paths of 60 characters each and their separators: about 1.2 MB, past Node's default 1 MiB buffer.
+    const script = "process.stdout.write(Array.from({ length: 20000 }, (_, i) => 'apps/kernel/test/a-long-directory-name/' + String(i).padStart(8, '0') + '-file.test.ts').join('\\0'))";
+    expect(() => execFileSync(process.execPath, ['-e', script], { encoding: 'utf8' })).toThrow(/maxBuffer|ENOBUFS/);
+    const paths = trackedPaths(execFileSync, process.execPath, ['-e', script]);
+    expect(paths).toHaveLength(20000);
+    expect(paths[19999]).toBe('apps/kernel/test/a-long-directory-name/00019999-file.test.ts');
+    expect(LS_FILES_MAX_BUFFER).toBeGreaterThanOrEqual(64 * 1024 * 1024);
+  });
+
+  it('pins only Gmail addresses no one can hold: under six characters or with an underscore (#1640)', () => {
+    const allowlist: { values?: string[] }[] = JSON.parse(readFileSync(ALLOWLIST_FILE, 'utf8'));
+    const gmail = allowlist.flatMap((e) => e.values ?? []).filter((v) => /@([a-z0-9-]+\.)?(gmail|googlemail)\.com$/i.test(v));
+    expect(gmail.length).toBeGreaterThan(0);
+    for (const address of gmail) {
+      const username = (address.split('@')[0] ?? '').split('+')[0]?.replaceAll('.', '') ?? '';
+      expect(username.length < 6 || username.includes('_'), address).toBe(true);
+    }
+  });
+
   it('passes on the tree as it is, with a valid allowlist whose every entry is still needed', () => {
     const allowlist = JSON.parse(readFileSync(ALLOWLIST_FILE, 'utf8'));
     expect(allowlistErrors(allowlist)).toEqual([]);
-    const paths = execFileSync('git', ['ls-files', '-z'], { encoding: 'utf8' }).split('\0').filter(Boolean);
+    const paths = trackedPaths();
     const { findings, unused } = scanFiles(paths, readText, allowlist);
     expect(findings.map((f) => `${f.path}:${f.line} ${f.kind} ${mask(f.kind, f.value)}`)).toEqual([]);
     expect(unused.map((e: { reason: string }) => e.reason)).toEqual([]);
