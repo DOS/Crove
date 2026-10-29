@@ -9,14 +9,19 @@
 --   1. the change deletes the last chief accountant; its guard reads founder and returns, holding nothing on the org;
 --   2. the switch locks the tenant row, still counts the holder (the delete is not committed) and commits;
 --   3. the change commits: the org is on the accountant preset with no chief accountant.
--- The guard now takes its lock before the first read of the preset, whatever the preset is, and reads it once, under
--- the lock: a switch in flight makes it wait, and it then sees the accountant preset and refuses the change; a switch
--- after it waits for it, and then counts no holder (NO_CHIEF_ACCOUNTANT). The lock is still FOR NO KEY UPDATE (#1922):
--- it does not wait for the commands in flight that only reference the org (FOR KEY SHARE), so the period lock and
--- unlock of #1921 do not wait on it. Staff writes are still let through first, without a lock. What this adds is a
--- short wait between two member changes of one org, or a member change and an UPDATE of its tenant row, on the
--- founder preset as well; no command updates the tenant row and then changes a member in one transaction. Copied with
--- that change; the triggers are unchanged.
+-- The guard of an active org now takes its lock before the first read of the preset, whatever the preset is, and
+-- reads it once, under the lock: a switch in flight makes it wait, and it then sees the accountant preset and refuses
+-- the change; a switch after it waits for it, and then counts no holder (NO_CHIEF_ACCOUNTANT). The lock is still FOR NO
+-- KEY UPDATE (#1922): it does not wait for the commands in flight that only reference the org (FOR KEY SHARE), so the
+-- period lock and unlock of #1921 do not wait on it. Staff writes are still let through first, without a lock.
+--
+-- An org that is not active is let through before the lock, as it was before (the guard only ever applied to active
+-- orgs): no login role moves an org back to active (tenant_status_guard; reopening is a staff step), so a status read
+-- without the lock cannot let a change through that the lock would refuse. It also keeps the org purge, which locks
+-- the tenant row FOR UPDATE and then deletes the members of an offboarding org, from deadlocking with a member change
+-- in that org (#1933 review). What this adds is a short wait between two member changes of one active org, or a member
+-- change and an UPDATE of its tenant row, on the founder preset as well; no command updates an active org's tenant row
+-- and then changes a member in one transaction. Copied with that change; the triggers are unchanged.
 SET LOCAL lock_timeout = '2s';
 
 CREATE OR REPLACE FUNCTION crove_kernel.chief_accountant_keep_guard()
@@ -31,6 +36,11 @@ BEGIN
     INTO v_staff
   FROM pg_catalog.pg_roles r WHERE r.rolname = SESSION_USER;
   IF COALESCE(v_staff, false) THEN
+    RETURN NULL;
+  END IF;
+  -- Only an active org is guarded, and no login role makes an org active again: no lock is needed to let the others
+  -- through (the org purge holds their tenant row while it deletes their members).
+  IF NOT EXISTS (SELECT 1 FROM crove_kernel.tenant t WHERE t.org_id = v_org AND t.status = 'active') THEN
     RETURN NULL;
   END IF;
   -- Serialize on the org first, then decide on what has committed since (each statement takes a new snapshot): the

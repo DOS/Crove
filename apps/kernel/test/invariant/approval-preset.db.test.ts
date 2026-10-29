@@ -358,12 +358,14 @@ suite('approval policy presets on PostgreSQL (#1402)', () => {
           return error.code;
         },
       );
-      // The switch finishes (the old guard held nothing), or waits for the revoke's lock on the tenant row.
+      // The switch finishes (the old guard held nothing), or waits for the revoke's row lock on the tenant row (a wait on
+      // the revoke's transaction or on the row itself, never a passing lock such as a relation extension).
       for (let tries = 0; !settled; tries++) {
         const { rows } = await withAdmin((c) =>
           c.query(
             `SELECT 1 FROM pg_catalog.pg_locks l JOIN pg_catalog.pg_stat_activity a ON a.pid = l.pid
-             WHERE NOT l.granted AND a.usename = 'crove_app' AND a.datname = pg_catalog.current_database()`,
+             WHERE NOT l.granted AND l.locktype IN ('transactionid', 'tuple') AND a.usename = 'crove_app'
+               AND a.datname = pg_catalog.current_database()`,
           ),
         );
         if (rows.length > 0) break;
