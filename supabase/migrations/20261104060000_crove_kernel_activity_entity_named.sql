@@ -12,9 +12,11 @@
 -- le_scope's WITH CHECK refuses an entity outside the writer's scope, and the foreign key one outside the org.
 --
 -- activity_entity_named: a new row of those record types must name its entity, so a writer that forgets falls closed
--- (23514) instead of writing an org-level row. NOT VALID: rows written before stay as they are (org-level; their entity
--- is not recorded anywhere a backfill could read it with certainty), and the constraint is checked for every row
--- inserted from now on. apps/kernel/test/activity-record-types.test.ts keeps the list equal to the types the code names.
+-- (23514) instead of writing an org-level row. NOT VALID: the constraint is checked for every row inserted from now on,
+-- and rows written before stay as they are (org-level). Most of them do not record their entity: a month lock's or an
+-- archive's row names only the org, a reminder covered several entities. A request's mail payload does name its
+-- entity, so a backfill of those could follow (left out here: this file changes no existing row).
+-- apps/kernel/test/activity-record-types.test.ts keeps the list equal to the types the code names.
 -- Adding a NOT VALID constraint takes activity's ACCESS EXCLUSIVE lock only to record it, without a scan.
 SET LOCAL lock_timeout = '2s';
 

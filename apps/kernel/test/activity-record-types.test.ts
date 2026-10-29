@@ -111,7 +111,9 @@ function calls(file: string, text: string): Call[] {
   for (const m of text.matchAll(/\.activity\s*\(/g)) {
     const args = argumentsAt(text, (m.index ?? 0) + m[0].length - 1);
     const first = /^\s*(?:'([^']+)'|([^,]+?))\s*,/.exec(args);
-    out.push({ where: file, type: first?.[1] ?? null, expression: (first?.[1] ?? first?.[2] ?? args).trim(), namesEntity: /\blegalEntityId\b/.test(args) });
+    // The entity is named by the last argument: an object literal with a legalEntityId that is not undefined.
+    const namesEntity = /\{[^{}]*\blegalEntityId\b(?!\s*:\s*undefined\b)[^{}]*\}\s*,?\s*$/.test(args);
+    out.push({ where: file, type: first?.[1] ?? null, expression: (first?.[1] ?? first?.[2] ?? args).trim(), namesEntity });
   }
   return out;
 }
@@ -124,6 +126,9 @@ function aliases(source: string): string[] {
     ...text.matchAll(/\{[^{}]*\bactivity\b[^{}]*\}\s*=\s*[A-Za-z_$][\w$.]*/g),
     ...text.matchAll(/[=:,(]\s*[A-Za-z_$][\w$]*\.activity\b(?!\s*\()(?!\s*:)/g),
     ...text.matchAll(/\.activity\.(?:bind|call|apply)\b/g),
+    // A parameter destructured as ({ activity }: CommandContext), and a call by computed name (ctx['activity']).
+    ...text.matchAll(/\(\s*\{[^{}]*\bactivity\b[^{}]*\}\s*:/g),
+    ...text.matchAll(/\[\s*['"`]activity['"`]\s*\]/g),
   ].map((m) => m[0].replace(/\s+/g, ' ').trim());
 }
 
@@ -168,12 +173,19 @@ describe('activity record types (#1716, #1725, #1728)', () => {
       'await context\n  .activity(t.kind, id, "k", s);',
       'const { activity, emit } = ctx;',
       'const write = ctx.activity;',
+      'const run = async ({ activity }: CommandContext) => 1;',
+      "await ctx['activity']('kernel.tenant', id, 'k', s);",
+      "await ctx.activity('finance.period', id, 'k', `${legalEntityId}`);",
+      "await ctx.activity('finance.period', id, 'k', s, { legalEntityId: undefined });",
     ].join('\n');
     expect(calls('sample.ts', sample).map((c) => [c.type, c.expression, c.namesEntity])).toEqual([
       ['finance.period', 'finance.period', true],
       [null, 't.kind', false],
+      // A legalEntityId in the summary, or one that is undefined, names no entity.
+      ['finance.period', 'finance.period', false],
+      ['finance.period', 'finance.period', false],
     ]);
-    expect(aliases(sample)).toHaveLength(2);
+    expect(aliases(sample)).toHaveLength(4);
     expect(aliased, 'call ctx.activity(...) on the context itself, so this guard sees the call').toEqual([]);
   });
 
