@@ -998,8 +998,17 @@ function InboxDetail({ slug, id, split }: { slug: string; id: string; split: boo
           )}
 
           {payload && (
-            <Card ref={linesRef} className="block overflow-x-auto p-4">
-              <p className="text-sm font-medium text-muted-foreground">{t('lines')}</p>
+            // A phone scrolls the lines sideways: the region takes the focus, so the keyboard scrolls it too (#1572).
+            <Card
+              ref={linesRef}
+              tabIndex={0}
+              role="region"
+              aria-labelledby="invoice-lines-title"
+              className="block overflow-x-auto p-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <p id="invoice-lines-title" className="text-sm font-medium text-muted-foreground">
+                {t('lines')}
+              </p>
               <table className="mt-3 w-full min-w-[560px] text-sm">
                 <thead className="text-left text-xs text-subtle-foreground">
                   <tr>

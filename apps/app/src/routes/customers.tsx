@@ -154,7 +154,8 @@ export function CustomersPage() {
           )}
           <p className="mt-3 text-xs text-subtle-foreground">
             {t('receivableNote')}{' '}
-            <Link to="/o/$slug/ledger" params={{ slug }} className="text-link hover:underline">
+            {/* Underlined: in a sentence a link is told apart by more than its color (WCAG 1.4.1, #1572). */}
+            <Link to="/o/$slug/ledger" params={{ slug }} className="text-link underline">
               {t('toLedger')}
             </Link>
           </p>
