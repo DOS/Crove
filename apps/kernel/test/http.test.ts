@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -235,6 +235,43 @@ describe('configuration guards', () => {
     };
     expect(await read({})).toBe('Ludy');
     expect(await read({ BRAND_NAME: 'Tên Mới' })).toBe('Tên Mới');
+  });
+
+  // #1691: the installed app is named after the configured brand; every other field of the app's manifest stays.
+  it('serves the install manifest under BRAND_NAME, "Ludy" when unset, and the other assets as files', async () => {
+    const source = readFileSync(new URL('../../app/public/assets/manifest.webmanifest', import.meta.url), 'utf8');
+    const dist = await mkdtemp(join(tmpdir(), 'crove-manifest-'));
+    try {
+      await mkdir(join(dist, 'assets'));
+      writeFileSync(join(dist, 'index.html'), '<!doctype html><title>Ludy</title>');
+      writeFileSync(join(dist, 'assets', 'manifest.webmanifest'), source);
+      writeFileSync(join(dist, 'assets', 'app.js'), 'export {};\n');
+      const serve = (env: Record<string, string>) =>
+        createHttpApp({
+          config: loadConfig({ ...base, WEB_DIST: dist, ...env }),
+          runtime: { installed: () => true, modules: () => ['kernel'] } as unknown as Runtime,
+          store: {} as BlobStore,
+          authenticate: async () => {
+            throw new Error('not used');
+          },
+          pool: {} as pg.Pool,
+          aiEnabled: false,
+        });
+      const { name: _name, short_name: _short, ...rest } = JSON.parse(source) as Record<string, unknown>;
+      for (const [env, brand] of [[{}, 'Ludy'], [{ BRAND_NAME: "Sổ Xanh & Co's" }, "Sổ Xanh & Co's"]] as const) {
+        const response = await serve(env).request('/assets/manifest.webmanifest');
+        expect(response.status).toBe(200);
+        expect(response.headers.get('content-type')).toBe('application/manifest+json');
+        expect(response.headers.get('cache-control')).toBe('no-cache');
+        expect(await response.json()).toEqual({ ...rest, name: brand, short_name: brand });
+      }
+      // The other static files are still the files themselves.
+      const script = await serve({ BRAND_NAME: 'Tên Mới' }).request('/assets/app.js');
+      expect(script.status).toBe(200);
+      expect(await script.text()).toBe('export {};\n');
+    } finally {
+      await rm(dist, { recursive: true, force: true });
+    }
   });
 });
 
