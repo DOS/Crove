@@ -1,8 +1,8 @@
 // Every table of a crove_* schema with an org_id column is deleted by crove_kernel.org_purge or kept on purpose (#1217).
 // A migration that adds a table restates org_purge with the table added to its lists; two such migrations written from
 // the same base each restate that base, and the one merged second drops the other's table without a conflict, so the
-// org's rows there would survive the purge. org-purge-coverage.db.test.ts reads the catalog of a migrated database and
-// fails on such a table; org-purge-coverage.test.ts checks the reading and the messages on planted catalogs.
+// org's rows there would survive the purge. org-purge.db.test.ts reads the catalog of its migrated database and fails
+// on such a table; org-purge-coverage.test.ts checks the reading and the messages on planted catalogs.
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type pg from 'pg';
@@ -53,42 +53,51 @@ export type PurgeCatalog = {
   tables: readonly string[];
   // Foreign keys with ON DELETE CASCADE whose columns are all NOT NULL: every child row goes with its parent.
   cascades: ReadonlyArray<{ child: string; parent: string }>;
-  // pg_get_functiondef of crove_kernel.org_purge(integer).
+  // The body of crove_kernel.org_purge(integer) (pg_proc.prosrc).
   purgeSource: string;
 };
 
 const TABLE = /crove_[a-z0-9_]+\.[a-z0-9_]+/;
 
-// The tables org_purge deletes rows of: the targets of its DELETE statements and the lists its FOREACH loop deletes
-// whole. Throws when the loop or one of its lists cannot be read, rather than finding fewer tables.
-export function purgedTables(source: string): Set<string> {
-  const code = source.replace(/--[^\n]*/g, '');
-  const out = new Set<string>();
-  for (const m of code.matchAll(new RegExp(`DELETE FROM\\s+(${TABLE.source})`, 'g'))) out.add(m[1] as string);
+// The tables org_purge deletes rows of. Whole: the lists its FOREACH loop deletes, and a DELETE whose only condition is
+// the org. Partial: a DELETE with any other condition (the rows pinned rows keep, `id <> ALL (v_keep_...)`). Throws when
+// the loop or one of its lists cannot be read, rather than finding fewer tables.
+export function purgedTables(source: string): { whole: Set<string>; partial: Set<string> } {
+  const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/--[^\n]*/g, '');
+  const whole = new Set<string>();
+  const partial = new Set<string>();
+  const statement = new RegExp(`DELETE FROM\\s+(${TABLE.source})(?:\\s+(?:AS\\s+)?(?!WHERE\\b)\\w+)?\\s+WHERE\\s+([\\s\\S]*?)(?:;|\\bRETURNING\\b)`, 'gi');
+  for (const m of code.matchAll(statement)) {
+    const onlyOrg = /^(?:\w+\.)?org_id\s*=\s*\w+$/.test((m[2] as string).trim());
+    (onlyOrg ? whole : partial).add(m[1] as string);
+  }
   const loop = /FOREACH\s+\w+\s+IN\s+ARRAY\s+([\w\s|]+?)\s+LOOP/.exec(code);
   if (!loop) throw new Error('org_purge: no FOREACH ... IN ARRAY ... LOOP over its table lists; update purgedTables');
   for (const name of (loop[1] as string).split('||').map((s) => s.trim())) {
     const list = new RegExp(`\\b${name}\\s+text\\[\\]\\s*:=\\s*ARRAY\\[([\\s\\S]*?)\\];`).exec(code);
     if (!list) throw new Error(`org_purge: the list ${name} is not a text[] := ARRAY[...] it declares; update purgedTables`);
-    for (const m of (list[1] as string).matchAll(new RegExp(`'(${TABLE.source})'`, 'g'))) out.add(m[1] as string);
+    for (const m of (list[1] as string).matchAll(new RegExp(`'(${TABLE.source})'`, 'g'))) whole.add(m[1] as string);
   }
-  return out;
+  for (const table of whole) partial.delete(table);
+  return { whole, partial };
 }
 
 export type Migrations = { createdIn: (table: string) => string | undefined; newestPurge: string };
 
 export function purgeCoverageProblems(catalog: PurgeCatalog, kept: Readonly<Record<string, string>>, migrations: Migrations): string[] {
-  const purged = purgedTables(catalog.purgeSource);
-  // Children that go with a purged parent, transitively.
+  const { whole, partial } = purgedTables(catalog.purgeSource);
+  // Children that go with a parent deleted whole, transitively. Not with a parent deleted in part: the children of its
+  // kept rows stay, so a child the purge stopped naming would pass unnoticed.
   for (let grown = true; grown; ) {
     grown = false;
     for (const { child, parent } of catalog.cascades) {
-      if (purged.has(parent) && !purged.has(child)) {
-        purged.add(child);
+      if (whole.has(parent) && !whole.has(child)) {
+        whole.add(child);
         grown = true;
       }
     }
   }
+  const purged = new Set([...whole, ...partial]);
   const tables = new Set(catalog.tables);
   const problems: string[] = [];
   for (const table of [...tables].sort()) {
@@ -126,20 +135,20 @@ export async function readPurgeCatalog(client: pg.Client): Promise<PurgeCatalog>
         SELECT 1 FROM pg_catalog.unnest(k.conkey) col
         JOIN pg_catalog.pg_attribute a ON a.attrelid = k.conrelid AND a.attnum = col
         WHERE NOT a.attnotnull)`);
-  const source = await client.query<{ def: string }>(`SELECT pg_catalog.pg_get_functiondef('crove_kernel.org_purge(integer)'::regprocedure) AS def`);
-  return { tables: tables.rows.map((r) => r.name), cascades: cascades.rows, purgeSource: (source.rows[0] as { def: string }).def };
+  const source = await client.query<{ src: string }>(`SELECT p.prosrc AS src FROM pg_catalog.pg_proc p WHERE p.oid = 'crove_kernel.org_purge(integer)'::regprocedure`);
+  return { tables: tables.rows.map((r) => r.name), cascades: cascades.rows, purgeSource: (source.rows[0] as { src: string }).src };
 }
 
 // Where each table was created and which migration restates org_purge last, from the migration files.
 export function readMigrations(dir: string = MIGRATIONS_DIR): Migrations {
   const files = readdirSync(dir).filter((f) => f.endsWith('.sql')).sort();
   const text = new Map(files.map((f) => [f, readFileSync(`${dir}/${f}`, 'utf8')]));
-  const newestPurge = files.filter((f) => /FUNCTION crove_kernel\.org_purge\(/.test(text.get(f) as string)).at(-1);
+  const newestPurge = files.filter((f) => /CREATE OR REPLACE FUNCTION crove_kernel\.org_purge\(/.test(text.get(f) as string)).at(-1);
   if (!newestPurge) throw new Error('no migration defines crove_kernel.org_purge');
   return {
     newestPurge,
     createdIn: (table) => {
-      const pattern = new RegExp(`CREATE TABLE(?: IF NOT EXISTS)?\\s+${table.replace('.', '\\.')}\\s*\\(`, 'i');
+      const pattern = new RegExp(`CREATE (?:UNLOGGED )?TABLE(?: IF NOT EXISTS)?\\s+${table.replace('.', '\\.')}\\b`, 'i');
       return files.find((f) => pattern.test(text.get(f) as string));
     },
   };

@@ -1,4 +1,4 @@
-// The reading behind org-purge-coverage.db.test.ts (#1217), without a database: what org_purge deletes, read from the
+// The reading behind the coverage check of org-purge.db.test.ts (#1217), without a database: what org_purge deletes, read from the
 // newest migration that defines it, and the messages on planted catalogs.
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
@@ -11,7 +11,8 @@ const newestSource = (() => {
   return text.slice(start, text.indexOf('END $$;', start) + 'END $$;'.length);
 })();
 
-const source = (lists: string[], deletes: string[] = []) =>
+// A purge whose loop deletes these lists, which deletes these tables whole and these but the rows pinned rows keep.
+const source = (lists: string[], deletes: string[] = [], partial: string[] = []) =>
   [
     'DECLARE',
     ...lists.map((l, i) => `  v_l${i} text[] := ARRAY[${l}];`),
@@ -20,21 +21,29 @@ const source = (lists: string[], deletes: string[] = []) =>
     "    EXECUTE pg_catalog.format('DELETE FROM %s WHERE org_id = $1', v_t::regclass) USING v_org;",
     '  END LOOP;',
     ...deletes.map((t) => `  DELETE FROM ${t} x WHERE x.org_id = v_org;`),
+    ...partial.map((t) => `  DELETE FROM ${t} x WHERE x.org_id = v_org AND x.id <> ALL (v_keep);`),
     'END',
   ].join('\n');
 
 describe('the tables crove_kernel.org_purge deletes (#1217)', () => {
-  it('reads the lists and the DELETE statements of the newest definition', () => {
-    const purged = purgedTables(newestSource);
-    for (const table of ['crove_notes.link', 'crove_kernel.inbox_item', 'crove_crm.event_type', 'crove_social.media_archive', 'crove_kernel.proposal', 'crove_social.post', 'crove_kernel.tenant_member', 'crove_kernel.party', 'crove_kernel.file']) {
-      expect(purged.has(table), table).toBe(true);
+  it('reads the lists and the DELETE statements of the newest definition, whole or in part', () => {
+    const { whole, partial } = purgedTables(newestSource);
+    for (const table of ['crove_notes.link', 'crove_kernel.inbox_item', 'crove_crm.event_type', 'crove_social.media_archive', 'crove_kernel.tenant_member']) {
+      expect(whole.has(table), table).toBe(true);
+    }
+    // What pinned rows keep: kept proposals, approved posts, the books' parties and files.
+    for (const table of ['crove_kernel.proposal', 'crove_social.post', 'crove_social.post_variant', 'crove_kernel.task', 'crove_kernel.party', 'crove_kernel.file']) {
+      expect(partial.has(table), table).toBe(true);
     }
     // Named only as counts of pinned rows, or updated: not deleted.
-    for (const table of ['crove_kernel.task_comment', 'crove_social.post_approval', 'crove_kernel.tenant']) expect(purged.has(table), table).toBe(false);
+    for (const table of ['crove_kernel.task_comment', 'crove_social.post_approval', 'crove_kernel.tenant']) {
+      expect(whole.has(table) || partial.has(table), table).toBe(false);
+    }
   });
 
   it('ignores tables named in comments', () => {
-    expect(purgedTables(`${source(["'crove_a.x'"])}\n-- DELETE FROM crove_a.y\n  -- 'crove_a.z'`)).toEqual(new Set(['crove_a.x']));
+    const { whole, partial } = purgedTables(`${source(["'crove_a.x'"])}\n-- DELETE FROM crove_a.y y WHERE y.org_id = v_org;\n  -- 'crove_a.z'\n/* DELETE FROM crove_a.w w WHERE w.org_id = v_org; */`);
+    expect([...whole, ...partial]).toEqual(['crove_a.x']);
   });
 
   it('fails rather than reading fewer tables when the loop or a list changes shape', () => {
@@ -47,13 +56,13 @@ describe('purge coverage problems (#1217)', () => {
   const catalog = (tables: string[], over: Partial<PurgeCatalog> = {}): PurgeCatalog => ({
     tables,
     cascades: [],
-    purgeSource: source(["'crove_a.deleted'"], ['crove_a.partial']),
+    purgeSource: source(["'crove_a.deleted'"], ['crove_a.whole'], ['crove_a.partial']),
     ...over,
   });
   const where: typeof migrations = { newestPurge: '20990101000000_crove_kernel_org_purge_last.sql', createdIn: (t) => (t === 'crove_a.missing' ? '20990101010000_crove_a_missing.sql' : undefined) };
 
   it('accepts tables the purge deletes, whole or in part, and kept tables', () => {
-    expect(purgeCoverageProblems(catalog(['crove_a.deleted', 'crove_a.partial', 'crove_a.kept']), { 'crove_a.kept': 'why' }, where)).toEqual([]);
+    expect(purgeCoverageProblems(catalog(['crove_a.deleted', 'crove_a.whole', 'crove_a.partial', 'crove_a.kept']), { 'crove_a.kept': 'why' }, where)).toEqual([]);
   });
 
   it('names a table neither deleted nor kept, the migration that made it and the one to restate', () => {
@@ -68,10 +77,21 @@ describe('purge coverage problems (#1217)', () => {
     const cascades = [
       { child: 'crove_a.child', parent: 'crove_a.deleted' },
       { child: 'crove_a.grandchild', parent: 'crove_a.child' },
+      { child: 'crove_a.of_whole', parent: 'crove_a.whole' },
       { child: 'crove_a.orphan', parent: 'crove_a.kept' },
     ];
-    expect(purgeCoverageProblems(catalog(['crove_a.deleted', 'crove_a.child', 'crove_a.grandchild', 'crove_a.orphan', 'crove_a.kept'], { cascades }), { 'crove_a.kept': 'why' }, where)).toEqual([
+    const tables = ['crove_a.deleted', 'crove_a.child', 'crove_a.grandchild', 'crove_a.whole', 'crove_a.of_whole', 'crove_a.orphan', 'crove_a.kept'];
+    expect(purgeCoverageProblems(catalog(tables, { cascades }), { 'crove_a.kept': 'why' }, where)).toEqual([
       expect.stringMatching(/^crove_a\.orphan has org_id, but crove_kernel\.org_purge does not delete it/),
+    ]);
+  });
+
+  it('does not count the children of a table deleted in part: those of its kept rows stay', () => {
+    // As crove_social.post_comment under crove_social.post, whose approved posts stay: a purge that stopped naming the
+    // comments would leave every comment of a kept post.
+    const cascades = [{ child: 'crove_a.comment', parent: 'crove_a.partial' }];
+    expect(purgeCoverageProblems(catalog(['crove_a.partial', 'crove_a.comment'], { cascades }), {}, where)).toEqual([
+      expect.stringMatching(/^crove_a\.comment has org_id, but crove_kernel\.org_purge does not delete it/),
     ]);
   });
 
