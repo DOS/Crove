@@ -67,7 +67,7 @@ const POLICIES: Record<string, CommandPolicy> = {
 const NOBODY: CommandPolicy = { roles: [], permission: null, fourEyes: true };
 
 // The policy table as the database's approval gate must hold it too (crove_kernel.approval_command_policy, #1793):
-// apps/kernel/test/proposal-approve-gate.db.test.ts compares the two.
+// apps/kernel/test/invariant/proposal-approve-gate.db.test.ts compares the two.
 export function approvalPolicies(): Array<{ command: string; roles: readonly string[]; permission: string | null; fourEyes: boolean; ledger: boolean }> {
   return Object.entries(POLICIES).map(([command, p]) => ({ command, roles: p.roles, permission: p.permission, fourEyes: p.fourEyes, ledger: p === LEDGER }));
 }

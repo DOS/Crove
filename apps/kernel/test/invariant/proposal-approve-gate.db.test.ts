@@ -68,6 +68,7 @@ suite('the approval gate in the database (#1793)', () => {
   const asUser = (userId: string) => ({ type: 'user' as const, userId, aal: 'aal1' as const });
   const asMfa = (userId: string) => ({ type: 'user' as const, userId, aal: 'aal2' as const, sessionId: randomUUID(), mfaAt: Math.floor(Date.now() / 1000) });
   const REFUSED = (message: string) => ({ ok: false, code: '42501', message });
+  const user = (id: string) => ({ type: 'user' as const, id });
 
   async function admin<T>(fn: (c: pg.Client) => Promise<T>): Promise<T> {
     const c = new pg.Client({ connectionString: adminUrl });
@@ -207,9 +208,22 @@ suite('the approval gate in the database (#1793)', () => {
 
   it('decides every case exactly as decideApproval does (P09 presets, P10, P12, a removed member, not pending)', { timeout: 300_000 }, async () => {
     const db = createDb(pools[0] as pg.Pool);
-    const user = (id: string) => ({ type: 'user' as const, id });
     const snapshots = [[owner, second, chief, scopedChief, viewer, member], [owner], [owner, removed], [chief], [second, chief]];
-    const authorSets: unknown[][] = [[], [user(owner)], [user(owner), user(second), user(chief)], [user(second)], [{ type: 'agent', id: randomUUID(), run: randomUUID() }], [{ type: 'user' }]];
+    const authorSets: unknown[][] = [
+      [],
+      [user(owner)],
+      [user(owner), user(second), user(chief)],
+      [user(second)],
+      [{ type: 'agent', id: randomUUID(), run: randomUUID() }],
+      // Malformed entries: a missing id, component or run, an id zod's z.uuid() refuses (not RFC 9562), an id in capitals.
+      [{ type: 'user' }],
+      [{ type: 'system' }],
+      [{ type: 'agent', id: randomUUID() }],
+      [user(owner), user('00000000-0000-0000-0000-000000000001')],
+      [user(owner), { type: 'user', id: randomUUID().toUpperCase() }],
+      [{ type: 'user', id: owner.toUpperCase() }],
+      [user(owner), { type: 'system', component: 'finance.extract' }],
+    ];
     const actors = [owner, second, member, viewer, chief, scopedChief];
     const cases: Array<{ preset: string; command: string; status: string; snapshot: string[]; authors: unknown[] }> = [];
     for (const preset of ['founder', 'accountant']) {
@@ -265,12 +279,40 @@ suite('the approval gate in the database (#1793)', () => {
     const agent: AgentActor = { type: 'agent', agentId, runId: started.runId as string };
     const inAgent = await inContext(workerUrl, (c) => c.query('SELECT crove_kernel.enter_agent_context($1::uuid, $2::uuid, $3::uuid)', [orgId, agent.agentId, agent.runId]), forge);
     expect(inAgent).toMatchObject({ ok: false, code: '42501', message: 'AGENT_FORBIDDEN' });
+    // The worker's login may not call the gate at all (only the API's may).
     const viaGate = await inContext(workerUrl, (c) => c.query('SELECT crove_kernel.enter_agent_context($1::uuid, $2::uuid, $3::uuid)', [orgId, agent.agentId, agent.runId]), gate(id));
-    expect(viaGate).toMatchObject(REFUSED('NOT_ELIGIBLE'));
+    expect(viaGate).toMatchObject({ ok: false, code: '42501', message: expect.stringMatching(/permission denied for function proposal_approve/) });
     // The worker's system context, which executes an agent's approval, still moves it itself.
     const system = await inContext(workerUrl, (c) => c.query('SELECT crove_kernel.enter_system_context($1::uuid)', [orgId]), forge);
     expect(system).toMatchObject({ ok: true });
     expect(await statusOf(id)).toBe('pending');
+  });
+
+  it('keeps what P10 and P12 stand on: no rewritten authors, snapshot or command, no forged pending insert', async () => {
+    const authored = await proposal([owner, second], [owner]);
+    for (const [what, text, values] of [
+      ['authors cleared', `UPDATE crove_kernel.proposal SET authors = '[]' WHERE id = $1`, [authored]],
+      ['snapshot narrowed', 'UPDATE crove_kernel.proposal SET eligible_approvers = ARRAY[$2::uuid] WHERE id = $1', [authored, owner]],
+      ['command changed', `UPDATE crove_kernel.proposal SET command = 'finance.journal.reverse' WHERE id = $1`, [authored]],
+    ] as const) {
+      await expect(asMember(owner, (c) => c.query(text, [...values])), what).resolves.toMatchObject({ ok: false, code: '23514', message: 'PROPOSAL_STATUS_TRANSITION' });
+    }
+    // Authors may grow, as an edit adds its editor.
+    await expect(
+      asMember(second, (c) => c.query(`UPDATE crove_kernel.proposal SET authors = authors || jsonb_build_array(jsonb_build_object('type', 'user', 'id', $2::text)) WHERE id = $1`, [authored, second])),
+    ).resolves.toMatchObject({ ok: true });
+    // A user's pending insert names itself among the authors and the snapshot of now.
+    const eligibleNow = [owner, second, chief].sort();
+    const insert = (snapshot: string[], authors: unknown[]) => (c: pg.Client) =>
+      c.query(
+        `INSERT INTO crove_kernel.proposal (org_id, kind, command, title, payload, eligible_approvers, authors)
+         VALUES ($1, 't1793', $2, 'T1793', '{}', $3::uuid[], $4)`,
+        [orgId, LEDGER_COMMAND, snapshot, JSON.stringify(authors)],
+      );
+    await expect(asMember(owner, insert([owner], [user(owner)]))).resolves.toMatchObject({ ok: false, code: '23514', message: 'PROPOSAL_STATUS_TRANSITION' });
+    await expect(asMember(owner, insert(eligibleNow, []))).resolves.toMatchObject({ ok: false, code: '23514', message: 'PROPOSAL_STATUS_TRANSITION' });
+    await expect(asMember(owner, insert(eligibleNow, [user(second)]))).resolves.toMatchObject({ ok: false, code: '23514', message: 'PROPOSAL_STATUS_TRANSITION' });
+    await expect(asMember(member, insert(eligibleNow, [user(member)]))).resolves.toMatchObject({ ok: true });
   });
 
   it('decides P12, P10 and P09 in the gate itself, whoever calls it', async () => {

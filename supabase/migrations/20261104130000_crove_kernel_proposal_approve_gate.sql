@@ -25,11 +25,15 @@
 --   Refusals are 42501 with the code as the message. P11 (a fresh second factor) stays the runtime's: the database
 --   never sees the token.
 -- crove_kernel.approval_command_policy(command)   who may approve a proposal command: the approval.ts POLICIES table,
---   kept equal by apps/kernel/test/proposal-approve-gate.db.test.ts. Unknown commands: nobody.
+--   kept equal by apps/kernel/test/invariant/proposal-approve-gate.db.test.ts. Unknown commands: nobody.
 -- proposal_status_guard   pending -> approved by a plain update only in the system context (the worker executing an
 --   agent's approval, decided by decideAgentApproval); agent contexts write no proposal at all (agent_write_guard).
---   Copied from 20261104070000_crove_kernel_proposal_status_guard.sql (the newest definition) with only that rule
---   changed.
+--   It also keeps what P10 and P12 stand on, so the gate cannot be fed forged inputs by the same session: outside the
+--   system context a proposal's command and snapshot never change and its authors only grow (an edit adds its editor),
+--   and a user's pending insert (kernel.proposal.request, resubmit) must carry the snapshot of now
+--   (crove_kernel.approval_eligible_now, the rule of approval.ts eligibleApprovers) and name its writer among the
+--   authors. Copied from 20261104070000_crove_kernel_proposal_status_guard.sql (the newest definition) with those rules
+--   added.
 SET LOCAL lock_timeout = '2s';
 
 CREATE OR REPLACE FUNCTION crove_kernel.approval_command_policy(p_command text, OUT roles text[], OUT permission text, OUT four_eyes boolean, OUT ledger boolean)
@@ -61,7 +65,9 @@ DECLARE
   v_preset text;
   v_version integer;
   v_ledger_only boolean;
-  v_authors uuid[];
+  -- The user authors' ids as written, compared as text the way approval.ts compares them (an id in capitals is not
+  -- its lower-case user).
+  v_authors text[];
   v_eligible uuid[];
   v_role text;
 BEGIN
@@ -82,11 +88,12 @@ BEGIN
      OR pg_catalog.jsonb_typeof(p_authors) <> 'array'
      OR EXISTS (
        SELECT 1 FROM pg_catalog.jsonb_array_elements(p_authors) a
-       WHERE NOT (pg_catalog.jsonb_typeof(a) = 'object' AND (
-         (a ->> 'type' = 'user' AND a ->> 'id' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+       -- IS NOT TRUE: a missing field makes the test NULL, which counts as malformed (zod's z.uuid() pattern, case as it).
+       WHERE (pg_catalog.jsonb_typeof(a) = 'object' AND (
+         (a ->> 'type' = 'user' AND pg_catalog.jsonb_typeof(a -> 'id') = 'string' AND a ->> 'id' ~ '^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$')
          OR (a ->> 'type' = 'system' AND pg_catalog.jsonb_typeof(a -> 'component') = 'string')
-         OR (a ->> 'type' = 'agent' AND a ->> 'id' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-             AND a ->> 'run' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')))) THEN
+         OR (a ->> 'type' = 'agent' AND pg_catalog.jsonb_typeof(a -> 'id') = 'string' AND a ->> 'id' ~ '^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$'
+             AND pg_catalog.jsonb_typeof(a -> 'run') = 'string' AND a ->> 'run' ~ '^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$'))) IS NOT TRUE) THEN
     RETURN pg_catalog.jsonb_build_object('reason', 'not_eligible', 'eligibleCount', 0, 'selfApproved', false, 'fourEyes', 'pass', 'preset', v_preset, 'version', v_version);
   END IF;
   -- The preset in force now (P09): a preset that reserves the ledger to the chief accountant leaves only the permission.
@@ -112,8 +119,8 @@ BEGIN
     RETURN pg_catalog.jsonb_build_object('reason', 'not_eligible', 'eligibleCount', pg_catalog.cardinality(v_eligible), 'selfApproved', false, 'fourEyes', 'pass', 'preset', v_preset, 'version', v_version);
   END IF;
   -- P10 (and P09 with it).
-  v_authors := ARRAY(SELECT (a ->> 'id')::uuid FROM pg_catalog.jsonb_array_elements(p_authors) a WHERE a ->> 'type' = 'user');
-  IF NOT (p_user = ANY (v_authors)) THEN
+  v_authors := ARRAY(SELECT a ->> 'id' FROM pg_catalog.jsonb_array_elements(p_authors) a WHERE a ->> 'type' = 'user');
+  IF NOT (p_user::text = ANY (v_authors)) THEN
     RETURN pg_catalog.jsonb_build_object('reason', 'ok', 'eligibleCount', pg_catalog.cardinality(v_eligible), 'selfApproved', false, 'fourEyes', 'pass', 'preset', v_preset, 'version', v_version);
   END IF;
   IF v_policy.ledger AND v_ledger_only THEN
@@ -123,12 +130,44 @@ BEGIN
     RETURN pg_catalog.jsonb_build_object('reason', 'ok', 'eligibleCount', pg_catalog.cardinality(v_eligible), 'selfApproved', true, 'fourEyes', 'self_approved', 'preset', v_preset, 'version', v_version);
   END IF;
   SELECT m.role INTO v_role FROM crove_kernel.tenant_member m WHERE m.org_id = p_org AND m.user_id = p_user;
-  IF v_role = 'owner' AND v_eligible <@ v_authors THEN
+  IF v_role = 'owner' AND ARRAY(SELECT e::text FROM pg_catalog.unnest(v_eligible) e) <@ v_authors THEN
     RETURN pg_catalog.jsonb_build_object('reason', 'ok', 'eligibleCount', pg_catalog.cardinality(v_eligible), 'selfApproved', true, 'fourEyes', 'owner_override', 'preset', v_preset, 'version', v_version);
   END IF;
   RETURN pg_catalog.jsonb_build_object('reason', 'four_eyes', 'eligibleCount', pg_catalog.cardinality(v_eligible), 'selfApproved', false, 'fourEyes', 'pass', 'preset', v_preset, 'version', v_version);
 END $$;
 REVOKE ALL ON FUNCTION crove_kernel.proposal_approval_decide(uuid, text, text, uuid[], jsonb, uuid, boolean) FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant;
+
+-- Who may approve a proposal of p_command in p_org right now (approval.ts eligibleApprovers): members with an approving
+-- base role under the org's preset, and members (not viewers) holding the command's approval permission org-wide, in
+-- user_id order. A definer, for the org of the caller's sealed context only (another org answers nothing); EXECUTE for
+-- crove_tenant, whose members read memberships anyway, because proposal_status_guard runs as the writer.
+CREATE OR REPLACE FUNCTION crove_kernel.approval_eligible_now(p_org uuid, p_command text) RETURNS uuid[]
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
+DECLARE
+  v_policy record;
+  v_roles text[];
+  v_ledger_only boolean;
+BEGIN
+  IF p_org IS DISTINCT FROM crove_kernel.ctx_org_id() THEN
+    RETURN ARRAY[]::uuid[];
+  END IF;
+  SELECT ap.ledger_chief_accountant_only INTO v_ledger_only
+  FROM crove_kernel.tenant t JOIN crove_kernel.approval_preset ap ON ap.key = t.approval_preset
+  WHERE t.org_id = p_org;
+  v_ledger_only := coalesce(v_ledger_only, true);
+  SELECT * INTO v_policy FROM crove_kernel.approval_command_policy(p_command);
+  v_roles := CASE WHEN v_policy.ledger AND v_ledger_only THEN ARRAY[]::text[] ELSE v_policy.roles END;
+  RETURN ARRAY(
+    SELECT m.user_id FROM crove_kernel.tenant_member m
+    WHERE m.org_id = p_org
+      AND (m.role = ANY (v_roles)
+           OR (v_policy.permission IS NOT NULL AND m.role <> 'viewer' AND EXISTS (
+                 SELECT 1 FROM crove_kernel.role_assignment a JOIN crove_kernel.role_permission rp ON rp.role_key = a.role_key
+                 WHERE a.org_id = m.org_id AND a.user_id = m.user_id AND a.legal_entity_id IS NULL AND rp.permission = v_policy.permission)))
+    ORDER BY m.user_id);
+END $$;
+REVOKE ALL ON FUNCTION crove_kernel.approval_eligible_now(uuid, text) FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant;
+GRANT EXECUTE ON FUNCTION crove_kernel.approval_eligible_now(uuid, text) TO crove_tenant;
 
 CREATE OR REPLACE FUNCTION crove_kernel.proposal_approve(p_proposal_id uuid, p_revision integer, p_executed_command_id uuid)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
@@ -143,12 +182,13 @@ BEGIN
   IF crove_kernel.ctx_actor_type() IS DISTINCT FROM 'user' OR v_user IS NULL OR v_org IS NULL OR p_executed_command_id IS NULL THEN
     RAISE EXCEPTION 'NOT_ELIGIBLE' USING ERRCODE = '42501';
   END IF;
-  SELECT p.status, p.revision, p.command, p.eligible_approvers, p.authors, p.legal_entity_id INTO v_p
+  -- One of another org, none, or one of an entity outside the caller's scope: the same answer, and no lock on it.
+  SELECT p.status, p.revision, p.command, p.eligible_approvers, p.authors INTO v_p
   FROM crove_kernel.proposal p
   WHERE p.org_id = v_org AND p.id = p_proposal_id
+    AND coalesce('*' = ANY (v_scope) OR p.legal_entity_id::text = ANY (v_scope), false)
   FOR UPDATE;
-  -- One of another org, none, or one of an entity outside the caller's scope: the same answer.
-  IF NOT FOUND OR NOT ('*' = ANY (v_scope) OR v_p.legal_entity_id::text = ANY (v_scope)) THEN
+  IF NOT FOUND THEN
     RAISE EXCEPTION 'NOT_FOUND' USING ERRCODE = '42501';
   END IF;
   IF v_p.status <> 'pending' THEN
@@ -193,6 +233,16 @@ BEGIN
       RAISE EXCEPTION 'PROPOSAL_STATUS_TRANSITION' USING ERRCODE = '23514',
         DETAIL = pg_catalog.json_build_object('to', NEW.status)::text;
     END IF;
+    -- A user's pending proposal (kernel.proposal.request, resubmit) carries the snapshot of now and names its writer
+    -- among the authors (#1793), so the gate's P10 and P12 stand on what the database itself would have recorded.
+    IF NEW.status = 'pending' AND crove_kernel.ctx_actor_type() IS NOT DISTINCT FROM 'user'
+       AND (NOT coalesce(NEW.authors @> pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object('type', 'user', 'id', crove_kernel.ctx_user_id())), false)
+            OR NEW.eligible_approvers IS NULL
+            OR NOT (NEW.eligible_approvers <@ crove_kernel.approval_eligible_now(NEW.org_id, NEW.command)
+                    AND crove_kernel.approval_eligible_now(NEW.org_id, NEW.command) <@ NEW.eligible_approvers)) THEN
+      RAISE EXCEPTION 'PROPOSAL_STATUS_TRANSITION' USING ERRCODE = '23514',
+        DETAIL = pg_catalog.json_build_object('to', NEW.status, 'frozen', 'policy')::text;
+    END IF;
     RETURN NEW;
   END IF;
   IF TG_OP = 'DELETE' THEN
@@ -201,6 +251,15 @@ BEGIN
         DETAIL = pg_catalog.json_build_object('from', OLD.status, 'deleted', true)::text;
     END IF;
     RETURN OLD;
+  END IF;
+
+  -- What P10 and P12 stand on (#1793): outside the system context (the worker reads files and records agents'
+  -- proposals), a proposal's command and snapshot do not change and its authors only grow (an edit adds its editor).
+  IF crove_kernel.ctx_actor_type() IS DISTINCT FROM 'system'
+     AND ((NEW.command, NEW.eligible_approvers) IS DISTINCT FROM (OLD.command, OLD.eligible_approvers)
+          OR (OLD.authors IS NOT NULL AND NOT coalesce(NEW.authors @> OLD.authors, false))) THEN
+    RAISE EXCEPTION 'PROPOSAL_STATUS_TRANSITION' USING ERRCODE = '23514',
+      DETAIL = pg_catalog.json_build_object('from', OLD.status, 'to', NEW.status, 'frozen', 'policy')::text;
   END IF;
 
   IF NEW.id IS DISTINCT FROM OLD.id THEN
