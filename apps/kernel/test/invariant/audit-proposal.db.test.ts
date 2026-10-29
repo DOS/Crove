@@ -113,6 +113,41 @@ suite('audit rows naming a proposal on PostgreSQL (#1695)', () => {
       return {};
     },
   });
+  // A handler that writes detail.under_proposal itself through ctx.audit, which the runtime removes (#1870).
+  const forgeLink = defineCommand({
+    sideEffect: 'none',
+    name: 'kernel.test_forge_link',
+    input: z.object({ proposalId: z.uuid() }),
+    risk: 'R1',
+    access: ['owner'],
+    handler: async (ctx, input) => {
+      ctx.audit({ under_proposal: input.proposalId, kept: true });
+      return {};
+    },
+  });
+  // A command that always refuses, and one that tries it under a proposal and goes on: the refusal's row is the
+  // runtime's, and links the proposal in its detail (#1870).
+  const refuseNested = defineCommand({
+    sideEffect: 'none',
+    name: 'kernel.test_refuse_nested',
+    input: z.object({}),
+    risk: 'R1',
+    access: ['owner'],
+    handler: async () => {
+      throw new DomainError('TEST_REFUSED', 409, 'refused');
+    },
+  });
+  const tryUnder = defineCommand({
+    sideEffect: 'none',
+    name: 'kernel.test_try_under',
+    input: z.object({ proposalId: z.uuid() }),
+    risk: 'R1',
+    access: ['owner'],
+    handler: async (ctx, input) => {
+      const tried = await ctx.tryRun('kernel.test_refuse_nested', {}, { proposalId: input.proposalId, recover: () => true });
+      return { status: tried.status };
+    },
+  });
 
   async function withClient<T>(url: string, fn: (c: pg.Client) => Promise<T>): Promise<T> {
     const c = new pg.Client({ connectionString: url });
@@ -227,7 +262,7 @@ suite('audit rows naming a proposal on PostgreSQL (#1695)', () => {
       return {
         db: target,
         runtime: new Runtime(target, { manifests: TEST_MANIFESTS }).register({
-          commands: [...kernelCommands, ...financeCommands, approveNested],
+          commands: [...kernelCommands, ...financeCommands, approveNested, forgeLink, refuseNested, tryUnder],
           queries: [...kernelQueries({ inboundDomain: 'in.test' }), ...financeQueries],
         }),
       };
@@ -387,5 +422,35 @@ suite('audit rows naming a proposal on PostgreSQL (#1695)', () => {
       { command: OWN, outcome: 'ok', link: 'column' },
       { command: OTHER, outcome: 'ok', link: 'detail' },
     ]);
+  });
+
+  it("keeps the link the runtime's own: ctx.audit cannot set it, and a recovered refusal's row carries it in detail (#1870)", async () => {
+    const o = await org();
+    const pending = await proposal(o.orgId, o.owner, 'pending');
+    await runtime.execute('kernel.test_forge_link', { proposalId: pending }, { actor: asUser(o.owner), orgId: o.orgId });
+    await expect(runtime.execute('kernel.test_try_under', { proposalId: pending }, { actor: asUser(o.owner), orgId: o.orgId })).resolves.toEqual({ status: 'refused' });
+    const rows = await admin(
+      async (c) =>
+        (
+          await c.query<{ command: string; outcome: string; proposal_id: string | null; detail: Record<string, unknown> }>(
+            `SELECT command, outcome, proposal_id, detail FROM crove_kernel.audit_event
+             WHERE org_id = $1 AND command IN ('kernel.test_forge_link', 'kernel.test_refuse_nested', 'kernel.test_try_under') ORDER BY command`,
+            [o.orgId],
+          )
+        ).rows,
+    );
+    const [forged, refused, tried] = rows;
+    expect(rows.map((r) => [r.command, r.outcome, r.proposal_id])).toEqual([
+      ['kernel.test_forge_link', 'ok', null],
+      ['kernel.test_refuse_nested', 'failed', null],
+      ['kernel.test_try_under', 'ok', null],
+    ]);
+    // The handler's own fact stays; its link does not.
+    expect(forged?.detail).toMatchObject({ kept: true });
+    expect(forged?.detail).not.toHaveProperty('under_proposal');
+    // The refused nested run links the proposal it ran under, and names the command that tried it.
+    expect(refused?.detail).toMatchObject({ under_proposal: pending, parentCommand: 'kernel.test_try_under' });
+    expect(tried?.detail).not.toHaveProperty('under_proposal');
+    expect(await rowsNaming(pending)).toEqual([{ command: 'kernel.test_refuse_nested', outcome: 'failed', link: 'detail' }]);
   });
 });
