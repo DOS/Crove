@@ -17,7 +17,8 @@ export function ThemeToggle({ toLight, toDark }: { toLight: string; toDark: stri
   const wanted = useRef<Theme | null>(null);
 
   useEffect(() => {
-    setTheme(currentTheme());
+    // A click before this effect ran already chose the theme, which the page may not show yet (see flip).
+    setTheme(wanted.current ?? currentTheme());
   }, []);
 
   const flip = () => {

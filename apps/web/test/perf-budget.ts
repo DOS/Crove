@@ -33,7 +33,8 @@ export type Profile = {
 // Lighthouse's two profiles as DevTools throttling applies them: a mid-range phone on slow 4G with a 4x slower CPU,
 // and a desktop on a fast line. INP is held to the budget on both. The theme toggle restyles the whole page, which on
 // the phone landed near the 200 ms line from one run to the next; since #1668 the click answers with the button's own
-// icon and the page restyles in the task after that paint (theme-toggle.tsx).
+// icon and the page restyles in the task after that paint (theme-toggle.tsx). The restyle costs the same main-thread
+// time as before; INP no longer counts it, since it is not part of the click's answer.
 export const PROFILES: Profile[] = [
   {
     name: 'mobile',
