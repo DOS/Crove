@@ -18,6 +18,7 @@ import { archiveSource, expandArchive } from '../src/archive.ts';
 import { processInboundEmail } from '../src/inbound.ts';
 import { recordLastAttemptFailure, startWorker } from '../src/worker.ts';
 import { inProcessExtract } from './extract-service.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -118,7 +119,7 @@ suite('bulk intake of a ZIP archive on PostgreSQL (issue #314)', () => {
     };
     workerUrl = loginUrl('crove_worker', 'test-worker-pw');
     const register = (target: Db) =>
-      new Runtime(target).register({
+      new Runtime(target, { manifests: TEST_MANIFESTS }).register({
         commands: [...kernelCommands, ...financeCommands],
         queries: [...kernelQueries({ inboundDomain: 'in.test' }), ...financeQueries],
       });

@@ -13,6 +13,7 @@ import { createDb, createPool } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
+import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -133,7 +134,7 @@ suite('ledger checks independent of caller visibility (#76)', () => {
     appUrl = url.toString();
     pool = createPool({ connectionString: appUrl, max: 1 });
     const db = createDb(pool);
-    const runtime = new Runtime(db).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: 'in.test' }) });
+    const runtime = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: 'in.test' }) });
     users.a = await upsertIdentity(db, { issuer: 'test', subject: 'ledger-a', email: 'a@ledger.test', name: null });
     users.b = await upsertIdentity(db, { issuer: 'test', subject: 'ledger-b', email: 'b@ledger.test', name: null });
     orgA = (await createOrg(runtime, asUser(users.a), 'Ledger A')).orgId;

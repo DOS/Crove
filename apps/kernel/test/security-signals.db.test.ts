@@ -11,6 +11,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
 import { sweepSecuritySignals, type SecurityThresholds } from '../src/security-signals.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -83,7 +84,7 @@ suite('detective security alerts on PostgreSQL (#996)', () => {
     app.password = 'test-app-pw';
     pool = createPool({ connectionString: app.toString(), max: 2 });
     db = createDb(pool);
-    rt = new Runtime(db).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
+    rt = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
     const asWorker = new URL(adminUrl);
     asWorker.username = 'crove_worker';
     asWorker.password = 'test-worker-pw';

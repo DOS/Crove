@@ -310,22 +310,22 @@ describe('job egress (#1653)', () => {
       'modules/planted/src/a.ts': `
         const NAMES = { a: 'planted.emit' } as const;
         export const emitter = defineCommand({ name: 'planted.emit', risk: 'R2', sideEffect: 'external', handler: async (ctx) => ctx.emit('planted.fed', {}) });
-        export const outer = defineCommand({ name: 'planted.outer', risk: 'R1', handler: async (ctx) => ctx.run('planted.emit', {}) });
-        export const twice = defineCommand({ name: 'planted.twice', risk: 'R1', handler: async (ctx) => ctx.tryRun('planted.outer', {}, { recover: () => true }) });
-        export const table = defineCommand({ name: 'planted.table', risk: 'R1', handler: async (ctx, input) => ctx.run(NAMES[input.k], {}) });
+        export const outer = defineCommand({ sideEffect: 'none', name: 'planted.outer', risk: 'R1', handler: async (ctx) => ctx.run('planted.emit', {}) });
+        export const twice = defineCommand({ sideEffect: 'none', name: 'planted.twice', risk: 'R1', handler: async (ctx) => ctx.tryRun('planted.outer', {}, { recover: () => true }) });
+        export const table = defineCommand({ sideEffect: 'none', name: 'planted.table', risk: 'R1', handler: async (ctx, input) => ctx.run(NAMES[input.k], {}) });
         function nest(ctx, name) {
           return ctx.run(name, {});
         }
-        export const helper = defineCommand({ name: 'planted.helper', risk: 'R1', handler: async (ctx) => nest(ctx, 'planted.emit') });
+        export const helper = defineCommand({ sideEffect: 'none', name: 'planted.helper', risk: 'R1', handler: async (ctx) => nest(ctx, 'planted.emit') });
         function make(name, inner) {
-          return defineCommand({ name, risk: 'R1', handler: async (ctx) => ctx.run(inner, {}) });
+          return defineCommand({ sideEffect: 'none', name, risk: 'R1', handler: async (ctx) => ctx.run(inner, {}) });
         }
         export const made = make('planted.made', 'planted.emit');
-        export const quiet = defineCommand({ name: 'planted.quiet', risk: 'R1', handler: async (ctx) => ctx.run('planted.other', {}) });
-        export const dynamic = defineCommand({ name: 'planted.dynamic', risk: 'R1', handler: async (ctx, input) => ctx.run(input.name, {}) });
-        export const renamed = defineCommand({ name: 'planted.renamed', risk: 'R1', handler: async (c) => c.run('planted.emit', {}) });
-        export const arrow = defineCommand({ name: 'planted.arrow', risk: 'R1', handler: async (ctx) => { const go = (name) => ctx.tryRun(name, {}, {}); return go('planted.emit'); } });
-        export const pulled = defineCommand({ name: 'planted.pulled', risk: 'R1', handler: async (ctx) => { const { run } = ctx; return run('planted.emit', {}); } });
+        export const quiet = defineCommand({ sideEffect: 'none', name: 'planted.quiet', risk: 'R1', handler: async (ctx) => ctx.run('planted.other', {}) });
+        export const dynamic = defineCommand({ sideEffect: 'none', name: 'planted.dynamic', risk: 'R1', handler: async (ctx, input) => ctx.run(input.name, {}) });
+        export const renamed = defineCommand({ sideEffect: 'none', name: 'planted.renamed', risk: 'R1', handler: async (c) => c.run('planted.emit', {}) });
+        export const arrow = defineCommand({ sideEffect: 'none', name: 'planted.arrow', risk: 'R1', handler: async (ctx) => { const go = (name) => ctx.tryRun(name, {}, {}); return go('planted.emit'); } });
+        export const pulled = defineCommand({ sideEffect: 'none', name: 'planted.pulled', risk: 'R1', handler: async (ctx) => { const { run } = ctx; return run('planted.emit', {}); } });
         export function nestOut(ctx) {
           return ctx.run('planted.emit', {});
         }
@@ -335,13 +335,13 @@ describe('job egress (#1653)', () => {
         export { listed };`,
       'modules/planted/src/b.ts': `
         import { nestOut as n, listed as l } from './a.ts';
-        export const aliased = defineCommand({ name: 'planted.aliased', risk: 'R1', handler: async (ctx) => n(ctx) });
-        export const far = defineCommand({ name: 'planted.far', risk: 'R1', handler: async (ctx) => l(ctx, 'planted.other') });
+        export const aliased = defineCommand({ sideEffect: 'none', name: 'planted.aliased', risk: 'R1', handler: async (ctx) => n(ctx) });
+        export const far = defineCommand({ sideEffect: 'none', name: 'planted.far', risk: 'R1', handler: async (ctx) => l(ctx, 'planted.other') });
         function pass(ctx, input) {
           return ctx.run(input.name, {});
         }
-        export const one = defineCommand({ name: 'planted.one', risk: 'R1', handler: async (ctx, input) => pass(ctx, input) });
-        export const two = defineCommand({ name: 'planted.two', risk: 'R1', handler: async (ctx, input) => pass(ctx, input) });`,
+        export const one = defineCommand({ sideEffect: 'none', name: 'planted.one', risk: 'R1', handler: async (ctx, input) => pass(ctx, input) });
+        export const two = defineCommand({ sideEffect: 'none', name: 'planted.two', risk: 'R1', handler: async (ctx, input) => pass(ctx, input) });`,
     });
     const external = (name: string) => name === 'planted.emit';
     const fed = (event: string) => [`${event} -> planted-queue (provider:planted)`];

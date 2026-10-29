@@ -14,6 +14,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove
 import { Runtime } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
 import { notesCommands, notesQueries } from '@crove/mod-notes';
+import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -87,7 +88,7 @@ suite('to-do reminders on PostgreSQL (#1675, ADR-0037)', () => {
       const db = createDb(pool);
       return {
         db,
-        runtime: new Runtime(db).register({
+        runtime: new Runtime(db, { manifests: TEST_MANIFESTS }).register({
           commands: [...kernelCommands, ...financeCommands, ...notesCommands],
           queries: [...kernelQueries({ inboundDomain: 'in.test' }), ...financeQueries, ...notesQueries],
         }),

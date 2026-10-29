@@ -16,6 +16,7 @@ import { Runtime } from '@crove/kernel-runtime';
 import { crmCommands, crmQueries } from '@crove/mod-crm';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
 import { notesCommands, notesQueries } from '@crove/mod-notes';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -167,11 +168,11 @@ suite('notes linked to documents, vouchers and bookings on PostgreSQL (#1672)', 
     pool = createPool({ connectionString: url.toString(), max: 4 });
     db = createDb(pool);
     const kernel = { commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) };
-    app = new Runtime(db).register({
+    app = new Runtime(db, { manifests: TEST_MANIFESTS }).register({
       commands: [...kernel.commands, ...financeCommands, ...crmCommands, ...notesCommands],
       queries: [...kernel.queries, ...financeQueries, ...crmQueries, ...notesQueries],
     });
-    noFinance = new Runtime(db, { absentModules: ['finance'] }).register({
+    noFinance = new Runtime(db, { manifests: TEST_MANIFESTS, absentModules: ['finance'] }).register({
       commands: [...kernel.commands, ...crmCommands, ...notesCommands],
       queries: [...kernel.queries, ...crmQueries, ...notesQueries],
     });

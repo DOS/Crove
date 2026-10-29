@@ -23,6 +23,7 @@ import { createHttpApp } from '../src/http.ts';
 import { createPortalSync } from '../src/portal-sync.ts';
 import { createSessionStatusSource } from '../src/sessions.ts';
 import { createTaxPortalClient } from '../src/tax-portal.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -149,12 +150,12 @@ suite('assisted tax portal sync (#325)', () => {
     pool = createPool({ connectionString: appUrl, max: 4 });
     const db: Db = createDb(pool);
     const registry = { commands: [...kernelCommands, ...financeCommands], queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries] };
-    const runtime = new Runtime(db, { sessions: createSessionStatusSource('off'), stepUp: 'required' }).register(registry);
+    const runtime = new Runtime(db, { manifests: TEST_MANIFESTS, sessions: createSessionStatusSource('off'), stepUp: 'required' }).register(registry);
     const workerUrl = new URL(adminUrl);
     workerUrl.username = 'crove_worker';
     workerUrl.password = 'test-worker-pw';
     workerPool = createPool({ connectionString: workerUrl.toString(), max: 2 });
-    workerRuntime = new Runtime(createDb(workerPool)).register(registry);
+    workerRuntime = new Runtime(createDb(workerPool), { manifests: TEST_MANIFESTS }).register(registry);
     const config = loadConfig({ DATABASE_URL: appUrl, AUTH_JWT_SECRET: SECRET, AUTH_ISSUER: ISSUER, AUTH_SESSION_CHECK: 'off', MIGRATIONS_DIR: MIGRATIONS, WEB_DIST: '/nonexistent' });
     const client = createTaxPortalClient({ baseUrl: portal.url, gapMs: 0, sleep: async () => {} });
     // Generous in-process limits, so the database's own guard is what the wrong-password test meets.

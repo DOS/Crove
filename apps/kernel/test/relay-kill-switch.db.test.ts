@@ -11,6 +11,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
 import { outboxLagSeconds } from '../src/back-pressure.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -79,7 +80,7 @@ suite('a kill switch per relay type on PostgreSQL (#1696)', () => {
     await setRolePasswords(adminUrl, { crove_app: 'test-app-pw', crove_worker: 'test-worker-pw' });
     appPool = createPool({ connectionString: login('crove_app', 'test-app-pw'), max: 2 });
     const appDb = createDb(appPool);
-    const runtime = new Runtime(appDb).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
+    const runtime = new Runtime(appDb, { manifests: TEST_MANIFESTS }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
     const owner = await upsertIdentity(appDb, { issuer: 'relay-kill-test', subject: 'owner', email: 'owner@relay-kill.test', name: null });
     ({ orgId } = await createOrg(runtime, { type: 'user', userId: owner, aal: 'aal1' }, 'Relay kill switch test'));
     workerPool = createPool({ connectionString: login('crove_worker', 'test-worker-pw'), max: 2 });

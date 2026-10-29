@@ -8,6 +8,7 @@ import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime, toDomainError } from '@crove/kernel-runtime';
+import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -92,7 +93,7 @@ suite('context re-entry guard on PostgreSQL (§4.5 item 1, T10)', () => {
     // One connection, so every runtime transaction below reuses the same pooled backend.
     pool = createPool({ connectionString: appUrl, max: 1 });
     db = createDb(pool);
-    runtime = new Runtime(db).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: 'in.test' }) });
+    runtime = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: 'in.test' }) });
     users.owner = await upsertIdentity(db, { issuer: 'test', subject: 'ctx-owner', email: 'owner@ctx.test', name: null });
     users.other = await upsertIdentity(db, { issuer: 'test', subject: 'ctx-other', email: 'other@ctx.test', name: null });
     users.member = await upsertIdentity(db, { issuer: 'test', subject: 'ctx-member', email: 'member@ctx.test', name: null });

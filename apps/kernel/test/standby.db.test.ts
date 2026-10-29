@@ -11,6 +11,7 @@ import { createDb, createPool } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const STANDBY = process.env.CROVE_TEST_STANDBY_URL;
@@ -46,7 +47,7 @@ suite('request context on a hot standby (#105)', () => {
     const primaryPool = createPool({ connectionString: withDatabase(ADMIN as string, dbName, { user: 'crove_app', password: 'test-app-pw' }), max: 1 });
     try {
       const db = createDb(primaryPool);
-      const runtime = new Runtime(db).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: 'in.test' }) });
+      const runtime = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: 'in.test' }) });
       owner = await upsertIdentity(db, { issuer: 'test', subject: 'standby-owner', email: 'owner@standby.test', name: null });
       orgId = (await createOrg(runtime, asOwner(), 'Standby')).orgId;
     } finally {
@@ -116,7 +117,7 @@ suite('request context on a hot standby (#105)', () => {
   it('serves queries through the runtime and refuses commands, which write', async () => {
     const pool = createPool({ connectionString: standbyAppUrl, max: 1 });
     try {
-      const runtime = new Runtime(createDb(pool)).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: 'in.test' }) });
+      const runtime = new Runtime(createDb(pool), { manifests: TEST_MANIFESTS }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: 'in.test' }) });
       // No session checks here (no session source, no sessionId): a first-seen session record would be a write.
       await expect(runtime.query('kernel.org.get', {}, { actor: asOwner(), orgId })).resolves.toMatchObject({ orgId });
       const c = await pool.connect();

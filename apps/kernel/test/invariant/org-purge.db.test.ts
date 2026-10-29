@@ -16,6 +16,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime, type BlobStore } from '@crove/kernel-runtime';
 import { orgPurgeCommand, purgeOrg } from '../../src/org-purge.ts';
+import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -103,8 +104,8 @@ suite('org purge invariants on PostgreSQL (#1024)', () => {
     pool = createPool({ connectionString: appUrl, max: 2 });
     workerPool = createPool({ connectionString: workerUrl, max: 2 });
     const registry = { commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) };
-    runtime = new Runtime(createDb(pool)).register(registry);
-    worker = new Runtime(createDb(workerPool)).register(registry).register({ commands: [orgPurgeCommand({ store: noBlobs })] });
+    runtime = new Runtime(createDb(pool), { manifests: TEST_MANIFESTS }).register(registry);
+    worker = new Runtime(createDb(workerPool), { manifests: TEST_MANIFESTS }).register(registry).register({ commands: [orgPurgeCommand({ store: noBlobs })] });
   });
 
   afterAll(async () => {

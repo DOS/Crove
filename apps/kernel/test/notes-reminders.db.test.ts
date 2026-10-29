@@ -15,6 +15,7 @@ import { todoDueInstant, type NoteSummary, type NoteWritten, type Todo, type Tod
 import { Runtime } from '@crove/kernel-runtime';
 import { notesCommands, notesQueries } from '@crove/mod-notes';
 import { sweepNotesReminders } from '../src/notes-worker.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -97,7 +98,7 @@ suite('to-do reminders and search on PostgreSQL (#1675)', () => {
       const pool = createPool({ connectionString: url.toString(), max: 4 });
       pools.push(pool);
       const db = createDb(pool);
-      return { db, runtime: new Runtime(db).register({ commands: [...kernelCommands, ...notesCommands], queries: [...kernelQueries({ inboundDomain: null }), ...notesQueries] }) };
+      return { db, runtime: new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: [...kernelCommands, ...notesCommands], queries: [...kernelQueries({ inboundDomain: null }), ...notesQueries] }) };
     };
     app = runtimeFor('crove_app', 'test-app-pw').runtime;
     const w = runtimeFor('crove_worker', 'test-worker-pw');

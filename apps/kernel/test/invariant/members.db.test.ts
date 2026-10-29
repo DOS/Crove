@@ -18,6 +18,7 @@ import { createAuthenticator } from '../../src/auth.ts';
 import { loadConfig } from '../../src/config.ts';
 import { createHttpApp } from '../../src/http.ts';
 import { createSessionStatusSource } from '../../src/sessions.ts';
+import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -160,7 +161,7 @@ suite('member role changes and removal on PostgreSQL (issue #36)', () => {
       MIGRATIONS_DIR: MIGRATIONS,
       WEB_DIST: '/nonexistent',
     });
-    runtime = new Runtime(db, { sessions: createSessionStatusSource('off'), stepUp: 'required' }).register({
+    runtime = new Runtime(db, { manifests: TEST_MANIFESTS, sessions: createSessionStatusSource('off'), stepUp: 'required' }).register({
       commands: [...kernelCommands, ...financeCommands],
       queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries],
     });
@@ -432,9 +433,10 @@ suite('member role changes and removal on PostgreSQL (issue #36)', () => {
         .map(([id]) => id);
 
     // A command that writes tenant_member without the commands' locks and LAST_OWNER checks, as a future one might.
-    const unchecked = new Runtime(db, { sessions: createSessionStatusSource('off'), stepUp: 'required' }).register({
+    const unchecked = new Runtime(db, { manifests: TEST_MANIFESTS, sessions: createSessionStatusSource('off'), stepUp: 'required' }).register({
       commands: [
         defineCommand({
+          sideEffect: 'none',
           name: 'test.member.write_unchecked',
           input: z.object({ userId: z.uuid(), role: z.enum(['admin', 'member', 'viewer']).nullable() }),
           risk: 'R1',

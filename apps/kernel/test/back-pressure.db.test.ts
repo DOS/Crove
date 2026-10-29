@@ -12,6 +12,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove
 import { Runtime } from '@crove/kernel-runtime';
 import { PausableWork, checkBackPressure, outboxLagSeconds } from '../src/back-pressure.ts';
 import { JOB_SCHEMA, QUEUES } from '../src/jobs-schema.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -57,7 +58,7 @@ suite('back-pressure on PostgreSQL (#894)', () => {
     workerDb = createDb(workerPool);
     appPool = createPool({ connectionString: login('crove_app', 'test-app-pw'), max: 2 });
     const appDb = createDb(appPool);
-    const runtime = new Runtime(appDb).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
+    const runtime = new Runtime(appDb, { manifests: TEST_MANIFESTS }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
     const owner = await upsertIdentity(appDb, { issuer: 'backpressure-test', subject: 'owner', email: 'owner@backpressure.test', name: null });
     ({ orgId } = await createOrg(runtime, { type: 'user', userId: owner, aal: 'aal1' }, 'Back-pressure test'));
   });
