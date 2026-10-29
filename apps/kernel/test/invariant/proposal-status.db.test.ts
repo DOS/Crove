@@ -265,8 +265,11 @@ suite('proposal status transitions on PostgreSQL (#1707)', () => {
         await expect(as(writer, (c) => c.query(sql, [orgId, owner])), `${writer.name}: insert naming ${column}`).resolves.toMatchObject({ ok: false, ...REFUSED });
       }
       // A pending one, as the runtime writes it, and a decided one that names no command (it decides nothing).
+      // A pending one only from the system context: a user's names itself among the authors (#1793), this one does not.
       for (const status of ['pending', 'rejected'] as const) {
-        await expect(as(writer, (c) => c.query(insert(status, null), [orgId, owner])), `${writer.name}: insert ${status}`).resolves.toMatchObject({ ok: true });
+        const inserted = await as(writer, (c) => c.query(insert(status, null), [orgId, owner]));
+        if (writer.name !== 'system' && status === 'pending') expect(inserted, `${writer.name}: insert ${status}`).toMatchObject({ ok: false, ...REFUSED });
+        else expect(inserted, `${writer.name}: insert ${status}`).toMatchObject({ ok: true });
       }
       for (const status of STATUSES.filter((s) => s !== 'pending')) {
         const id = await proposal(status);

@@ -30,10 +30,12 @@
 --   agent's approval, decided by decideAgentApproval); agent contexts write no proposal at all (agent_write_guard).
 --   It also keeps what P10 and P12 stand on, so the gate cannot be fed forged inputs by the same session: outside the
 --   system context a proposal's command and snapshot never change and its authors only grow (an edit adds its editor),
---   and a user's pending insert (kernel.proposal.request, resubmit) must carry the snapshot of now
---   (crove_kernel.approval_eligible_now, the rule of approval.ts eligibleApprovers) and name its writer among the
---   authors. Copied from 20261104070000_crove_kernel_proposal_status_guard.sql (the newest definition) with those rules
---   added.
+--   and a user's pending insert (kernel.proposal.request, resubmit) gets the snapshot of now
+--   (crove_kernel.approval_eligible_now, the rule of approval.ts eligibleApprovers) and must name its writer among the
+--   authors, and no other author but those of the proposal it asks for again; its snapshot is set by the guard itself.
+--   A change of a proposal's content outside the system context is a new revision whose writer is among the authors,
+--   and the authors grow only by the writer. Copied from 20261104070000_crove_kernel_proposal_status_guard.sql (the
+--   newest definition) with those rules added.
 SET LOCAL lock_timeout = '2s';
 
 CREATE OR REPLACE FUNCTION crove_kernel.approval_command_policy(p_command text, OUT roles text[], OUT permission text, OUT four_eyes boolean, OUT ledger boolean)
@@ -233,15 +235,22 @@ BEGIN
       RAISE EXCEPTION 'PROPOSAL_STATUS_TRANSITION' USING ERRCODE = '23514',
         DETAIL = pg_catalog.json_build_object('to', NEW.status)::text;
     END IF;
-    -- A user's pending proposal (kernel.proposal.request, resubmit) carries the snapshot of now and names its writer
-    -- among the authors (#1793), so the gate's P10 and P12 stand on what the database itself would have recorded.
-    IF NEW.status = 'pending' AND crove_kernel.ctx_actor_type() IS NOT DISTINCT FROM 'user'
-       AND (NOT coalesce(NEW.authors @> pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object('type', 'user', 'id', crove_kernel.ctx_user_id())), false)
-            OR NEW.eligible_approvers IS NULL
-            OR NOT (NEW.eligible_approvers <@ crove_kernel.approval_eligible_now(NEW.org_id, NEW.command)
-                    AND crove_kernel.approval_eligible_now(NEW.org_id, NEW.command) <@ NEW.eligible_approvers)) THEN
-      RAISE EXCEPTION 'PROPOSAL_STATUS_TRANSITION' USING ERRCODE = '23514',
-        DETAIL = pg_catalog.json_build_object('to', NEW.status, 'frozen', 'policy')::text;
+    -- A user's pending proposal (kernel.proposal.request, resubmit) names its writer among the authors, and no other
+    -- author but those of the proposal it asks for again; its snapshot is the database's own, taken here in the same
+    -- statement (#1793), so the gate's P10 and P12 stand on what the database itself records.
+    IF NEW.status = 'pending' AND crove_kernel.ctx_actor_type() IS NOT DISTINCT FROM 'user' THEN
+      IF NOT coalesce(NEW.authors @> pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object('type', 'user', 'id', crove_kernel.ctx_user_id())), false)
+         OR EXISTS (
+           SELECT 1 FROM pg_catalog.jsonb_array_elements(NEW.authors) e
+           WHERE e IS DISTINCT FROM pg_catalog.jsonb_build_object('type', 'user', 'id', crove_kernel.ctx_user_id())
+             AND NOT EXISTS (
+               SELECT 1 FROM crove_kernel.proposal r
+               WHERE NEW.resubmitted_from IS NOT NULL AND r.org_id = NEW.org_id AND r.id = NEW.resubmitted_from
+                 AND r.authors @> pg_catalog.jsonb_build_array(e))) THEN
+        RAISE EXCEPTION 'PROPOSAL_STATUS_TRANSITION' USING ERRCODE = '23514',
+          DETAIL = pg_catalog.json_build_object('to', NEW.status, 'frozen', 'policy')::text;
+      END IF;
+      NEW.eligible_approvers := crove_kernel.approval_eligible_now(NEW.org_id, NEW.command);
     END IF;
     RETURN NEW;
   END IF;
@@ -254,10 +263,18 @@ BEGIN
   END IF;
 
   -- What P10 and P12 stand on (#1793): outside the system context (the worker reads files and records agents'
-  -- proposals), a proposal's command and snapshot do not change and its authors only grow (an edit adds its editor).
+  -- proposals), a proposal's command and snapshot do not change; its authors only grow, and only by the writer; and a
+  -- change of its content is a new revision whose writer is among the authors (as kernel.proposal.edit makes it), so
+  -- nobody approves content they wrote while not counted as its author.
   IF crove_kernel.ctx_actor_type() IS DISTINCT FROM 'system'
      AND ((NEW.command, NEW.eligible_approvers) IS DISTINCT FROM (OLD.command, OLD.eligible_approvers)
-          OR (OLD.authors IS NOT NULL AND NOT coalesce(NEW.authors @> OLD.authors, false))) THEN
+          OR (OLD.authors IS NOT NULL AND NOT coalesce(NEW.authors @> OLD.authors, false))
+          OR EXISTS (
+            SELECT 1 FROM pg_catalog.jsonb_array_elements(CASE WHEN pg_catalog.jsonb_typeof(NEW.authors) = 'array' THEN NEW.authors ELSE '[]'::jsonb END) e
+            WHERE NOT coalesce(OLD.authors @> pg_catalog.jsonb_build_array(e), false) AND e IS DISTINCT FROM pg_catalog.jsonb_build_object('type', 'user', 'id', crove_kernel.ctx_user_id()))
+          OR ((NEW.payload, NEW.title, NEW.request_input, NEW.duplicate_of, NEW.revision)
+                IS DISTINCT FROM (OLD.payload, OLD.title, OLD.request_input, OLD.duplicate_of, OLD.revision)
+              AND NOT (NEW.revision > OLD.revision AND coalesce(NEW.authors @> pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object('type', 'user', 'id', crove_kernel.ctx_user_id())), false)))) THEN
     RAISE EXCEPTION 'PROPOSAL_STATUS_TRANSITION' USING ERRCODE = '23514',
       DETAIL = pg_catalog.json_build_object('from', OLD.status, 'to', NEW.status, 'frozen', 'policy')::text;
   END IF;
