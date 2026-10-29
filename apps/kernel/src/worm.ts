@@ -19,7 +19,9 @@
 //     unanchored.
 //   - verifyArchive, nightly: reads every batch back from the store, checks the chain, and recomputes every row hash
 //     from the database. A changed, missing or added row, a broken chain, a window gap, or a store and database that
-//     disagree fail the run: the job fails without a retry, and the prober alerts on the dead letter.
+//     disagree fail the run: the job fails without a retry, and the prober alerts on the dead letter. So does an
+//     anchored number series whose period key does not fit its reset (crove_kernel.archive_series_misfits, #1820): a
+//     reset switched and switched back before the series was anchored, which its row hash alone cannot show.
 // The archive holds hashes and references only, never row content.
 //
 // Stores, one key layout (chain/v1/<sequence, 12 digits>.json):
@@ -399,7 +401,8 @@ export interface ArchiveProblem {
     | 'numbers_gap'
     | 'entities_gap'
     | 'allocations_gap'
-    | 'series_gap';
+    | 'series_gap'
+    | 'series_period_mismatch';
   seq: number;
   ref?: string;
 }
@@ -430,6 +433,9 @@ export async function verifyArchive(db: Db, store: ArchiveStore): Promise<Archiv
   let previous: ArchiveBatch | null = null;
   let rowsChecked = 0;
   let seq = 0;
+  // The batch that anchored each number series, and the rows already found changed, missing or added.
+  const seriesSeq = new Map<string, number>();
+  const rowProblems = new Set<string>();
   for (const key of keys) {
     seq += 1;
     if (key !== archiveKey(seq)) {
@@ -473,9 +479,14 @@ export async function verifyArchive(db: Db, store: ArchiveStore): Promise<Archiv
       const kept = archived.get(ref);
       if (kept === undefined) note({ code: 'row_added', seq, ref });
       else if (kept !== hash) note({ code: 'row_changed', seq, ref });
+      if (kept !== hash) rowProblems.add(ref);
       archived.delete(ref);
     }
-    for (const ref of archived.keys()) note({ code: 'row_missing', seq, ref });
+    for (const ref of archived.keys()) {
+      note({ code: 'row_missing', seq, ref });
+      rowProblems.add(ref);
+    }
+    for (const [ref] of batch.rows) if (ref.startsWith('number_series:')) seriesSeq.set(ref, seq);
 
     prev = batch.chainSha256;
     prevTo = batch.window.to;
@@ -483,6 +494,17 @@ export async function verifyArchive(db: Db, store: ArchiveStore): Promise<Archiv
   }
   // Batches the database recorded that the store does not have.
   for (const recordedSeq of recorded.keys()) if (recordedSeq > seq) note({ code: 'object_missing', seq: recordedSeq });
+  // Anchored series whose period key does not fit the reset of their doc type (#1820). A series whose row already
+  // differs from its batch is reported as that (its reset was switched after it was anchored); this is the one that
+  // verifies as written, its reset switched and switched back before. A series not anchored yet is checked once a batch
+  // holds it.
+  if (seriesSeq.size > 0) {
+    const misfits = (await sql<{ ref: string }>`SELECT ref FROM crove_kernel.archive_series_misfits()`.execute(db)).rows;
+    for (const { ref } of misfits) {
+      const anchored = seriesSeq.get(ref);
+      if (anchored !== undefined && !rowProblems.has(ref)) note({ code: 'series_period_mismatch', seq: anchored, ref });
+    }
+  }
 
   const result = { ok: problems.length === 0, batches: seq, rows: rowsChecked, problems };
   await sql`SELECT crove_kernel.archive_verified(${result.ok}, ${result.batches}::int, ${result.rows}::bigint, ${JSON.stringify(problems)}::jsonb)`.execute(db);
