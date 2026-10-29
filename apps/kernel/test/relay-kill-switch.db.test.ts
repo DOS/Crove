@@ -5,7 +5,7 @@
 // backlog does not slow every relay pass. Set CROVE_TEST_ADMIN_URL to a superuser URL; each run makes its own database.
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
@@ -85,6 +85,20 @@ suite('a kill switch per relay type on PostgreSQL (#1696)', () => {
     ({ orgId } = await createOrg(runtime, { type: 'user', userId: owner, aal: 'aal1' }, 'Relay kill switch test'));
     workerPool = createPool({ connectionString: login('crove_worker', 'test-worker-pw'), max: 2 });
     workerDb = createDb(workerPool);
+  });
+
+  // A test that fails with a switch engaged must not hold the next test's events: release every relay key still on.
+  afterEach(async () => {
+    if (!adminUrl) return;
+    const on = await admin(
+      async (c) =>
+        (
+          await c.query<{ key: string }>(
+            `SELECT DISTINCT key FROM crove_kernel.global_kill_switch WHERE key LIKE 'relay:%' AND crove_kernel.global_kill_switch_on(key)`,
+          )
+        ).rows,
+    );
+    for (const { key } of on) await set(key, false);
   });
 
   afterAll(async () => {
