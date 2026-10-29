@@ -45,7 +45,7 @@ import { fileHoldCommands } from './evidence-holds.ts';
 import { extractionCommands, legalEntityMoveRefused, readAgainIn, refuseWhileReextracting } from './extraction.ts';
 import { ingestFileRow, zIngestFile } from './files.ts';
 import { createOrgCommand, myOrgs, orgCreateCommand, type OrgCreateLimits, type OrgSummary } from './identity.ts';
-import { acceptInvite, createInvite, inviteCreateCommand, revokeInvite, type InviteLimits } from './invites.ts';
+import { acceptInvite, createInvite, inviteCreateCommand, normalizeEmail, revokeInvite, type InviteLimits } from './invites.ts';
 import { mailCommands, queueContactMail } from './mail.ts';
 import { auditLogCommands } from './audit-log.ts';
 import { personalDataCommands } from './personal-data.ts';
@@ -227,7 +227,26 @@ export const removeMember = defineCommand({
       .where('status', '=', 'pending')
       .returning('id')
       .execute();
-    ctx.audit({ target_user: input.userId, role: null, previous_role: target.role, revoked_invites: revokedInvites.map((r) => r.id) });
+    // So do the org's pending invites addressed to them (#1880): a member cannot use one (a scoped one is refused,
+    // #1459), but once removed they could rejoin through it, with whatever role and scope it names, until it expires.
+    // Invites are bound to the email the account verified (user_account.email), stored normalized.
+    const addressedInvites = target.email
+      ? await ctx.trx
+          .updateTable('crove_kernel.member_invite')
+          .set({ status: 'revoked', revoked_at: ctx.now, revoked_by: actorId })
+          .where('org_id', '=', ctx.orgId)
+          .where('email', '=', normalizeEmail(target.email))
+          .where('status', '=', 'pending')
+          .returning('id')
+          .execute()
+      : [];
+    ctx.audit({
+      target_user: input.userId,
+      role: null,
+      previous_role: target.role,
+      revoked_invites: revokedInvites.map((r) => r.id),
+      revoked_invites_to_member: addressedInvites.map((r) => r.id),
+    });
     await rerouteStrandedTasks(ctx, seats);
     await ctx.activity('kernel.member', input.userId, 'member.removed', `Xóa thành viên (${target.role})`);
     await ctx.emit('kernel.member.removed', { userId: input.userId, oldRole: target.role });
