@@ -16,6 +16,7 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { sql } from 'kysely';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -85,17 +86,12 @@ suite('audit rows naming a proposal on PostgreSQL (#1695)', () => {
     access: ['owner'],
     handler: async (ctx, input) => {
       if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'users only');
-      const decidedBy = ctx.actor.userId;
-      const mark = (status: 'approved' | 'executed') =>
-        ctx.trx
-          .updateTable('crove_kernel.proposal')
-          .set(status === 'approved' ? { status, decided_by: decidedBy, decided_at: ctx.now, executed_command_id: ctx.commandId } : { status })
-          .where('org_id', '=', ctx.orgId)
-          .where('id', '=', input.proposalId)
-          .execute();
-      if (input.approve) await mark('approved');
+      // A user's context approves only through the database's gate (#1793), as kernel.proposal.approve does.
+      if (input.approve) await sql`SELECT crove_kernel.proposal_approve(${input.proposalId}::uuid, 1, ${ctx.commandId}::uuid)`.execute(ctx.trx);
       await ctx.run(OTHER, { taxCode: '0101234567' }, { proposalId: input.proposalId });
-      if (input.approve) await mark('executed');
+      if (input.approve) {
+        await ctx.trx.updateTable('crove_kernel.proposal').set({ status: 'executed' }).where('org_id', '=', ctx.orgId).where('id', '=', input.proposalId).execute();
+      }
       return {};
     },
   });
