@@ -207,6 +207,7 @@ describe('migration lint: the schema of the module', () => {
       "  -- migration-lint: cross-module the purge clears the kernel row too\n  EXECUTE 'UPDATE crove_kernel.tenant SET x = 1';",
       "  -- migration-lint: cross-module the purge clears the kernel rows too\n  EXECUTE format('UPDATE crove_kernel.%I SET x = 1', 'tenant');",
       "  -- migration-lint: cross-module the command string starts on the next line\n  EXECUTE\n    'DELETE FROM crove_kernel.tenant WHERE false';",
+      "  -- migration-lint: cross-module a statement in parentheses (review)\n  EXECUTE '(\n    WITH d AS (DELETE FROM crove_kernel.tenant RETURNING 1) SELECT 1)';",
     ]) {
       const waivers: { file: string; line: number; schemas: string[]; reason: string }[] = [];
       expect(lintMigration(FILE, inDo(body), { waivers }), body).toEqual([]);

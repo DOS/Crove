@@ -1487,8 +1487,9 @@ export function lintMigration(file, sql, {
       const inner = { retry: ctx.retry(head) ? () => true : () => false, anchorLine: ctx.anchorLine ?? head.line };
       const statements = command === undefined ? [] : splitStatements(lex(command.body, command.bodyLine));
       // A waiver on the line before the EXECUTE covers the first statement of its command string, and only that one
-      // (#1227): the EXECUTE itself touches nothing. Handed over on the line that statement starts on.
-      const first = statements[0]?.[0];
+      // (#1227): the EXECUTE itself touches nothing. Handed over on the line that statement starts on, past the
+      // parentheses that may wrap it.
+      const first = statements[0] && unwrapParens(statements[0])[0];
       if (waiver !== undefined && first !== undefined) waiverAt.set(first.line, waiver);
       for (const statement of statements) lintStatement(statement, false, inner);
       if (first !== undefined && waiverAt.get(first.line) === waiver) waiverAt.delete(first.line);
