@@ -163,6 +163,28 @@ export const changeMemberRole = defineCommand({
     ctx.audit({ target_user: input.userId, role: input.role, previous_role: previousRole, changed: previousRole !== input.role });
     if (previousRole === input.role) return { userId: input.userId, role: input.role, previousRole };
     if (previousRole === 'owner' && owners <= 1) throw LAST_OWNER(input.userId, input.role);
+    // An owner or admin made member or viewer must not hold org-wide and legal-entity roles together (#1367): as a
+    // member they would read every entity (any org-wide role lifts the scope, enter_context) while their entity roles
+    // still show. For one limited to some entities before a promotion, the demotion would widen what they read, which
+    // ROLE_GRANT_WIDENS_SCOPE refuses a grant to do; every mixed demotion is refused rather than tracking how the roles
+    // came. Whoever demotes them decides which side goes first.
+    if ((previousRole === 'owner' || previousRole === 'admin') && (input.role === 'member' || input.role === 'viewer')) {
+      const held = await ctx.trx
+        .selectFrom('crove_kernel.role_assignment')
+        .select('legal_entity_id')
+        .where('org_id', '=', ctx.orgId)
+        .where('user_id', '=', input.userId)
+        .execute();
+      if (held.some((a) => a.legal_entity_id === null) && held.some((a) => a.legal_entity_id !== null)) {
+        throw new DomainError(
+          'ROLE_DEMOTION_MIXES_SCOPE',
+          409,
+          'Thành viên này đang có cả vai trò cho cả tổ chức lẫn vai trò theo pháp nhân, nên chưa đổi được thành Thành viên hoặc Chỉ xem. Hãy thu hồi các vai trò cho cả tổ chức để họ chỉ xem các pháp nhân đó, hoặc thu hồi các vai trò theo pháp nhân để họ xem mọi pháp nhân, rồi đổi lại',
+          undefined,
+          { audit: { target_user: input.userId, role: input.role, previous_role: previousRole } },
+        );
+      }
+    }
     // A demotion to viewer of the last chief accountant under the accountant preset is refused (#1402).
     await keepingChiefAccountant(() =>
       ctx.trx.updateTable('crove_kernel.tenant_member').set({ role: input.role }).where('org_id', '=', ctx.orgId).where('user_id', '=', input.userId).execute(),
