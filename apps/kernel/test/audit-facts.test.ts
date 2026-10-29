@@ -342,7 +342,8 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
     // An empty container, from the declaration or a later assignment (`let facts; facts = {}`), is read by its writes.
     const isBuilt = (value: string) => BUILT.test(value) || /^new\s+(?:Map|Set)\s*</.test(value);
     const built = isBuilt(init) || assigned.some((w) => isBuilt(valueAt(code, from + (w.index ?? 0) + w[0].length).trim()));
-    if (!built && !listed) checkHeld(name, init, from, flag, depth);
+    // The initializer is read whatever is assigned later (`let facts = { code }; if (redact) facts = {};`).
+    if (!isBuilt(init) && !listed) checkHeld(name, init, from, flag, depth);
     // Writes to an empty container, or to an object written out (`facts.email = ...`), add to what the name holds.
     if (built || objectish(init)) {
       for (const w of scope.matchAll(new RegExp(`(?<![\\w$.])${escape(name)}\\s*(\\[[^\\]]*\\]|\\.\\s*[A-Za-z_$][\\w$]*)\\s*=(?![=>])\\s*`, 'g'))) {
@@ -838,6 +839,9 @@ describe('audit facts and classified columns (#1626, #1632)', () => {
     expect(check('let facts: Record<string, unknown>;\nfacts = {};\nfacts.email = input.email;\nctx.audit(facts);')).toEqual([
       'facts: facts.email is a classified column and its value is not auditValue(...)',
       'facts: the value reads the classified column email outside auditValue(...)',
+    ]);
+    expect(check('let facts = { code: party.tax_code };\nif (redact) facts = {};\nctx.audit(facts);')).toEqual([
+      'code: the value reads the classified column tax_code outside auditValue(...)',
     ]);
     // An assignment to a parameter of the same name in a nested function is not one to the fact's variable.
     expect(check('const code = 0;\nfunction normalize(code: string) { code = party.tax_code; return code; }\nctx.audit({ code });')).toEqual([]);
