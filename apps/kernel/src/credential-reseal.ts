@@ -5,6 +5,7 @@
 //
 // Only credentials of active connections whose connecting member may still use them are resealed (the rule of
 // credential_get); the others reseal when they are reconnected, and the counts say how many there are. No token is ever logged.
+// Orgs being offboarded are resealed too, as they are counted (#1889): one may return to active before its purge.
 //
 // The sealed targets of team chat alerts (#863, crove_social.chat_alert_target) go through the same pass, under the
 // same lock, when the Social module is on: those whose saver is still an owner or admin are resealed, the others when
