@@ -85,14 +85,17 @@ suite('activity rows of one legal entity whose record names none (#1725, #1728)'
         )
       ).rows,
     );
-  // A row written in userId's context as ctx.activity writes it.
-  const write = (userId: string, recordType: string, recordId: string, entity: string | null) =>
-    asApp(userId, (c) =>
-      c.query(
-        `INSERT INTO crove_kernel.activity (org_id, record_type, record_id, kind, summary, actor_id, legal_entity_id)
-         VALUES ($1, $2, $3, 'test.row', 'Dòng thử', $4, $5) RETURNING legal_entity_id`,
-        [orgId, recordType, recordId, userId, entity],
-      ),
+  // A row written in userId's context as ctx.activity writes it; rolled back unless commit is set.
+  const write = (userId: string, recordType: string, recordId: string, entity: string | null, commit = false) =>
+    asApp(
+      userId,
+      (c) =>
+        c.query(
+          `INSERT INTO crove_kernel.activity (org_id, record_type, record_id, kind, summary, actor_id, legal_entity_id)
+           VALUES ($1, $2, $3, 'test.row', 'Dòng thử', $4, $5) RETURNING legal_entity_id`,
+          [orgId, recordType, recordId, userId, entity],
+        ),
+      commit,
     );
 
   beforeAll(async () => {
@@ -179,7 +182,7 @@ suite('activity rows of one legal entity whose record names none (#1725, #1728)'
   });
 
   it('keeps org-level rows visible to every member', async () => {
-    await write(owner, 'kernel.tenant', orgId, null);
+    await write(owner, 'kernel.tenant', orgId, null, true);
     const seen = await readAs(member, ['kernel.tenant']);
     expect(seen).toEqual([{ record_type: 'kernel.tenant', kind: 'test.row', legal_entity_id: null }]);
   });
