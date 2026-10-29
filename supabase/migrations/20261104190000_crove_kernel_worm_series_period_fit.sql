@@ -7,7 +7,9 @@
 -- as {period_key: '2026-11', reset: 'yearly'} that verifies as written: a forgery before anchoring, which the stream
 -- itself cannot see. The mismatch shows, though: legitimate data always fits, since number_allocate takes the period key
 -- from the policy (number_period_key, 20261103030000), the reset cannot change once the doc type has numbers
--- (NUMBER_POLICY_IN_USE, 20261103050000), and the #1401 backfill wrote 'never' policies with '-' series.
+-- (NUMBER_POLICY_IN_USE, with the lock of 20261103050000), and the #1401 backfill wrote 'never' policies with '-' series.
+-- One historical exception: before 20261103050000 (#1607) a reset change racing a doc type's first number could commit
+-- beside it, and such a series is reported the same way (docs/runbooks/worm-archive.md says how to tell them apart).
 --
 -- crove_kernel.archive_series_misfits() gives, to the worker only, the reference (number_series:<org_id>:<id>, ids
 -- only) of every series whose period key does not fit the reset in force for its doc type: 'YYYY' for yearly (also

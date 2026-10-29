@@ -111,7 +111,7 @@ docker compose exec db psql -U postgres -c "SELECT verified_at, ok, batches, row
 | `chain_broken`, `window_gap`, `batch_hash_mismatch`, `chain_hash_mismatch`, `object_unreadable`, `object_out_of_order` | A batch in the store was changed, removed or replaced. With `s3` and Object Lock this should be impossible; check the bucket's lock and access logs. |
 | `object_missing` | The database recorded a batch the store does not have. |
 | `version_regressed`, `numbers_gap`, `entities_gap`, `allocations_gap`, `series_gap` | A batch of a lower version follows a higher one, or a batch does not take its numbers (versions 2 and up), legal entities (versions 3 and up), number allocations (versions 4 and up) or number series (version 5) from where the last one stopped: a worker older than #977, #1489, #1594 or #1623 wrote to the archive, or a batch was replaced. The numbers, entities or series in that stretch are not anchored. Find the deploy that ran the old worker. |
-| `series_period_mismatch` | A `number_series:` row verifies as written, but its period key does not fit the reset of its doc type (`YYYY` for yearly, `YYYY-MM` for monthly, `-` for never; #1820, `crove_kernel.archive_series_misfits`). The doc type's reset was switched, a number given out, and the reset switched back before the archiver anchored the series. Legitimate numbering never does this: the reset is locked once a doc type has numbers. |
+| `series_period_mismatch` | A `number_series:` row verifies as written, but its period key does not fit the reset of its doc type (`YYYY` for yearly, `YYYY-MM` for monthly, `-` for never; #1820, `crove_kernel.archive_series_misfits`). The doc type's reset was switched, a number given out, and the reset switched back before the archiver anchored the series. Numbering never does this since #1608 (20261103050000): the reset is locked once a doc type has numbers, and a reset change waits for a first number in flight. A series created before that fix, by a reset change racing the doc type's first number (#1607), shows the same way. |
 | `record_mismatch` | `crove_kernel.archive_batch` disagrees with the store. The store is the authority. |
 
 **What to do**
@@ -121,8 +121,9 @@ docker compose exec db psql -U postgres -c "SELECT verified_at, ok, batches, row
    - Superuser sessions: `log_connections` and the database logs.
    - Changes to triggers: `ALTER TABLE ... DISABLE TRIGGER` shows in the logs when `log_statement` is `ddl`.
    - Host and bucket access logs.
-3. **For a `row_changed` journal entry, compare the entry with the period's exports and the accountant's books.** The archive holds hashes, not values, so the correct values come from the last export or backup taken before the change.
-4. **Write it up in an issue (security label):** what changed, when it was noticed, what was restored.
+3. **For a `series_period_mismatch`, compare the series' `created_at` with the deploy of #1608 and with the doc type's `kernel.number.policy.set` audit events.** A series created before that deploy, next to a policy change at the same moment, is the #1607 race, not an edit: record it in the issue. Otherwise the reset was edited outside the command: restore the policy row from the last backup before the series and find who wrote it (step 2).
+4. **For a `row_changed` journal entry, compare the entry with the period's exports and the accountant's books.** The archive holds hashes, not values, so the correct values come from the last export or backup taken before the change.
+5. **Write it up in an issue (security label):** what changed, when it was noticed, what was restored.
 
 A single `row_added` right after a long-running transaction, with no other finding, can be a transaction that stayed open longer than `ARCHIVE_LAG_SECONDS`. Look up the row's command in the audit trail. If it is a normal command, raise the lag. Do not silence the alert.
 

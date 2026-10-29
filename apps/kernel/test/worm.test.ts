@@ -294,8 +294,8 @@ describe('archive verifier across batch versions (#1624, #1623)', () => {
   }
 
   // Verifies the batches as stored objects (a batch may lack a field), every one recorded in the database; `misfits` are
-  // the series archive_series_misfits() names.
-  async function verify(batches: Array<Omit<ArchiveBatch, 'allocationsFrom' | 'seriesFrom'> & Partial<ArchiveBatch>>, misfits: string[] = []) {
+  // the series archive_series_misfits() names, and the rows in `changed` hash differently now than when written.
+  async function verify(batches: Array<Omit<ArchiveBatch, 'allocationsFrom' | 'seriesFrom'> & Partial<ArchiveBatch>>, misfits: string[] = [], changed: string[] = []) {
     const objects = new Map(batches.map((b) => [archiveKey(b.seq), new TextEncoder().encode(JSON.stringify(b))]));
     const store: ArchiveStore = {
       put: async () => {},
@@ -315,11 +315,11 @@ describe('archive verifier across batch versions (#1624, #1623)', () => {
         }));
       }
       if (query.sql.includes('archive_series_misfits()')) return misfits.map((ref) => ({ ref }));
-      const fn =/crove_kernel\.(archive_\w+_hashes)\(/.exec(query.sql)?.[1];
+      const fn = /crove_kernel\.(archive_\w+_hashes)\(/.exec(query.sql)?.[1];
       if (fn) {
         const [from, to] = query.parameters as [string, string];
         ranges.push({ fn, from, to });
-        return rowsOf({ fn, from, to }).map(([ref, row_sha256]) => ({ ref, row_sha256 }));
+        return rowsOf({ fn, from, to }).map(([ref, row_sha256]) => ({ ref, row_sha256: changed.includes(ref) ? 'c'.repeat(64) : row_sha256 }));
       }
       return [];
     });
@@ -398,6 +398,10 @@ describe('archive verifier across batch versions (#1624, #1623)', () => {
     // number_series:o:1 is anchored by batch 3; number_series:o:9 is not anchored yet and waits for its batch.
     expect((await verify(batches, ['number_series:o:1', 'number_series:o:9'])).result.problems).toEqual([
       { code: 'series_period_mismatch', seq: 3, ref: 'number_series:o:1' },
+    ]);
+    // A series whose row changed is reported as that, once: its reset was switched after it was anchored.
+    expect((await verify(batches, ['number_series:o:1'], ['number_series:o:1'])).result.problems).toEqual([
+      { code: 'row_changed', seq: 3, ref: 'number_series:o:1' },
     ]);
     // Before version 5 nothing anchors a series, so the check does not run.
     expect((await verify(batches.slice(0, 2), ['number_series:o:1'])).result.problems).toEqual([]);
