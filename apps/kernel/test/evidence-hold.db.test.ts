@@ -118,9 +118,11 @@ suite('retention holds on evidence files (#1009)', () => {
     const { rows } = await admin((c) =>
       c.query<{ us: string }>('SELECT (extract(epoch FROM created_at) * 1000000)::bigint::text AS us FROM crove_finance.journal_entry WHERE id = $1', [journalEntryId]),
     );
-    return BigInt(rows[0]?.us ?? '0');
+    if (rows[0] === undefined) throw new Error(`no journal entry ${journalEntryId}`);
+    return BigInt(rows[0].us);
   };
-  // The hold for a posting `us` microseconds after the epoch: `days` later, rounded up to the whole second.
+  // The hold for a posting `us` microseconds after the epoch: `days` later, rounded up to the whole second. Days of 24
+  // hours, as make_interval(days => n) adds them in a UTC session (the CI database's TimeZone).
   const holdFor = (us: bigint | null, days: number) => {
     const end = (us ?? 0n) + BigInt(days) * 86_400_000_000n;
     return new Date(Number(((end + 999_999n) / 1_000_000n) * 1000n));
