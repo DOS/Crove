@@ -608,9 +608,10 @@ export function createHttpApp(deps: HttpDeps) {
 
   if (config.INBOUND_DOMAIN && config.INBOUND_SECRET) {
     const domain = config.INBOUND_DOMAIN;
-    const secret = config.INBOUND_SECRET;
+    // The previous value too while a rotation is under way (#1214): the mail worker and the kernel switch apart.
+    const secrets = config.INBOUND_SECRET_PREVIOUS ? [config.INBOUND_SECRET, config.INBOUND_SECRET_PREVIOUS] : [config.INBOUND_SECRET];
     app.post('/api/inbound/email', bodyLimit({ maxSize: MAX_EMAIL_BYTES }), async (c) => {
-      if (!secretMatches(c.req.header('authorization'), secret)) return c.json({ code: 'UNAUTHENTICATED' }, 401);
+      if (!secretMatches(c.req.header('authorization'), secrets)) return c.json({ code: 'UNAUTHENTICATED' }, 401);
       try {
         const raw = new Uint8Array(await c.req.arrayBuffer());
         // Stored and queued only; the worker parses it and files the attachments (External-tenant gate T5).

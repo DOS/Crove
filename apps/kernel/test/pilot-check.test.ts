@@ -47,6 +47,25 @@ describe('pilot-check settings', () => {
     expect(failing({ ...READY, TRUSTED_PROXY_HOPS: '2' })).toEqual([]);
   });
 
+  // #1214: the previous inbound secret of a rotation, checked as the current one, never printed, and a reminder to
+  // remove it.
+  it('checks a previous inbound secret like the current one and asks to remove it once the rotation is done (#1214)', () => {
+    const current = fake('inbound-current', 40);
+    const previous = fake('inbound-previous', 40);
+    const env = { ...READY, INBOUND_DOMAIN: 'in.example.com', INBOUND_SECRET: current };
+    expect(failing({ ...env, INBOUND_SECRET_PREVIOUS: previous })).toEqual([]);
+    const reminder = checkEnv({ ...env, INBOUND_SECRET_PREVIOUS: previous }).find((r) => r.item === 'Secrets' && r.status === 'manual');
+    expect(reminder?.message).toMatch(/^INBOUND_SECRET_PREVIOUS is set: an inbound secret rotation is under way/);
+    expect(checkEnv(env).some((r) => r.item === 'Secrets' && r.status === 'manual')).toBe(false);
+    expect(failing({ ...env, INBOUND_SECRET_PREVIOUS: current })).toEqual(['Secrets: INBOUND_SECRET_PREVIOUS is the same as INBOUND_SECRET']);
+    expect(failing({ ...READY, INBOUND_SECRET_PREVIOUS: previous })).toEqual(['Secrets: INBOUND_SECRET_PREVIOUS is set without INBOUND_SECRET']);
+    expect(failing({ ...env, INBOUND_SECRET_PREVIOUS: 'short' })).toEqual(['Secrets: INBOUND_SECRET_PREVIOUS is shorter than 32 characters']);
+    expect(failing({ ...env, INBOUND_SECRET_PREVIOUS: 'change-me-to-a-long-random-string-0123456789' })).toEqual([
+      'Secrets: INBOUND_SECRET_PREVIOUS still has a sample value from .env.example or docker-compose.yml',
+    ]);
+    for (const result of checkEnv({ ...env, INBOUND_SECRET_PREVIOUS: previous })) expect(result.message).not.toContain(previous);
+  });
+
   // #1888: the worker reports envelopes under a key it cannot open; the preflight names the keys it opens and points there.
   it('names the credential keys the worker opens and fails one that does not parse (#1888)', () => {
     const bytes = (start: number) => Buffer.from(Array.from({ length: 32 }, (_, i) => (start + i * 7) % 256));

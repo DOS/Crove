@@ -23,6 +23,7 @@ import type { AuthUser } from '../src/auth.ts';
 import { ConcurrencyLimiter } from '../src/concurrency.ts';
 import { assertExportKey, loadConfig } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
+import { secretMatches } from '../src/inbound.ts';
 import { buildZip } from '../../extract/test/zip-fixture.ts';
 
 const SECRET = 'x'.repeat(32);
@@ -33,6 +34,29 @@ describe('configuration guards', () => {
 
   it('refuses a short JWT secret', () => {
     expect(() => loadConfig({ ...base, AUTH_JWT_SECRET: 'short' })).toThrow(/32 characters/);
+  });
+
+  // #1214: the previous inbound secret of a rotation follows the current one's rules, and the errors carry neither value.
+  it('takes a previous inbound secret only with a current one, as long, different and not a sample value', () => {
+    const current = 'c'.repeat(32);
+    const previous = 'p'.repeat(32);
+    expect(loadConfig({ ...base, INBOUND_SECRET: current, INBOUND_SECRET_PREVIOUS: previous }).INBOUND_SECRET_PREVIOUS).toBe(previous);
+    expect(loadConfig({ ...base, INBOUND_SECRET: current, INBOUND_SECRET_PREVIOUS: '' }).INBOUND_SECRET_PREVIOUS).toBeUndefined();
+    const refusal = (env: Record<string, string>) => {
+      try {
+        loadConfig({ ...base, ...env });
+      } catch (error) {
+        const message = (error as Error).message;
+        expect(message).not.toContain(current);
+        expect(message).not.toContain(previous);
+        return message;
+      }
+      return null;
+    };
+    expect(refusal({ INBOUND_SECRET_PREVIOUS: previous })).toBe('INBOUND_SECRET_PREVIOUS is set without INBOUND_SECRET');
+    expect(refusal({ INBOUND_SECRET: current, INBOUND_SECRET_PREVIOUS: 'p'.repeat(31) })).toBe('INBOUND_SECRET_PREVIOUS must be at least 32 characters');
+    expect(refusal({ INBOUND_SECRET: current, INBOUND_SECRET_PREVIOUS: current })).toBe('INBOUND_SECRET_PREVIOUS must differ from INBOUND_SECRET');
+    expect(refusal({ INBOUND_SECRET: current, INBOUND_SECRET_PREVIOUS: 'change-me-to-a-long-random-string-0123456789' })).toBe('INBOUND_SECRET_PREVIOUS still has a sample value');
   });
 
   it('allows sample secrets and autoconfirm on localhost only', () => {
@@ -460,6 +484,8 @@ describe('auth proxy', () => {
 
 describe('inbound email on the API', () => {
   const INBOUND_SECRET = 'y'.repeat(32);
+  // A rotation under way (#1214): the old value the mail worker may still send.
+  const INBOUND_SECRET_PREVIOUS = 'w'.repeat(32);
   let touched: string[] = [];
   // What the enqueue definer answers: true (queued), false (already pending) or an error.
   let enqueue: () => boolean = () => true;
@@ -470,6 +496,7 @@ describe('inbound email on the API', () => {
       AUTH_ISSUER: 'crove-auth',
       INBOUND_DOMAIN: 'in.test',
       INBOUND_SECRET,
+      INBOUND_SECRET_PREVIOUS,
       WEB_DIST: '/nonexistent',
     }),
     runtime: {
@@ -525,6 +552,31 @@ describe('inbound email on the API', () => {
     } finally {
       enqueue = () => true;
     }
+  });
+
+  it('accepts the current and the previous secret during a rotation, and refuses any other value (#1214)', async () => {
+    const recipient = { 'x-crove-recipient': `${'a'.repeat(24)}@in.test` };
+    for (const secret of [INBOUND_SECRET, INBOUND_SECRET_PREVIOUS]) {
+      touched = [];
+      expect((await deliver({ authorization: `Bearer ${secret}`, ...recipient })).status).toBe(202);
+      expect(touched).toHaveLength(2);
+    }
+    touched = [];
+    for (const wrong of ['v'.repeat(32), INBOUND_SECRET.slice(1), `${INBOUND_SECRET}y`, `${INBOUND_SECRET}${INBOUND_SECRET_PREVIOUS}`, '']) {
+      expect((await deliver({ authorization: `Bearer ${wrong}`, ...recipient })).status, wrong).toBe(401);
+    }
+    expect((await deliver({ authorization: INBOUND_SECRET, ...recipient })).status).toBe(401);
+    expect((await deliver(recipient)).status).toBe(401);
+    expect(touched).toEqual([]);
+  });
+
+  it('compares every secret, over digests of one length (#1214)', () => {
+    expect(secretMatches(`Bearer ${INBOUND_SECRET}`, [INBOUND_SECRET])).toBe(true);
+    expect(secretMatches(`Bearer ${INBOUND_SECRET_PREVIOUS}`, [INBOUND_SECRET, INBOUND_SECRET_PREVIOUS])).toBe(true);
+    expect(secretMatches(`Bearer ${INBOUND_SECRET_PREVIOUS}`, [INBOUND_SECRET])).toBe(false);
+    expect(secretMatches(undefined, [INBOUND_SECRET])).toBe(false);
+    expect(secretMatches('Bearer ', [INBOUND_SECRET])).toBe(false);
+    expect(secretMatches(`Bearer ${INBOUND_SECRET}`, [])).toBe(false);
   });
 
   it('refuses a wrong secret, an empty body and a malformed address before storing anything', async () => {
