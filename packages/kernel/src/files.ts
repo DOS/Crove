@@ -102,7 +102,7 @@ export async function ingestFileRow(ctx: CommandContext, input: IngestFile, crea
     if (isDocumentSource(input.source) && existing.source === 'social') {
       const read = await ctx.trx.selectFrom('crove_kernel.extraction').select('id').where('org_id', '=', ctx.orgId).where('file_id', '=', existing.id).limit(1).executeTakeFirst();
       if (!read) {
-        await ctx.activity('kernel.file', existing.id, 'file.received', `Nhận chứng từ ${input.filename}`);
+        await ctx.activity('kernel.file', existing.id, 'file.received', 'Nhận chứng từ');
         await ctx.emit('kernel.file.ingested', { fileId: existing.id });
         return { fileId: existing.id, duplicate: false };
       }
@@ -110,7 +110,7 @@ export async function ingestFileRow(ctx: CommandContext, input: IngestFile, crea
     return { fileId: existing.id, duplicate: true };
   }
   if (!isDocumentSource(input.source)) return { fileId: inserted.id, duplicate: false };
-  await ctx.activity('kernel.file', inserted.id, 'file.received', `Nhận chứng từ ${input.filename}`);
+  await ctx.activity('kernel.file', inserted.id, 'file.received', 'Nhận chứng từ');
   await ctx.emit('kernel.file.ingested', { fileId: inserted.id });
   return { fileId: inserted.id, duplicate: false };
 }

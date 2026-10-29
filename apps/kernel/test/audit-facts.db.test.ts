@@ -2,8 +2,9 @@
 // or an org's name, tax code or address into audit_event.detail now write a marker naming the column's class, and the
 // row still says which fields changed. A cleared value stays null. tenant_tax_code_requires_audit (20261103070000)
 // accepts the marker for a tax code that is set and still refuses a row naming another value, or a marker for a code
-// that is cleared. Their activity summaries name what happened and none of those values either (#1634). Set CROVE_TEST_ADMIN_URL to a superuser URL; each run makes its own database. The tax codes are made
-// up and fail the MST checksum (#157).
+// that is cleared. Their activity summaries name what happened and none of those values either (#1634). Set
+// CROVE_TEST_ADMIN_URL to a superuser URL; each run makes its own database. The tax codes are made up and fail the MST
+// checksum (#157).
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';

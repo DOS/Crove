@@ -480,7 +480,7 @@ export const requestProposal = defineCommand({
       .returning('id')
       .executeTakeFirstOrThrow();
     ctx.audit({ proposal_id: proposal.id, proposal_command: draft.command });
-    await ctx.activity('kernel.proposal', proposal.id, 'proposal.created', draft.title);
+    await ctx.activity('kernel.proposal', proposal.id, 'proposal.created', 'Tạo đề xuất');
     await ctx.emit('kernel.proposal.created', { proposalId: proposal.id, kind: draft.kind });
     return { proposalId: proposal.id };
   },
@@ -570,7 +570,7 @@ export const editProposal = defineCommand({
       .where('id', '=', proposal.id)
       .execute();
     ctx.audit({ revision });
-    await ctx.activity('kernel.proposal', proposal.id, 'proposal.edited', `Chỉnh sửa (bản ${revision}): ${proposal.title}`);
+    await ctx.activity('kernel.proposal', proposal.id, 'proposal.edited', `Chỉnh sửa (bản ${revision})`);
     return { revision, changed: true };
   },
 });
@@ -683,7 +683,7 @@ export const approveProposal = defineCommand({
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', proposal.id)
       .execute();
-    await ctx.activity('kernel.proposal', proposal.id, 'proposal.approved', `Đã duyệt: ${proposal.title}`);
+    await ctx.activity('kernel.proposal', proposal.id, 'proposal.approved', 'Đã duyệt');
     return result;
   },
 });
@@ -853,7 +853,7 @@ export const rejectProposal = defineCommand({
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', proposal.id)
       .execute();
-    await ctx.activity('kernel.proposal', proposal.id, 'proposal.rejected', `Từ chối: ${proposal.title}`);
+    await ctx.activity('kernel.proposal', proposal.id, 'proposal.rejected', 'Từ chối');
     return { ok: true as const };
   },
 });

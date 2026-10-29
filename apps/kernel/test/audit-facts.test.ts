@@ -17,7 +17,7 @@ import { ROOT, SCANNED, balanced, blank, classifiedColumns, snake, sources } fro
 // Facts whose key or value names a classified column but holds internal data, per file, with the reason.
 // An entry is a fact key or a column read (`info.name`) and covers that name in its file.
 const ALLOWED: Record<string, Record<string, string>> = {
-  'packages/kernel/src/agents.ts': { 'info.name': 'the name of the command a proposal runs' },
+  'packages/kernel/src/agents.ts': { 'info.name': 'the name of the command a proposal runs', title: 'the title of a position in the org chart (crove_kernel.position.title, internal)', 'before.title': 'the title of a position in the org chart (crove_kernel.position.title, internal)' },
   'packages/kernel/src/proposal-reminders.ts': { recipients: 'how many members each stage reminded, a count per stage' },
   'modules/finance/src/accounts.ts': { name: "the name of an account of the org's chart (crove_finance.account.name, internal)" },
   'modules/finance/src/bank.ts': { bankAccount: 'the chart account code (112x) the statement is for, not a bank account number' },

@@ -3,9 +3,11 @@
 // never a person's or an org's name, tax code, address, email or other classified value. The record's page shows its
 // current values beside the timeline.
 // A source scan of the summary (the fourth argument) of every ctx.activity(...) call. It fails when the summary reads a
-// column some manifest classifies (anything but internal), in snake_case or camelCase: inside a template's ${...}
-// (`${party.name}`, `${taxCode}`), or as the whole summary (`input.name`). The scan reads only the call's text: a summary
-// built elsewhere and passed in by name (`summary`, `label`) is not checked here, so build it from internal values only.
+// column some manifest classifies (anything but internal), in snake_case or camelCase, anywhere its value can reach the
+// text: in a template's ${...} (`${party.name}`), a concatenation (`'Thêm ' + name`), a branch or the whole summary
+// (`input.email`); the condition of a top-level ternary only picks a text and is left out. The scan reads only the
+// call's text: a summary or a value built elsewhere and passed in by another name (`summary`, `memo`, `entity` holding a
+// name) is not checked here, so build it from internal values only.
 // Column names that are also ordinary words of internal data (an account's name, an asset's name) are listed below with
 // their reason, per file; adding one says that value is not a person's or an org's.
 import { readFileSync } from 'node:fs';
@@ -19,12 +21,14 @@ const ALLOWED: Record<string, Record<string, string>> = {
   'packages/kernel/src/agents.ts': {
     'input.displayName': "an AI agent's display name (crove_kernel.agent.display_name, internal)",
     'agent.display_name': "an AI agent's display name (crove_kernel.agent.display_name, internal)",
+    'input.title': 'the title of a position in the org chart (crove_kernel.position.title, internal)',
+    'before.title': 'the title of a position in the org chart (crove_kernel.position.title, internal)',
+    'position.title': 'the title of a position in the org chart (crove_kernel.position.title, internal)',
+    'template.title': "an agent template's title (crove_kernel.agent_template.title, internal)",
   },
+  'modules/crm/src/bookings.ts': { 'type.title': "the title of a booking page's event type (crove_crm.event_type.title, internal)" },
   'modules/finance/src/accounts.ts': { name: "the name of an account of the org's chart (crove_finance.org_account.name, internal)" },
   'modules/finance/src/bank.ts': { 'input.bankAccount': 'the chart account code (112x) the statement is for, not a bank account number' },
-  'modules/finance/src/cash-voucher.ts': { 'payload.description': "the voucher's description (crove_finance.cash_voucher.description, internal)" },
-  'modules/finance/src/journal-voucher.ts': { 'payload.description': "the voucher's description (crove_finance.journal_voucher.description, internal)" },
-  'modules/finance/src/reversal.ts': { 'entry.description': "the entry's description (crove_finance.journal_entry.description, internal)" },
   'modules/finance/src/fixed-assets.ts': {
     'input.name': "the asset's name (crove_finance.fixed_asset.name, internal)",
     'asset.name': "the asset's name (crove_finance.fixed_asset.name, internal)",
@@ -56,25 +60,21 @@ function args(call: string): Array<{ at: number; text: string }> {
   return out;
 }
 
-// The code a summary puts into its text: each ${...} of its templates, or the whole summary when it is a plain name or
-// member read.
-function interpolations(summary: string): Array<{ at: number; text: string }> {
-  const out: Array<{ at: number; text: string }> = [];
-  let end = 0;
-  for (const m of summary.matchAll(/\$\{/g)) {
-    // A template nested in an interpolation is read with it, once.
-    if (m.index < end) continue;
-    const inner = balanced(summary, m.index + 1);
-    out.push({ at: m.index + 2, text: inner.slice(1, -1) });
-    end = m.index + 1 + inner.length;
+// The code of a summary that reaches its text: the whole expression, string text blanked, less the condition of a
+// top-level ternary (`taxCode ? 'Đặt' : 'Xóa'` chooses a text and puts no value in it).
+function valuePart(summary: string): { at: number; text: string } {
+  let depth = 0;
+  for (let i = 0; i < summary.length; i++) {
+    const c = summary[i] as string;
+    if ('([{'.includes(c)) depth++;
+    else if (')]}'.includes(c)) depth--;
+    else if (c === '?' && depth === 0 && summary[i + 1] !== '.' && summary[i + 1] !== '?' && summary[i - 1] !== '?') return { at: i + 1, text: summary.slice(i + 1) };
   }
-  if (/^\s*[A-Za-z_$][\w$]*(\s*\??\.\s*[A-Za-z_$][\w$]*)*\s*$/.test(summary)) out.push({ at: 0, text: summary });
-  return out;
+  return { at: 0, text: summary };
 }
 
-function scan(file: string, text: string, classified: Set<string>): Finding[] {
+function scan(file: string, text: string, classified: Set<string>, allowed: Record<string, string> = ALLOWED[file] ?? {}): Finding[] {
   const code = blank(text);
-  const allowed = ALLOWED[file] ?? {};
   const findings: Finding[] = [];
   const isClassified = (name: string) => classified.has(name) || classified.has(snake(name));
   const lineOf = (at: number) => code.slice(0, at).split('\n').length;
@@ -82,14 +82,13 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
     const open = m.index + m[0].length - 1;
     const summary = args(balanced(code, open))[3];
     if (!summary) continue;
-    for (const piece of interpolations(summary.text)) {
-      // Names read, not called: `party.name` reads name, `wallTime(hours.timeZone, start)` reads timeZone and start.
-      for (const read of piece.text.matchAll(/(?<![\w$])([A-Za-z_$][\w$]*(?:\s*\??\.\s*[A-Za-z_$][\w$]*)*)(?!\s*[\w$(])/g)) {
-        const expr = (read[1] as string).replace(/\s+/g, '');
-        const name = expr.split(/\??\./).at(-1) as string;
-        if (Object.hasOwn(allowed, expr)) continue;
-        if (isClassified(name)) findings.push({ file, line: lineOf(open + summary.at + piece.at + read.index), read: expr });
-      }
+    const piece = valuePart(summary.text);
+    // Names read, not called: `party.name` reads name, `wallTime(hours.timeZone, start)` reads timeZone and start.
+    for (const read of piece.text.matchAll(/(?<![\w$])([A-Za-z_$][\w$]*(?:\s*\??\.\s*[A-Za-z_$][\w$]*)*)(?!\s*[\w$(])/g)) {
+      const expr = (read[1] as string).replace(/\s+/g, '');
+      const name = expr.split(/\??\./).at(-1) as string;
+      if (Object.hasOwn(allowed, expr)) continue;
+      if (isClassified(name)) findings.push({ file, line: lineOf(open + summary.at + piece.at + read.index), read: expr });
     }
   }
   return findings;
@@ -110,10 +109,10 @@ describe('activity summaries and classified columns (#1634)', () => {
     expect(findings).toEqual([]);
   });
 
-  it('lists only files that exist and reads they still make', () => {
+  it('lists only reads a summary still makes', () => {
     for (const [file, entries] of Object.entries(ALLOWED)) {
-      const text = readFileSync(join(ROOT, file), 'utf8');
-      for (const entry of Object.keys(entries)) expect(text.includes(entry), `${file}: ${entry}`).toBe(true);
+      const reads = scan(file, readFileSync(join(ROOT, file), 'utf8'), classified, {}).map((f) => f.read);
+      for (const entry of Object.keys(entries)) expect(reads, `${file}: ${entry}`).toContain(entry);
     }
   });
 
@@ -123,9 +122,13 @@ describe('activity summaries and classified columns (#1634)', () => {
     expect(check("await ctx.activity('kernel.tenant', ctx.orgId, 'org.tax_code_changed', taxCode ? `Đặt mã số thuế là ${taxCode}` : 'Xóa');")).toEqual(['taxCode']);
     expect(check("await ctx.activity('kernel.member', id, 'invite.revoked', invite.email);")).toEqual(['invite.email']);
     expect(check("await ctx.activity('kernel.party', id, 'x', `Gộp ${`(${keep?.name})`}`, { legalEntityId: entity.id });")).toEqual(['keep?.name']);
+    // Outside a template too: a concatenation, a fallback, a branch.
+    expect(check("await ctx.activity('kernel.party', id, 'x', 'Thêm ' + party.name);")).toEqual(['party.name']);
+    expect(check("await ctx.activity('kernel.party', id, 'x', input.name ?? 'Không tên');")).toEqual(['input.name']);
+    expect(check("await ctx.activity('kernel.party', id, 'x', sale ? party.name : 'Thêm nhà cung cấp');")).toEqual(['party.name']);
     // The condition picks the text and is not part of it; a call's result and the record's own fields are not read.
     expect(check("await ctx.activity('kernel.tenant', ctx.orgId, 'org.tax_code_changed', taxCode ? 'Đặt mã số thuế' : 'Xóa mã số thuế');")).toEqual([]);
-    expect(check("await ctx.activity('kernel.party', id, 'x', `Đặt lịch ${type.title} lúc ${wallTime(hours.timeZone, start)}`);")).toEqual([]);
+    expect(check("await ctx.activity('kernel.party', id, 'x', `Đặt lịch ${type.slug} lúc ${wallTime(hours.timeZone, start)}`);")).toEqual([]);
     expect(check("await ctx.activity('kernel.party', id, 'x', 'Sửa thông tin'); // ${party.name}")).toEqual([]);
     // Only the summary: the record id, kind and options may name anything.
     expect(check("await ctx.activity('kernel.party', party.name, 'x', 'Sửa', { legalEntityId: entity.name });")).toEqual([]);

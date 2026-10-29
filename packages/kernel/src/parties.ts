@@ -176,7 +176,7 @@ export const markDuplicate = defineCommand({
       .where('id', '=', partyId)
       .execute();
     ctx.audit({ partyId, keepId, name: auditValue(PARTY, 'name', party.name), keepName: auditValue(PARTY, 'name', keep.name) });
-    await ctx.activity('kernel.party', partyId, 'party.marked_duplicate', 'Gộp vào một bên khác (trùng)');
+    await ctx.activity('kernel.party', partyId, 'party.marked_duplicate', 'Gộp vào một đối tác trùng');
     return { partyId, keepId };
   },
 });
@@ -210,7 +210,7 @@ export const unmarkDuplicate = defineCommand({
       .where('id', '=', partyId)
       .execute();
     ctx.audit({ partyId, keepId: party.duplicate_of, name: auditValue(PARTY, 'name', party.name), keepName: auditValue(PARTY, 'name', keep.name) });
-    await ctx.activity('kernel.party', partyId, 'party.unmarked_duplicate', 'Tách khỏi bên đã gộp vào');
+    await ctx.activity('kernel.party', partyId, 'party.unmarked_duplicate', 'Tách khỏi đối tác đã gộp vào');
     return { partyId };
   },
 });
