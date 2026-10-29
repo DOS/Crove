@@ -1791,7 +1791,9 @@ export const createAgentProposal = defineCommand({
     ctx.audit({ event: event.id, proposal_id: proposal.id, proposal_command: draft.command, policy_flags: flags, tainted });
     await ctx.trx
       .insertInto('crove_kernel.task_comment')
-      .values({ org_id: ctx.orgId, task_id: taskId, body: `Đã gửi đề xuất chờ duyệt: ${title}`.slice(0, 10000), author_type: 'system' })
+      // The proposal's kind and id, not its title, so a later change to how titles are built cannot carry a party's name
+      // here (#1825); the proposal's page shows the title.
+      .values({ org_id: ctx.orgId, task_id: taskId, body: `Đã gửi đề xuất chờ duyệt: ${kind} (mã ${proposal.id})`, author_type: 'system' })
       .execute();
     await ctx.activity('kernel.proposal', proposal.id, 'proposal.created', 'Tác tử AI tạo đề xuất');
     await ctx.emit('kernel.proposal.created', { proposalId: proposal.id, kind });

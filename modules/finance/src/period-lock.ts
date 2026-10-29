@@ -173,7 +173,9 @@ export const periodUnlock = defineCommand({
     } catch (error) {
       lockRefusal(error, input.month);
     }
-    await ctx.activity('finance.period', ctx.orgId, 'period.unlocked', `Mở khóa sổ tháng ${monthLabel(input.month)} (lý do: ${input.reason})`, {
+    // The reason the member typed is in the audit row above, which only the audit log's readers see, not in the
+    // timeline's text (#1825).
+    await ctx.activity('finance.period', ctx.orgId, 'period.unlocked', `Mở khóa sổ tháng ${monthLabel(input.month)}`, {
       legalEntityId: entity,
     });
     return periodLockState(ctx, entity);
