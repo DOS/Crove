@@ -6,7 +6,9 @@
 //                         after the first (the runner, packages/db/src/migrate.ts concurrentIndexes, refuses the same);
 //                         the marker counts only among the comment lines before the first statement;
 //   hot-index-concurrently  build a new index on a hot table (see hot-table-retry) concurrently, in a marked file:
-//                         CREATE INDEX holds a SHARE lock for the whole build and every write waits (#1791);
+//                         CREATE INDEX holds a SHARE lock for the whole build and every write waits (#1791); so do
+//                         ADD UNIQUE, PRIMARY KEY or EXCLUDE without USING INDEX, and REINDEX (hotIndexBuild). A
+//                         partitioned parent's empty index (CREATE INDEX ... ON ONLY) is left to hot-table-retry;
 //   no-transaction        not BEGIN, COMMIT, ROLLBACK or END: the runner owns the transaction;
 //   no-drop-schema        not DROP SCHEMA;
 //   no-truncate           not TRUNCATE;
@@ -946,15 +948,66 @@ export function concurrentIndexProblems(sql, statements, marked) {
     }
   });
   for (const tokens of statements) {
-    let k = skipWords(tokens, 1, 'unique');
-    const shaped = isWord(tokens[0], 'create') && isWord(tokens[k], 'index') && isWord(tokens[k + 1], 'concurrently')
+    const k = skipWords(tokens, 1, 'unique');
+    let shaped = isWord(tokens[0], 'create') && isWord(tokens[k], 'index') && isWord(tokens[k + 1], 'concurrently')
       && isWord(tokens[k + 2], 'if') && isWord(tokens[k + 3], 'not') && isWord(tokens[k + 4], 'exists') && isWord(tokens[k + 5])
       && isWord(tokens[k + 6], 'on') && isWord(tokens[k + 7]) && isPunct(tokens[k + 8], '.') && isWord(tokens[k + 9]);
+    // After the table: [USING method] (columns) [INCLUDE (columns)] [WHERE predicate], as the runner reads it; and no
+    // semicolon inside a string, where the runner splits the file.
+    let j = k + 10;
+    if (isWord(tokens[j], 'using') && isWord(tokens[j + 1])) j += 2;
+    shaped &&= isPunct(tokens[j], '(');
+    j = skipParens(tokens, j);
+    if (isWord(tokens[j], 'include') && isPunct(tokens[j + 1], '(')) j = skipParens(tokens, j + 1);
+    shaped &&= j >= tokens.length || isWord(tokens[j], 'where');
+    shaped &&= !tokens.some((t) => t.t === 'string' && t.v.includes(';'));
     if (!shaped) {
       problems.push({ line: tokens[0].line, message: `a file marked ${CONCURRENT_INDEX_MARKER} holds only CREATE [UNIQUE] INDEX CONCURRENTLY IF NOT EXISTS <name> ON <schema>.<table> statements; anything else goes in a transactional migration` });
     }
   }
   return problems;
+}
+
+// The index a statement builds with a lock that blocks writes, as { table, what, constraint }, or undefined:
+// CREATE [UNIQUE] INDEX without CONCURRENTLY (but ON ONLY, which only adds a partitioned parent's empty index), ALTER
+// TABLE ... ADD [CONSTRAINT x] UNIQUE, PRIMARY KEY or EXCLUDE without USING INDEX, and REINDEX TABLE or INDEX (an
+// index is matched by its name, as in lockedTables).
+export function hotIndexBuild(tokens) {
+  const head = tokens[0];
+  const named = (k) => {
+    const name = qualifiedName(tokens, k);
+    return name && !name.dynamic ? { schema: name.schema, name: name.name } : undefined;
+  };
+  if (isWord(head, 'create')) {
+    const k = skipWords(tokens, 1, 'unique');
+    if (!isWord(tokens[k], 'index') || isWord(tokens[k + 1], 'concurrently')) return undefined;
+    const on = findWord(tokens, k + 1, 'on');
+    if (on === -1 || isWord(tokens[on + 1], 'only')) return undefined;
+    const table = named(on + 1);
+    return table && { table, what: 'CREATE INDEX', constraint: false };
+  }
+  if (isWord(head, 'alter') && isWord(tokens[1], 'table')) {
+    const table = named(skipWords(tokens, skipIfExists(tokens, 2), 'only'));
+    if (!table) return undefined;
+    let depth = 0;
+    for (let j = 3; j < tokens.length; j++) {
+      if (isPunct(tokens[j], '(')) depth++;
+      else if (isPunct(tokens[j], ')')) depth--;
+      else if (depth === 0 && isWord(tokens[j], 'add')) {
+        let k = j + 1;
+        if (isWord(tokens[k], 'constraint')) k += 2;
+        const kind = isWord(tokens[k], 'unique') ? 'UNIQUE' : isWord(tokens[k], 'primary') ? 'PRIMARY KEY' : isWord(tokens[k], 'exclude') ? 'EXCLUDE' : undefined;
+        const after = kind === 'PRIMARY KEY' ? k + 2 : k + 1;
+        if (kind && !(isWord(tokens[after], 'using') && isWord(tokens[after + 1], 'index'))) return { table, what: `ADD ${kind}`, constraint: true };
+      }
+    }
+    return undefined;
+  }
+  if (isWord(head, 'reindex') && isWord(tokens[1], 'table', 'index') && !isWord(tokens[2], 'concurrently')) {
+    const table = named(2);
+    return table && { table, what: `REINDEX ${tokens[1].v.toUpperCase()}`, constraint: false };
+  }
+  return undefined;
 }
 
 // hot-index-concurrently applies to migrations with a version above this one, the newest on main when it landed (as
@@ -1098,12 +1151,11 @@ export function lintMigration(file, sql, {
         report(token.line, 'no-concurrently', `CONCURRENTLY cannot run in the transaction the runner applies each migration in; an index on a hot table goes in a file of its own marked ${CONCURRENT_INDEX_MARKER}`);
       }
     }
-    // A new index on a hot table holds a SHARE lock for its whole build with CREATE INDEX, and every write waits (#1791).
-    if (hotIndexRule && isWord(head, 'create') && isWord(tokens[skipWords(tokens, 1, 'unique')], 'index') && !isWord(tokens[skipWords(tokens, 1, 'unique') + 1], 'concurrently')) {
-      const on = findWord(tokens, 1, 'on');
-      const table = on === -1 ? undefined : qualifiedName(tokens, skipWords(tokens, on + 1, 'only'));
-      if (table && !table.dynamic && isHotTable(table) && !createdPlain.has(`table:${table.schema}.${table.name}`)) {
-        report(head.line, 'hot-index-concurrently', `a new index on the hot table ${table.schema}.${table.name} is built with CREATE INDEX CONCURRENTLY IF NOT EXISTS, in a file of its own marked ${CONCURRENT_INDEX_MARKER} (#1791): CREATE INDEX blocks every write to the table for the whole build`);
+    // An index built on a hot table outside a marked file holds a lock for its whole build, and every write waits (#1791).
+    if (hotIndexRule) {
+      const build = hotIndexBuild(tokens);
+      if (build && isHotTable(build.table) && !createdPlain.has(`table:${build.table.schema}.${build.table.name}`)) {
+        report(head.line, 'hot-index-concurrently', `${build.what} on the hot table ${build.table.schema}.${build.table.name} blocks every write to it for the whole build: build the index with CREATE INDEX CONCURRENTLY IF NOT EXISTS, in a file of its own marked ${CONCURRENT_INDEX_MARKER} (#1791)${build.constraint ? ', then add the constraint with ADD CONSTRAINT ... USING INDEX' : ''}`);
       }
     }
 

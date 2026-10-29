@@ -46,7 +46,13 @@ export async function migrate(options: MigrateOptions): Promise<string[]> {
   await client.connect();
   const applied: string[] = [];
   try {
-    await client.query("SELECT pg_advisory_lock(hashtext('crove_migrate'))");
+    // Polled rather than waited for (#1791): a session that waits in pg_advisory_lock holds a snapshot all the while, and
+    // a concurrent index build of the run that holds the lock waits for every older snapshot, so the two would deadlock.
+    for (;;) {
+      const { rows: lock } = await client.query<{ ok: boolean }>("SELECT pg_try_advisory_lock(hashtext('crove_migrate')) AS ok");
+      if (lock[0]?.ok) break;
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
     // Once they exist, these statements change nothing, so the DDL watch has nothing to record before the mark below.
     await client.query(`
       CREATE SCHEMA IF NOT EXISTS crove_meta;
@@ -207,28 +213,64 @@ export async function applyConcurrentIndexes(
   indexes: ConcurrentIndex[],
   log: (message: string) => void = () => {},
 ): Promise<void> {
-  for (const index of indexes) {
-    const qualified = `${client.escapeIdentifier(index.schema)}.${client.escapeIdentifier(index.name)}`;
-    const dropInvalid = async () => {
-      const state = await indexState(client, index);
-      if (state === null || state.valid) return;
-      log(`dropping the INVALID index ${index.schema}.${index.name} a failed build left`);
-      await client.query(`DROP INDEX CONCURRENTLY IF EXISTS ${qualified}`);
-    };
-    await dropInvalid();
-    try {
-      await client.query(index.sql);
-    } catch (error) {
-      await dropInvalid().catch(() => {});
-      throw new Error(`migration ${file} failed building ${index.schema}.${index.name}: ${(error as Error).message}`, { cause: error });
+  // For the builds, the session runs with the pinned search_path (an index expression or predicate resolves no name
+  // through the caller's schemas) and no statement or lock timeout: a build waits out every older transaction, and a
+  // timeout a hosting provider sets on the role would cancel it on every run. Restored afterwards.
+  const { rows: before } = await client.query<{ path: string; statement: string; lock: string }>(
+    "SELECT current_setting('search_path') AS path, current_setting('statement_timeout') AS statement, current_setting('lock_timeout') AS lock",
+  );
+  await client.query("SELECT set_config('search_path', 'pg_catalog, pg_temp', false), set_config('statement_timeout', '0', false), set_config('lock_timeout', '0', false)");
+  try {
+    for (const index of indexes) await buildConcurrentIndex(client, file, index, log);
+  } finally {
+    await client
+      .query('SELECT set_config($1, $2, false), set_config($3, $4, false), set_config($5, $6, false)', [
+        'search_path',
+        before[0]?.path ?? '"$user", public',
+        'statement_timeout',
+        before[0]?.statement ?? '0',
+        'lock_timeout',
+        before[0]?.lock ?? '0',
+      ])
+      .catch(() => {});
+  }
+}
+
+async function buildConcurrentIndex(client: pg.ClientBase, file: string, index: ConcurrentIndex, log: (message: string) => void): Promise<void> {
+  const qualified = `${client.escapeIdentifier(index.schema)}.${client.escapeIdentifier(index.name)}`;
+  // Only an INVALID index of this name on this table is a failed build's leftover; one on another table is someone
+  // else's index, and is never dropped here.
+  const dropInvalid = async () => {
+    const state = await indexState(client, index);
+    if (state === null || state.valid) return;
+    if (state.schema !== index.schema || state.table !== index.table) {
+      throw new Error(`migration ${file}: ${index.schema}.${index.name} is an INVALID index on ${state.schema}.${state.table}, not on ${index.schema}.${index.table}; drop or rename it by hand`);
     }
-    const built = await indexState(client, index);
-    if (built === null || !built.valid || built.schema !== index.schema || built.table !== index.table) {
-      throw new Error(
-        `migration ${file}: ${index.schema}.${index.name} is not a valid index on ${index.schema}.${index.table} after the build` +
-          (built === null ? ' (another relation may have the name)' : ''),
-      );
-    }
+    log(`dropping the INVALID index ${index.schema}.${index.name} a failed build left`);
+    await client.query(`DROP INDEX CONCURRENTLY IF EXISTS ${qualified}`);
+  };
+  // CREATE INDEX CONCURRENTLY cannot build on a partitioned table: its index is built per partition and attached.
+  const { rows: target } = await client.query<{ kind: string }>(
+    `SELECT c.relkind::text AS kind FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = $1 AND c.relname = $2`,
+    [index.schema, index.table],
+  );
+  if (target[0]?.kind === 'p') {
+    throw new Error(`migration ${file}: ${index.schema}.${index.table} is partitioned, where an index cannot be built concurrently; build it on each partition`);
+  }
+  await dropInvalid();
+  try {
+    await client.query(index.sql);
+  } catch (error) {
+    await dropInvalid().catch(() => {});
+    throw new Error(`migration ${file} failed building ${index.schema}.${index.name}: ${(error as Error).message}`, { cause: error });
+  }
+  const built = await indexState(client, index);
+  if (built === null || !built.valid || built.schema !== index.schema || built.table !== index.table) {
+    throw new Error(
+      `migration ${file}: ${index.schema}.${index.name} is not a valid index on ${index.schema}.${index.table} after the build` +
+        (built === null ? ' (another relation may have the name)' : ''),
+    );
   }
 }
 

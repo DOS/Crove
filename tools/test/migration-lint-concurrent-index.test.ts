@@ -28,6 +28,10 @@ const BAD: Record<string, [string, number]> = {
   'a quoted identifier': [marked('CREATE INDEX CONCURRENTLY IF NOT EXISTS "A_idx" ON crove_kernel.party (a);\n'), 4],
   'a backslash': [marked("CREATE INDEX CONCURRENTLY IF NOT EXISTS a_idx ON crove_kernel.party (a) WHERE b = E'\\\\';\n"), 4],
   'nothing to build': [marked(''), 1],
+  // Clauses the runner does not read, and a semicolon inside a string, where it splits the file (review probes).
+  'NULLS NOT DISTINCT': [marked('CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS a_key ON crove_kernel.party (a) NULLS NOT DISTINCT;\n'), 4],
+  'a tablespace': [marked('CREATE INDEX CONCURRENTLY IF NOT EXISTS a_idx ON crove_kernel.party (a) TABLESPACE pg_default;\n'), 4],
+  'a semicolon in a string': [marked("CREATE INDEX CONCURRENTLY IF NOT EXISTS a_idx ON crove_kernel.party (a) WHERE b = 'x;y';\n"), 4],
 };
 
 describe('migration lint: concurrent index builds (#1791)', () => {
@@ -59,7 +63,18 @@ describe('migration lint: concurrent index builds (#1791)', () => {
   it('refuses a new index on a hot table built with CREATE INDEX, also in a retry block or an EXECUTE', () => {
     const hot = (sql: string) => lint(sql).filter((f) => f.rule === 'hot-index-concurrently').map((f) => f.line);
     expect(hot('CREATE INDEX IF NOT EXISTS audit_event_x_idx ON crove_kernel.audit_event (org_id, command);')).toEqual([1]);
-    expect(hot('SELECT 1;\nCREATE UNIQUE INDEX IF NOT EXISTS k ON ONLY crove_jobs.job (id);')).toEqual([2]);
+    expect(hot('SELECT 1;\nCREATE UNIQUE INDEX IF NOT EXISTS k ON crove_jobs.job (id);')).toEqual([2]);
+    // Other index builds that lock out writes: a unique, primary key or exclusion constraint without USING INDEX, and
+    // REINDEX (review probes).
+    expect(hot('ALTER TABLE crove_kernel.audit_event ADD CONSTRAINT audit_event_x_key UNIQUE (org_id, command_id);')).toEqual([1]);
+    expect(hot('ALTER TABLE ONLY crove_kernel.outbox_event ADD PRIMARY KEY (org_id, id);')).toEqual([1]);
+    expect(hot('ALTER TABLE crove_kernel.record ADD COLUMN x int, ADD EXCLUDE USING gist (x WITH =);')).toEqual([1]);
+    expect(hot('REINDEX TABLE crove_kernel.audit_event;\nREINDEX INDEX crove_kernel.outbox_event_pkey;')).toEqual([1, 2]);
+    expect(lint('ALTER TABLE crove_kernel.audit_event ADD UNIQUE (id);')[0]?.message).toContain('ADD CONSTRAINT ... USING INDEX');
+    // A constraint on an index built concurrently, and a partitioned parent's empty index (ON ONLY), are left alone.
+    expect(hot('ALTER TABLE crove_kernel.audit_event ADD CONSTRAINT audit_event_x_key UNIQUE USING INDEX audit_event_x_key;')).toEqual([]);
+    expect(hot('ALTER TABLE crove_kernel.audit_event ADD CONSTRAINT audit_event_pk PRIMARY KEY USING INDEX audit_event_pk;')).toEqual([]);
+    expect(hot('CREATE UNIQUE INDEX IF NOT EXISTS k ON ONLY crove_jobs.job (id);')).toEqual([]);
     expect(hot(`DO $$ DECLARE n int := 0; BEGIN LOOP BEGIN
     PERFORM set_config('lock_timeout', '2s', true);
     CREATE INDEX IF NOT EXISTS outbox_event_x_idx ON crove_kernel.outbox_event (org_id); EXIT;

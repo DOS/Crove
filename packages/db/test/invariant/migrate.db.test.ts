@@ -611,8 +611,9 @@ suite('migrations with a runner that is not a superuser', () => {
   }
 
   // #1791: a marked file builds its index outside a transaction, as this runner (not a superuser), and a write to the
-  // hot table goes through while the build runs. The build waits out a transaction left open on purpose; meanwhile an
-  // audit_event insert gets its lock at once (a plain CREATE INDEX would hold a SHARE lock for the whole build).
+  // hot table goes through while the build runs. The build waits out a snapshot held open on purpose, the index already
+  // in the catalog; meanwhile an audit_event insert gets its lock at once and writes (a plain CREATE INDEX would hold a
+  // SHARE lock for the whole build, and the insert would time out).
   it('builds an index on audit_event concurrently while an insert goes through (#1791)', async () => {
     const file = '29990101000000_crove_kernel_concurrent_index_test.sql';
     const dir = await withExtraMigrations({
@@ -620,8 +621,10 @@ suite('migrations with a runner that is not a superuser', () => {
     });
     const db = adminUrlFor(dbName);
     await withClient(db, async (blocker) => {
-      await blocker.query('BEGIN');
-      await blocker.query('SELECT pg_catalog.txid_current()');
+      // A snapshot held open: the build waits for every transaction whose snapshot is older than the index (a READ
+      // COMMITTED transaction between statements holds none, so REPEATABLE READ).
+      await blocker.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
+      await blocker.query('SELECT 1');
       const run = migrate({ adminUrl: runnerUrl, dir });
       run.catch(() => {});
       await withClient(db, async (watch) => {
@@ -656,6 +659,33 @@ suite('migrations with a runner that is not a superuser', () => {
       expect(rows).toEqual([{ valid: true }]);
       expect((await runner.query('SELECT 1 FROM crove_meta.schema_migrations WHERE name = $1', [file])).rowCount).toBe(1);
     });
+    // The contrast: while a plain CREATE INDEX holds its SHARE lock, the same insert cannot get its lock.
+    await withClient(runnerUrl, async (builder) => {
+      await builder.query('BEGIN');
+      await builder.query('CREATE INDEX audit_event_t1791_plain_idx ON crove_kernel.audit_event (command)');
+      try {
+        await withClient(db, async (writer) => {
+          await writer.query("SET lock_timeout = '1s'");
+          await expect(
+            writer.query(
+              `INSERT INTO crove_kernel.audit_event (org_id, actor_type, command, command_id, outcome, input_sha256)
+               VALUES (gen_random_uuid(), 'system', 't1791', gen_random_uuid(), 'ok', 'x')`,
+            ),
+          ).rejects.toThrow(/lock timeout/);
+        });
+      } finally {
+        await builder.query('ROLLBACK');
+      }
+    });
+  });
+
+  it('refuses to build concurrently on a partitioned table, where PostgreSQL cannot (#1791)', async () => {
+    const dir = await withExtraMigrations({
+      '29990103000000_crove_jobs_concurrent_index_partitioned.sql': `${CONCURRENT_INDEX_MARKER}\nCREATE INDEX CONCURRENTLY IF NOT EXISTS job_t1791_idx ON crove_jobs.job (name);\n`,
+    });
+    const kind = await withClient(runnerUrl, async (runner) => (await runner.query<{ kind: string }>("SELECT relkind::text AS kind FROM pg_class WHERE oid = 'crove_jobs.job'::regclass")).rows[0]?.kind);
+    expect(kind).toBe('p');
+    await expect(migrate({ adminUrl: runnerUrl, dir })).rejects.toThrow(/crove_jobs\.job is partitioned/);
   });
 
   it('records nothing when a build fails, and drops the INVALID index a failed build left before the retry (#1791)', async () => {
