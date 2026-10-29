@@ -728,8 +728,8 @@ function sameClasses(a: Readonly<Record<string, string>>, b: Readonly<Record<str
   return keys.length === Object.keys(b).length && keys.every((column) => Object.hasOwn(b, column) && b[column] === a[column]);
 }
 
-// Checks a command's declared writes (CommandDef.writes) against the classes they carry and, when the runtime has
-// them, against the manifests' (#1710), and answers the contact and payment columns among them
+// Checks a command's declared writes (CommandDef.writes) against the classes they carry and against the manifests'
+// (#1710, #1772), and answers the contact and payment columns among them
 // (`<schema>.<table>.<column> (<class>)`), for P04.
 function checkedWrites(command: string, writes: readonly CommandWrite[], manifests: ReadonlyMap<string, Readonly<Record<string, string>>>): string[] {
   const refuse = (why: string): never => {
@@ -900,7 +900,7 @@ export class Runtime {
   // Command -> whether an agent's proposal of it is flagged P04 (CommandInfo.contactOrPayment), derived once at
   // registration from its declared writes.
   readonly #contactOrPayment = new Map<string, boolean>();
-  // The classes of every manifest table (RuntimeOptions.manifests), or null when the runtime was given none.
+  // The classes of every manifest table (RuntimeOptions.manifests).
   readonly #manifestTables: ReadonlyMap<string, Readonly<Record<string, string>>>;
   // Where each transaction opens (Decision 14): tenant work on the org's cell, org-less work on the control plane.
   readonly #cells: CellResolver;
@@ -916,9 +916,9 @@ export class Runtime {
 
   // A plain Db is one cell that also holds the control plane (singleCell).
   constructor(cells: CellResolver | Db, options: RuntimeOptions) {
-    if (typeof options !== 'object' || options === null || !Array.isArray(options.manifests)) {
-      throw new Error('RuntimeOptions.manifests: a runtime is built with the module manifests (#1772)');
-    }
+    // Read once: the check and the copy below see the same list.
+    const manifests: unknown = typeof options === 'object' && options !== null ? options.manifests : undefined;
+    if (!Array.isArray(manifests)) throw new Error('RuntimeOptions.manifests: a runtime is built with the module manifests (#1772)');
     this.#cells = isCellResolver(cells) ? cells : singleCell(cells);
     // The runtime's own frozen copy of the session source, read once: changing the object passed in (its check
     // replaced by a no-op) does not turn off the ADR-0028 check here (#1766).
@@ -936,7 +936,7 @@ export class Runtime {
     const inputHash = options.inputHash ?? 'keyed';
     if (!(INPUT_HASH_MODES as readonly string[]).includes(inputHash)) throw new Error(`unknown input hash mode ${String(inputHash)}`);
     this.inputHash = inputHash;
-    this.#manifestTables = manifestTableClasses(options.manifests);
+    this.#manifestTables = manifestTableClasses(manifests as readonly ManifestTables[]);
     Object.freeze(this);
   }
 
