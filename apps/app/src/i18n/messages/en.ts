@@ -803,7 +803,7 @@ export const en = {
         chief_accountant: 'Approves posting proposals and unlocks locked months, as an owner does.',
         accountant: 'Says the member keeps the books. Adds no permission beyond the base role yet.',
         viewer: 'Says the member only follows the accounting figures. Adds no permission beyond the base role yet.',
-        entity_chief_accountant: 'Unlocks the locked months of the assigned legal entities only. Each assignment names one entity; you can add more. Approving posting proposals needs the org-wide chief accountant.',
+        entity_chief_accountant: 'Unlocks the locked months of the assigned legal entities only. Each assignment names one entity; you can add more. Approving posting proposals needs the org-wide chief accountant. If it is the only role of this person, give them Outside accountant for that entity before revoking it.',
       },
       crm: { sales: 'Adds no permission beyond the base role yet.' },
       desk: { agent: 'Adds no permission beyond the base role yet.' },

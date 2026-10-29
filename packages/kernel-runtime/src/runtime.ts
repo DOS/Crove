@@ -135,7 +135,8 @@ export interface CommandDef<I = unknown, O = unknown> {
   // 'legal_entity' (#1507): a user who holds the permission for some legal entities only (entity-scoped assignments,
   // crove_kernel.ctx_permission_entities) passes the gate too, with those entities, and the handler must name the entity
   // it acts on through ctx.permissionEntity: one outside them is refused, and a command that names none fails (fails
-  // closed) after its handler returns. Default 'org': an org-wide assignment only, exactly as before. Only beside a
+  // closed) after its handler returns. Such a holder is past the gate, so an R3 command asks them for the step-up first
+  // and refuses another entity after it. Default 'org': an org-wide assignment only, exactly as before. Only beside a
   // permission.
   permissionScope?: 'org' | 'legal_entity';
   target?: (input: I) => { type: string; id: string } | null;

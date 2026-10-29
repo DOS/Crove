@@ -38,13 +38,13 @@ BEGIN
   END IF;
   -- An owner, or a user holding finance.period.unlock org-wide or for some entity (both answer nothing for any other
   -- actor): refused first, as before, when they hold it nowhere.
-  IF NOT crove_kernel.ctx_has_permission('finance.period.unlock')
-     AND pg_catalog.cardinality(crove_kernel.ctx_permission_entities('finance.period.unlock')) = 0 THEN
+  IF crove_kernel.ctx_has_permission('finance.period.unlock') IS NOT TRUE
+     AND COALESCE(pg_catalog.cardinality(crove_kernel.ctx_permission_entities('finance.period.unlock')), 0) = 0 THEN
     PERFORM crove_finance.assert_period_lock_role(ARRAY['owner']);
   END IF;
   v_entity := crove_finance.period_lock_entity(v_org, p_legal_entity_id);
   -- Then for the entity resolved (#1507): an entity holder unlocks only the months of its own entities.
-  IF NOT crove_finance.may_unlock_period(v_entity) THEN
+  IF crove_finance.may_unlock_period(v_entity) IS NOT TRUE THEN
     RAISE EXCEPTION 'PERIOD_LOCK_FORBIDDEN' USING ERRCODE = '42501';
   END IF;
   IF p_month IS NULL OR EXTRACT(DAY FROM p_month) <> 1 THEN
