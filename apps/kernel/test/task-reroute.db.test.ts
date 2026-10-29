@@ -637,8 +637,19 @@ suite('tasks a chart or role change would strand (#1799)', () => {
 
   // The rounds end only when no task of the seats is stranded, so a task's target must never be a seat that would
   // strand it again: the escalation target and the stranded test read coverage the same way (the #1904 review). Every
-  // seat and entity of the org, after the cases above built its chart, in the owner's context the commands run in.
+  // seat and entity of the org, in the owner's context the commands run in: a chain of its own with a paused seat, a
+  // vacant one and seats limited to one entity, and whatever the cases above built.
   it("never targets a seat that does not read the task's entity, nor the task's own seat (#1904 review)", async () => {
+    const top = await seat('Giám đốc vùng', await member('pin-top', 'member', null), null);
+    const paused = await seat('Phó giám đốc vùng', await member('pin-paused', 'member', null), top);
+    await admin((c) => c.query(`UPDATE crove_kernel.position SET status = 'paused' WHERE org_id = $1 AND id = $2`, [orgId, paused]));
+    const { positionId: vacant } = await app.execute<{ positionId: string }>(
+      'kernel.position.create',
+      { title: 'Vị trí trống', module: 'finance', roleKey: 'finance.accountant', reportsTo: paused },
+      { actor: asMfa(owner), orgId },
+    );
+    const ofBranch = await seat('Kế toán chi nhánh vùng', await member('pin-branch', 'member', branch), vacant);
+    const chain = [top, paused, vacant, ofBranch, await seat('Kế toán viên vùng', await member('pin-default', 'member', defaultEntity), ofBranch)];
     const c = new pg.Client({ connectionString: adminUrl });
     await c.connect();
     try {
@@ -652,7 +663,9 @@ suite('tasks a chart or role change would strand (#1799)', () => {
          WHERE x.target IS NOT NULL`,
         [orgId],
       );
-      expect(rows.length).toBeGreaterThan(10);
+      // Every seat of the chain below the top has a target for every entity: the top's holder reads them all.
+      const entities = (await c.query<{ n: number }>('SELECT count(*)::int AS n FROM crove_kernel.legal_entity WHERE org_id = $1', [orgId])).rows[0]?.n ?? 0;
+      expect(rows.filter((r) => chain.includes(r.seat)).length).toBe(entities * (chain.length - 1));
       expect(rows.filter((r) => r.target === r.seat || !r.reads)).toEqual([]);
     } finally {
       await c.query('ROLLBACK').catch(() => {});
