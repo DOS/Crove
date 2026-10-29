@@ -100,19 +100,31 @@ suite('retention holds on evidence files (#1009)', () => {
     return { fileId, storageKey };
   }
 
-  // Reads an invoice into a proposal, and posts it when asked; returns the file and the journal entry's creation time.
+  // Reads an invoice into a proposal, and posts it when asked; returns the file, the journal entry and its creation
+  // time in microseconds since the epoch. A JS Date keeps milliseconds only, and the hold rounds the microseconds up to
+  // the second (#1664).
   async function invoiceFile(post: boolean) {
     const file = await ingest(invoice());
     const { proposalId } = await extractAndPropose({ runtime: workerRuntime, store, extractor: null, extract, today: () => '2026-10-13' }, orgId, file.fileId);
-    if (!post) return { ...file, postedAt: null };
+    if (!post) return { ...file, journalEntryId: null, postedUs: null };
     const { journalEntryId } = await runtime.execute<{ journalEntryId: string }>(
       'kernel.proposal.approve',
       { acceptUnverifiedSignature: true, id: String(proposalId), revision: 1 },
       { actor: asMfa(owner), orgId, idempotencyKey: randomUUID() },
     );
-    const { rows } = await admin((c) => c.query<{ created_at: Date }>('SELECT created_at FROM crove_finance.journal_entry WHERE id = $1', [journalEntryId]));
-    return { ...file, postedAt: rows[0]?.created_at ?? null };
+    return { ...file, journalEntryId, postedUs: await postedUs(journalEntryId) };
   }
+  const postedUs = async (journalEntryId: string) => {
+    const { rows } = await admin((c) =>
+      c.query<{ us: string }>('SELECT (extract(epoch FROM created_at) * 1000000)::bigint::text AS us FROM crove_finance.journal_entry WHERE id = $1', [journalEntryId]),
+    );
+    return BigInt(rows[0]?.us ?? '0');
+  };
+  // The hold for a posting `us` microseconds after the epoch: `days` later, rounded up to the whole second.
+  const holdFor = (us: bigint | null, days: number) => {
+    const end = (us ?? 0n) + BigInt(days) * 86_400_000_000n;
+    return new Date(Number(((end + 999_999n) / 1_000_000n) * 1000n));
+  };
 
   const holdRow = async (fileId: string) =>
     (
@@ -133,7 +145,6 @@ suite('retention holds on evidence files (#1009)', () => {
     });
   const run = (days = 3650, state: EvidenceHoldState = { unavailableReportedAt: 0 }, target: BlobStore = store) =>
     runEvidenceHolds({ runtime: workerRuntime, workerDb, store: target }, days, state);
-  const ceilSecond = (ms: number) => Math.ceil(ms / 1000) * 1000;
 
   beforeAll(async () => {
     extract = inProcessExtract();
@@ -184,7 +195,7 @@ suite('retention holds on evidence files (#1009)', () => {
     const posted = await invoiceFile(true);
     const pending = await invoiceFile(false);
     expect(await run()).toEqual({ held: 1, failed: 0, waiting: 0 });
-    const until = new Date(ceilSecond((posted.postedAt as Date).getTime() + 3650 * DAY));
+    const until = holdFor(posted.postedUs, 3650);
     expect(store.calls.map((c) => c.ref.key)).toEqual([posted.storageKey]);
     expect(store.calls[0]?.until).toEqual(until);
     expect(await holdRow(posted.fileId)).toMatchObject({ held_until: until, hold_attempts: 0, hold_error: null });
@@ -247,6 +258,33 @@ suite('retention holds on evidence files (#1009)', () => {
     const longer = await run(4015);
     expect(longer.held).toBeGreaterThanOrEqual(1);
     expect(longer.failed).toBe(0);
-    expect((await holdRow(posted.fileId))?.held_until).toEqual(new Date(ceilSecond((posted.postedAt as Date).getTime() + 4015 * DAY)));
+    expect((await holdRow(posted.fileId))?.held_until).toEqual(holdFor(posted.postedUs, 4015));
+  });
+
+  // #1664: a posting a few microseconds past a whole second is held to the next second, which a millisecond Date reads
+  // as the same second; one on the whole second stays on it.
+  it('rounds the hold up to the second from the microseconds of the posting', async () => {
+    const setPostedAt = (journalEntryId: string, at: string) =>
+      admin(async (c) => {
+        await c.query('BEGIN');
+        await c.query("SET LOCAL session_replication_role = 'replica'");
+        await c.query('UPDATE crove_finance.journal_entry SET created_at = $2::timestamptz WHERE id = $1', [journalEntryId, at]);
+        await c.query('COMMIT');
+      });
+    for (const [at, until] of [
+      ['2026-10-24T12:03:18.000400Z', '2036-10-21T12:03:19.000Z'],
+      ['2026-10-24T12:03:18.999999Z', '2036-10-21T12:03:19.000Z'],
+      ['2026-10-24T12:03:18.000000Z', '2036-10-21T12:03:18.000Z'],
+    ] as const) {
+      const posted = await invoiceFile(true);
+      await setPostedAt(posted.journalEntryId as string, at);
+      const us = await postedUs(posted.journalEntryId as string);
+      // What the old test computed from a millisecond Date, wrong by a second for the first case.
+      const fromMs = new Date(Math.ceil((Number(us / 1000n) + 3650 * DAY) / 1000) * 1000);
+      await run();
+      expect((await holdRow(posted.fileId))?.held_until, at).toEqual(new Date(until));
+      expect(holdFor(us, 3650), at).toEqual(new Date(until));
+      if (at.endsWith('.000400Z')) expect(fromMs).not.toEqual(new Date(until));
+    }
   });
 });
