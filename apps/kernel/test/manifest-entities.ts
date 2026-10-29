@@ -40,8 +40,8 @@ export interface TargetUse {
 
 // A function body with its SQL comments (`--` to the end of the line, `/* */`) removed and string literals kept, so a
 // quote, comma or parenthesis in a comment, or a commented-out call, is not read as code. Block comments are not
-// nested in Crove's functions.
-function stripSqlComments(body: string): string {
+// nested in Crove's functions. manifest-permissions.ts reads permissions from the same text.
+export function stripSqlComments(body: string): string {
   let out = '';
   let quoted = false;
   for (let i = 0; i < body.length; i += 1) {

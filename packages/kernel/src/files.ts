@@ -1,7 +1,7 @@
 // Recording a stored file (plan §7.6, ADR-0013), shared by kernel.file.ingest (uploads and email attachments) and
 // kernel.file.archive.record (the entries of a ZIP, #314).
 import { z } from 'zod';
-import { ACCEPTED_ARCHIVE_TYPES } from '@crove/kernel-contract';
+import { ACCEPTED_ARCHIVE_TYPES, zId } from '@crove/kernel-contract';
 import { DomainError, GENERATION_PATTERN, contentGeneration, fileKey, type CommandContext } from '@crove/kernel-runtime';
 
 // A file reference is the triple (storageKey, generation, sha256) of plan §7.6 (ADR-0013): generation is what the
@@ -21,6 +21,10 @@ export const zIngestFile = z.object({
   // An image's size as shown, read by the server from its header (#636); both or neither.
   imageWidth: z.number().int().min(1).max(100_000).optional(),
   imageHeight: z.number().int().min(1).max(100_000).optional(),
+  // The legal entity the uploader books the document in (#1764): its first reading, and so its proposal, belong there.
+  // One the uploader can see; chosen once, never changed. Omitted: the uploader's own entity when limited to one, else
+  // the default entity.
+  legalEntityId: zId.optional(),
 });
 export type IngestFile = z.infer<typeof zIngestFile>;
 
@@ -41,6 +45,12 @@ export async function ingestFileRow(ctx: CommandContext, input: IngestFile, crea
   if (input.generation.startsWith('content:') && input.generation !== contentGeneration(input.sha256)) {
     throw new DomainError('INVALID_GENERATION', 400, 'Phiên bản lưu trữ không khớp nội dung tệp');
   }
+  // An entity the writer sees (read under its own policies): one that does not exist and one hidden from it answer the
+  // same. The database checks it again (file_upload_entity).
+  if (input.legalEntityId !== undefined) {
+    const entity = await ctx.trx.selectFrom('crove_kernel.legal_entity').select('id').where('org_id', '=', ctx.orgId).where('id', '=', input.legalEntityId).executeTakeFirst();
+    if (!entity) throw new DomainError('LEGAL_ENTITY_NOT_ALLOWED', 403, 'Bạn không có quyền với sổ sách của pháp nhân này');
+  }
   const inserted = await ctx.trx
     .insertInto('crove_kernel.file')
     .values({
@@ -55,6 +65,8 @@ export async function ingestFileRow(ctx: CommandContext, input: IngestFile, crea
       duration_ms: input.durationMs === undefined ? null : String(input.durationMs),
       ...(input.imageWidth !== undefined && input.imageHeight !== undefined ? { image_width: input.imageWidth, image_height: input.imageHeight } : {}),
       created_by: createdBy,
+      // A file stored again (the same bytes) keeps the entity of its first upload.
+      ...(input.legalEntityId !== undefined ? { upload_entity_id: input.legalEntityId } : {}),
     })
     .onConflict((oc) => oc.columns(['org_id', 'sha256']).doNothing())
     .returning('id')

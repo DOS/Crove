@@ -1,5 +1,17 @@
 // Migration content lint (G2 migration-lint, plan §5.5 and §10; issue #1201). Every migration not on the allowlist must:
-//   no-concurrently       not use CONCURRENTLY: the runner applies each file in one transaction, where it fails;
+//   no-concurrently       not use CONCURRENTLY: the runner applies each file in one transaction, where it fails; but in a
+//                         file marked `-- crove:concurrent-index`, which it applies outside one (#1791);
+//   concurrent-index      a marked file holds only `CREATE [UNIQUE] INDEX CONCURRENTLY IF NOT EXISTS <name> ON
+//                         <schema>.<table> ...;` statements, with no comment, dollar quote, quoted identifier or backslash
+//                         after the first (the runner, packages/db/src/migrate.ts concurrentIndexes, refuses the same);
+//                         the marker counts only among the comment lines before the first statement, and no name is
+//                         over the 63 bytes PostgreSQL keeps of one (security review L2);
+//   hot-index-concurrently  build a new index on a hot table (see hot-table-retry) concurrently, in a marked file:
+//                         CREATE INDEX holds a SHARE lock for the whole build and every write waits (#1791); so do
+//                         ADD UNIQUE, PRIMARY KEY or EXCLUDE without USING INDEX, ADD [COLUMN] ... UNIQUE or PRIMARY
+//                         KEY, and REINDEX, with options too, of a hot table or index, of a schema with hot tables, of
+//                         the database or its catalogs (hotIndexBuild; security review M1, M2). A
+//                         partitioned parent's empty index (CREATE INDEX ... ON ONLY) is left to hot-table-retry;
 //   no-transaction        not BEGIN, COMMIT, ROLLBACK or END: the runner owns the transaction;
 //   no-drop-schema        not DROP SCHEMA;
 //   no-truncate           not TRUNCATE;
@@ -31,7 +43,8 @@
 //                         [NO] INHERIT. A table a top-level plain CREATE TABLE of this file made is not hot yet;
 //   no-edit-applied       with --since, not change or delete a migration that is already on the base branch.
 // contract-header and hot-table-retry skip the files up to BREAKING_RULES_AFTER (20261103090000), the newest of the 262
-// on main when they landed.
+// on main when they landed; hot-index-concurrently the files up to HOT_INDEX_RULE_AFTER. A marked file's indexes need
+// no retry block: a concurrent build takes no lock that blocks writes.
 // DO bodies are linted too: their PL/pgSQL is split into statements and each SQL statement is checked like a top-level
 // one, and so is every statement of the command string an EXECUTE runs. Function bodies are not: they run when the
 // function is called, not when the migration is applied.
@@ -905,19 +918,148 @@ const CONTRACT = /^--\s*crove:contract(?:\s+adr=(\S*))?(?:\s|$)/;
 // the same file is neither a contract change nor DDL on a table anyone else holds.
 const PLAIN_CREATE_KINDS = new Set(['table', 'view', 'materialized', 'sequence', 'type', 'domain']);
 
+// A file the runner applies outside a transaction to build indexes concurrently (#1791, packages/db/src/migrate.ts,
+// concurrentIndexes): CONCURRENT_INDEX_MARKER is one of its leading comment lines, before the first statement.
+export const CONCURRENT_INDEX_MARKER = '-- crove:concurrent-index';
+export function concurrentIndexMarked(sql) {
+  for (const raw of sql.split('\n')) {
+    const line = raw.trim();
+    if (line === '') continue;
+    if (!line.startsWith('--')) return false;
+    if (line === CONCURRENT_INDEX_MARKER) return true;
+  }
+  return false;
+}
+
+// What keeps a file from being one the runner applies concurrently, as [{ line, message }]: in a marked file, anything
+// but `CREATE [UNIQUE] INDEX CONCURRENTLY IF NOT EXISTS <name> ON <schema>.<table> ...;` statements, or a comment,
+// dollar quote, quoted identifier or backslash after the first statement (the runner splits the file on semicolons and
+// refuses the same); in any file, the marker anywhere but the leading comment lines, where the runner does not see it.
+export function concurrentIndexProblems(sql, statements, marked) {
+  const problems = [];
+  const lines = sql.replaceAll('\r\n', '\n').split('\n');
+  if (!marked) {
+    const at = lines.findIndex((l) => l.includes('crove:concurrent-index'));
+    if (at !== -1) problems.push({ line: at + 1, message: `the ${CONCURRENT_INDEX_MARKER} marker counts only among the comment lines before the first statement` });
+    return problems;
+  }
+  const first = lines.findIndex((l) => l.trim() !== '' && !l.trim().startsWith('--'));
+  if (first === -1) return [{ line: 1, message: `a file marked ${CONCURRENT_INDEX_MARKER} builds at least one index` }];
+  lines.slice(first).forEach((text, k) => {
+    if (/--|\/\*|\$|\\|"/.test(text)) {
+      problems.push({ line: first + k + 1, message: `a file marked ${CONCURRENT_INDEX_MARKER} holds no comment, dollar quote, quoted identifier or backslash after its first statement (the runner applies it statement by statement)` });
+    }
+  });
+  for (const tokens of statements) {
+    const k = skipWords(tokens, 1, 'unique');
+    let shaped = isWord(tokens[0], 'create') && isWord(tokens[k], 'index') && isWord(tokens[k + 1], 'concurrently')
+      && isWord(tokens[k + 2], 'if') && isWord(tokens[k + 3], 'not') && isWord(tokens[k + 4], 'exists') && isWord(tokens[k + 5])
+      && isWord(tokens[k + 6], 'on') && isWord(tokens[k + 7]) && isPunct(tokens[k + 8], '.') && isWord(tokens[k + 9]);
+    // After the table: [USING method] (columns) [INCLUDE (columns)] [WHERE predicate], as the runner reads it; and no
+    // semicolon inside a string, where the runner splits the file.
+    let j = k + 10;
+    if (isWord(tokens[j], 'using') && isWord(tokens[j + 1])) j += 2;
+    shaped &&= isPunct(tokens[j], '(');
+    j = skipParens(tokens, j);
+    if (isWord(tokens[j], 'include') && isPunct(tokens[j + 1], '(')) j = skipParens(tokens, j + 1);
+    shaped &&= j >= tokens.length || isWord(tokens[j], 'where');
+    shaped &&= !tokens.some((t) => t.t === 'string' && t.v.includes(';'));
+    // A name longer than 63 bytes is cut short by PostgreSQL, so the runner would never find the index it built.
+    const long = [tokens[k + 5], tokens[k + 7], tokens[k + 9]].find((t) => t?.t === 'word' && Buffer.byteLength(t.v) > 63);
+    if (shaped && long) {
+      problems.push({ line: tokens[0].line, message: `${long.v} is longer than 63 bytes, which PostgreSQL cuts names to; the runner would not find the index it built` });
+      continue;
+    }
+    if (!shaped) {
+      problems.push({ line: tokens[0].line, message: `a file marked ${CONCURRENT_INDEX_MARKER} holds only CREATE [UNIQUE] INDEX CONCURRENTLY IF NOT EXISTS <name> ON <schema>.<table> statements; anything else goes in a transactional migration` });
+    }
+  }
+  return problems;
+}
+
+// The schemas that hold hot tables (isHotTable): a REINDEX of one of them, or of the database or its catalogs, rebuilds a
+// hot table's indexes under a lock.
+const HOT_SCHEMAS = new Set(['crove_jobs', 'crove_kernel']);
+
+// The index a statement builds with a lock that blocks writes, as { table, what, constraint } (or { all, target, what }
+// when it covers a whole schema or database), or undefined: CREATE [UNIQUE] INDEX without CONCURRENTLY (but ON ONLY,
+// which only adds a partitioned parent's empty index); ALTER TABLE ... ADD [CONSTRAINT x] UNIQUE, PRIMARY KEY or EXCLUDE
+// without USING INDEX, and ADD [COLUMN] with a UNIQUE or PRIMARY KEY column constraint; REINDEX [(options)] TABLE or
+// INDEX (an index is matched by its name, as in lockedTables), and REINDEX SCHEMA of a schema with hot tables, DATABASE
+// or SYSTEM.
+export function hotIndexBuild(tokens) {
+  const head = tokens[0];
+  const named = (k) => {
+    const name = qualifiedName(tokens, k);
+    return name && !name.dynamic ? { schema: name.schema, name: name.name } : undefined;
+  };
+  if (isWord(head, 'create')) {
+    const k = skipWords(tokens, 1, 'unique');
+    if (!isWord(tokens[k], 'index') || isWord(tokens[k + 1], 'concurrently')) return undefined;
+    const on = findWord(tokens, k + 1, 'on');
+    if (on === -1 || isWord(tokens[on + 1], 'only')) return undefined;
+    const table = named(on + 1);
+    return table && { table, what: 'CREATE INDEX', constraint: false };
+  }
+  if (isWord(head, 'alter') && isWord(tokens[1], 'table')) {
+    const table = named(skipWords(tokens, skipIfExists(tokens, 2), 'only'));
+    if (!table) return undefined;
+    let depth = 0;
+    let column = false; // inside an ADD [COLUMN] action's column definition, up to the next action
+    for (let j = 3; j < tokens.length; j++) {
+      if (isPunct(tokens[j], '(')) depth++;
+      else if (isPunct(tokens[j], ')')) depth--;
+      else if (depth === 0 && isPunct(tokens[j], ',')) column = false;
+      else if (depth === 0 && isWord(tokens[j], 'add')) {
+        let k = j + 1;
+        if (isWord(tokens[k], 'constraint')) k += 2;
+        const kind = isWord(tokens[k], 'unique') ? 'UNIQUE' : isWord(tokens[k], 'primary') ? 'PRIMARY KEY' : isWord(tokens[k], 'exclude') ? 'EXCLUDE' : undefined;
+        const after = kind === 'PRIMARY KEY' ? k + 2 : k + 1;
+        if (kind && !(isWord(tokens[after], 'using') && isWord(tokens[after + 1], 'index'))) return { table, what: `ADD ${kind}`, constraint: true };
+        column = kind === undefined && !isWord(tokens[k], 'check', 'foreign') && !isWord(tokens[j + 1], 'constraint');
+      } else if (column && depth === 0 && isWord(tokens[j], 'unique', 'primary')) {
+        return { table, what: `ADD COLUMN ... ${tokens[j].v === 'unique' ? 'UNIQUE' : 'PRIMARY KEY'}`, constraint: true };
+      }
+    }
+    return undefined;
+  }
+  if (isWord(head, 'reindex')) {
+    const k = isPunct(tokens[1], '(') ? skipParens(tokens, 1) : 1;
+    if (isWord(tokens[k + 1], 'concurrently')) return undefined;
+    if (isWord(tokens[k], 'table', 'index')) {
+      const table = named(k + 1);
+      return table && { table, what: `REINDEX ${tokens[k].v.toUpperCase()}`, constraint: false };
+    }
+    if (isWord(tokens[k], 'schema') && HOT_SCHEMAS.has(tokens[k + 1]?.v)) return { all: true, target: `every table of schema ${tokens[k + 1].v}`, what: 'REINDEX SCHEMA', constraint: false };
+    if (isWord(tokens[k], 'database', 'system')) return { all: true, target: 'every table of the database', what: `REINDEX ${tokens[k].v.toUpperCase()}`, constraint: false };
+  }
+  return undefined;
+}
+
+// hot-index-concurrently applies to migrations with a version above this one, the newest on main when the rule merged
+// (as BREAKING_RULES_AFTER: the files up to it cannot be edited, and with --since every file a PR adds gets the rule).
+export const HOT_INDEX_RULE_AFTER = '20261104120000';
+export function hotIndexRuleApplies(name, added) {
+  return added || basename(name).slice(0, 14) > HOT_INDEX_RULE_AFTER;
+}
+
 // Lints one migration. Returns [{ file, line, rule, message }], in file order. `existingFunctions` are the keys of
 // functions earlier migrations created (functionsCreated): CREATE OR REPLACE keeps a function's privileges, so only a
 // new function needs its REVOKE. Matching is by name, so a new overload of an existing function is not caught. Each
 // cross-module waiver the lint accepts is pushed to `waivers` as { file, line, schemas, reason }.
 // `breakingRules` turns on contract-header and hot-table-retry (off for the files on main before they landed, see
 // BREAKING_RULES_AFTER); `adrs`, when given, are the ADR numbers (4 digits) a contract header may name.
+// `hotIndexRule` turns on hot-index-concurrently (off for the files on main before it landed, HOT_INDEX_RULE_AFTER).
 export function lintMigration(file, sql, {
   existingFunctions = new Set(),
   waivers = /** @type {{ file: string, line: number, schemas: string[], reason: string }[]} */ ([]),
   breakingRules = true,
+  hotIndexRule = true,
   adrs = /** @type {Set<string> | undefined} */ (undefined),
 } = {}) {
   const findings = [];
+  // A file the runner applies outside a transaction to build indexes concurrently (#1791).
+  const marked = concurrentIndexMarked(sql);
   const module = moduleOf(file);
   const schema = module === undefined ? undefined : `crove_${module}`;
   const report = (line, rule, message) => findings.push({ file, line, rule, message });
@@ -1031,7 +1173,18 @@ export function lintMigration(file, sql, {
     order++;
 
     for (const token of tokens) {
-      if (isWord(token, 'concurrently')) report(token.line, 'no-concurrently', 'CONCURRENTLY cannot run in the transaction the runner applies each migration in');
+      if (isWord(token, 'concurrently') && !marked) {
+        report(token.line, 'no-concurrently', `CONCURRENTLY cannot run in the transaction the runner applies each migration in; an index on a hot table goes in a file of its own marked ${CONCURRENT_INDEX_MARKER}`);
+      }
+    }
+    // An index built on a hot table outside a marked file holds a lock for its whole build, and every write waits (#1791).
+    if (hotIndexRule) {
+      const build = hotIndexBuild(tokens);
+      if (build?.all) {
+        report(head.line, 'hot-index-concurrently', `${build.what} rebuilds the indexes of ${build.target}, hot tables among them, and blocks their writes for the whole rebuild: reindex the one index that needs it with REINDEX INDEX CONCURRENTLY, outside a migration, or build a new index concurrently in a file marked ${CONCURRENT_INDEX_MARKER} (#1791)`);
+      } else if (build && isHotTable(build.table) && !createdPlain.has(`table:${build.table.schema}.${build.table.name}`)) {
+        report(head.line, 'hot-index-concurrently', `${build.what} on the hot table ${build.table.schema}.${build.table.name} blocks every write to it for the whole build: build the index with CREATE INDEX CONCURRENTLY IF NOT EXISTS, in a file of its own marked ${CONCURRENT_INDEX_MARKER} (#1791)${build.constraint ? ', then add the constraint with ADD CONSTRAINT ... USING INDEX' : ''}`);
+      }
     }
 
     if (head.t === 'word' && TRANSACTION_WORDS.has(head.v) && (!nested || head.v === 'commit' || head.v === 'rollback')) {
@@ -1095,7 +1248,8 @@ export function lintMigration(file, sql, {
 
     if (breakingRules) {
       checkContract(tokens, ctx.anchorLine ?? head.line);
-      checkHot(tokens, ctx.retry(head));
+      // A concurrent build takes no lock that blocks writes, so a marked file's indexes need no retry block.
+      if (!marked) checkHot(tokens, ctx.retry(head));
     }
     // Only a top-level CREATE surely ran: one in a DO may sit in a branch not taken or a block that swallows its error.
     if (ctx === TOP && !nested) noteCreated(tokens);
@@ -1127,6 +1281,7 @@ export function lintMigration(file, sql, {
   const statements = splitStatements(lex(sql, 1, comments));
   collectWaivers();
   for (const statement of statements) lintStatement(statement, false);
+  for (const { line, message } of concurrentIndexProblems(sql, statements, marked)) report(line, 'concurrent-index', message);
 
   for (const fn of functions) {
     // A function dropped earlier in this file and created again is new: the drop took its privileges with it.
@@ -1228,6 +1383,7 @@ function main() {
     waivers,
     adrs,
     breakingRules: breakingRulesApply(name, changes !== undefined),
+    hotIndexRule: hotIndexRuleApplies(name, changes !== undefined),
   }));
   findings.push(...(changes?.edited ?? []));
   // Every accepted waiver, so reviewers see each cross-module change: as annotations and in the job summary.

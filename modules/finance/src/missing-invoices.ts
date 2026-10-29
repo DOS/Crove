@@ -129,6 +129,9 @@ export function mailPayload(
   return { ...base, periods: shown };
 }
 
+// What makes two listed invoices one: the seller, the template, the series and the number.
+const itemKey = (item: Item): string => `${item.sellerTaxCode}|${item.template ?? ''}|${item.series}|${item.number}`;
+
 // The missing invoices of the reminder's periods, in period order. An invoice in a month and in its quarter (both
 // imported) is listed once, under the first period. A period too large to reconcile (PERIOD_TOO_LARGE) is skipped and
 // named in `skipped`; the others still count.
@@ -151,7 +154,7 @@ export async function collectMissing(
       throw error;
     }
     const fresh = items.filter((item) => {
-      const key = `${item.sellerTaxCode}|${item.template ?? ''}|${item.series}|${item.number}`;
+      const key = itemKey(item);
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
@@ -221,6 +224,8 @@ export const missingInvoicesRequest = defineCommand({
       queued.status === 'suppressed'
         ? `Không gửi được đề nghị bổ sung hóa đơn ${periodLabel(input.period)}: email liên hệ đang bị chặn`
         : `Gửi email đề nghị công ty bổ sung ${items.length} hóa đơn mua vào còn thiếu, ${periodLabel(input.period)}`,
+      // The request is about one entity's purchases: its row is read only where that entity is (#1725).
+      { legalEntityId },
     );
     ctx.audit({ period: input.period, count: items.length, message_id: queued.messageId, status: queued.status, legal_entity_id: legalEntityId });
     return { messageId: queued.messageId, status: queued.status, count: items.length };
@@ -322,9 +327,15 @@ export const missingInvoicesRemind = defineCommand({
         return to >= cutoff && from <= today;
       })
       .sort();
+    // Which entity each missing invoice is of, by the key collectMissing dedupes on, for the timeline rows below.
+    const entityOf = new Map<string, string>();
     const { missing, skipped } = await collectMissing(periods, async (period) => {
       const items: Item[] = [];
-      for (const legalEntityId of entities.get(period) ?? []) items.push(...(await missingIn(ctx, period, legalEntityId)));
+      for (const legalEntityId of entities.get(period) ?? []) {
+        const found = await missingIn(ctx, period, legalEntityId);
+        for (const item of found) if (!entityOf.has(itemKey(item))) entityOf.set(itemKey(item), legalEntityId);
+        items.push(...found);
+      }
       return items;
     });
     if (missing.length === 0 && skipped.length > 0) {
@@ -345,12 +356,24 @@ export const missingInvoicesRemind = defineCommand({
       subject: 'Nhắc bổ sung hóa đơn đầu vào còn thiếu',
       payload,
     });
-    await ctx.activity(
-      'kernel.mail_message',
-      queued.messageId,
-      'missing_invoices.reminded',
-      queued.status === 'suppressed' ? 'Không gửi được email nhắc hằng tháng: email liên hệ đang bị chặn' : `Gửi email nhắc công ty bổ sung ${payload.count} hóa đơn mua vào còn thiếu`,
-    );
+    // One row per legal entity the reminder covers, with that entity's own count, read only where that entity is
+    // (#1725): the mail goes to the company, but a member limited to one entity learns nothing of another's purchases.
+    const perEntity = new Map<string, number>();
+    for (const { items } of missing) {
+      for (const item of items) {
+        const entity = entityOf.get(itemKey(item));
+        if (entity) perEntity.set(entity, (perEntity.get(entity) ?? 0) + 1);
+      }
+    }
+    for (const [legalEntityId, count] of [...perEntity].sort(([a], [b]) => a.localeCompare(b))) {
+      await ctx.activity(
+        'kernel.mail_message',
+        queued.messageId,
+        'missing_invoices.reminded',
+        queued.status === 'suppressed' ? 'Không gửi được email nhắc hằng tháng: email liên hệ đang bị chặn' : `Gửi email nhắc công ty bổ sung ${count} hóa đơn mua vào còn thiếu`,
+        { legalEntityId },
+      );
+    }
     ctx.audit({ count: payload.count, periods: missing.map((m) => m.period), message_id: queued.messageId, status: queued.status, ...(skipped.length > 0 ? { skipped } : {}) });
     return { action: 'sent', messageId: queued.messageId, status: queued.status, count: payload.count };
   },

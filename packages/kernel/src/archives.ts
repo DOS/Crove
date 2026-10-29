@@ -75,7 +75,7 @@ export const recordArchive = defineCommand({
   handler: async (ctx, input) => {
     const archive = await ctx.trx
       .selectFrom('crove_kernel.file')
-      .select(['id', 'filename', 'content_type', 'created_by', 'source'])
+      .select(['id', 'filename', 'content_type', 'created_by', 'source', 'upload_entity_id'])
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', input.fileId)
       .forUpdate()
@@ -109,10 +109,15 @@ export const recordArchive = defineCommand({
       if (!fileable(entry) || overLimit.has(index)) continue;
       // The archive's uploader is the creator of every entry, so approval counts them as an author of each invoice
       // read from it (P10), exactly as if they had uploaded the files one by one. An emailed archive has none.
-      const filed = await ingestFileRow(ctx, { ...entry.file, source: email ? 'email' : 'upload' }, archive.created_by);
+      // Each entry is booked in the entity the archive was uploaded in (#1764).
+      const filed = await ingestFileRow(
+        ctx,
+        { ...entry.file, source: email ? 'email' : 'upload', ...(archive.upload_entity_id ? { legalEntityId: archive.upload_entity_id } : {}) },
+        archive.created_by,
+      );
       entries[index] = { name: entry.name, outcome: filed.duplicate ? 'duplicate' : 'stored', reason: null, fileId: filed.fileId };
     }
-    const entity = await uploaderEntity(ctx, archive.created_by);
+    const entity = archive.upload_entity_id ?? (await uploaderEntity(ctx, archive.created_by));
     const run = await ctx.trx
       .insertInto('crove_kernel.extraction')
       .values({

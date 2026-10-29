@@ -2,6 +2,7 @@
 // a proposal. The server decides every approval; these only shape the requests and the keys.
 
 import { z } from 'zod';
+import { PROPOSAL_APPROVE_PERMISSION } from '@crove/kernel-contract';
 import { readSearch, type Defined } from './search.ts';
 
 // The Inbox tabs, by proposal status; pending is the default. Expired proposals (#876) waited past the org's expiry;
@@ -53,7 +54,7 @@ export function showMatched(
 // Who may approve proposals (kernel.proposal.approve and approve_many): owners and admins, and a member holding the
 // approval permission through an org-wide role assignment (a chief accountant, #1279). The kernel checks again.
 export function canApproveProposals(role: string | null | undefined, permissions: readonly string[] = []): boolean {
-  return role === 'owner' || role === 'admin' || (role != null && permissions.includes('finance.proposal.approve'));
+  return role === 'owner' || role === 'admin' || (role != null && permissions.includes(PROPOSAL_APPROVE_PERMISSION));
 }
 
 export interface BulkItem {
