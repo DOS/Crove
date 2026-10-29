@@ -37,6 +37,7 @@ import {
   keepingChiefAccountant,
   LEDGER_APPROVE_PERMISSION,
   parseAuthors,
+  type FourEyesOutcome,
 } from './approval.ts';
 import { archiveCommands } from './archives.ts';
 import { imageSizeCommands } from './image-sizes.ts';
@@ -480,9 +481,21 @@ export const requestProposal = defineCommand({
 });
 
 // The database's approval gate (#1793), its refusals as the approval's own (the checks above make them rare).
-async function approveInDatabase(ctx: CommandContext, id: string, revision: number): Promise<void> {
+// It returns the decision the database applied, which the approval's audit row records.
+interface GateDecision {
+  fourEyes: FourEyesOutcome;
+  selfApproved: boolean;
+  eligibleCount: number;
+  preset: string;
+  version: number;
+}
+
+async function approveInDatabase(ctx: CommandContext, id: string, revision: number): Promise<GateDecision> {
   try {
-    await sql`SELECT crove_kernel.proposal_approve(${id}::uuid, ${revision}::int, ${ctx.commandId}::uuid)`.execute(ctx.trx);
+    const { rows } = await sql<{ d: GateDecision }>`SELECT crove_kernel.proposal_approve(${id}::uuid, ${revision}::int, ${ctx.commandId}::uuid) AS d`.execute(ctx.trx);
+    const decided = rows[0]?.d;
+    if (!decided) throw new DomainError('INTERNAL', 500, 'Lỗi hệ thống');
+    return decided;
   } catch (error) {
     const pg = error as { code?: string; message?: string };
     if (pg?.code !== '42501') throw error;
@@ -645,16 +658,21 @@ export const approveProposal = defineCommand({
     if (signature?.needsConfirmation && input.acceptUnverifiedSignature !== true) {
       throw new DomainError('SIGNATURE_UNVERIFIED', 422, 'Chưa xác minh được chữ ký số của hóa đơn này; hãy kiểm tra hóa đơn gốc rồi xác nhận khi duyệt');
     }
+    // Approved for its command by this command: the runtime's proposal state gate lets the command run only now.
+    // The same transaction ends 'executed', or rolls back to 'pending' if the command fails. The database decides P09,
+    // P10 and P12 again and writes the approval (crove_kernel.proposal_approve, #1793): a user's session reaches
+    // 'approved' no other way. The audit row records the decision it applied.
+    const applied = await approveInDatabase(ctx, proposal.id, proposal.revision);
     ctx.audit({
       revision: proposal.revision,
       aal: ctx.actor.aal,
-      policy: { P12: 'pass', P10: decision.fourEyes },
+      policy: { P12: 'pass', P10: applied.fourEyes },
       // The rules, the org's preset and its version, and the build this approval ran under (plan §4.7, #1402).
       policy_version: APPROVAL_POLICY_VERSION,
-      org_policy: decision.orgPolicy,
+      org_policy: { preset: applied.preset, version: applied.version },
       build: ctx.build,
-      eligible_approvers: decision.eligibleCount,
-      self_approved: decision.selfApproved,
+      eligible_approvers: applied.eligibleCount,
+      self_approved: applied.selfApproved,
       accept_failed_checks: input.acceptFailedChecks ?? false,
       // An invoice's signature verification and whether the approver confirmed it (#674).
       ...(signature
@@ -662,11 +680,6 @@ export const approveProposal = defineCommand({
         : {}),
       ...(input.postingDate !== undefined ? { posting_date: input.postingDate } : {}),
     });
-    // Approved for its command by this command: the runtime's proposal state gate lets the command run only now.
-    // The same transaction ends 'executed', or rolls back to 'pending' if the command fails. The database decides P09,
-    // P10 and P12 again and writes the approval (crove_kernel.proposal_approve, #1793): a user's session reaches
-    // 'approved' no other way.
-    await approveInDatabase(ctx, proposal.id, proposal.revision);
     const result = await ctx.run<Record<string, unknown>>(
       proposal.command,
       {

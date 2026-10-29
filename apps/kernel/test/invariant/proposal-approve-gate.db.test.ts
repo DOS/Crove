@@ -309,7 +309,12 @@ suite('the approval gate in the database (#1793)', () => {
          VALUES ($1, 't1793', $2, 'T1793', '{}', $3::uuid[], $4)`,
         [orgId, LEDGER_COMMAND, snapshot, JSON.stringify(authors)],
       );
-    await expect(asMember(owner, insert([owner], [user(owner)]))).resolves.toMatchObject({ ok: false, code: '23514', message: 'PROPOSAL_STATUS_TRANSITION' });
+    // A narrowed snapshot is replaced by the database's own.
+    const recorded = await asMember(owner, async (c) => {
+      await insert([owner], [user(owner)])(c);
+      return (await c.query<{ s: string[] }>(`SELECT eligible_approvers::text[] AS s FROM crove_kernel.proposal WHERE org_id = $1 AND title = 'T1793' ORDER BY created_at DESC, id DESC LIMIT 1`, [orgId])).rows[0]?.s;
+    });
+    expect(recorded.ok && [...(recorded.value ?? [])].sort()).toEqual(eligibleNow);
     await expect(asMember(owner, insert(eligibleNow, []))).resolves.toMatchObject({ ok: false, code: '23514', message: 'PROPOSAL_STATUS_TRANSITION' });
     await expect(asMember(owner, insert(eligibleNow, [user(second)]))).resolves.toMatchObject({ ok: false, code: '23514', message: 'PROPOSAL_STATUS_TRANSITION' });
     await expect(asMember(member, insert(eligibleNow, [user(member)]))).resolves.toMatchObject({ ok: true });
