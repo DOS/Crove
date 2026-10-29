@@ -297,6 +297,16 @@ suite('proposal status transitions on PostgreSQL (#1707)', () => {
     for (const writer of [ownerWriter, memberWriter]) {
       await expect(as(writer, execute(approved)), `${writer.name}: after an earlier transaction's run`).resolves.toMatchObject({ ok: false, ...REFUSED });
     }
+    // The check answers for the org of the context only: the same row, asked about from another org, is not there.
+    for (const writer of writers()) {
+      const answer = await as(writer, async (c) => {
+        await ran('t1707.prop', 'ok', approved)(c);
+        const asked = (org: string) =>
+          c.query<{ recorded: boolean }>('SELECT crove_kernel.proposal_execution_recorded($1::uuid, $2::uuid, $3) AS recorded', [org, approved, 't1707.prop']);
+        return { own: (await asked(orgId)).rows[0]?.recorded, other: (await asked(randomUUID())).rows[0]?.recorded };
+      });
+      expect(answer, `${writer.name}: asked for its org and another`).toMatchObject({ ok: true, value: { own: true, other: false } });
+    }
   });
 
   it('keeps a decided proposal from being rebuilt: no insert of an approved or executed one, no delete of a decided one, no new id', async () => {

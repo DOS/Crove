@@ -21,12 +21,16 @@
 -- What stays: the audit row is the evidence, and a session with raw SQL can still insert one (#1695 accepts an ok row
 -- of the proposal's own command while it is approved). That row is then the session's own, append-only and archived
 -- in the WORM stream (#891) under its actor, so marking a proposal executed without running it now leaves a permanent,
--- attributable record of a command that claims to have run.
+-- attributable record of a command that claims to have run. The row is not tied to the executing command, the
+-- revision or the payload (its input hash is not compared). The worker's system context, trusted to approve an agent's
+-- proposal (#1793), can still approve and mark executed alone with such a row.
 
 CREATE OR REPLACE FUNCTION crove_kernel.proposal_execution_recorded(p_org uuid, p_proposal uuid, p_command text) RETURNS boolean
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
+DECLARE
+  v_actor text := crove_kernel.ctx_actor_type();
 BEGIN
-  IF p_org IS DISTINCT FROM crove_kernel.ctx_org_id() OR crove_kernel.ctx_actor_type() IS NULL THEN
+  IF p_org IS DISTINCT FROM crove_kernel.ctx_org_id() OR v_actor IS NULL THEN
     RETURN false;
   END IF;
   RETURN EXISTS (
@@ -36,8 +40,8 @@ BEGIN
       AND a.proposal_id = p_proposal
       AND a.command = p_command
       AND a.outcome = 'ok'
-      AND a.actor_type = crove_kernel.ctx_actor_type()
-      AND a.actor_id IS NOT DISTINCT FROM CASE WHEN crove_kernel.ctx_actor_type() = 'user' THEN crove_kernel.ctx_user_id() END);
+      AND a.actor_type = v_actor
+      AND a.actor_id IS NOT DISTINCT FROM CASE WHEN v_actor = 'user' THEN crove_kernel.ctx_user_id() END);
 END $$;
 REVOKE ALL ON FUNCTION crove_kernel.proposal_execution_recorded(uuid, uuid, text) FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant;
 GRANT EXECUTE ON FUNCTION crove_kernel.proposal_execution_recorded(uuid, uuid, text) TO crove_tenant;
@@ -125,7 +129,7 @@ BEGIN
       -- The proposal's command ran in this transaction, for this proposal, as this actor: the runtime writes its ok row
       -- before the execution marks the proposal executed (#1816).
       WHEN OLD.status = 'approved' AND NEW.status = 'executed' THEN
-        crove_kernel.proposal_execution_recorded(NEW.org_id, NEW.id, NEW.command)
+        crove_kernel.proposal_execution_recorded(NEW.org_id, NEW.id, OLD.command)
       ELSE false
     END;
     IF NOT v_allowed THEN
