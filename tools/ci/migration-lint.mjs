@@ -27,6 +27,7 @@
 //                         a waiver comment on the line right before it, `-- migration-lint: cross-module <reason>`,
 //                         with a reason; the lint lists every waiver it accepted (decision on #1213: Social adds its
 //                         tables to crove_kernel.org_purge in its own feature migration, as the owner allowed); the
+//                         waiver before an EXECUTE covers the first statement of its command string (#1227); the
 //                         writes of a WITH count too, in a data-modifying CTE, after the CTE list (past SEARCH and
 //                         CYCLE) and in CREATE TABLE ... AS WITH (#1225);
 //   owner-to              hand a function, procedure or aggregate (ALTER ... OWNER TO) only to the NOLOGIN roles
@@ -1484,7 +1485,14 @@ export function lintMigration(file, sql, {
       const using = findWord(tokens, 1, 'using');
       const command = tokens.slice(0, using === -1 ? tokens.length : using).find((token) => token.t === 'string');
       const inner = { retry: ctx.retry(head) ? () => true : () => false, anchorLine: ctx.anchorLine ?? head.line };
-      if (command !== undefined) for (const statement of splitStatements(lex(command.body, command.bodyLine))) lintStatement(statement, false, inner);
+      const statements = command === undefined ? [] : splitStatements(lex(command.body, command.bodyLine));
+      // A waiver on the line before the EXECUTE covers the first statement of its command string, and only that one
+      // (#1227): the EXECUTE itself touches nothing. Handed over on the line that statement starts on, past the
+      // parentheses that may wrap it.
+      const first = statements[0] && unwrapParens(statements[0])[0];
+      if (waiver !== undefined && first !== undefined) waiverAt.set(first.line, waiver);
+      for (const statement of statements) lintStatement(statement, false, inner);
+      if (first !== undefined && waiverAt.get(first.line) === waiver) waiverAt.delete(first.line);
     }
   };
 
