@@ -38,7 +38,7 @@ ENV NODE_ENV=production \
 WORKDIR /app
 COPY --from=kernel --chown=node:node /app /app
 COPY --from=web --chown=node:node /app/apps/app/dist /app/apps/app/dist
-RUN mkdir -p /data/files /data/keys /data/status /data/archive && chown node:node /data/files /data/keys /data/status /data/archive && chmod 700 /data/keys
+RUN mkdir -p /data/files /data/keys /data/context-token /data/status /data/archive && chown node:node /data/files /data/keys /data/context-token /data/status /data/archive && chmod 700 /data/keys /data/context-token
 # The build id GET /version reports (#892): the release workflow passes the git SHA. Last, so a new SHA rebuilds no
 # layer above.
 ARG CROVE_BUILD=

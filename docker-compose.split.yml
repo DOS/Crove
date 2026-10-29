@@ -21,8 +21,8 @@ x-crove-env: &crove-env
   AUTH_UPSTREAM_URL: http://auth:9999
   DATABASE_URL: postgres://crove_app:${CROVE_APP_DB_PASSWORD:-local-app-password}@db:5432/postgres
   CROVE_CONTEXT_TOKEN_KEY: ${CROVE_CONTEXT_TOKEN_KEY:-}
-  # Read from the `keys` volume, where migrate creates it, unless CROVE_CONTEXT_TOKEN_KEY is set (#1822).
-  CROVE_CONTEXT_TOKEN_KEY_FILE: /data/keys/context-token.key
+  # Read from the `context-token` volume, where migrate creates it, unless CROVE_CONTEXT_TOKEN_KEY is set (#1822).
+  CROVE_CONTEXT_TOKEN_KEY_FILE: /data/context-token/key
   PUBLIC_URL: http://localhost:${SPLIT_PORT:-18080}
   INBOUND_DOMAIN: inbound.crove.test
   INBOUND_SECRET: split-stack-inbound-secret-0123456789abcdef
@@ -98,7 +98,7 @@ services:
     environment:
       <<: *crove-env
     volumes:
-      - keys:/data/keys:ro
+      - context-token:/data/context-token:ro
     ports:
       - '127.0.0.1:${SPLIT_PORT:-18080}:8080'
     depends_on:
@@ -129,7 +129,7 @@ services:
       ARCHIVE_S3_BUCKET: crove-archive
       ARCHIVE_LAG_SECONDS: '60'
     volumes:
-      - keys:/data/keys:ro
+      - context-token:/data/context-token:ro
     networks:
       - default
       - extract

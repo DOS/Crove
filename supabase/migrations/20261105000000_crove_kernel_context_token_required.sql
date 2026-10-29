@@ -11,8 +11,8 @@
 --    (auth_session_valid). A token of the jwt or db check names its session; one of no check (a runtime without a
 --    session source: tests and tools) names none.
 --
--- v1 tokens (step 1's kernels) are still accepted for the minutes of a deploy, as tokens of no check: only the key
--- makes either.
+-- v1 tokens (step 1's kernels) are still accepted, as tokens of no check, for a deploy's restarts and a rollback to
+-- step 1: only the key makes either.
 
 SET LOCAL lock_timeout = '2s';
 

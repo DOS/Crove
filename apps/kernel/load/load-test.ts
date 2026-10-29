@@ -579,7 +579,7 @@ export async function runLoad(args: LoadArgs, log: (line: string) => void = cons
   base.pathname = `/${dbName}`;
   const adminUrl = base.toString();
   // The context token key (#1822): the run's own unless one is set, installed by migrate and held by the runtime.
-  const contextTokenKey = process.env.CROVE_CONTEXT_TOKEN_KEY ?? randomBytes(32).toString('base64');
+  const contextTokenKey = process.env.CROVE_CONTEXT_TOKEN_KEY?.trim() || randomBytes(32).toString('base64');
   const appPassword = randomUUID();
   const workerPassword = randomUUID();
   let appPool: pg.Pool | undefined;

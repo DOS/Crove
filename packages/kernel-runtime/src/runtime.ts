@@ -352,7 +352,9 @@ export type TryRunResult<O> = { status: 'ok'; value: O } | { status: 'refused'; 
 // Status of the session behind a user actor (ADR-0028), checked in the request transaction before the
 // tenant context is entered (orgId: that org, where an owner may have revoked the session for this member), and
 // before org-less work (orgId: null). Throws (or raises in SQL) 401, 403 or 503; never passes a session it cannot
-// vouch for.
+// vouch for. A check that passes has recorded the session in crove_kernel.auth_session in that transaction (through
+// crove_kernel.session_check): the context token names the session and the mode, and the database refuses a session
+// it has no active row for (SESSION_INVALID, 401; #1822 step 2), so a source that records nothing signs every user out.
 export interface SessionStatusSource {
   readonly mode: 'db' | 'jwt' | 'off';
   // true when the per-request check does not read Supabase Auth (jwt): every R3 command run by a user then needs
