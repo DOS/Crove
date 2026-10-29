@@ -27,6 +27,7 @@ export const ROLE_LABELS: Record<BuiltinRoleKey, string> = {
   'desk.agent': 'Nhân viên chăm sóc khách hàng',
   'hr.manager': 'Quản lý nhân sự',
   external_accountant: 'Kế toán thuê ngoài',
+  'finance.entity_chief_accountant': 'Kế toán trưởng pháp nhân',
 };
 
 const isBuiltin = (key: string): key is BuiltinRoleKey => (BUILTIN_ROLE_KEYS as readonly string[]).includes(key);

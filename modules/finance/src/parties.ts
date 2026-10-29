@@ -5,21 +5,26 @@
 // parties marked as its duplicates (#887) are one, as on the vendors list: the kept party alone is listed, with the
 // sales and the receivable of all of them, and found by the name or tax code of any of them. Editing a customer goes
 // through kernel.party.update and the duplicate commands, as for vendors.
+// The list is for one legal entity (#1534, #1280): legalEntityId as in zLegalEntityChoice, resolved against the
+// caller's scope (resolveLegalEntity), so a member limited to some entities never reads another entity's sales or
+// receivable, whatever they pass. Its customers are the parties with a sale or a 131 line in that entity's books.
 import { sql } from 'kysely';
 import { z } from 'zod';
-import { CUSTOMER_PAGE_SIZE, zCustomerCursor, type CustomerPage } from '@crove/kernel-contract';
+import { CUSTOMER_PAGE_SIZE, zCustomerCursor, zId, type CustomerPage } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { defineQuery } from '@crove/kernel-runtime';
 import { RECEIVABLE_ACCOUNT } from '@crove/l10n-vn';
 import { canonical, parseDecimal } from './domain/money.ts';
+import { resolveLegalEntity } from './legal-entity.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 
 export const customersList = defineQuery({
   name: 'finance.customers.list',
-  input: z.object({ q: z.string().max(100).optional(), after: zCustomerCursor.optional() }),
+  input: z.object({ q: z.string().max(100).optional(), after: zCustomerCursor.optional(), legalEntityId: zId.optional() }),
   access: ALL,
   handler: async (ctx, input): Promise<CustomerPage> => {
+    const entity = await resolveLegalEntity(ctx, input.legalEntityId);
     // The party a row counts under: the kept one for a duplicate, the party itself otherwise.
     const kept = sql<string>`coalesce(x.duplicate_of, x.id)`;
     let query = ctx.trx
@@ -35,6 +40,7 @@ export const customersList = defineQuery({
             eb.fn.max('d.invoice_date').filterWhere('v.document_id', 'is', null).as('last_invoice_date'),
           ])
           .where('d.org_id', '=', ctx.orgId)
+          .where('d.legal_entity_id', '=', entity)
           .where('d.direction', '=', 'sale')
           .groupBy(kept),
       )
@@ -47,6 +53,7 @@ export const customersList = defineQuery({
           .select(kept.as('party_id'))
           .select(sql<string>`sum(l.debit - l.credit)`.as('balance'))
           .where('l.org_id', '=', ctx.orgId)
+          .where('l.legal_entity_id', '=', entity)
           .where('l.account_code', 'like', `${RECEIVABLE_ACCOUNT}%`)
           .groupBy(kept),
       )

@@ -48,3 +48,19 @@ export function screenInstalled(installed: readonly string[], pathname: string):
   const module = moduleOfPath(pathname);
   return module === null || module === 'kernel' || installed.includes(module);
 }
+
+// The module of a screen outside /o/$slug (#1660), from the route's own path as the router writes it ('/-/b/$org/$type',
+// not the address), or null for a route no manifest declares.
+const OUTSIDE = new Map(
+  (Object.entries(MODULE_SCREENS) as Array<[string, ModuleScreens]>).flatMap(([module, screens]) => (screens.outside ?? []).map((route) => [route.path, module] as const)),
+);
+export function moduleOfOutsideRoute(fullPath: string): string | null {
+  return OUTSIDE.get(fullPath) ?? null;
+}
+
+// Whether a screen outside /o/$slug may open: its module is installed, or it belongs to the kernel or to no module. One
+// of a module the deployment leaves out answers not found, as the API answers its calls (ADR-0031 §3).
+export function outsideInstalled(installed: readonly string[], fullPath: string): boolean {
+  const module = moduleOfOutsideRoute(fullPath);
+  return module === null || module === 'kernel' || installed.includes(module);
+}

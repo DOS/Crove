@@ -23,7 +23,7 @@ import { JOURNAL_VOUCHER_SOURCE, journalVoucherTitle, journalVoucherTotal } from
 import { closingDescription, closingLines, type AccountBalance, type ClosingLine } from './domain/year-closing.ts';
 import { postJournalVoucher } from './journal-voucher.ts';
 import { resolveLegalEntity } from './legal-entity.ts';
-import { databaseToday, dateLabel, periodLockState } from './period-lock.ts';
+import { databaseToday, dateLabel, periodLockedThrough } from './period-lock.ts';
 
 const REQUESTERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
 
@@ -92,7 +92,7 @@ async function buildClosing(ctx: QueryContext, year: number, legalEntityId: stri
 async function assertClosable(ctx: QueryContext, year: number, legalEntityId: string) {
   const today = await databaseToday(ctx.trx);
   if (yearEnd(year) >= today) throw new DomainError('YEAR_NOT_ENDED', 422, `Năm ${year} chưa kết thúc nên chưa kết chuyển được`);
-  const { lockedThrough } = await periodLockState(ctx, legalEntityId);
+  const lockedThrough = await periodLockedThrough(ctx, legalEntityId);
   if (lockedThrough && yearEnd(year) <= lockedThrough) {
     throw new DomainError('PERIOD_LOCKED', 409, `Sổ đã khóa đến hết ngày ${dateLabel(lockedThrough)}, nên không ghi được bút toán ngày ${dateLabel(yearEnd(year))}`, {
       lockedThrough,

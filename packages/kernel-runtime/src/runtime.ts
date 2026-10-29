@@ -132,6 +132,13 @@ export interface CommandDef<I = unknown, O = unknown> {
   // applies from the next command, and a user without it is refused FORBIDDEN before any step-up. The handler still
   // decides per record (the approval policy for approvals).
   permission?: string;
+  // 'legal_entity' (#1507): a user who holds the permission for some legal entities only (entity-scoped assignments,
+  // crove_kernel.ctx_permission_entities) passes the gate too, with those entities, and the handler must name the entity
+  // it acts on through ctx.permissionEntity: one outside them is refused, and a command that names none fails (fails
+  // closed) after its handler returns. Such a holder is past the gate, so an R3 command asks them for the step-up first
+  // and refuses another entity after it. Default 'org': an org-wide assignment only, exactly as before. Only beside a
+  // permission.
+  permissionScope?: 'org' | 'legal_entity';
   target?: (input: I) => { type: string; id: string } | null;
   // Org-less commands (creating an org) start without an org. `bootstrap` calls a definer that creates the
   // org with the actor as a member, or returns the org an earlier request with the same idempotency key
@@ -278,6 +285,11 @@ export interface CommandContext extends QueryContext {
   activity(recordType: string, recordId: string, kind: string, summary: string, options?: { legalEntityId?: string }): Promise<void>;
   // Adds fields to this command's own audit row (for example the policy outcome of an approval).
   audit(detail: Record<string, unknown>): void;
+  // Names the legal entity this command acts on, for a command whose permission gate admits entity holders
+  // (permissionScope 'legal_entity', #1507). A user let in for some entities only is refused FORBIDDEN for any other; a
+  // user let in by role or by an org-wide permission passes for any. Such a command run by an entity holder that names
+  // no entity fails once its handler returns. A no-op for every other command.
+  permissionEntity(legalEntityId: string): void;
   // Runs another registered command in the same transaction (audited on its own row).
   run<O>(name: string, input: unknown, options?: { proposalId?: string }): Promise<O>;
   // Runs another registered command as run() does, inside a savepoint, for a command that goes on when that one is
@@ -1163,6 +1175,9 @@ export class Runtime {
       if (c.permission !== undefined && (typeof c.access === 'string' || !/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/.test(c.permission))) {
         throw new Error(`command ${c.name}: a permission is declared only beside a role list, as <module>.<name>`);
       }
+      if (c.permissionScope !== undefined && (c.permission === undefined || (c.permissionScope !== 'org' && c.permissionScope !== 'legal_entity'))) {
+        throw new Error(`command ${c.name}: a permission scope is 'org' or 'legal_entity', and only beside a permission`);
+      }
       if ((c.access === 'proposal_revision') !== (typeof c.revises === 'string' && c.revises.length > 0)) {
         throw new Error(`command ${c.name}: a reviser (access 'proposal_revision') names the command it revises, and only a reviser does`);
       }
@@ -1411,20 +1426,33 @@ export class Runtime {
     if (grant.tainted && RISK_RANK[def.risk] >= 1 && access.taint !== 'propagate') refuse('P03');
   }
 
-  private async authorize(trx: Transaction<Database>, def: CommandDef<unknown, unknown>, actor: Actor, entered: Entered, viaProposal: boolean): Promise<void> {
+  // Answers the legal entities the user was let in for when only an entity-scoped permission admitted them (#1507),
+  // else null (their role, or the permission org-wide).
+  private async authorize(trx: Transaction<Database>, def: CommandDef<unknown, unknown>, actor: Actor, entered: Entered, viaProposal: boolean): Promise<readonly string[] | null> {
     try {
       this.authorizeRole(def, actor, entered, viaProposal);
+      return null;
     } catch (error) {
       // A member whose role is not in access may still hold the command's permission through an org-wide role
       // assignment (issue #1279). Read only after the role check failed, in this transaction, never cached.
-      if (!(await this.holdsPermission(trx, def, actor, entered))) throw error;
+      const held = await this.holdsPermission(trx, def, actor, entered);
+      if (held === false) throw error;
+      return held;
     }
   }
 
-  private async holdsPermission(trx: Transaction<Database>, def: CommandDef<unknown, unknown>, actor: Actor, entered: Entered): Promise<boolean> {
+  // false, or where the permission is held: null for the whole org, else the entity ids (#1507, permissionScope
+  // 'legal_entity' only; any other command reads ctx_has_permission, the org-wide answer, as before).
+  private async holdsPermission(trx: Transaction<Database>, def: CommandDef<unknown, unknown>, actor: Actor, entered: Entered): Promise<false | readonly string[] | null> {
     if (def.permission === undefined || actor.type !== 'user' || entered.role === null || typeof def.access === 'string') return false;
+    if (def.permissionScope === 'legal_entity') {
+      const { rows } = await sql<{ entities: string[] }>`SELECT crove_kernel.ctx_permission_entities(${def.permission}::text) AS entities`.execute(trx);
+      const entities = rows[0]?.entities ?? [];
+      if (entities.length === 0) return false;
+      return entities.includes('*') ? null : Object.freeze([...entities]);
+    }
     const { rows } = await sql<{ held: boolean }>`SELECT crove_kernel.ctx_has_permission(${def.permission}::text) AS held`.execute(trx);
-    return rows[0]?.held === true;
+    return rows[0]?.held === true ? null : false;
   }
 
   private authorizeRole(def: CommandDef<unknown, unknown>, actor: Actor, entered: Entered, viaProposal: boolean): void {
@@ -1570,9 +1598,15 @@ export class Runtime {
       cleanRoot?: string;
       writeScope?: WriteScope;
       writeCounters?: readonly { n: number }[];
+      // The entities an entity-scoped permission let the user in for (#1507); null: no such limit. Required, so every
+      // path that runs a command passes what its gate answered.
+      permissionEntities: readonly string[] | null;
     },
   ): Promise<O> {
     const commandId = uuidv7();
+    const { permissionEntities } = base;
+    // Whether the handler named the entity it acts on (ctx.permissionEntity) when an entity holder ran it.
+    let entityNamed = false;
     const cleanRoot = base.cleanRoot ?? (def.access === 'proposal' && this.#contactOrPayment.get(def.name) === false ? def.name : undefined);
     let auditDetail: Record<string, unknown> | undefined;
     // Refusals ctx.tryRun caught and rolled back, written after the handler returns.
@@ -1764,6 +1798,14 @@ export class Runtime {
               .execute(),
           );
         }),
+      permissionEntity: (legalEntityId) => {
+        refuseClosed('ctx.permissionEntity');
+        if (permissionEntities === null) return;
+        if (!permissionEntities.includes(legalEntityId)) {
+          throw new DomainError('FORBIDDEN', 403, 'Bạn không có quyền này với pháp nhân đó', { rule: 'permission_entity' });
+        }
+        entityNamed = true;
+      },
       audit: (detail) => {
         refuseClosed('ctx.audit');
         const own = { ...detail };
@@ -1918,7 +1960,7 @@ export class Runtime {
         throw new Error(`command ${cleanRoot}: declares no contact or payment write (P04), so it cannot run ${nested.def.name}, which may write one`);
       }
       const { proposalId } = nested;
-      await this.authorize(trx, nested.def, base.actor, base.entered, proposalId !== null);
+      const permissionEntities = await this.authorize(trx, nested.def, base.actor, base.entered, proposalId !== null);
       if (proposalId !== null && (nested.def.access === 'proposal' || nested.def.access === 'proposal_revision')) {
         await this.requireProposalState(trx, base.orgId, nested.def, proposalId, { def, commandId });
       }
@@ -1928,6 +1970,8 @@ export class Runtime {
       return this.runInTx<R>(trx, nested.def, nested.input, {
         ...base,
         proposalId,
+        // The nested command's own gate, never its caller's.
+        permissionEntities,
         ...(cleanRoot !== undefined ? { cleanRoot } : {}),
         ...(scope !== null ? { writeScope: scope, writeCounters: counter ? [...counters, counter] : counters } : {}),
       });
@@ -1951,6 +1995,10 @@ export class Runtime {
     // Before the runtime writes this command's rows: a nested command still running would share the connection with
     // them, and a tryRun's rollback could undo them, so the command fails instead and commits nothing.
     if ((await settleRunning()) || leftRunning) throw new Error(`command ${def.name}: the handler returned while a nested command was still running`);
+    // An entity holder's command that never named its entity fails closed (#1507).
+    if (permissionEntities !== null && !entityNamed) {
+      throw new DomainError('FORBIDDEN', 403, 'Bạn không có quyền này với pháp nhân đó', { rule: 'permission_entity' });
+    }
     if (writeCheck !== null) {
       if (writeCheck.unmeasured) {
         throw new Error(
@@ -2048,7 +2096,7 @@ export class Runtime {
             FROM crove_kernel.tenant t WHERE t.org_id = ${orgId}::uuid`.execute(trx);
           orgIsNew = rows[0]?.fresh === true;
         }
-        await this.authorize(trx, def, actor, context, false);
+        const permissionEntities = await this.authorize(trx, def, actor, context, false);
         this.requireStepUp(def, actor);
         await this.requireLiveSession(def, actor);
 
@@ -2082,7 +2130,7 @@ export class Runtime {
             if (stored !== null && typeof stored === 'object' && 'value' in stored) return stored.value as O;
             throw new DomainError('RETRY', 409, 'Yêu cầu đang được xử lý');
           }
-          const output = await this.runInTx<O>(trx, def, input, { orgId, actor, entered: context, proposalId: null });
+          const output = await this.runInTx<O>(trx, def, input, { orgId, actor, entered: context, proposalId: null, permissionEntities });
           await trx
             .updateTable('crove_kernel.idempotency_key')
             .set({ response: JSON.stringify({ value: output ?? null }) })
@@ -2092,7 +2140,7 @@ export class Runtime {
             .execute();
           return output;
         }
-        return this.runInTx<O>(trx, def, input, { orgId, actor, entered: context, proposalId: null });
+        return this.runInTx<O>(trx, def, input, { orgId, actor, entered: context, proposalId: null, permissionEntities });
       });
     } catch (error) {
       const domain = toDomainError(error);

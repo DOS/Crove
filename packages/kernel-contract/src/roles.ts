@@ -5,6 +5,7 @@ import { zId } from './schemas.ts';
 // crove_kernel.role rows (roles.db.test.ts checks it). An org-wide role covers the whole org; external_accountant names
 // one legal entity per assignment, and a member or viewer who holds only such assignments sees only those entities.
 //   finance.chief_accountant  approves the ledger's proposals (P12) and unlocks a period (ADR-0021);
+//   finance.entity_chief_accountant  unlocks the periods of the legal entity it names, per assignment (#1507);
 //   the others grant nothing more yet: they say what the member does, and their permissions come with their modules.
 export const BUILTIN_ROLE_KEYS = [
   'finance.chief_accountant',
@@ -14,6 +15,7 @@ export const BUILTIN_ROLE_KEYS = [
   'desk.agent',
   'hr.manager',
   'external_accountant',
+  'finance.entity_chief_accountant',
 ] as const;
 export type BuiltinRoleKey = (typeof BUILTIN_ROLE_KEYS)[number];
 export const zBuiltinRoleKey = z.enum(BUILTIN_ROLE_KEYS);

@@ -1248,7 +1248,8 @@ export const contract = {
       .output(z.object({ partyId: zId, accountCode: zAccountCode.nullable() })),
     // Every role (#670): the customers, by name, a page at a time (after: the last customer shown; more: others
     // follow), each with its receivable on 131 and its last invoice date. q searches the name and the tax code.
-    customers: oc.input(z.object({ q: z.string().max(100).optional(), after: zCustomerCursor.optional() })).output(zCustomerPage),
+    // The customers of one legal entity (#1534): legalEntityId as in zLegalEntityChoice.
+    customers: oc.input(z.object({ q: z.string().max(100).optional(), after: zCustomerCursor.optional(), legalEntityId: zId.optional() })).output(zCustomerPage),
     // Owners, admins and members (R1, #887): the party's name and contact details, from the version the editor read.
     // A tax code can be added, never changed or removed.
     update: oc

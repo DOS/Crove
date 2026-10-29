@@ -38,7 +38,8 @@ export const financeManifest = defineModule({
   },
   permissions: [
     // ADR-0021 section 3: a chief accountant reopens a locked month (finance.period.unlock, and unlock_period() again).
-    { key: 'finance.period.unlock', risk: 'R3', defaultRoles: ['finance.chief_accountant'] },
+    // #1507: also for the months of one legal entity, through finance.entity_chief_accountant.
+    { key: 'finance.period.unlock', risk: 'R3', defaultRoles: ['finance.chief_accountant', 'finance.entity_chief_accountant'] },
     // P12 (#1279): a chief accountant approves the ledger's proposals (kernel.proposal.approve and its bulk form, the
     // approval policy's LEDGER_APPROVE_PERMISSION, and the accountant preset's guard on the last chief accountant).
     { key: 'finance.proposal.approve', risk: 'R3', defaultRoles: ['finance.chief_accountant'] },

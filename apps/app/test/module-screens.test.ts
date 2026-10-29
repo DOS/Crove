@@ -3,18 +3,18 @@
 // of its own module with its label in Vietnamese and English, and a screen of a module the deployment leaves out
 // redirects to the inbox, whichever module it is.
 import { MODULE_SCREENS, type ModuleScreens } from '@crove/kernel-contract';
-import { createMemoryHistory, createRouter } from '@tanstack/react-router';
+import { createMemoryHistory, createRouter, isNotFound } from '@tanstack/react-router';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { en } from '../src/i18n/messages/en.ts';
 import { vi as viMessages } from '../src/i18n/messages/vi.ts';
 import { ADMIN_ITEMS, ALL_NAV, APPS, appOfPath, installedApps, isHeadedGroup } from '../src/lib/apps.ts';
-import { moduleOfPath, screenInstalled } from '../src/lib/modules.ts';
+import { moduleOfOutsideRoute, moduleOfPath, outsideInstalled, screenInstalled } from '../src/lib/modules.ts';
 
 // What the org route's guard reads: a signed-in session and the modules of /api/config, set per test.
-const session = vi.hoisted(() => ({ modules: ['kernel'] as string[] }));
+const session = vi.hoisted(() => ({ modules: ['kernel'] as string[], token: 'token' as string | null }));
 vi.mock('../src/lib/auth.ts', async (original) => ({
   ...(await original<typeof import('../src/lib/auth.ts')>()),
-  accessToken: async () => 'token',
+  accessToken: async () => session.token,
   needsSecondFactor: async () => false,
   getConfig: () => ({ modules: session.modules }),
 }));
@@ -59,7 +59,62 @@ function screenProblems(screens: readonly string[], modules: ReadonlyArray<reado
   return problems;
 }
 
+// The router's routes outside /o/$slug, as it writes them ('/' for the landing redirect).
+function outsideRoutes(r: Router): string[] {
+  const out = new Set<string>();
+  for (const [id, route] of Object.entries(r.routesById)) {
+    if (id === '__root__') continue;
+    const path = route.fullPath === '/' ? '/' : route.fullPath.replace(/\/+$/, '');
+    if (path !== '/o/$slug' && !path.startsWith('/o/$slug/')) out.add(path);
+  }
+  return [...out].sort();
+}
+
+// What differs between the router's routes outside /o/$slug and the manifests' `outside`, one line each (#1660).
+function outsideProblems(routes: readonly string[], modules: ReadonlyArray<readonly [string, ModuleScreens]>): string[] {
+  const problems: string[] = [];
+  const owners = new Map<string, string[]>();
+  for (const [module, { outside }] of modules) for (const route of outside ?? []) owners.set(route.path, [...(owners.get(route.path) ?? []), module]);
+  for (const path of routes) {
+    const by = owners.get(path) ?? [];
+    if (by.length === 0) problems.push(`route ${path} has no manifest entry: add it to the outside routes of its module in packages/kernel-contract/src/screens.ts`);
+    if (by.length > 1) problems.push(`route ${path} is declared by ${by.join(' and ')}`);
+  }
+  for (const [path, by] of owners) if (!routes.includes(path)) problems.push(`${by.join(', ')} declares ${path}, which the router does not have`);
+  return problems;
+}
+
 describe('module screens against the router (#1652)', () => {
+  it('declares every route outside /o/$slug in exactly one module (#1660)', () => {
+    const routes = outsideRoutes(router);
+    expect(routes).toEqual([
+      '/',
+      '/-/b/$org/$type',
+      '/-/invite',
+      '/-/report',
+      '/-/review',
+      '/-/share',
+      '/channels/oauth/$provider/callback',
+      '/clients',
+      '/login',
+      '/mfa',
+      '/onboarding',
+      '/reset-password',
+    ]);
+    expect(outsideProblems(routes, MODULES)).toEqual([]);
+    expect(outsideProblems([...routes, '/-/quote'], MODULES)).toEqual([
+      'route /-/quote has no manifest entry: add it to the outside routes of its module in packages/kernel-contract/src/screens.ts',
+    ]);
+    expect(Object.fromEntries(routes.map((r) => [r, moduleOfOutsideRoute(r)]))).toMatchObject({
+      '/-/share': 'social',
+      '/channels/oauth/$provider/callback': 'social',
+      '/-/review': 'social',
+      '/-/report': 'social',
+      '/-/b/$org/$type': 'crm',
+      '/login': 'kernel',
+    });
+  });
+
   it('declares every /o/$slug route in exactly one module', () => {
     const screens = routerScreens(Object.values(router.routesById).map((r) => r.fullPath));
     expect(screens.length).toBeGreaterThan(30);
@@ -178,6 +233,63 @@ describe('a module turned off (ADR-0031 §3, #1652)', () => {
         expect(screenInstalled(session.modules, path), path).toBe(true);
         expect(await landing(path), path).toBe(path);
       }
+    }
+  });
+});
+
+describe('a module turned off, outside /o/$slug (ADR-0031 §3, #1660)', () => {
+  // The router's answer for an address: the path it ends on, and whether that is a not-found page.
+  const answer = async (address: string) => {
+    const r = createRouter({ routeTree: router.routeTree, history: createMemoryHistory({ initialEntries: [address] }), isServer: false });
+    await r.load();
+    // A notFound() thrown in a beforeLoad lands on the match whose notFoundComponent shows it: the root's.
+    return { path: r.state.location.pathname, notFound: r.state.matches.some((m) => isNotFound(m.error)) };
+  };
+  const SOCIAL = ['/-/share', '/channels/oauth/x/callback', '/-/review', '/-/report'];
+  const BOOKING = '/-/b/acme/tu-van';
+
+  it('answers the screens of social and crm not found, as the API does, and opens them where they run', async () => {
+    session.token = 'token';
+    session.modules = ['kernel', 'finance'];
+    for (const address of [...SOCIAL, BOOKING]) expect(await answer(address), address).toEqual({ path: address, notFound: true });
+    expect(outsideInstalled(session.modules, '/-/b/$org/$type')).toBe(false);
+    session.modules = ['kernel', 'social'];
+    for (const address of SOCIAL) expect(await answer(address), address).toEqual({ path: address, notFound: false });
+    expect(await answer(BOOKING)).toEqual({ path: BOOKING, notFound: true });
+    session.modules = ['kernel', 'crm'];
+    expect(await answer(BOOKING)).toEqual({ path: BOOKING, notFound: false });
+    // The kernel's own screens open whatever the modules.
+    session.modules = ['kernel'];
+    expect(outsideInstalled(session.modules, '/clients')).toBe(true);
+    expect(await answer('/clients')).toEqual({ path: '/clients', notFound: false });
+  });
+
+  it('shows the not-found page at the root outside an org, and inside the org frame for a mistyped org address', async () => {
+    session.modules = ['kernel'];
+    const shownBy = async (address: string) => {
+      const r = createRouter({ routeTree: router.routeTree, history: createMemoryHistory({ initialEntries: [address] }), isServer: false });
+      await r.load();
+      return r.state.matches.filter((m) => (m as { _notFound?: boolean })._notFound === true || isNotFound(m.error)).map((m) => m.routeId);
+    };
+    expect(await shownBy('/-/review')).toEqual(['__root__']);
+    expect(await shownBy('/nowhere')).toEqual(['__root__']);
+    expect(await shownBy('/o/acme/nope')).toEqual(['/o/$slug']);
+  });
+
+  it('keeps public links public: no sign-in asked, installed or not', async () => {
+    session.token = null;
+    try {
+      const publicRoutes = (Object.values(MODULE_SCREENS) as ModuleScreens[]).flatMap((m) => (m.outside ?? []).filter((r) => r.public).map((r) => r.path)).sort();
+      expect(publicRoutes).toEqual(['/-/b/$org/$type', '/-/report', '/-/review']);
+      session.modules = ['kernel', 'social', 'crm'];
+      for (const address of ['/-/review', '/-/report', BOOKING]) expect(await answer(address), address).toEqual({ path: address, notFound: false });
+      session.modules = ['kernel'];
+      for (const address of ['/-/review', '/-/report', BOOKING]) expect(await answer(address), address).toEqual({ path: address, notFound: true });
+      // A signed-in screen still asks for a sign-in where its module runs.
+      session.modules = ['kernel', 'social'];
+      expect((await answer('/channels/oauth/x/callback')).path).toBe('/login');
+    } finally {
+      session.token = 'token';
     }
   });
 });
