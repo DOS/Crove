@@ -306,11 +306,21 @@ function findWord(tokens, from, ...words) {
   return -1;
 }
 
-// Strips the PL/pgSQL control structure in front of a statement (labels, BEGIN, DECLARE, IF ... THEN, LOOP heads,
-// EXCEPTION WHEN ... THEN, END IF), leaving the statement it guards. Returns [] for a piece that is only structure.
-// The words a query starts with, where a loop or a cursor takes one (#1859); EXECUTE for a dynamic query.
-const QUERY_HEADS = new Set(['select', 'with', 'insert', 'update', 'delete', 'merge', 'values', 'table', 'execute']);
+// The words a query starts with, where a loop or a cursor takes one (#1859): EXECUTE for a dynamic query, EXPLAIN,
+// which PL/pgSQL takes as a query that returns rows (and no-indirect refuses).
+const QUERY_HEADS = new Set(['select', 'with', 'insert', 'update', 'delete', 'merge', 'values', 'table', 'execute', 'explain']);
 
+// A statement or query without the parentheses that wrap all of it: (WITH d AS (DELETE ...) SELECT ...) reads as the
+// WITH it holds (#1859).
+export function unwrapParens(tokens) {
+  let rest = tokens;
+  while (isPunct(rest[0], '(') && skipParens(rest, 0) === rest.length) rest = rest.slice(1, -1);
+  return rest;
+}
+
+// Strips the PL/pgSQL control structure in front of a statement (labels, BEGIN, DECLARE, IF ... THEN, LOOP heads,
+// EXCEPTION WHEN ... THEN, END IF), leaving the statement it guards. Returns [] for a piece that is only structure. The
+// query of each FOR r IN <query> LOOP it strips goes to `queries`, for the caller to lint (#1859).
 export function stripControl(tokens, queries = []) {
   let rest = tokens;
   for (;;) {
@@ -1327,21 +1337,31 @@ export function lintMigration(file, sql, {
   // `ctx.retry(head)` says whether the statement runs in a lock-retry block; `ctx.anchorLine` is the line of the
   // EXECUTE whose command string holds the statement, where its contract header goes.
   const TOP = { retry: () => false, anchorLine: undefined };
+  // A query a loop or a cursor runs, linted as a statement of its own when it is one (#1859).
+  const lintQuery = (query, ctx) => {
+    const unwrapped = unwrapParens(query);
+    if (isWord(unwrapped[0]) && QUERY_HEADS.has(unwrapped[0].v)) lintStatement(unwrapped, true, ctx);
+  };
   const lintStatement = (raw, nested, ctx = TOP) => {
-    // The queries of the loops this statement starts with (FOR r IN <query> LOOP), linted as statements of their own.
+    // The queries of the loops this statement starts with (FOR r IN <query> LOOP), linted after the statement they
+    // guard, so a waiver on the line before both covers that statement, as it did before (#1859 review).
     const loopQueries = [];
-    const tokens = nested ? stripControl(raw, loopQueries) : raw;
-    for (const query of loopQueries) if (isWord(query[0]) && QUERY_HEADS.has(query[0].v)) lintStatement(query, true, ctx);
+    lintStripped(unwrapParens(nested ? stripControl(raw, loopQueries) : raw), nested, ctx);
+    for (const query of loopQueries) lintQuery(query, ctx);
+  };
+  const lintStripped = (tokens, nested, ctx) => {
     const head = tokens[0];
     if (!head) return;
     order++;
     // A cursor's query, run when the cursor is opened: OPEN c [[NO] SCROLL] FOR <query>, and a DECLARE section's
     // c [[NO] SCROLL] CURSOR [(args)] FOR | IS <query> (#1859).
     if (nested) {
+      // Only in those shapes: a column named cursor (PERFORM cursor FROM ... FOR UPDATE) is not a declaration.
       const open = isWord(head, 'open') ? findWord(tokens, 1, 'for') : -1;
-      const cursor = findWord(tokens, 1, 'cursor');
-      const at = open !== -1 ? open : cursor !== -1 ? findWord(tokens, cursor + 1, 'for', 'is') : -1;
-      if (at !== -1 && isWord(tokens[at + 1]) && QUERY_HEADS.has(tokens[at + 1].v)) lintStatement(tokens.slice(at + 1), true, ctx);
+      const cursor = skipWords(tokens, 1, 'no', 'scroll');
+      const args = isWord(tokens[cursor], 'cursor') ? (isPunct(tokens[cursor + 1], '(') ? skipParens(tokens, cursor + 1) : cursor + 1) : -1;
+      const at = open !== -1 ? open : args !== -1 && isWord(tokens[args], 'for', 'is') ? args : -1;
+      if (at !== -1) lintQuery(tokens.slice(at + 1), ctx);
     }
     // Statements that run another statement the lint does not read, and that no migration needs (#1859): PREPARE (and
     // the SQL EXECUTE of a prepared statement; a DO body's EXECUTE runs a string the lint reads), EXPLAIN (ANALYZE runs

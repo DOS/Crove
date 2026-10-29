@@ -431,6 +431,21 @@ describe('migration lint: loop and cursor queries, PREPARE, EXPLAIN and COPY (#1
     // A loop nested in another, and a cursor declared with its query.
     expect(rules(inDo('  FOR r IN SELECT 1 LOOP\n    FOR r IN DELETE FROM crove_kernel.tenant RETURNING 1 LOOP\n      NULL;\n    END LOOP;\n  END LOOP;'))).toEqual(['6 module-schema']);
     expect(rules('DO $$\nDECLARE\n  c CURSOR FOR DELETE FROM crove_kernel.tenant RETURNING 1;\nBEGIN\n  NULL;\nEND $$;')).toEqual(['3 module-schema']);
+    expect(rules('DO $$\nDECLARE\n  c NO SCROLL CURSOR (n int) IS DELETE FROM crove_kernel.tenant RETURNING n;\nBEGIN\n  NULL;\nEND $$;')).toEqual(['3 module-schema']);
+    // A column named cursor is not a declaration (Codex).
+    expect(rules(inDo('  PERFORM cursor FROM crove_social.sample FOR UPDATE OF sample;'))).toEqual([]);
+    // EXPLAIN as a loop or cursor query, and a query in parentheses (review).
+    for (const body of [
+      '  FOR r IN EXPLAIN ANALYZE DELETE FROM crove_social.sample RETURNING 1 LOOP\n    NULL;\n  END LOOP;',
+      '  OPEN c FOR EXPLAIN ANALYZE DELETE FROM crove_social.sample;',
+    ]) {
+      expect(rules(inDo(body)), body).toEqual(['5 no-indirect']);
+    }
+    expect(rules(inDo('  FOR r IN (WITH d AS (DELETE FROM crove_kernel.tenant RETURNING 1) SELECT * FROM d) LOOP\n    NULL;\n  END LOOP;'))).toEqual(['5 module-schema']);
+    expect(rules('(WITH d AS (DELETE FROM crove_kernel.tenant RETURNING 1) SELECT 1);')).toEqual(['1 module-schema']);
+    // A one-line loop under a waiver: the waiver covers the statement the loop guards, as before (review).
+    const waived = 'DO $$ BEGIN\n  -- migration-lint: cross-module the purge clears the kernel rows too\n  FOR r IN SELECT 1 LOOP DELETE FROM crove_kernel.tenant; END LOOP;\nEND $$;';
+    expect(lintMigration(FILE, waived, { waivers: [] })).toEqual([]);
     // A loop over numbers, an array or a read of the file's own schema writes nothing elsewhere.
     expect(rules(inDo('  FOR i IN 1..3 LOOP\n    NULL;\n  END LOOP;'))).toEqual([]);
     expect(rules(inDo("  FOREACH r IN ARRAY ARRAY['a'] LOOP\n    NULL;\n  END LOOP;"))).toEqual([]);
