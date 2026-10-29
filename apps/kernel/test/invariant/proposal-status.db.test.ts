@@ -297,6 +297,32 @@ suite('proposal status transitions on PostgreSQL (#1707)', () => {
     for (const writer of [ownerWriter, memberWriter]) {
       await expect(as(writer, execute(approved)), `${writer.name}: after an earlier transaction's run`).resolves.toMatchObject({ ok: false, ...REFUSED });
     }
+    // A row undone with its savepoint is no row (#1840): the move after the rollback is refused.
+    for (const writer of writers()) {
+      const undone = await as(writer, async (c) => {
+        await c.query('SAVEPOINT ran');
+        await ran('t1707.prop', 'ok', approved)(c);
+        await c.query('ROLLBACK TO SAVEPOINT ran');
+        return execute(approved)(c);
+      });
+      expect(undone, `${writer.name}: after a rolled-back run`).toMatchObject({ ok: false, ...REFUSED });
+    }
+    // One statement that writes the row first is two statements in one (#1840): the update reads the CTE, so its insert
+    // runs first, and proposal_status_guard is VOLATILE, so its expression takes a fresh snapshot (after a command
+    // counter increment) that the STABLE proposal_execution_recorded reads. The ok row passes, a failed one is refused.
+    // Dropping the EXISTS or marking the guard STABLE flips the first case.
+    const inOneStatement = (outcome: string) => (c: pg.Client) =>
+      c.query(
+        `WITH r AS (
+           INSERT INTO crove_kernel.audit_event (org_id, actor_type, command, command_id, outcome, input_sha256, proposal_id)
+           VALUES ($1, 'user', 't1707.prop', gen_random_uuid(), $2, repeat('0', 64), $3) RETURNING id)
+         UPDATE crove_kernel.proposal SET status = 'executed', result = '{"ok": true}' WHERE org_id = $1 AND id = $3 AND EXISTS (SELECT 1 FROM r)`,
+        [orgId, outcome, approved],
+      );
+    for (const writer of writers()) {
+      await expect(as(writer, inOneStatement('ok')), `${writer.name}: one statement, ok row`).resolves.toMatchObject({ ok: true, value: { rowCount: 1 } });
+      await expect(as(writer, inOneStatement('failed')), `${writer.name}: one statement, failed row`).resolves.toMatchObject({ ok: false, ...REFUSED });
+    }
     // The check answers for the org of the context only: the same row, asked about from another org, is not there.
     for (const writer of writers()) {
       const answer = await as(writer, async (c) => {
