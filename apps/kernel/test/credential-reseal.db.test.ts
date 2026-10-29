@@ -170,6 +170,23 @@ suite('credential reseal after a key rotation on PostgreSQL (#776)', () => {
     expect(done.leftInactive).toBeGreaterThanOrEqual(1);
   });
 
+  it('reseals the credentials of an org being offboarded too, as it counts them (#1889)', async () => {
+    const o = await org();
+    const id = await connect(o, 30 * 24 * HOUR, JSON.stringify({ accessToken: 'token-g' }));
+    // Offboarding: only owners enter it, the worker's system context still does, and staff can reopen it before its
+    // purge, so its tokens must outlive the previous key. Moved as staff, without the triggers (the move's own audit
+    // check is kernel.org.offboard's).
+    await admin(async (c) => {
+      await c.query('BEGIN');
+      await c.query('SET LOCAL session_replication_role = replica');
+      await c.query("UPDATE crove_kernel.tenant SET status = 'offboarding' WHERE org_id = $1", [o.orgId]);
+      await c.query('COMMIT');
+    });
+    const done = await resealCredentials({ runtime: worker, broker: rotated, workerDb });
+    expect(await keyOf(id)).toBe(newKey.id);
+    expect(done.leftActive).toBe(0);
+  });
+
   it('skips a broker that does not say which key it seals with', async () => {
     const opaque = { id: 'other', seal: rotated.seal.bind(rotated), open: rotated.open.bind(rotated) };
     expect(await resealCredentials({ runtime: worker, broker: opaque, workerDb })).toMatchObject({ skipped: true, resealed: 0 });

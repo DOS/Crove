@@ -163,6 +163,28 @@ export const changeMemberRole = defineCommand({
     ctx.audit({ target_user: input.userId, role: input.role, previous_role: previousRole, changed: previousRole !== input.role });
     if (previousRole === input.role) return { userId: input.userId, role: input.role, previousRole };
     if (previousRole === 'owner' && owners <= 1) throw LAST_OWNER(input.userId, input.role);
+    // An owner or admin made member or viewer must not hold org-wide and legal-entity roles together (#1367): as a
+    // member they would read every entity (any org-wide role lifts the scope, enter_context) while their entity roles
+    // still show. For one limited to some entities before a promotion, the demotion would widen what they read, which
+    // ROLE_GRANT_WIDENS_SCOPE refuses a grant to do; every mixed demotion is refused rather than tracking how the roles
+    // came. Whoever demotes them decides which side goes first.
+    if ((previousRole === 'owner' || previousRole === 'admin') && (input.role === 'member' || input.role === 'viewer')) {
+      const held = await ctx.trx
+        .selectFrom('crove_kernel.role_assignment')
+        .select('legal_entity_id')
+        .where('org_id', '=', ctx.orgId)
+        .where('user_id', '=', input.userId)
+        .execute();
+      if (held.some((a) => a.legal_entity_id === null) && held.some((a) => a.legal_entity_id !== null)) {
+        throw new DomainError(
+          'ROLE_DEMOTION_MIXES_SCOPE',
+          409,
+          'Thành viên này đang có cả vai trò cho cả tổ chức lẫn vai trò theo pháp nhân, nên chưa đổi được thành Thành viên hoặc Chỉ xem. Hãy thu hồi các vai trò cho cả tổ chức để họ chỉ xem các pháp nhân đó, hoặc thu hồi các vai trò theo pháp nhân để họ xem mọi pháp nhân, rồi đổi lại',
+          undefined,
+          { audit: { target_user: input.userId, role: input.role, previous_role: previousRole } },
+        );
+      }
+    }
     // A demotion to viewer of the last chief accountant under the accountant preset is refused (#1402).
     await keepingChiefAccountant(() =>
       ctx.trx.updateTable('crove_kernel.tenant_member').set({ role: input.role }).where('org_id', '=', ctx.orgId).where('user_id', '=', input.userId).execute(),
@@ -212,6 +234,23 @@ export const removeMember = defineCommand({
     const { actorId, target, owners } = await lockForMemberChange(ctx, input.userId);
     if (input.userId === actorId) throw new DomainError('CANNOT_REMOVE_SELF', 422, 'Bạn không thể tự xóa mình khỏi tổ chức');
     if (target.role === 'owner' && owners <= 1) throw LAST_OWNER(input.userId, null);
+    // The org's pending invites addressed to them are revoked too (#1880): a member cannot use one (a scoped one is
+    // refused, #1459), but once removed they could rejoin through it, with whatever role and scope it names. Before the
+    // membership row goes, in the order the member commands use (membership rows, then invites): an acceptance that
+    // holds the invite row meets a member row that is only locked, does not wait for it and finishes first, and one that
+    // does not waits for this update and then finds the invite revoked. Matched as invite_for_user matches the
+    // accepting account's verified email (lower(btrim(user_account.email))); crove_kernel.invite_accept also refuses an
+    // invite made before its invitee's removal, for invites addressed to members removed before this existed.
+    const addressedInvites = target.email
+      ? await ctx.trx
+          .updateTable('crove_kernel.member_invite')
+          .set({ status: 'revoked', revoked_at: ctx.now, revoked_by: actorId })
+          .where('org_id', '=', ctx.orgId)
+          .where('email', '=', sql<string>`pg_catalog.lower(pg_catalog.btrim(${target.email}))`)
+          .where('status', '=', 'pending')
+          .returning('id')
+          .execute()
+      : [];
     // The seats they hold become vacant (position_holder_user_fk): their open tasks the vacant seat's scope does not
     // read go up the chart once they are gone (#1799).
     const seats = await positionsHeldBy(ctx, input.userId);
@@ -227,7 +266,13 @@ export const removeMember = defineCommand({
       .where('status', '=', 'pending')
       .returning('id')
       .execute();
-    ctx.audit({ target_user: input.userId, role: null, previous_role: target.role, revoked_invites: revokedInvites.map((r) => r.id) });
+    ctx.audit({
+      target_user: input.userId,
+      role: null,
+      previous_role: target.role,
+      revoked_invites: revokedInvites.map((r) => r.id),
+      revoked_invites_to_member: addressedInvites.map((r) => r.id),
+    });
     await rerouteStrandedTasks(ctx, seats);
     await ctx.activity('kernel.member', input.userId, 'member.removed', `Xóa thành viên (${target.role})`);
     await ctx.emit('kernel.member.removed', { userId: input.userId, oldRole: target.role });

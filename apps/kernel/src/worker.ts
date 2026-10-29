@@ -1192,8 +1192,11 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     resealing = true;
     try {
       const done = await resealCredentials({ runtime: deps.runtime, broker: channels.broker, workerDb: deps.workerDb });
-      if (done.resealed + done.failed + done.leftActive + done.leftInactive > 0) {
-        console.log(`[credential-reseal] resealed ${done.resealed}, failed ${done.failed}; left under an older key: ${done.leftActive} active, ${done.leftInactive} to reconnect`);
+      if (done.resealed + done.failed + done.leftActive + done.leftInactive + done.leftWaiting > 0) {
+        console.log(
+          `[credential-reseal] resealed ${done.resealed}, failed ${done.failed}; left under an older key: ${done.leftActive} active, ${done.leftInactive} to reconnect` +
+            (done.leftWaiting > 0 ? `, ${done.leftWaiting} team chat alerts waiting for the Social module (keep CREDENTIAL_KEY_PREVIOUS)` : ''),
+        );
       }
     } catch (error) {
       console.error('[credential-reseal] sweep', error instanceof Error ? error.name : typeof error);

@@ -457,6 +457,51 @@ suite('member invites with consent on PostgreSQL (issue #35)', () => {
     for (const who of [a, a2, b, c2]) expect(await memberships(who.id)).toEqual([]);
   });
 
+  it('revokes the invites addressed to a member when they are removed, so they cannot rejoin through one (#1880)', async () => {
+    const owner = await person('owner');
+    const orgId = await orgOf(owner);
+    // An invite still pending when its invitee joined another way (here by hand), and one for somebody else.
+    const held = await person('held', `Held-${randomUUID().slice(0, 8)}@Invites.test`);
+    const other = await person('other');
+    const toHeld = await invite(orgId, owner.id, held.email, 'admin');
+    const toOther = await invite(orgId, owner.id, other.email, 'viewer');
+    await admin((c) => c.query("INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member')", [orgId, held.id]));
+
+    await runtime.execute('kernel.member.remove', { userId: held.id }, { actor: asMfa(owner.id), orgId });
+    // Matched on the normalized email, whatever its case in the account.
+    expect(await inviteStatus(toHeld.inviteId)).toEqual({ status: 'revoked', revoked_by: owner.id });
+    expect(await inviteStatus(toOther.inviteId)).toEqual({ status: 'pending', revoked_by: null });
+    expect((await lastAudit(orgId, 'kernel.member.remove'))?.detail).toMatchObject({
+      target_user: held.id,
+      role: null,
+      previous_role: 'member',
+      revoked_invites: [],
+      revoked_invites_to_member: [toHeld.inviteId],
+    });
+    await expect(accept(tokenOf(toHeld), held.id)).rejects.toMatchObject({ code: 'INVITE_REVOKED' });
+    expect(await memberships(held.id)).toEqual([]);
+    // A member with no invite addressed to them: nothing else is revoked.
+    const plain = await person('plain');
+    await accept(tokenOf(await invite(orgId, owner.id, plain.email)), plain.id);
+    await runtime.execute('kernel.member.remove', { userId: plain.id }, { actor: asMfa(owner.id), orgId });
+    expect((await lastAudit(orgId, 'kernel.member.remove'))?.detail).toMatchObject({ revoked_invites: [], revoked_invites_to_member: [] });
+    expect(await inviteStatus(toOther.inviteId)).toEqual({ status: 'pending', revoked_by: null });
+
+    // An invite the removal did not see (addressed to the email the account takes only after it): refused all the same,
+    // since it is older than the removal. Invited again after the removal, they join as anyone does.
+    const subject = randomUUID();
+    const [oldEmail, newEmail] = [`old-${subject.slice(0, 8)}@invites.test`, `new-${subject.slice(0, 8)}@invites.test`];
+    const moved = await upsertIdentity(db, { issuer: 'test', subject, email: oldEmail, name: null });
+    const toNewEmail = await invite(orgId, owner.id, newEmail, 'member');
+    await admin((c) => c.query("INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member')", [orgId, moved]));
+    await runtime.execute('kernel.member.remove', { userId: moved }, { actor: asMfa(owner.id), orgId });
+    expect(await inviteStatus(toNewEmail.inviteId)).toEqual({ status: 'pending', revoked_by: null });
+    expect(await upsertIdentity(db, { issuer: 'test', subject, email: newEmail, name: null })).toBe(moved);
+    await expect(accept(tokenOf(toNewEmail), moved)).rejects.toMatchObject({ code: 'INVITE_REVOKED' });
+    expect(await memberships(moved)).toEqual([]);
+    await expect(accept(tokenOf(await invite(orgId, owner.id, newEmail, 'viewer')), moved)).resolves.toMatchObject({ orgId, role: 'viewer' });
+  });
+
   // Acceptance locks the inviter's membership row before the invite row, the order the member commands use, so an
   // acceptance racing its inviter's demotion never deadlocks: either the invitee joined first, or the invite is
   // revoked. Never both, never neither, never a 500.
