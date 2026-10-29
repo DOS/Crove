@@ -4,7 +4,7 @@
 import type { ColumnType, Generated } from 'kysely';
 
 /** Every table of crove_kernel, crove_finance, crove_social, crove_crm, crove_notes that crove_tenant may read. */
-export type Database = CroveFinanceSchema & CroveSocialSchema & CroveKernelSchema & CroveCrmSchema & CroveNotesSchema;
+export type Database = CroveCrmSchema & CroveFinanceSchema & CroveKernelSchema & CroveNotesSchema & CroveSocialSchema;
 
 /**
  * The insert or update type of a column crove_tenant may not insert or update: no value but undefined, which

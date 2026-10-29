@@ -12,7 +12,8 @@
 --     whose legal entity the position's holder no longer reads (position_reads_legal_entity, as #1788's checks read it),
 --     each with its target: the entity-aware escalation target of #1788 (task_escalation_target, the nearest active
 --     position up the chart held by a person who reads the entity), NULL for the owners at the root. Org-level tasks
---     (no entity) are never stranded. A helper of task_reroute: no EXECUTE for any login role.
+--     (no entity) are never stranded. Each seat and entity is judged once, whatever the number of its tasks. A helper of
+--     task_reroute: no EXECUTE for any login role.
 -- crove_kernel.task_reroute(positions)  SECURITY DEFINER, EXECUTE for crove_app only. Moves those tasks, set-based, in
 --     the caller's transaction, and answers each move:
 --       - first it locks every target seat and its holder's membership (FOR SHARE, seats in id order, then members in
@@ -33,14 +34,24 @@ SET LOCAL lock_timeout = '2s';
 CREATE OR REPLACE FUNCTION crove_kernel.task_stranded(p_org uuid, p_positions uuid[])
 RETURNS TABLE (task_id uuid, from_position_id uuid, legal_entity_id uuid, to_position_id uuid)
 LANGUAGE sql STABLE SET search_path = pg_catalog, pg_temp AS $$
-  SELECT t.id, t.assignee_position_id, t.legal_entity_id,
-         crove_kernel.task_escalation_target(p_org, t.assignee_position_id, t.legal_entity_id)
-  FROM crove_kernel.task t
-  WHERE t.org_id = p_org
-    AND t.assignee_position_id = ANY (p_positions)
-    AND t.status IN ('todo', 'in_progress', 'waiting', 'in_review')
-    AND t.legal_entity_id IS NOT NULL
-    AND NOT crove_kernel.position_reads_legal_entity(p_org, t.assignee_position_id, t.legal_entity_id)
+  -- Each seat and entity is judged once, whatever the number of its tasks.
+  WITH open_task AS MATERIALIZED (
+    SELECT t.id, t.assignee_position_id, t.legal_entity_id
+    FROM crove_kernel.task t
+    WHERE t.org_id = p_org
+      AND t.assignee_position_id = ANY (p_positions)
+      AND t.status IN ('todo', 'in_progress', 'waiting', 'in_review')
+      AND t.legal_entity_id IS NOT NULL),
+  pair AS MATERIALIZED (
+    SELECT DISTINCT o.assignee_position_id, o.legal_entity_id FROM open_task o),
+  judged AS MATERIALIZED (
+    SELECT p.assignee_position_id, p.legal_entity_id,
+           crove_kernel.task_escalation_target(p_org, p.assignee_position_id, p.legal_entity_id) AS target
+    FROM pair p
+    WHERE NOT crove_kernel.position_reads_legal_entity(p_org, p.assignee_position_id, p.legal_entity_id))
+  SELECT o.id, o.assignee_position_id, o.legal_entity_id, j.target
+  FROM open_task o
+  JOIN judged j ON j.assignee_position_id = o.assignee_position_id AND j.legal_entity_id = o.legal_entity_id
 $$;
 REVOKE ALL ON FUNCTION crove_kernel.task_stranded(uuid, uuid[]) FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant;
 

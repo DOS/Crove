@@ -253,9 +253,10 @@ suite('tasks a chart or role change would strand (#1799)', () => {
       { templateKey: 'finance.chief_accountant', leScope: [defaultEntity, branch], reportsTo: null },
       { actor: asMfa(owner), orgId },
     );
+    // A run starts only for an open task of its seat.
+    const ofBranch = await task(branch, positionId);
     const started = await worker.execute<{ runId: string | null }>('kernel.agent.run.start', { agentId }, { actor: { type: 'system', component: 'kernel.agent' }, orgId });
     if (!started.runId) throw new Error('no run');
-    const ofBranch = await task(branch, positionId);
     await worker.execute('kernel.task.checkout', { id: ofBranch }, { actor: { type: 'agent', agentId, runId: started.runId }, orgId });
     expect(await taskRow(ofBranch)).toEqual({ assignee: positionId, status: 'in_progress' });
 
