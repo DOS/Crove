@@ -142,6 +142,9 @@ import {
   type TicketStore,
 } from './stream.ts';
 
+// A uuid in text form, any case.
+const UUID_TEXT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export interface HttpDeps {
   config: Config;
   runtime: Runtime;
@@ -1103,7 +1106,15 @@ export function createHttpApp(deps: HttpDeps) {
   // purpose import: an .xlsx workbook for a module's import (the tax portal's purchase list, #465), recorded with source
   // 'import' so it never goes to extraction either; the module has it read in the parsing sandbox. Only its container
   // is checked here (a ZIP of at most MAX_IMPORT_BYTES); the sandbox decides whether it is a workbook.
-  async function ingest(user: AuthUser, orgId: string, name: string, bytes: Uint8Array, sha256 = sha256Hex(bytes), purpose: UploadPurpose = 'document') {
+  async function ingest(
+    user: AuthUser,
+    orgId: string,
+    name: string,
+    bytes: Uint8Array,
+    sha256 = sha256Hex(bytes),
+    purpose: UploadPurpose = 'document',
+    legalEntityId: string | undefined = undefined,
+  ) {
     // The content decides the type; the browser's MIME type and the extension are only hints.
     const video = purpose === 'social' ? sniffVideo(bytes) : null;
     let type = video ?? sniffType(bytes);
@@ -1147,6 +1158,8 @@ export function createHttpApp(deps: HttpDeps) {
         source: purpose === 'social' ? 'social' : purpose === 'import' ? 'import' : 'upload',
         ...(durationMs === undefined ? {} : { durationMs }),
         ...(size ? { imageWidth: size.width, imageHeight: size.height } : {}),
+        // A document only: the entity it is booked in (#1764), which the command checks the uploader sees.
+        ...(purpose === 'document' && legalEntityId !== undefined ? { legalEntityId } : {}),
       },
       { actor: actorOf(user), orgId },
     );
@@ -1161,6 +1174,14 @@ export function createHttpApp(deps: HttpDeps) {
   };
 
   // What an upload is for: a document (the default) or an image for a Social post. Anything else is refused.
+  // The legal entity a document upload names (#1764): a form field or JSON property, omitted or empty for none. Its
+  // shape is checked here; whether the uploader sees it, by kernel.file.ingest.
+  function uploadEntity(value: unknown): string | undefined {
+    if (value === undefined || value === null || value === '') return undefined;
+    if (typeof value !== 'string' || !UUID_TEXT.test(value)) throw new DomainError('INVALID', 400, 'Pháp nhân không hợp lệ');
+    return value.toLowerCase();
+  }
+
   function uploadPurpose(value: unknown): UploadPurpose {
     if (value === undefined || value === null || value === '' || value === 'document') return 'document';
     if (value === 'social') return 'social';
@@ -1209,6 +1230,7 @@ export function createHttpApp(deps: HttpDeps) {
       const body = await c.req.parseBody({ all: true });
       const files = ([] as unknown[]).concat(body.file ?? []).filter((f): f is File => f instanceof File);
       const purpose = uploadPurpose(body.purpose);
+      const legalEntityId = uploadEntity(body.legalEntityId);
       if (files.length === 0) throw new DomainError('NO_FILE', 400, 'Chưa chọn tệp');
       if (files.length > MAX_FILES_PER_UPLOAD) throw new DomainError('TOO_MANY_FILES', 413, `Tối đa ${MAX_FILES_PER_UPLOAD} tệp mỗi lần`);
       const results = [];
@@ -1221,7 +1243,7 @@ export function createHttpApp(deps: HttpDeps) {
         // A Social video may be up to 100 MB; ingest checks the size against the type it reads from the bytes.
         if (file.size > (purpose === 'social' ? MAX_SOCIAL_VIDEO_BYTES : MAX_UPLOAD_BYTES)) throw new DomainError('TOO_LARGE', 413, `${file.name} vượt quá ${purpose === 'social' ? 100 : 25} MB`);
         const bytes = new Uint8Array(await file.arrayBuffer());
-        results.push(await ingest(user, orgId, file.name, bytes, sha256Hex(bytes), purpose));
+        results.push(await ingest(user, orgId, file.name, bytes, sha256Hex(bytes), purpose, legalEntityId));
       }
       return c.json({ files: results });
     } catch (error) {
@@ -1264,8 +1286,9 @@ export function createHttpApp(deps: HttpDeps) {
     try {
       if (!direct) throw noDirect();
       const { user, orgId } = await uploader(c);
-      const input = (await c.req.json().catch(() => null)) as { filename?: unknown; purpose?: unknown } | null;
+      const input = (await c.req.json().catch(() => null)) as { filename?: unknown; purpose?: unknown; legalEntityId?: unknown } | null;
       const purpose = uploadPurpose(input?.purpose);
+      const legalEntityId = uploadEntity(input?.legalEntityId);
       const filename = typeof input?.filename === 'string' && input.filename.trim() ? input.filename.slice(0, 255) : 'chung-tu';
       const release = completes.tryAcquire(user.userId);
       if (!release) {
@@ -1291,7 +1314,7 @@ export function createHttpApp(deps: HttpDeps) {
             throw error;
           });
           if (staged.bytes.byteLength === 0) throw new DomainError('NO_FILE', 400, 'Tệp rỗng');
-          return c.json(await ingest(user, orgId, filename, staged.bytes, staged.sha256, purpose));
+          return c.json(await ingest(user, orgId, filename, staged.bytes, staged.sha256, purpose, legalEntityId));
         } finally {
           await store.delete(claim.stagingKey).catch((error: unknown) => console.error('[http] staging object not deleted', error));
         }

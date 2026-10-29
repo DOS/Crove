@@ -11,7 +11,7 @@ import { Label } from '@crove/ui/components/label';
 import { TableCell, TableRow } from '@crove/ui/components/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@crove/ui/components/tabs';
 import { cn } from '@crove/ui/lib/utils';
-import { useChosenEntity, useLegalEntity } from '../components/entity-switcher.tsx';
+import { UploadEntityPicker, useChosenEntity, useLegalEntity } from '../components/entity-switcher.tsx';
 import { IntakePanel, useIntake } from '../components/intake.tsx';
 import { StepUpPrompt } from '../components/two-factor.tsx';
 import { DataTable, Empty, ErrorText, PageHeader, Spinner, TableSkeleton } from '../components/ui.tsx';
@@ -419,10 +419,13 @@ export function InboxPage() {
         title={t('title')}
         subtitle={t('subtitle')}
         actions={
-          <Button size="lg" onClick={() => inputRef.current?.click()} disabled={intake.uploading}>
-            {intake.uploading ? <Spinner className="text-current" /> : null}
-            {t('upload')}
-          </Button>
+          <div className="flex flex-wrap items-center gap-3">
+            <UploadEntityPicker slug={slug} />
+            <Button size="lg" onClick={() => inputRef.current?.click()} disabled={intake.uploading}>
+              {intake.uploading ? <Spinner className="text-current" /> : null}
+              {t('upload')}
+            </Button>
+          </div>
         }
       />
       <input

@@ -27,24 +27,8 @@ export function chooseEntity(entities: readonly VisibleEntity[], kept: string | 
   return (entities.find((e) => e.isDefault) ?? entities[0])?.id ?? null;
 }
 
-// The entity an invoice proposal is recorded in (#1542), and the one to suggest moving it to. A proposal names its entity
-// once a revision set it (inbox.edit); before that the kernel records it in the approver's default entity, so that is
-// what shows. The shell's choice is suggested only for a proposal that names none, when it is another entity.
-export function proposalEntity(
-  entities: readonly VisibleEntity[],
-  proposalEntityId: string | null,
-  chosen: string | null,
-): { effective: string | null; suggest: string | null } {
-  const named = proposalEntityId !== null && entities.some((e) => e.id === proposalEntityId) ? proposalEntityId : null;
-  const effective = named ?? chooseEntity(entities, null);
-  const visible = chosen !== null && entities.some((e) => e.id === chosen);
-  const suggest = proposalEntityId === null && visible && chosen !== effective ? chosen : null;
-  return { effective, suggest };
-}
-
-// The entity the Inbox list shows beside a proposal (#1543), only to a caller who sees several: the one its revision
-// names, else, for a proposal approval records in the approver's default entity (an invoice or a voucher that names
-// none), the default one. Nothing for an entity the caller does not see: with the default out of sight, approval
+// The entity the Inbox list shows beside a proposal (#1543), only to a caller who sees several: the one the list gives
+// (its revision's, else the proposal's own since #1764), else, for an older row that gives none, the default one. Nothing for an entity the caller does not see: with the default out of sight, approval
 // refuses to guess (LEGAL_ENTITY_REQUIRED), so neither does the list.
 export function listedEntity(entities: readonly VisibleEntity[], legalEntityId: string | null, postsToDefault: boolean): VisibleEntity | null {
   if (entities.length < 2) return null;
