@@ -13,6 +13,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove
 import { Runtime } from '@crove/kernel-runtime';
 import { socialCommands, socialQueries, type PostView, type PreReview } from '@crove/mod-social';
 import { styleSelection, styleText } from '@crove/mod-social/contract';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -101,7 +102,7 @@ suite('social duplicate text on PostgreSQL (#1156)', () => {
     u.password = 'test-app-pw';
     appPool = createPool({ connectionString: u.toString(), max: 4 });
     db = createDb(appPool);
-    rt = new Runtime(db).register({ commands: [...kernelCommands, ...socialCommands], queries: [...kernelQueries({ inboundDomain: null }), ...socialQueries] });
+    rt = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: [...kernelCommands, ...socialCommands], queries: [...kernelQueries({ inboundDomain: null }), ...socialQueries] });
   });
 
   afterAll(async () => {

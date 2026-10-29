@@ -16,6 +16,7 @@ import { applyAuthGrants, migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, previewInvite, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
 import { createSessionStatusSource } from '../../src/sessions.ts';
+import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -91,7 +92,7 @@ suite('member invites with consent on PostgreSQL (issue #35)', () => {
     appUrl.password = 'test-app-pw';
     pool = createPool({ connectionString: appUrl.toString(), max: 4 });
     db = createDb(pool);
-    runtime = new Runtime(db).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
+    runtime = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
   });
 
   afterAll(async () => {
@@ -719,7 +720,7 @@ suite('member invites with consent on PostgreSQL (issue #35)', () => {
         ALTER TABLE auth.mfa_factors ENABLE ROW LEVEL SECURITY;`);
     });
     await applyAuthGrants({ adminUrl, timeoutMs: 5000 });
-    const upstream = new Runtime(db, { sessions: createSessionStatusSource('db'), stepUp: 'off' }).register({
+    const upstream = new Runtime(db, { manifests: TEST_MANIFESTS, sessions: createSessionStatusSource('db'), stepUp: 'off' }).register({
       commands: kernelCommands,
       queries: kernelQueries({ inboundDomain: null }),
     });

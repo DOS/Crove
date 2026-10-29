@@ -14,6 +14,7 @@ import type { Note, NoteRecordPanel, NoteSummary, NoteWritten } from '@crove/ker
 import { Runtime } from '@crove/kernel-runtime';
 import { notesCommands, notesQueries } from '@crove/mod-notes';
 import { sweepNotesFormerMembers } from '../src/notes-worker.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -111,7 +112,7 @@ suite('notes on PostgreSQL (#1671)', () => {
       url.password = password;
       const pool = createPool({ connectionString: url.toString(), max: 4 });
       pools.push(pool);
-      return new Runtime(createDb(pool)).register({ commands: [...kernelCommands, ...notesCommands], queries: [...kernelQueries({ inboundDomain: null }), ...notesQueries] });
+      return new Runtime(createDb(pool), { manifests: TEST_MANIFESTS }).register({ commands: [...kernelCommands, ...notesCommands], queries: [...kernelQueries({ inboundDomain: null }), ...notesQueries] });
     };
     app = runtimeFor('crove_app', 'test-app-pw');
     worker = runtimeFor('crove_worker', 'test-worker-pw');

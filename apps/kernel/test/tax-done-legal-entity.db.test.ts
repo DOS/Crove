@@ -14,6 +14,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import type { TaxDueView } from '@crove/kernel-contract';
 import { Runtime, type InputHashMode } from '@crove/kernel-runtime';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -51,7 +52,7 @@ suite('tax obligations done per legal entity on PostgreSQL (#1496)', () => {
   function connect(inputHash: InputHashMode = 'keyed') {
     pool = createPool({ connectionString: appUrl, max: 4 });
     db = createDb(pool);
-    rt = new Runtime(db, { inputHash }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
+    rt = new Runtime(db, { manifests: TEST_MANIFESTS, inputHash }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
   }
 
   const exec = <T>(user: string, command: string, input: unknown) => rt.execute<T>(command, input, { actor: asUser(user), orgId });

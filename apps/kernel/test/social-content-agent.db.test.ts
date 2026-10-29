@@ -12,6 +12,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, runAgentWake, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
 import { socialAgentPrograms, socialCommands, socialQueries, type PreReview } from '@crove/mod-social';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -55,7 +56,7 @@ suite('the social.content_manager agent on PostgreSQL (#799)', () => {
       const pool = createPool({ connectionString: url.toString(), max: 4 });
       pools.push(pool);
       const d = createDb(pool);
-      return { db: d, runtime: new Runtime(d).register({ commands: [...kernelCommands, ...socialCommands], queries: [...kernelQueries({ inboundDomain: null }), ...socialQueries] }) };
+      return { db: d, runtime: new Runtime(d, { manifests: TEST_MANIFESTS }).register({ commands: [...kernelCommands, ...socialCommands], queries: [...kernelQueries({ inboundDomain: null }), ...socialQueries] }) };
     };
     const api = runtimeFor('crove_app', 'test-app-pw');
     app = api.runtime;

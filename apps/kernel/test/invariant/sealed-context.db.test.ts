@@ -14,6 +14,7 @@ import { createDb, createPool } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime, toDomainError } from '@crove/kernel-runtime';
+import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -190,7 +191,7 @@ suite('sealed request context on PostgreSQL (§4.5 item 5, T11)', () => {
     workerUrl = loginUrl('crove_worker', 'test-worker-pw');
     pool = createPool({ connectionString: appUrl, max: 1 });
     const db = createDb(pool);
-    const runtime = new Runtime(db).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: 'in.test' }) });
+    const runtime = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: 'in.test' }) });
     users.owner = await upsertIdentity(db, { issuer: 'test', subject: 'seal-owner', email: 'owner@seal.test', name: null });
     users.other = await upsertIdentity(db, { issuer: 'test', subject: 'seal-other', email: 'other@seal.test', name: null });
     orgA = (await createOrg(runtime, asUser(users.owner), 'Seal A')).orgId;

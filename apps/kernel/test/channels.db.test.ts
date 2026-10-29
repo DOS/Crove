@@ -16,6 +16,7 @@ import { loadConfig } from '../src/config.ts';
 import { noCredentialBroker } from '../src/credentials.ts';
 import { createHttpApp } from '../src/http.ts';
 import { createSessionStatusSource } from '../src/sessions.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -127,8 +128,8 @@ suite('channel connections through the API (ADR-0025)', () => {
     db = createDb(pool);
     workerPool = createPool({ connectionString: login('crove_worker', 'test-worker-pw'), max: 2 });
     const defs = { commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) };
-    const runtime = new Runtime(db, { sessions: createSessionStatusSource('off'), stepUp: 'required' }).register(defs);
-    worker = new Runtime(createDb(workerPool)).register(defs);
+    const runtime = new Runtime(db, { manifests: TEST_MANIFESTS, sessions: createSessionStatusSource('off'), stepUp: 'required' }).register(defs);
+    worker = new Runtime(createDb(workerPool), { manifests: TEST_MANIFESTS }).register(defs);
     config = loadConfig({
       DATABASE_URL: appUrl,
       AUTH_JWT_SECRET: SECRET,

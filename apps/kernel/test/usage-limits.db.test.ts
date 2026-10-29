@@ -16,6 +16,7 @@ import type { ExtractClient } from '@crove/extract-contract';
 import { processInboundEmail } from '../src/inbound.ts';
 import { renderUsageDeferredMail } from '../src/usage-deferred-mail.ts';
 import { inProcessExtract } from './extract-service.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -121,12 +122,12 @@ suite('per-org abuse limits on PostgreSQL (#675)', () => {
     pool = createPool({ connectionString: app.toString(), max: 4 });
     db = createDb(pool);
     const registry = { commands: [...kernelCommands, ...financeCommands], queries: [...kernelQueries({ inboundDomain: 'in.test' }), ...financeQueries] };
-    rt = new Runtime(db).register(registry);
+    rt = new Runtime(db, { manifests: TEST_MANIFESTS }).register(registry);
     const asWorker = new URL(adminUrl);
     asWorker.username = 'crove_worker';
     asWorker.password = 'test-worker-pw';
     workerPool = createPool({ connectionString: asWorker.toString(), max: 2 });
-    worker = new Runtime(createDb(workerPool)).register(registry);
+    worker = new Runtime(createDb(workerPool), { manifests: TEST_MANIFESTS }).register(registry);
     extract = inProcessExtract();
   });
 

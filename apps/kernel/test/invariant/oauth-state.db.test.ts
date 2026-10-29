@@ -16,6 +16,7 @@ import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
+import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -96,7 +97,7 @@ suite('OAuth connect attempts on PostgreSQL (S6.1)', () => {
     u.password = 'test-app-pw';
     appPool = createPool({ connectionString: u.toString(), max: 4 });
     appDb = createDb(appPool);
-    api = new Runtime(appDb).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
+    api = new Runtime(appDb, { manifests: TEST_MANIFESTS }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
   });
 
   afterAll(async () => {

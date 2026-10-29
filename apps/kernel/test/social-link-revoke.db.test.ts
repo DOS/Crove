@@ -10,6 +10,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
 import { socialCommands, socialQueries } from '@crove/mod-social';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -54,7 +55,7 @@ suite('links of a member who loses the right to make them (#625)', () => {
       const pool = createPool({ connectionString: url.toString(), max: 4 });
       pools.push(pool);
       const d = createDb(pool);
-      return { pool, db: d, runtime: new Runtime(d).register({ commands: [...kernelCommands, ...socialCommands], queries: [...kernelQueries({ inboundDomain: null }), ...socialQueries] }) };
+      return { pool, db: d, runtime: new Runtime(d, { manifests: TEST_MANIFESTS }).register({ commands: [...kernelCommands, ...socialCommands], queries: [...kernelQueries({ inboundDomain: null }), ...socialQueries] }) };
     };
     const api = runtimeFor('crove_app', 'test-app-pw');
     app = api.runtime;

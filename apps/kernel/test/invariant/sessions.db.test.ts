@@ -20,6 +20,7 @@ import { loadConfig } from '../../src/config.ts';
 import { createHttpApp } from '../../src/http.ts';
 import { createSessionStatusSource, type SignOutTarget } from '../../src/sessions.ts';
 import { startWorker } from '../../src/worker.ts';
+import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -133,7 +134,7 @@ suite('sessions and revocation on PostgreSQL (ADR-0028, self-host db adapter)', 
       MIGRATIONS_DIR: MIGRATIONS,
       WEB_DIST: '/nonexistent',
     });
-    const runtime = new Runtime(db, { sessions: createSessionStatusSource('db'), stepUp: 'required' }).register({
+    const runtime = new Runtime(db, { manifests: TEST_MANIFESTS, sessions: createSessionStatusSource('db'), stepUp: 'required' }).register({
       commands: [...kernelCommands, ...financeCommands],
       queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries],
     });
@@ -428,7 +429,7 @@ suite('sessions and revocation on PostgreSQL (ADR-0028, self-host db adapter)', 
     const stop = await startWorker({
       connectionString: workerUrl,
       workerDb,
-      runtime: new Runtime(workerDb).register({ commands: kernelCommands, queries: [] }),
+      runtime: new Runtime(workerDb, { manifests: TEST_MANIFESTS }).register({ commands: kernelCommands, queries: [] }),
       store: {} as BlobStore,
       extractor: null,
       extract: createExtractClient({ url: 'http://crove-extract.test', fetch: async (input, init) => createExtractApp().fetch(new Request(input, init)) }),

@@ -21,6 +21,7 @@ import { loadConfig } from '../src/config.ts';
 import { createHttpApp, type HttpDeps, type StreamDeps } from '../src/http.ts';
 import { createSessionStatusSource } from '../src/sessions.ts';
 import { StreamHub, createDbTicketStore, createPgNotificationSource, newTicket } from '../src/stream.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -201,7 +202,7 @@ suite('invalidation stream on PostgreSQL', () => {
       MIGRATIONS_DIR: MIGRATIONS,
       WEB_DIST: '/nonexistent',
     });
-    runtime = new Runtime(db, { sessions: createSessionStatusSource('off'), stepUp: 'required' }).register({
+    runtime = new Runtime(db, { manifests: TEST_MANIFESTS, sessions: createSessionStatusSource('off'), stepUp: 'required' }).register({
       commands: [...kernelCommands, ...financeCommands],
       queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries],
     });

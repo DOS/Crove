@@ -35,6 +35,7 @@ import type { SocialDrafter } from '../src/rpc.ts';
 import { SocialWriter, type DraftRequest, type DraftResult, type RewriteGenerator } from '@crove/agent';
 
 import { createSessionStatusSource } from '../src/sessions.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 
 
@@ -219,7 +220,7 @@ suite('social posts through the API', () => {
 
     const kernel = { commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) };
 
-    const runtime = new Runtime(db, { sessions: createSessionStatusSource('off'), stepUp: 'required' }).register({
+    const runtime = new Runtime(db, { manifests: TEST_MANIFESTS, sessions: createSessionStatusSource('off'), stepUp: 'required' }).register({
 
       commands: [...kernel.commands, ...socialCommands],
 
@@ -227,7 +228,7 @@ suite('social posts through the API', () => {
 
     });
 
-    const withoutSocial = new Runtime(db, { sessions: createSessionStatusSource('off'), stepUp: 'required' }).register(kernel);
+    const withoutSocial = new Runtime(db, { manifests: TEST_MANIFESTS, sessions: createSessionStatusSource('off'), stepUp: 'required' }).register(kernel);
 
     config = loadConfig({
 

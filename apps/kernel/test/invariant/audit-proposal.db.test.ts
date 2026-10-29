@@ -26,6 +26,7 @@ import { createExtractClient } from '@crove/extract-contract';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { DomainError, Runtime, defineCommand, fileKey, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
 import { extractAndPropose, financeCommands, financeQueries } from '@crove/mod-finance';
+import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -77,6 +78,7 @@ suite('audit rows naming a proposal on PostgreSQL (#1695)', () => {
   // itself (as the approval does), runs `OTHER` with the proposal's id (the runtime passes it on, as to every command an
   // execution runs) and marks it executed. With approve false it runs `OTHER` with the id as the proposal stands.
   const approveNested = defineCommand({
+    sideEffect: 'none',
     name: 'kernel.test_approve_nested',
     input: z.object({ proposalId: z.uuid(), approve: z.boolean() }),
     risk: 'R1',
@@ -195,7 +197,7 @@ suite('audit rows naming a proposal on PostgreSQL (#1695)', () => {
       const target = createDb(pool);
       return {
         db: target,
-        runtime: new Runtime(target).register({
+        runtime: new Runtime(target, { manifests: TEST_MANIFESTS }).register({
           commands: [...kernelCommands, ...financeCommands, approveNested],
           queries: [...kernelQueries({ inboundDomain: 'in.test' }), ...financeQueries],
         }),

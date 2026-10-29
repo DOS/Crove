@@ -17,6 +17,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove
 import { Runtime, defineCommand } from '@crove/kernel-runtime';
 import { socialCommands, socialQueries, type PostView, type ReviewFeedbackView, type ReviewLinkView, type ReviewReplyView } from '@crove/mod-social';
 import { reviewView } from '../src/review-link.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -27,6 +28,7 @@ const DAY = 86_400_000;
 // what refuses it, not the commands' rules. A refusal comes back as its SQLSTATE (the savepoint keeps the transaction
 // usable for the command's audit row).
 const rawSql = defineCommand({
+  sideEffect: 'none',
   name: 'test.review_reply.raw',
   input: z.object({ text: z.string(), params: z.array(z.unknown()) }),
   risk: 'R1',
@@ -134,7 +136,7 @@ suite('social review replies on PostgreSQL (#1301, #930)', () => {
     app.password = 'test-app-pw';
     pool = createPool({ connectionString: app.toString(), max: 6 });
     db = createDb(pool);
-    rt = new Runtime(db).register(registry);
+    rt = new Runtime(db, { manifests: TEST_MANIFESTS }).register(registry);
   });
 
   afterAll(async () => {

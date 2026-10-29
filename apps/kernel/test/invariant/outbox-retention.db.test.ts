@@ -22,6 +22,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove
 import { Runtime } from '@crove/kernel-runtime';
 import { OUTBOX_ARCHIVE_PREFIX, archiveOutbox, type OutboxManifest } from '../../src/outbox-retention.ts';
 import { LocalArchiveStore } from '../../src/worm.ts';
+import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -100,7 +101,7 @@ suite('outbox retention: archive, then delete (#997)', () => {
     db = createDb(pool);
     workerPool = createPool({ connectionString: login('crove_worker', 'test-worker-pw'), max: 2 });
     worker = createDb(workerPool);
-    const runtime = new Runtime(db).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
+    const runtime = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
     for (const name of ['a', 'b']) {
       const userId = await upsertIdentity(db, { issuer: 'test', subject: `outbox-${name}`, email: `outbox-${name}@example.com`, name: null });
       orgs.push((await createOrg(runtime, { type: 'user', userId, aal: 'aal1' }, `Outbox ${name.toUpperCase()}`)).orgId);

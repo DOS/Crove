@@ -22,6 +22,7 @@ import { loadConfig } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
 import { createSessionStatusSource } from '../src/sessions.ts';
 import { createPexels } from '../src/stock-photos.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -142,7 +143,7 @@ suite('stock photos from Pexels through the API (#1106)', () => {
     db = createDb(pool);
     dir = await mkdtemp(join(tmpdir(), 'crove-stock-'));
     const store = new LocalDiskStore(dir);
-    const runtime = new Runtime(db, { sessions: createSessionStatusSource('off'), stepUp: 'required' }).register({
+    const runtime = new Runtime(db, { manifests: TEST_MANIFESTS, sessions: createSessionStatusSource('off'), stepUp: 'required' }).register({
       commands: [...kernelCommands, ...socialCommands],
       queries: [...kernelQueries({ inboundDomain: null }), ...socialQueries],
     });
@@ -278,7 +279,7 @@ suite('stock photos from Pexels through the API (#1106)', () => {
     const sha = sha256Hex(bytes);
     const key = fileKey(org.orgId, sha);
     const generation = await putFile(store, key, bytes, 'image/jpeg', sha);
-    const runtime = new Runtime(db).register({ commands: [...kernelCommands, ...socialCommands], queries: [...kernelQueries({ inboundDomain: null }), ...socialQueries] });
+    const runtime = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: [...kernelCommands, ...socialCommands], queries: [...kernelQueries({ inboundDomain: null }), ...socialQueries] });
     const file = { filename: 'pexels-41.jpg', contentType: 'image/jpeg', sizeBytes: bytes.byteLength, sha256: sha, storageKey: key, generation };
     const credit = { provider: 'pexels', externalId: '41', photographer: 'A', photographerUrl: 'https://www.pexels.com/@a', sourceUrl: 'https://www.pexels.com/photo/41/', altText: null };
     const before = await counts();

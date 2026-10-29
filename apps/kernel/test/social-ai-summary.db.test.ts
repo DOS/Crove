@@ -25,6 +25,7 @@ import { createHttpApp } from '../src/http.ts';
 import { socialDrafter } from '../src/kernel.ts';
 import { reportView, type ReportPage } from '../src/report-link.ts';
 import { createSessionStatusSource } from '../src/sessions.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -158,8 +159,8 @@ suite('AI summary of a period, and the rate and goals it repeats (#1237, #1164, 
     pool = createPool({ connectionString: appUrl.toString(), max: 4 });
     db = createDb(pool);
     const kernel = { commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) };
-    rt = new Runtime(db).register({ commands: [...kernel.commands, ...socialCommands], queries: [...kernel.queries, ...socialQueries] });
-    const runtime = new Runtime(db, { sessions: createSessionStatusSource('off'), stepUp: 'required' }).register({
+    rt = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: [...kernel.commands, ...socialCommands], queries: [...kernel.queries, ...socialQueries] });
+    const runtime = new Runtime(db, { manifests: TEST_MANIFESTS, sessions: createSessionStatusSource('off'), stepUp: 'required' }).register({
       commands: [...kernel.commands, ...socialCommands],
       queries: [...kernel.queries, ...socialQueries],
     });

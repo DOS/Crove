@@ -11,6 +11,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
 import { runRetention } from '../src/retention.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -73,7 +74,7 @@ suite('retention purges on PostgreSQL (#38)', () => {
     workerPool = createPool({ connectionString: loginUrl('crove_worker', 'test-worker-pw'), max: 2 });
     db = createDb(pool);
     workerDb = createDb(workerPool);
-    runtime = new Runtime(db).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: 'in.test' }) });
+    runtime = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: 'in.test' }) });
     owner = await upsertIdentity(db, { issuer: 'test', subject: `owner-${randomUUID()}`, email: 'owner@example.com', name: null });
     orgId = (await createOrg(runtime, { type: 'user', userId: owner, aal: 'aal1' }, 'Công ty Lưu trữ', randomUUID())).orgId;
 

@@ -12,6 +12,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove
 import { CredentialVault, Runtime, parseVaultKey } from '@crove/kernel-runtime';
 import { CHAT_ALERT_PROVIDER, socialCommands, socialQueries, type SealedChatAlert } from '@crove/mod-social';
 import { resealCredentials } from '../src/credential-reseal.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -86,8 +87,8 @@ suite('team chat alert targets resealed after a key rotation on PostgreSQL (#863
     appDb = createDb(appPool);
     workerDb = createDb(workerPool);
     const defs = { commands: [...kernelCommands, ...socialCommands], queries: [...kernelQueries({ inboundDomain: null }), ...socialQueries] };
-    api = new Runtime(appDb).register(defs);
-    worker = new Runtime(workerDb).register(defs);
+    api = new Runtime(appDb, { manifests: TEST_MANIFESTS }).register(defs);
+    worker = new Runtime(workerDb, { manifests: TEST_MANIFESTS }).register(defs);
   });
 
   afterAll(async () => {
