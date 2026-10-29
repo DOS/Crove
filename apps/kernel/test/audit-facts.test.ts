@@ -276,7 +276,10 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
       return;
     }
     // An object written out has each of its keys read as a fact of its own.
-    if (trimmed.startsWith('{') && balanced(trimmed, 0) === trimmed) return;
+    if (trimmed.startsWith('{') && balanced(trimmed, 0) === trimmed) {
+      for (const p of unreadProperties(trimmed)) flag(`the scan cannot read the property ${collapse(p)}; write it as key: value`);
+      return;
+    }
     checkValue(trimmed, at, flag, depth);
   };
 
@@ -434,10 +437,16 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
 
   // Every key and value of a fact object's text, nested objects included, and its spreads.
   const checkObject = (obj: string, start: number, depth = 0) => {
+    const whole = unwrap(obj);
+    if (whole.startsWith('{') && balanced(whole, 0) === whole) {
+      for (const p of unreadProperties(whole)) reporter(start, p)('the scan cannot read this property; write it as key: value');
+    }
     // Shorthand properties: `{ taxCode }` carries the variable's value under a column's name.
     for (const m of obj.matchAll(/[{,]\s*([A-Za-z_$][\w$]*)\s*(?=[,}])/g)) checkFact(m[1] as string, m[1] as string, start + (m.index ?? 0), depth);
-    for (const m of obj.matchAll(/[{,]\s*([A-Za-z_$][\w$]*|'[^']*'|"[^"]*")\s*:/g)) {
-      const key = (m[1] as string).replace(/^['"]|['"]$/g, '');
+    // Named, numeric and quoted keys; a quoted key's text is blanked in `code`, so it is read from `text`.
+    for (const m of obj.matchAll(/[{,]\s*([A-Za-z_$][\w$]*|\d+(?:\.\d+)?|'[^']*'|"[^"]*")\s*:/g)) {
+      const raw = m[1] as string;
+      const key = /^['"]/.test(raw) ? (literalAt(start + (m.index ?? 0) + m[0].indexOf(raw)) ?? '') : raw;
       checkFact(key, valueAt(obj, (m.index ?? 0) + m[0].length), start + (m.index ?? 0) + m[0].length, depth);
     }
     // A getter or a method (toJSON) runs when the facts are serialized, so what it returns cannot be read here.
@@ -565,6 +574,20 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
     }
   }
   return findings;
+}
+
+// The properties of an object written out that no rule of the scan reads: anything but a spread, a shorthand, a named,
+// numeric, quoted or computed key with its value, or a method (refused on its own).
+function unreadProperties(obj: string): string[] {
+  return splitTop(obj.slice(1, -1))
+    .map((p) => p.trim())
+    .filter(
+      (p) =>
+        p !== '' &&
+        // The rest of a type argument a comma split (`x as Record<string, unknown>`).
+        !/^[\w$.[\]\s|&]*>+$/.test(p) &&
+        !/^(?:\.\.\.|[A-Za-z_$][\w$]*$|(?:[A-Za-z_$][\w$]*|\d+(?:\.\d+)?|'[^']*'|"[^"]*"|\[[^]*\])\s*:|(?:async\s+|get\s+|set\s+|\*\s*)*(?:[A-Za-z_$][\w$]*|\[[^]*\])\s*\()/.test(p),
+    );
 }
 
 // The variables an expression names: object keys, member reads, calls and keywords aside.
@@ -737,6 +760,12 @@ describe('audit facts and classified columns (#1626, #1632)', () => {
     expect(check('function idOf(p: P) { return { id: p.id }; }\nctx.audit({ ...idOf(party) });')).toEqual([]);
     expect(check('ctx.audit({ previous: { get code() { return party.tax_code; } } });')).toEqual([
       'code: a getter or method computes the fact when it is written; write the value out',
+    ]);
+    // Numeric and quoted keys are read; a property of no form the scan knows is refused.
+    expect(check('ctx.audit({ previous: { 0: party.tax_code } });')).toEqual(['0: the value reads the classified column tax_code outside auditValue(...)']);
+    expect(check("ctx.audit({ previous: { 'tax_code': x } });")).toEqual(['tax_code: the key names a classified column and its value is not auditValue(...)']);
+    expect(check('ctx.audit({ previous: { 0x1: party.tax_code } });')).toEqual([
+      'previous: the scan cannot read the property 0x1: party.tax_code; write it as key: value',
     ]);
     expect(check('ctx.audit({ previous: { toJSON() { return party.tax_code; } } });')).toEqual([
       'toJSON: a getter or method computes the fact when it is written; write the value out',
