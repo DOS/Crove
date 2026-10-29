@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -235,6 +235,58 @@ describe('configuration guards', () => {
     };
     expect(await read({})).toBe('Ludy');
     expect(await read({ BRAND_NAME: 'Tên Mới' })).toBe('Tên Mới');
+  });
+
+  // #1691: the installed app is named after the configured brand; every other field of the app's manifest stays.
+  it('serves the install manifest under BRAND_NAME, "Ludy" when unset, and the other assets as files', async () => {
+    const source = readFileSync(new URL('../../app/public/assets/manifest.webmanifest', import.meta.url), 'utf8');
+    const dist = await mkdtemp(join(tmpdir(), 'crove-manifest-'));
+    try {
+      await mkdir(join(dist, 'assets'));
+      writeFileSync(join(dist, 'index.html'), '<!doctype html><title>Ludy</title>');
+      writeFileSync(join(dist, 'assets', 'manifest.webmanifest'), source);
+      writeFileSync(join(dist, 'assets', 'app.js'), 'export {};\n');
+      const serve = (env: Record<string, string>) =>
+        createHttpApp({
+          config: loadConfig({ ...base, WEB_DIST: dist, ...env }),
+          runtime: { installed: () => true, modules: () => ['kernel'] } as unknown as Runtime,
+          store: {} as BlobStore,
+          authenticate: async () => {
+            throw new Error('not used');
+          },
+          pool: {} as pg.Pool,
+          aiEnabled: false,
+        });
+      const { name: _name, short_name: _short, ...rest } = JSON.parse(source) as Record<string, unknown>;
+      for (const [env, brand] of [[{}, 'Ludy'], [{ BRAND_NAME: "Sổ Xanh & Co's" }, "Sổ Xanh & Co's"]] as const) {
+        const response = await serve(env).request('/assets/manifest.webmanifest');
+        expect(response.status).toBe(200);
+        expect(response.headers.get('content-type')).toBe('application/manifest+json');
+        expect(response.headers.get('cache-control')).toBe('no-cache');
+        expect(await response.json()).toEqual({ ...rest, name: brand, short_name: brand });
+      }
+      // HEAD answers like GET; another method goes on to the static route, as before.
+      const branded = serve({ BRAND_NAME: 'Tên Mới' });
+      const head = await branded.request('/assets/manifest.webmanifest', { method: 'HEAD' });
+      expect(head.status).toBe(200);
+      expect(head.headers.get('content-type')).toBe('application/manifest+json');
+      expect((await branded.request('/assets/manifest.webmanifest', { method: 'POST' })).headers.get('content-type')).not.toBe('application/manifest+json');
+      // The other static files are still the files themselves.
+      const script = await branded.request('/assets/app.js');
+      expect(script.status).toBe(200);
+      expect(await script.text()).toBe('export {};\n');
+      // A build without the manifest, or with one that is not JSON: the static route answers as before, nothing breaks.
+      for (const broken of [null, '{ not json']) {
+        await rm(join(dist, 'assets', 'manifest.webmanifest'), { force: true });
+        if (broken !== null) writeFileSync(join(dist, 'assets', 'manifest.webmanifest'), broken);
+        const response = await serve({ BRAND_NAME: 'Tên Mới' }).request('/assets/manifest.webmanifest');
+        expect(response.status, String(broken)).not.toBe(500);
+        expect(response.headers.get('cache-control'), String(broken)).not.toBe('no-cache');
+        if (broken !== null) expect(await response.text()).toBe(broken);
+      }
+    } finally {
+      await rm(dist, { recursive: true, force: true });
+    }
   });
 });
 
