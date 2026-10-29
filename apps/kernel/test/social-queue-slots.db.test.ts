@@ -7,7 +7,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
@@ -88,7 +88,11 @@ suite('social open queue slots on PostgreSQL (#1158)', () => {
 
   const toSlot = (o: Org, p: { postId: string; variantId: string }, slotAt: string, user = o.owner) => exec<Scheduled>(o, 'social.variant.schedule', { postId: p.postId, variantIds: [p.variantId], queue: true, slotAt }, user);
   const row = (variantId: string) => admin(async (c) => (await c.query<Row>('SELECT status, queue_slot_at, scheduled_at FROM crove_social.post_variant WHERE id = $1', [variantId])).rows[0] as Row);
-  const range = (days = 14) => ({ from: new Date().toISOString(), to: new Date(Date.now() + days * DAY).toISOString() });
+  // One clock read for both ends: two reads a millisecond apart made a 31-day range a millisecond over the limit (#1828).
+  const range = (days = 14) => {
+    const now = Date.now();
+    return { from: new Date(now).toISOString(), to: new Date(now + days * DAY).toISOString() };
+  };
   const open = (o: Org, connectionId: string, user = o.owner, days = 14) => query<OpenSlots>(o, 'social.queue.open_slots', { connectionId, ...range(days) }, user);
   const local = (at: Date | string) => new Intl.DateTimeFormat('en-GB', { timeZone: HCM, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(at));
 
@@ -151,6 +155,15 @@ suite('social open queue slots on PostgreSQL (#1158)', () => {
     await expect(query(o, 'social.queue.open_slots', { connectionId: conn, from: new Date().toISOString(), to: new Date(Date.now() + 32 * DAY).toISOString() })).rejects.toMatchObject({ code: 'VALIDATION', status: 422 });
     await expect(query(o, 'social.queue.open_slots', { connectionId: conn, from: new Date(Date.now() + DAY).toISOString(), to: new Date().toISOString() })).rejects.toMatchObject({ code: 'VALIDATION', status: 422 });
     expect((await open(o, conn, o.owner, 31)).slots.length).toBeGreaterThan(before.slots.length);
+    // The range spans exactly its days however far the clock moves between reads (#1828).
+    let tick = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => (tick += 5));
+    try {
+      const { from, to } = range(31);
+      expect(Date.parse(to) - Date.parse(from)).toBe(31 * DAY);
+    } finally {
+      clock.mockRestore();
+    }
 
     // A member limited to the other channel (#1081) may not read this one.
     await exec(o, 'social.channel_access.set', { userId: o.member, channelConnectionIds: [other] }, o.admin);
