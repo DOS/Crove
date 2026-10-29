@@ -115,27 +115,35 @@ The `postgres` password unlocks everything, the context key included ([context-k
 
 ## 2. `INBOUND_SECRET`
 
-The mail worker (`tools/inbound-mail/worker.js` on Cloudflare Email Routing, [provision-pilot.md](provision-pilot.md), "Inbound email") sends `INBOUND_SECRET` with every message. During a rotation the kernel also accepts the old value, set as `INBOUND_SECRET_PREVIOUS` (#1214), so the worker and the kernel switch at different times and no message is refused. The secret only guards `POST /api/inbound/email`: messages already accepted are stored and filed by the worker whatever the secret is, and nothing stored is derived from it.
+The mail worker (`tools/inbound-mail/worker.js` on Cloudflare Email Routing, [provision-pilot.md](provision-pilot.md), "Inbound email") sends `INBOUND_SECRET` with every message. During a rotation the kernel also accepts the old value, set as `INBOUND_SECRET_PREVIOUS` (#1214), so the worker and the kernel switch at different times and no message is refused for its secret. The two kernel restarts (steps 2 and 6) are the only windows: during each (about 10 s on the test stack) the worker gets no answer, throws, and the senders retry later, as for any restart. In the split layout, give `INBOUND_SECRET_PREVIOUS` to `api` too (`docker-compose.split.yml` or your own file), or step 2 changes nothing and step 4 brings 401s. The secret only guards `POST /api/inbound/email`: messages already accepted are stored and filed by the worker whatever the secret is, and nothing stored is derived from it.
 
 The kernel refuses a previous value that is shorter than 32 characters, equal to the new one or a sample value, and one set without `INBOUND_SECRET`. Both values are compared in constant time, and neither is ever logged.
 
 1. Keep the old value as the previous one, then generate the new value into `.env`:
 
    ```bash
-   grep '^INBOUND_SECRET=' .env | sed 's/^INBOUND_SECRET=/INBOUND_SECRET_PREVIOUS=/' >> .env   # the old value, as the previous one
+   # The old value as the previous one: any INBOUND_SECRET_PREVIOUS line (the empty one .env.example ships) is replaced
+   # by one holding the current INBOUND_SECRET, written like rotate() writes, and nothing is printed.
+   ( umask 077; awk -F= '$1 == "INBOUND_SECRET" { v = substr($0, length($1) + 2) } $1 != "INBOUND_SECRET_PREVIOUS" { print } END { print "INBOUND_SECRET_PREVIOUS=" v }' .env > .env.new && cat .env.new > .env && rm .env.new )
    rotate INBOUND_SECRET
-   grep -c '^INBOUND_SECRET_PREVIOUS=' .env    # 1: a single line, or remove the extra ones first
+   grep -c '^INBOUND_SECRET_PREVIOUS=.' .env   # 1: one line, holding the old value
    grep '^INBOUND_SECRET=' .env                # copy the new value into the secret store, next to the old one
    ```
-
-   If `.env` already had an empty `INBOUND_SECRET_PREVIOUS=` line (copied from `.env.example`), delete it first, so the one line left holds the old value.
 2. Apply it: `docker compose up -d`. The kernel now accepts both values, and the worker still sends the old one.
 3. Check: `curl -s http://127.0.0.1:${PORT:-8080}/readyz` answers `{"ready":true}`. `pnpm pilot:check` lists `INBOUND_SECRET_PREVIOUS is set` as a manual item: that is expected until step 6.
 4. In the Cloudflare dashboard, **Workers & Pages**, `crove-inbound-mail`, **Settings**, **Variables and Secrets**: edit `INBOUND_SECRET` (type Secret), paste the new value and **Deploy**. With wrangler: `wrangler secret put INBOUND_SECRET`. Both values are accepted, so no message is refused, whenever the deploy takes effect.
 5. Check:
    - Send a message with an e-invoice XML attached to an org's "Địa chỉ nhận hóa đơn qua email" (its **Settings**): it shows in that org's **Inbox** within a minute, and `docker compose logs --since 5m crove | grep '\[inbound\]'` shows it.
    - The worker's **Logs** show no `Crove did not accept the message: 401 UNAUTHENTICATED`.
-6. Retire the old value: empty `INBOUND_SECRET_PREVIOUS=` in `.env` (or delete the line), run `docker compose up -d`, and remove the old value from the secret store. From then on the old value gets 401. Do it once step 5 passed: a worker still sending the old value has its messages refused and retried by their senders, but they are delayed until the worker is fixed.
+6. Retire the old value: remove its line from `.env`, run `docker compose up -d`, and remove the old value from the secret store:
+
+   ```bash
+   ( umask 077; awk -F= '$1 != "INBOUND_SECRET_PREVIOUS"' .env > .env.new && cat .env.new > .env && rm .env.new )
+   grep -c '^INBOUND_SECRET_PREVIOUS=' .env    # 0
+   docker compose up -d
+   ```
+
+   From then on the old value gets 401. Do it once step 5 passed: a worker still sending the old value has its messages refused and retried by their senders, but they are delayed until the worker is fixed.
 
 **Going back.** Before step 6, put the old value back on the worker (step 4 with the old value): the kernel still accepts it. After step 6, set it again as `INBOUND_SECRET_PREVIOUS` and restart, or fix the worker.
 

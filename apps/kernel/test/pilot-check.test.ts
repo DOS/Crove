@@ -55,9 +55,10 @@ describe('pilot-check settings', () => {
     const env = { ...READY, INBOUND_DOMAIN: 'in.example.com', INBOUND_SECRET: current };
     expect(failing({ ...env, INBOUND_SECRET_PREVIOUS: previous })).toEqual([]);
     const reminder = checkEnv({ ...env, INBOUND_SECRET_PREVIOUS: previous }).find((r) => r.item === 'Secrets' && r.status === 'manual');
-    expect(reminder?.message).toMatch(/^INBOUND_SECRET_PREVIOUS is set, so the kernel still accepts the old inbound secret/);
+    expect(reminder?.message).toMatch(/^INBOUND_SECRET_PREVIOUS is set: an inbound secret rotation is under way/);
     expect(checkEnv(env).some((r) => r.item === 'Secrets' && r.status === 'manual')).toBe(false);
     expect(failing({ ...env, INBOUND_SECRET_PREVIOUS: current })).toEqual(['Secrets: INBOUND_SECRET_PREVIOUS is the same as INBOUND_SECRET']);
+    expect(failing({ ...READY, INBOUND_SECRET_PREVIOUS: previous })).toEqual(['Secrets: INBOUND_SECRET_PREVIOUS is set without INBOUND_SECRET']);
     expect(failing({ ...env, INBOUND_SECRET_PREVIOUS: 'short' })).toEqual(['Secrets: INBOUND_SECRET_PREVIOUS is shorter than 32 characters']);
     expect(failing({ ...env, INBOUND_SECRET_PREVIOUS: 'change-me-to-a-long-random-string-0123456789' })).toEqual([
       'Secrets: INBOUND_SECRET_PREVIOUS still has a sample value from .env.example or docker-compose.yml',

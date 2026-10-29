@@ -175,7 +175,9 @@ export function checkEnv(env: Env): CheckResult[] {
   const inboundPrevious = value(env, 'INBOUND_SECRET_PREVIOUS');
   if (inboundPrevious !== undefined) {
     secrets.push(secretProblem('INBOUND_SECRET_PREVIOUS', inboundPrevious, MIN_TOKEN_SECRET_LENGTH));
-    if (inboundPrevious === value(env, 'INBOUND_SECRET')) secrets.push('INBOUND_SECRET_PREVIOUS is the same as INBOUND_SECRET');
+    // The kernel refuses to start on either (config.ts).
+    if (value(env, 'INBOUND_SECRET') === undefined) secrets.push('INBOUND_SECRET_PREVIOUS is set without INBOUND_SECRET');
+    else if (inboundPrevious === value(env, 'INBOUND_SECRET')) secrets.push('INBOUND_SECRET_PREVIOUS is the same as INBOUND_SECRET');
   }
   // Optional secrets: only a shipped sample value is wrong.
   for (const name of ['INBOUND_SECRET', 'S3_SECRET_ACCESS_KEY', 'SMTP_PASS', 'AI_API_KEY', 'CREDENTIAL_KEY', 'CREDENTIAL_KEY_PREVIOUS', 'CHANNEL_META_APP_SECRET', 'CHANNEL_ZALO_APP_SECRET', 'CHANNEL_THREADS_APP_SECRET', 'CHANNEL_LINKEDIN_CLIENT_SECRET', 'CHANNEL_LINKEDIN_PAGE_CLIENT_SECRET', 'CHANNEL_GOOGLE_CLIENT_SECRET', 'CHANNEL_TIKTOK_CLIENT_SECRET', 'CHANNEL_X_CLIENT_SECRET', 'CHANNEL_PINTEREST_APP_SECRET', 'MEDIA_PEXELS_API_KEY', 'VAPID_PRIVATE_KEY']) {
@@ -323,7 +325,7 @@ export function checkEnv(env: Env): CheckResult[] {
             item: 'Secrets',
             status: 'manual' as const,
             message:
-              'INBOUND_SECRET_PREVIOUS is set, so the kernel still accepts the old inbound secret: once the mail worker sends the new INBOUND_SECRET, empty it and restart (docs/runbooks/secret-rotation.md, section 2)',
+              'INBOUND_SECRET_PREVIOUS is set: an inbound secret rotation is under way and the old value is still accepted; once the mail worker sends the new INBOUND_SECRET, remove it and restart (docs/runbooks/secret-rotation.md, section 2)',
           },
         ]),
     // Envelopes under a key the worker cannot open (#1888): only the worker sees the database's key ids, so it logs them.
