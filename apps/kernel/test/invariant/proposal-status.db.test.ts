@@ -215,8 +215,27 @@ suite('proposal status transitions on PostgreSQL (#1707)', () => {
       for (const [text, values] of cases) {
         await expect(as(writer, (c) => c.query(text, values)), `${writer.name}: ${text}`).resolves.toMatchObject({ ok: false, ...REFUSED });
       }
-      // Columns outside the decision stay writable, as the reminders write them.
-      const reminded = await as(writer, (c) => c.query('UPDATE crove_kernel.proposal SET reminded_at = now() WHERE id = $1', [executed]));
+      // A terminal proposal changes in no column at all: its authors and eligible approvers are the P10 and P12
+      // evidence, and nothing else of it moves either.
+      for (const [column, value] of [
+        ['authors', `'[{"type": "user", "id": "${member}"}]'`],
+        ['eligible_approvers', `ARRAY['${member}'::uuid]`],
+        ['title', "'Sửa'"],
+        ['command', "'t1707.other'"],
+        ['reminded_at', 'now()'],
+      ] as const) {
+        for (const id of [executed, rejected]) {
+          await expect(as(writer, (c) => c.query(`UPDATE crove_kernel.proposal SET ${column} = ${value} WHERE id = $1`, [id])), `${writer.name}: ${column}`).resolves.toMatchObject({
+            ok: false,
+            ...REFUSED,
+          });
+        }
+      }
+      // An update that writes the same values passes (the RLS matrix's own-row control does that).
+      const same = await as(writer, (c) => c.query('UPDATE crove_kernel.proposal SET title = title, authors = authors WHERE id = $1', [executed]));
+      expect(same.ok && same.value.rowCount, `${writer.name}: same values`).toBe(1);
+      // A pending proposal's other columns stay writable, as the reminders write them.
+      const reminded = await as(writer, (c) => c.query('UPDATE crove_kernel.proposal SET reminded_at = now() WHERE id = $1', [pending]));
       expect(reminded, `${writer.name}: reminded_at`).toMatchObject({ ok: true });
     }
   });
@@ -233,6 +252,14 @@ suite('proposal status transitions on PostgreSQL (#1707)', () => {
         ok: false,
         ...REFUSED,
       });
+      // Nor one that names who or when decided it.
+      for (const decision of ['decided_by = $2', 'decided_at = now()']) {
+        const column = decision.split(' = ')[0] as string;
+        const value = decision.split(' = ')[1] as string;
+        const sql = `INSERT INTO crove_kernel.proposal (org_id, kind, command, status, title, payload, eligible_approvers, authors, ${column})
+                     VALUES ($1, 't1707', 't1707.prop', 'rejected', 'T1707', '{}', ARRAY[$2::uuid], '[]', ${value})`;
+        await expect(as(writer, (c) => c.query(sql, [orgId, owner])), `${writer.name}: insert naming ${column}`).resolves.toMatchObject({ ok: false, ...REFUSED });
+      }
       // A pending one, as the runtime writes it, and a decided one that names no command (it decides nothing).
       for (const status of ['pending', 'rejected'] as const) {
         await expect(as(writer, (c) => c.query(insert(status, null), [orgId, owner])), `${writer.name}: insert ${status}`).resolves.toMatchObject({ ok: true });

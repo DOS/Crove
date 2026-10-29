@@ -17,12 +17,14 @@
 -- and an update that keeps the status. Every other change of status is refused with PROPOSAL_STATUS_TRANSITION
 -- (23514): out of a terminal state (executed, rejected, failed, expired), back from 'approved' (the runtime rolls the
 -- transaction back instead), and 'pending' straight to 'executed'. A decided proposal's record is frozen too: once
--- 'approved', who decided, when and the executing command do not change; in a terminal state neither does its content
--- (payload, revision), its decision note or its result, and no proposal's id changes. Other columns (reminded_at,
--- escalated_at) stay writable as before.
--- So that a decided proposal cannot be rebuilt either: an INSERT may not write one 'approved' or 'executed', or naming
--- an executing command (the runtime inserts 'pending' only; a 'rejected', 'failed' or 'expired' row decides nothing an
--- audit row could lean on, and the RLS matrix's factory writes one), and a DELETE may not remove a proposal that is no
+-- 'approved', who decided, when and the executing command do not change; in a terminal state nothing of the row
+-- changes (its authors and eligible approvers are the P10 and P12 evidence the org export shows; the runtime never
+-- updates a terminal row, and an update that writes the same values passes; a move to another org is left to the tenant
+-- policy, which refuses it), and no proposal's id changes.
+-- So that a decided proposal cannot be rebuilt either: an INSERT may not write one 'approved' or 'executed', name an
+-- executing command, or name who or when decided it (the runtime inserts 'pending' only; a 'rejected', 'failed' or
+-- 'expired' row with no decision decides nothing an audit row could lean on, and the RLS matrix's factory writes
+-- one), and a DELETE may not remove a proposal that is no
 -- longer 'pending' (no tenant code deletes proposals; the org purge, a definer run as the table's owner, still does).
 --
 -- What it does not do: tie the move to 'approved' to a real approval. A session that may update proposals can still
@@ -54,7 +56,8 @@ BEGIN
   END IF;
 
   IF TG_OP = 'INSERT' THEN
-    IF NEW.status IN ('approved', 'executed') OR NEW.executed_command_id IS NOT NULL THEN
+    IF NEW.status IN ('approved', 'executed')
+       OR pg_catalog.num_nonnulls(NEW.executed_command_id, NEW.decided_by, NEW.decided_by_agent, NEW.decided_at, NEW.result) > 0 THEN
       RAISE EXCEPTION 'PROPOSAL_STATUS_TRANSITION' USING ERRCODE = '23514',
         DETAIL = pg_catalog.json_build_object('to', NEW.status)::text;
     END IF;
@@ -96,10 +99,10 @@ BEGIN
     RAISE EXCEPTION 'PROPOSAL_STATUS_TRANSITION' USING ERRCODE = '23514',
       DETAIL = pg_catalog.json_build_object('from', OLD.status, 'to', NEW.status, 'frozen', 'decision')::text;
   END IF;
-  -- A terminal proposal's content and outcome stay too.
+  -- A terminal proposal stays as it is, every column of it. org_id is left to the tenant policy, whose WITH CHECK
+  -- refuses a move to another org (and the RLS matrix expects that refusal, not this one).
   IF OLD.status IN ('executed', 'rejected', 'failed', 'expired')
-     AND (NEW.payload, NEW.revision, NEW.decision_note, NEW.result)
-         IS DISTINCT FROM (OLD.payload, OLD.revision, OLD.decision_note, OLD.result) THEN
+     AND pg_catalog.to_jsonb(NEW) - 'org_id' IS DISTINCT FROM pg_catalog.to_jsonb(OLD) - 'org_id' THEN
     RAISE EXCEPTION 'PROPOSAL_STATUS_TRANSITION' USING ERRCODE = '23514',
       DETAIL = pg_catalog.json_build_object('from', OLD.status, 'to', NEW.status, 'frozen', 'content')::text;
   END IF;
