@@ -286,6 +286,10 @@ export const recordExport = defineCommand({
     if (keys.some((k) => k.key !== exportKey(ctx.orgId, k.sha256))) {
       throw new DomainError('INVALID_STORAGE_KEY', 400, 'Khóa lưu trữ không hợp lệ');
     }
+    // One record of the org's export at a time, new or rebound (#1867): a rebind reads the newest export only after a
+    // record in flight has committed (each statement reads what is committed then), so it never re-records an older
+    // export over one that was just recorded.
+    await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`crove_kernel.org_export:${ctx.orgId}`}, 0))`.execute(ctx.trx);
     if (input.rebind) {
       const current = await currentExport(ctx.trx, ctx.orgId);
       if (!current || withoutGenerations(current) !== withoutGenerations(input)) {
