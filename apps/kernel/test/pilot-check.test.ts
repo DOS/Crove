@@ -2,6 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { vaultKeyId } from '@crove/kernel-runtime';
 import { KNOWN_DEFAULTS, PILOT_EXIT, REQUIRED_SECRETS, checkEnv, parsePilotArgs, probeDeployment, runPilotCheck, type CheckResult, type Env, type Fetch } from '../src/pilot-check.ts';
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
@@ -46,10 +47,33 @@ describe('pilot-check settings', () => {
     expect(failing({ ...READY, TRUSTED_PROXY_HOPS: '2' })).toEqual([]);
   });
 
+  // #1888: the worker reports envelopes under a key it cannot open; the preflight names the keys it opens and points there.
+  it('names the credential keys the worker opens and fails one that does not parse (#1888)', () => {
+    const bytes = (start: number) => Buffer.from(Array.from({ length: 32 }, (_, i) => (start + i * 7) % 256));
+    const [current, previous] = [bytes(1), bytes(2)];
+    const line = (env: Env) => checkEnv(env).find((r) => r.item === 'Credential key');
+    expect(line(READY)).toMatchObject({ status: 'manual', message: expect.stringMatching(/^the worker opens tokens sealed under the key in CREDENTIAL_KEY_FILE .*"\[credential-reseal\] ERROR sealed under a key this worker cannot open"/) });
+    expect(line({ ...READY, CREDENTIAL_KEY: current.toString('base64') })?.message).toContain(`the worker opens tokens sealed under CREDENTIAL_KEY (${vaultKeyId(current)}); `);
+    expect(line({ ...READY, CREDENTIAL_KEY: current.toString('base64'), CREDENTIAL_KEY_PREVIOUS: previous.toString('hex') })?.message).toContain(
+      `the worker opens tokens sealed under CREDENTIAL_KEY (${vaultKeyId(current)}) and CREDENTIAL_KEY_PREVIOUS (${vaultKeyId(previous)}); `,
+    );
+    // With the key in its file, the previous key from the environment is opened too, and named.
+    expect(line({ ...READY, CREDENTIAL_KEY_PREVIOUS: previous.toString('hex') })?.message).toContain(
+      `the worker opens tokens sealed under the key in CREDENTIAL_KEY_FILE (docker compose: /data/keys/credential.key on the keys volume) and CREDENTIAL_KEY_PREVIOUS (${vaultKeyId(previous)}); `,
+    );
+    expect(line(READY)?.message).toContain('docker compose logs crove | grep "cannot open"');
+    // A sample value fails as for every optional secret (Codex review): the worker would refuse it at start.
+    expect(failing({ ...READY, CREDENTIAL_KEY_PREVIOUS: 'change-me' })).toEqual(['Secrets: CREDENTIAL_KEY_PREVIOUS still has a sample value']);
+    expect(failing({ ...READY, CREDENTIAL_KEY: 'not-a-key', CREDENTIAL_KEY_PREVIOUS: previous.toString('hex').slice(2) })).toEqual([
+      'Secrets: CREDENTIAL_KEY is not a 32-byte key as base64 or 64 hex characters (openssl rand -base64 32)',
+      'Secrets: CREDENTIAL_KEY_PREVIOUS is not a 32-byte key as base64 or 64 hex characters (openssl rand -base64 32)',
+    ]);
+  });
+
   it('passes a ready deployment and leaves the human items as manual', () => {
     const results = checkEnv(READY);
     expect(failures(results)).toEqual([]);
-    expect(results.filter((r) => r.status === 'manual').map((r) => r.item)).toEqual(['Alerts', 'Extraction sandbox', 'RLS matrix', 'Backups', 'Evidence holds', 'Owner sign-off']);
+    expect(results.filter((r) => r.status === 'manual').map((r) => r.item)).toEqual(['Alerts', 'Credential key', 'Extraction sandbox', 'RLS matrix', 'Backups', 'Evidence holds', 'Owner sign-off']);
     // Evidence holds (#1009): the bucket's Object Lock is confirmed by hand; without S3 or with holds off, the owner
     // accepts that posted files are not held.
     const holds = (env: Record<string, string | undefined>) => checkEnv(env).find((r) => r.item === 'Evidence holds')?.message;
@@ -359,7 +383,7 @@ describe('pilot-check command', () => {
     const lines: string[] = [];
     const print = (line: string) => lines.push(line);
     expect(await runPilotCheck([], READY, fakeFetch({}), print)).toBe(PILOT_EXIT.ok);
-    expect(lines.join('\n')).toContain('Automatic checks passed. Confirm the 6 manual item(s)');
+    expect(lines.join('\n')).toContain('Automatic checks passed. Confirm the 7 manual item(s)');
     expect(await runPilotCheck(['--url', 'https://crove.example.com'], READY, fakeFetch(healthy), print)).toBe(PILOT_EXIT.ok);
     lines.length = 0;
     expect(await runPilotCheck([], { ...READY, AUTH_DISABLE_SIGNUP: 'false' }, fakeFetch({}), print)).toBe(PILOT_EXIT.failed);
