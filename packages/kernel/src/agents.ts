@@ -49,6 +49,11 @@ const LEASE_COLUMNS = ['status', 'checkout_run_id', 'lock_expires_at'] as const;
 const CHILD_TASK_COLUMNS = ['org_id', 'title', 'description', 'kind', 'assignee_position_id', 'parent_task_id', 'source', 'source_ref', 'created_by_type'] as const;
 // requestWakeup's upsert.
 const WAKEUP_WRITE = tableWrite(TASK_TABLES, 'crove_kernel', 'agent_wakeup', ['org_id', 'agent_id', 'reasons', 'request_count', 'tainted', 'request_depth', 'updated_at']);
+// What the taint triggers write (task_before_update, task_comment_before_insert): a write to a task marks the run that
+// claims it tainted, and a comment marks its task tainted (T18, taint both ways). The runtime checks a command's
+// writes per table against its declaration (#1710), so a command that writes a task or a comment declares these too.
+const RUN_TAINT_WRITE = tableWrite(TASK_TABLES, 'crove_kernel', 'ai_run', ['tainted']);
+const TASK_TAINT_WRITE = tableWrite(TASK_TABLES, 'crove_kernel', 'task', ['tainted']);
 
 const zModule = z.string().regex(/^[a-z][a-z0-9_]*$/).max(50);
 const zRoleKey = z.string().regex(/^[a-z][a-z0-9_.]*$/).max(100);
@@ -707,7 +712,7 @@ export const checkoutTask = defineCommand({
   sideEffect: 'internal',
   access: [],
   agent: { roles: 'any', taint: 'propagate' },
-  writes: [tableWrite(TASK_TABLES, 'crove_kernel', 'task', [...LEASE_COLUMNS, 'fence'])],
+  writes: [tableWrite(TASK_TABLES, 'crove_kernel', 'task', [...LEASE_COLUMNS, 'fence']), RUN_TAINT_WRITE],
   target: (input) => ({ type: 'kernel.task', id: input.id }),
   handler: async (ctx, input) => {
     const agent = requireAgent(ctx);
@@ -755,7 +760,7 @@ export const commentTask = defineCommand({
   sideEffect: 'internal',
   access: MEMBERS,
   agent: { roles: 'any', taint: 'propagate' },
-  writes: [tableWrite(TASK_TABLES, 'crove_kernel', 'task_comment', ['org_id', 'task_id', 'body', 'author_type'])],
+  writes: [tableWrite(TASK_TABLES, 'crove_kernel', 'task_comment', ['org_id', 'task_id', 'body', 'author_type']), TASK_TAINT_WRITE, RUN_TAINT_WRITE],
   target: (input) => ({ type: 'kernel.task', id: input.id }),
   handler: async (ctx, input) => {
     if (ctx.actor.type === 'agent') {
@@ -785,7 +790,7 @@ export const setTaskStatus = defineCommand({
   sideEffect: 'internal',
   access: MEMBERS,
   agent: { roles: 'any', taint: 'propagate' },
-  writes: [tableWrite(TASK_TABLES, 'crove_kernel', 'task', LEASE_COLUMNS), WAKEUP_WRITE],
+  writes: [tableWrite(TASK_TABLES, 'crove_kernel', 'task', LEASE_COLUMNS), WAKEUP_WRITE, RUN_TAINT_WRITE],
   target: (input) => ({ type: 'kernel.task', id: input.id }),
   handler: async (ctx, input) => {
     const release = input.status !== 'in_progress';
@@ -859,7 +864,7 @@ export const escalateTask = defineCommand({
   access: [],
   agent: { roles: 'any', taint: 'propagate' },
   // The child task and the parent's release.
-  writes: [tableWrite(TASK_TABLES, 'crove_kernel', 'task', [...CHILD_TASK_COLUMNS, ...LEASE_COLUMNS]), WAKEUP_WRITE],
+  writes: [tableWrite(TASK_TABLES, 'crove_kernel', 'task', [...CHILD_TASK_COLUMNS, ...LEASE_COLUMNS]), WAKEUP_WRITE, RUN_TAINT_WRITE],
   target: (input) => ({ type: 'kernel.task', id: input.id }),
   handler: async (ctx, input) => {
     const agent = requireAgent(ctx);
@@ -902,7 +907,7 @@ export const delegateTask = defineCommand({
   sideEffect: 'internal',
   access: [],
   agent: { roles: 'any', taint: 'propagate' },
-  writes: [tableWrite(TASK_TABLES, 'crove_kernel', 'task', CHILD_TASK_COLUMNS), WAKEUP_WRITE],
+  writes: [tableWrite(TASK_TABLES, 'crove_kernel', 'task', CHILD_TASK_COLUMNS), WAKEUP_WRITE, RUN_TAINT_WRITE],
   target: (input) => ({ type: 'kernel.task', id: input.id }),
   handler: async (ctx, input) => {
     const agent = requireAgent(ctx);
@@ -1542,7 +1547,7 @@ export const proposeFromTask = defineCommand({
   access: [],
   agent: { roles: 'any', taint: 'propagate' },
   // The preparer it runs declares its own.
-  writes: [tableWrite(TASK_TABLES, 'crove_kernel', 'task', LEASE_COLUMNS)],
+  writes: [tableWrite(TASK_TABLES, 'crove_kernel', 'task', LEASE_COLUMNS), RUN_TAINT_WRITE],
   target: (input) => ({ type: 'kernel.task', id: input.id }),
   handler: async (ctx, input) => {
     const agent = requireAgent(ctx);
@@ -1587,7 +1592,7 @@ export const approveFromTask = defineCommand({
   sideEffect: 'internal',
   access: [],
   agent: { roles: 'any' },
-  writes: [tableWrite(TASK_TABLES, 'crove_kernel', 'task', LEASE_COLUMNS)],
+  writes: [tableWrite(TASK_TABLES, 'crove_kernel', 'task', LEASE_COLUMNS), RUN_TAINT_WRITE],
   target: (input) => ({ type: 'kernel.proposal', id: input.proposalId }),
   handler: async (ctx, input) => {
     const agent = requireAgent(ctx);
