@@ -13,7 +13,7 @@ import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { agentCommands, createOrg, decideApproval, eligibleApprovers, kernelCommands, kernelManifest, kernelQueries, runAgentWake, upsertIdentity } from '@crove/kernel';
 import { tableWrite } from '@crove/kernel-contract';
-import { Runtime, defineCommand, defineQuery, type Actor, type AgentActor, type AgentApprovers, type AgentRuntime, type CommandDef, type CommandWrite, type QueryDef, type Risk } from '@crove/kernel-runtime';
+import { DomainError, Runtime, defineCommand, defineQuery, type Actor, type AgentActor, type AgentApprovers, type AgentRuntime, type CommandDef, type CommandWrite, type QueryDef, type Risk } from '@crove/kernel-runtime';
 import { financeCommands, financeManifest, financeQueries } from '@crove/mod-finance';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
@@ -1570,6 +1570,64 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
     // Nothing the refused commands wrote stayed.
     const kept = await withAdmin(async (c) => (await c.query(`SELECT dedupe_key FROM crove_kernel.inbox_item WHERE org_id = $1 AND dedupe_key LIKE $2 ORDER BY 1`, [orgA, `t1710:%${suffix}`])).rows);
     expect(kept).toEqual([{ dedupe_key: `t1710:declared-${suffix}` }]);
+  });
+
+  it('sets aside what a refused tryRun rolled back, and pg-boss queue writes, from the caller declared-writes check (#1797)', async () => {
+    const suffix = randomUUID().slice(0, 8);
+    const raise = async (ctx: { trx: Parameters<CommandDef<unknown, unknown>['handler']>[0]['trx']; orgId: string; now: Date }, key: string) => {
+      await ctx.trx
+        .insertInto('crove_kernel.inbox_item')
+        .values({ org_id: ctx.orgId, kind: 'kernel.job.dead_lettered', dedupe_key: `t1797:${key}`, detail: JSON.stringify({ queue: 't1797', jobId: randomUUID(), retries: 0 }), raised_at: ctx.now })
+        .execute();
+    };
+    const command = (name: string, extra: Partial<CommandDef<unknown, unknown>>) =>
+      defineCommand({ sideEffect: 'none', name: `t1797.${name}_${suffix}`, input: z.object({}), risk: 'R1', access: 'system', handler: async () => ({ ok: true }), ...extra }) as CommandDef<unknown, unknown>;
+    // Nested commands that declare no writes: one writes and is then refused (a 409 its caller recovers from), one writes
+    // and commits.
+    const writesThenRefused = command('refused', {
+      handler: async (ctx) => {
+        await raise(ctx, `refused-${suffix}`);
+        throw new DomainError('CONFLICT', 409, 't1797 refused');
+      },
+    });
+    const writesAndCommits = command('commits', {
+      handler: async (ctx) => {
+        await raise(ctx, `commits-${suffix}`);
+        return { ok: true };
+      },
+    });
+    // Callers that declare they write no table.
+    const triesRefused = command('tries_refused', {
+      writes: [],
+      handler: async (ctx) => ctx.tryRun(writesThenRefused.name, {}, { recover: () => true }),
+    });
+    const triesCommitted = command('tries_committed', {
+      writes: [],
+      handler: async (ctx) => ctx.tryRun(writesAndCommits.name, {}, { recover: () => true }),
+    });
+    // pg-boss's queue holds no tenant data and is no module's to declare: a write there is not the caller's to declare.
+    const touchesQueue = command('queue', {
+      writes: [],
+      handler: async (ctx) => {
+        await sql`UPDATE crove_jobs.version SET cron_on = cron_on`.execute(ctx.trx);
+        return { ok: true };
+      },
+    });
+    worker.register({ commands: [writesThenRefused, writesAndCommits, triesRefused, triesCommitted, touchesQueue] });
+    const as = { actor: SYSTEM, orgId: orgA };
+    // The refused nested command's row is rolled back with its savepoint, so the caller is not charged with it.
+    await expect(worker.execute(triesRefused.name, {}, as)).resolves.toMatchObject({ status: 'refused' });
+    // A committed nested command that declares no writes still counts as its caller's.
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await expect(worker.execute(triesCommitted.name, {}, as)).rejects.toMatchObject({ code: 'INTERNAL' });
+      expect(logged.mock.calls.flat().map(String).join('\n')).toContain(`command ${triesCommitted.name}: wrote crove_kernel.inbox_item, which it does not declare`);
+    } finally {
+      logged.mockRestore();
+    }
+    await expect(worker.execute(touchesQueue.name, {}, as)).resolves.toEqual({ ok: true });
+    const kept = await withAdmin(async (c) => (await c.query(`SELECT dedupe_key FROM crove_kernel.inbox_item WHERE org_id = $1 AND dedupe_key LIKE $2`, [orgA, `t1797:%${suffix}`])).rows);
+    expect(kept).toEqual([]);
   });
 
   it('runs a command as it registered: agent access set on its definition afterwards grants an agent nothing (#1766)', async () => {

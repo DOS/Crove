@@ -848,6 +848,11 @@ interface WriteScope {
   // and sets them aside.
   // rolledBackOnError: the work undoes its rows when it fails (a tryRun's savepoint).
   aside<T>(work: () => Promise<T>, rolledBackOnError?: boolean): Promise<T>;
+  // Runs a tryRun of a nested command that declares no writes (#1797): what it wrote counts as the caller's when it
+  // commits, and is set aside when its savepoint rolls it back (PostgreSQL keeps the counts of a rolled-back
+  // savepoint). `work` gets the counter its handlers' statements add to, so a statement of anyone else meanwhile is
+  // seen and the command cannot be checked.
+  undoneIfRolledBack<T>(work: (counter: { n: number }) => Promise<T>, rolledBack: (value: T) => boolean): Promise<T>;
   // The statements the scope's handlers issued through their ctx.trx.
   readonly statements: { n: number };
 }
@@ -855,21 +860,26 @@ interface WriteScope {
 // Counts the statements a handler issues through its ctx.trx (raw SQL and SELECTs too, since a function a SELECT
 // calls may write): once when each is compiled to run, and again when its result comes back (also for a query the
 // handler compiled itself). A statement after the handler returned is refused: the check has already read the counts.
-function countWrites(statements: { n: number }, closed: () => boolean, command: string): KyselyPlugin {
+function countWrites(counters: readonly { n: number }[], closed: () => boolean, command: string): KyselyPlugin {
+  const count = () => {
+    for (const counter of counters) counter.n += 1;
+  };
   return {
     transformQuery: ({ node }) => {
       if (closed()) throw new Error(`command ${command}: a statement on ctx.trx after the handler returned (#1710)`);
-      statements.n += 1;
+      count();
       return node;
     },
     transformResult: async ({ result }) => {
-      statements.n += 1;
+      count();
       return result;
     },
   };
 }
 
-// The rows inserted, updated and deleted so far in this transaction, per crove_* table (#1710). The counts need
+// The rows inserted, updated and deleted so far in this transaction, per crove_* table (#1710), pg-boss's queue aside:
+// crove_jobs holds no tenant data, its tables (partitions among them) are no module's to declare, and a job is handled
+// later under its handler's own declaration, as one-write-path (#680) sets that schema aside too (#1797). The counts need
 // track_counts, which is on by default; with it off they would read zero, so the runtime refuses to go on.
 async function tableWriteCounts(trx: Transaction<Database>): Promise<Map<string, number>> {
   // The counters pg_stat_xact_user_tables reads, for the crove_* tables this transaction changed only.
@@ -880,7 +890,7 @@ async function tableWriteCounts(trx: Transaction<Database>): Promise<Map<string,
                       pg_catalog.pg_stat_get_xact_tuples_inserted(c.oid) + pg_catalog.pg_stat_get_xact_tuples_updated(c.oid)
                         + pg_catalog.pg_stat_get_xact_tuples_deleted(c.oid) AS n
                  FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-                WHERE pg_catalog.starts_with(n.nspname, 'crove_') AND c.relkind = 'r') t
+                WHERE pg_catalog.starts_with(n.nspname, 'crove_') AND n.nspname <> 'crove_jobs' AND c.relkind = 'r') t
         WHERE t.n > 0) AS counts`.execute(trx);
   const row = rows[0];
   if (row?.counting !== true) throw new Error('the declared-writes check needs track_counts on (#1710)');
@@ -1360,7 +1370,16 @@ export class Runtime {
     // cleanRoot: the proposal command, declared free of contact and payment writes, this command runs under (as
     // itself or nested at any depth below it), if any (P04, #1697).
     // writeScope: the declared-writes check of the nearest caller that declares its writes (#1710), if any.
-    base: { orgId: string; actor: Actor; entered: Entered; proposalId: string | null; cleanRoot?: string; writeScope?: WriteScope },
+    // writeCounters: in a caller's scope, the counters this command's handler statements add to.
+    base: {
+      orgId: string;
+      actor: Actor;
+      entered: Entered;
+      proposalId: string | null;
+      cleanRoot?: string;
+      writeScope?: WriteScope;
+      writeCounters?: readonly { n: number }[];
+    },
   ): Promise<O> {
     const commandId = uuidv7();
     const cleanRoot = base.cleanRoot ?? (def.access === 'proposal' && this.#contactOrPayment.get(def.name) === false ? def.name : undefined);
@@ -1449,10 +1468,44 @@ export class Runtime {
                 windows.open -= 1;
               }
             },
+            undoneIfRolledBack: async <T>(work: (counter: { n: number }) => Promise<T>, rolledBack: (value: T) => boolean): Promise<T> => {
+              const statements = (scope as WriteScope).statements;
+              // Not a window of its own (the nested command's emits and declared nested commands open theirs inside),
+              // but it may not start inside one.
+              if (windows.open > 0) writeCheck.unmeasured = true;
+              const counter = { n: 0 };
+              const issued = statements.n;
+              const before = await tableWriteCounts(trx);
+              const asideBefore = new Map(writeCheck.aside);
+              const setAsideIfUndone = async () => {
+                const after = await tableWriteCounts(trx);
+                // Every statement since the start is the nested command's (its handlers add to both counters).
+                if (statements.n - issued !== counter.n) writeCheck.unmeasured = true;
+                for (const [table, n] of after) {
+                  const setAsideInside = (writeCheck.aside.get(table) ?? 0) - (asideBefore.get(table) ?? 0);
+                  writeCheck.aside.set(table, (writeCheck.aside.get(table) ?? 0) + n - (before.get(table) ?? 0) - setAsideInside);
+                }
+              };
+              let value: T;
+              try {
+                value = await work(counter);
+              } catch (error) {
+                // tryNested rolled the savepoint back before the error reached here.
+                await setAsideIfUndone().catch(() => {
+                  writeCheck.unmeasured = true;
+                });
+                throw error;
+              }
+              // Committed: its writes stay counted as the caller's, whoever issued them.
+              if (rolledBack(value)) await setAsideIfUndone();
+              return value;
+            },
           };
     const aside = <T>(work: () => Promise<T>, rolledBackOnError = false): Promise<T> => (scope === null ? work() : scope.aside(work, rolledBackOnError));
-    // The handler's own statements, counted for the scope through its ctx.trx.
-    const handlerTrx = scope === null ? trx : trx.withPlugin(countWrites(scope.statements, () => closed, def.name));
+    // The handler's own statements, counted for the scope through its ctx.trx: on the scope's counter, and in a caller's
+    // scope also on the counters of the nested runs this one is part of (base.writeCounters).
+    const counters: readonly { n: number }[] = scope === null ? [] : writeCheck !== null ? [scope.statements] : (base.writeCounters ?? [scope.statements]);
+    const handlerTrx = scope === null ? trx : trx.withPlugin(countWrites(counters, () => closed, def.name));
     // Whether the writes of a nested command are its own to declare (it declares writes) or this command's.
     const ownsWrites = (name: string): boolean => this.#commands.get(name)?.writes !== undefined;
     // Set once the handler settled: from then on the runtime writes this command's rows, and nothing the handler
@@ -1511,7 +1564,9 @@ export class Runtime {
       tryRun: <R>(name: string, nestedInput: unknown, options: TryRunOptions): Promise<TryRunResult<R>> => {
         if (closed) return Promise.reject(new Error(`command ${def.name}: ctx.tryRun after the handler returned`));
         if (running.size > 0) return Promise.reject(new Error(`command ${def.name}: ctx.tryRun runs only while no other nested command runs`));
-        return tracked(() => (ownsWrites(name) ? aside(() => tryNested<R>(name, nestedInput, options), true) : tryNested<R>(name, nestedInput, options)));
+        if (ownsWrites(name)) return tracked(() => aside(() => tryNested<R>(name, nestedInput, options), true));
+        if (scope === null) return tracked(() => tryNested<R>(name, nestedInput, options));
+        return tracked(() => scope.undoneIfRolledBack((counter) => tryNested<R>(name, nestedInput, options, counter), (result) => result.status === 'refused'));
       },
       numbering: {
         allocate: async (n) => {
@@ -1539,7 +1594,8 @@ export class Runtime {
       if (!nested || nested.bootstrap) throw new DomainError('COMMAND_NOT_FOUND', 404, `Không có lệnh ${name}`);
       return { def: nested, input: parseInput(nested.input, nestedInput), proposalId: proposalIdOption ?? base.proposalId };
     };
-    const tryNested = async <R>(name: string, nestedInput: unknown, options: TryRunOptions): Promise<TryRunResult<R>> => {
+    // counter: for a nested command that declares no writes run in this scope, the counter of this run (undoneIfRolledBack).
+    const tryNested = async <R>(name: string, nestedInput: unknown, options: TryRunOptions, counter?: { n: number }): Promise<TryRunResult<R>> => {
       // An unknown command or an input that does not parse is the caller's bug, never a recorded refusal, as for a
       // top-level command (refused before its org is entered, so never audited).
       const nested = resolveNested(name, nestedInput, options.proposalId);
@@ -1576,7 +1632,7 @@ export class Runtime {
       };
       let value: R;
       try {
-        value = await runNested<R>(nested);
+        value = await runNested<R>(nested, counter);
       } catch (error) {
         if (!(error instanceof DomainError)) {
           await discardQuietly(error);
@@ -1634,7 +1690,7 @@ export class Runtime {
       await sql`RELEASE SAVEPOINT ${savepoint}`.execute(trx);
       return { status: 'ok', value };
     };
-    const runNested = async <R>(nested: NestedRun): Promise<R> => {
+    const runNested = async <R>(nested: NestedRun, counter?: { n: number }): Promise<R> => {
       // P04 is derived from a proposal command's declared writes, so one that declares no contact or payment write never
       // runs a command that may write one (or declares nothing), whoever runs it and however deep it is nested.
       if (cleanRoot !== undefined && this.#contactOrPayment.get(nested.def.name) !== false) {
@@ -1652,7 +1708,7 @@ export class Runtime {
         ...base,
         proposalId,
         ...(cleanRoot !== undefined ? { cleanRoot } : {}),
-        ...(scope !== null ? { writeScope: scope } : {}),
+        ...(scope !== null ? { writeScope: scope, writeCounters: counter ? [...counters, counter] : counters } : {}),
       });
     };
     let output: O;
