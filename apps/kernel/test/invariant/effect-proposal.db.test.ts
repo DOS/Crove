@@ -3,8 +3,8 @@
 // journal entry of source kernel.proposal, are what #1842 counts as a ledger proposal's effect; each must name a
 // proposal of the writer's org, 'approved', for the command that writes that row. A row naming a pending, executed,
 // rejected proposal, another command's, another org's or none at all is refused (EFFECT_PROPOSAL_MISMATCH), for the
-// owner's and the worker's system context alike; a changed proposal_id is checked as an insert is; staff are not
-// checked. Part of the invariant suite: keep it self-contained (package code under test, no helpers from outside
+// owner's and the worker's system context alike; the tables are append-only, so a written proposal_id never changes;
+// a replacement invoice's reversal of its original names the purchase's proposal; staff are not checked. Part of the invariant suite: keep it self-contained (package code under test, no helpers from outside
 // test/invariant/). Set CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -169,11 +169,15 @@ suite('ledger rows naming a proposal on PostgreSQL (#1853)', () => {
       const id = await proposal(command, 'approved');
       await expect(as('owner', journalVoucher(id)), command).resolves.toMatchObject({ ok: true });
     }
+    // A replacement invoice reverses its original's entry in the name of the purchase's proposal (#916).
+    const replacement = await proposal('finance.purchase.record', 'approved');
+    await expect(as('owner', reversal(replacement)), 'replacement invoice reversal').resolves.toMatchObject({ ok: true });
   });
 
   it('refuses a row naming a pending, executed or rejected proposal, another command, another org or no proposal', async () => {
     for (const path of PATHS) {
-      const other = PATHS.find((p) => p.command !== path.command)?.command as string;
+      // A ledger command none of this row's writers is (a purchase may write a reversal entry, #916).
+      const other = path.command === 'finance.voucher.record' ? 'finance.purchase.record' : 'finance.voucher.record';
       const cases: Array<[string, string]> = [
         ['a pending proposal', await proposal(path.command, 'pending')],
         ['an executed proposal', await proposal(path.command, 'executed')],
@@ -190,7 +194,7 @@ suite('ledger rows naming a proposal on PostgreSQL (#1853)', () => {
     }
   });
 
-  it('checks a changed proposal_id as an insert, and leaves rows with none and staff writes alone', async () => {
+  it('never lets a written proposal_id change, and leaves rows with none and staff writes alone', async () => {
     const pending = await proposal('finance.purchase.record', 'pending');
     const approved = await proposal('finance.purchase.record', 'approved');
     // A document with no proposal, written by staff.
@@ -206,8 +210,10 @@ suite('ledger rows naming a proposal on PostgreSQL (#1853)', () => {
     );
     const relink = (proposalId: string) => (c: pg.Client) =>
       c.query('UPDATE crove_finance.purchase_document SET proposal_id = $2 WHERE org_id = $1 AND id = $3', [orgId, proposalId, documentId]);
-    await expect(as('owner', relink(pending))).resolves.toMatchObject({ ok: false, ...REFUSED });
-    await expect(as('owner', relink(approved))).resolves.toMatchObject({ ok: true });
+    // The tables are append-only: no tenant writer changes a row, so the insert is the only check needed.
+    for (const id of [pending, approved]) {
+      await expect(as('owner', relink(id))).resolves.toMatchObject({ ok: false, code: '42501' });
+    }
     // A row naming no proposal, from a tenant writer.
     await expect(
       as('owner', (c) =>

@@ -10,15 +10,18 @@
 --   crove_finance.purchase_document   finance.purchase.record (purchases and sales alike)
 --   crove_finance.cash_voucher        finance.voucher.record
 --   crove_finance.journal_voucher     finance.journal_voucher.record, finance.closing.record, finance.depreciation.record
---   crove_finance.journal_entry       finance.journal.reverse, its reversal entry (source_type 'kernel.proposal')
+--   crove_finance.journal_entry       a reversal entry (source_type 'kernel.proposal'): finance.journal.reverse, and
+--                                     finance.purchase.record when a replacement invoice reverses its original's entry
+--                                     (#916, postReversal)
+-- The three tables are append-only (make_append_only), so a row's proposal_id is checked once, on insert.
 --
--- crove_finance.effect_proposal_check()  BEFORE INSERT OR UPDATE OF proposal_id on the three tables, with the table's
---     commands as trigger arguments: a proposal_id that is set (or changed) must name a proposal of the org of the
---     writer's sealed context, of the row's org, 'approved' (being executed), whose command is one of them. The proposal
---     is read as the writer, so one its scope cannot see is refused as well.
+-- crove_finance.effect_proposal_check()  BEFORE INSERT on the three tables, with the table's commands as trigger
+--     arguments: a proposal_id that is set must name a proposal of the org of the writer's sealed context, of the row's
+--     org, 'approved' (being executed), whose command is one of them. The proposal is read as the writer, so one its
+--     scope cannot see is refused as well.
 -- crove_finance.effect_proposal_entry_check()  BEFORE INSERT on journal_entry, the same for an entry of source
---     kernel.proposal and finance.journal.reverse. Entries are inserted by the posting definer
---     (post_journal_entry), so this reads the context, never CURRENT_USER.
+--     kernel.proposal, with the two commands above. Entries are inserted by the posting definer
+--     (post_journal_entry), so the check reads the context, and staff is the session user, never CURRENT_USER.
 -- Refusals are 23514 EFFECT_PROPOSAL_MISMATCH. Staff (a superuser or a member of the table owner's role as the
 -- session user, the support and migration paths) are not checked; a definer's CURRENT_USER is never taken for staff.
 --
@@ -45,8 +48,7 @@ $$;
 CREATE OR REPLACE FUNCTION crove_finance.effect_proposal_check() RETURNS trigger
 LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
 BEGIN
-  IF NEW.proposal_id IS NULL OR (TG_OP = 'UPDATE' AND NEW.proposal_id IS NOT DISTINCT FROM OLD.proposal_id)
-     OR crove_finance.effect_proposal_staff(TG_RELID) THEN
+  IF NEW.proposal_id IS NULL OR crove_finance.effect_proposal_staff(TG_RELID) THEN
     RETURN NEW;
   END IF;
   IF NOT crove_finance.effect_proposal_is_executing(NEW.org_id, NEW.proposal_id, TG_ARGV::text[]) THEN
@@ -62,7 +64,8 @@ BEGIN
   IF NEW.source_type IS DISTINCT FROM 'kernel.proposal' OR crove_finance.effect_proposal_staff(TG_RELID) THEN
     RETURN NEW;
   END IF;
-  IF NEW.source_id IS NULL OR NOT crove_finance.effect_proposal_is_executing(NEW.org_id, NEW.source_id, ARRAY['finance.journal.reverse']) THEN
+  IF NEW.source_id IS NULL
+     OR NOT crove_finance.effect_proposal_is_executing(NEW.org_id, NEW.source_id, ARRAY['finance.journal.reverse', 'finance.purchase.record']) THEN
     RAISE EXCEPTION 'EFFECT_PROPOSAL_MISMATCH' USING ERRCODE = '23514',
       DETAIL = pg_catalog.json_build_object('table', TG_TABLE_NAME)::text;
   END IF;
@@ -70,13 +73,13 @@ BEGIN
 END $$;
 
 DROP TRIGGER IF EXISTS effect_proposal ON crove_finance.purchase_document;
-CREATE TRIGGER effect_proposal BEFORE INSERT OR UPDATE OF proposal_id ON crove_finance.purchase_document
+CREATE TRIGGER effect_proposal BEFORE INSERT ON crove_finance.purchase_document
   FOR EACH ROW EXECUTE FUNCTION crove_finance.effect_proposal_check('finance.purchase.record');
 DROP TRIGGER IF EXISTS effect_proposal ON crove_finance.cash_voucher;
-CREATE TRIGGER effect_proposal BEFORE INSERT OR UPDATE OF proposal_id ON crove_finance.cash_voucher
+CREATE TRIGGER effect_proposal BEFORE INSERT ON crove_finance.cash_voucher
   FOR EACH ROW EXECUTE FUNCTION crove_finance.effect_proposal_check('finance.voucher.record');
 DROP TRIGGER IF EXISTS effect_proposal ON crove_finance.journal_voucher;
-CREATE TRIGGER effect_proposal BEFORE INSERT OR UPDATE OF proposal_id ON crove_finance.journal_voucher
+CREATE TRIGGER effect_proposal BEFORE INSERT ON crove_finance.journal_voucher
   FOR EACH ROW EXECUTE FUNCTION crove_finance.effect_proposal_check('finance.journal_voucher.record', 'finance.closing.record', 'finance.depreciation.record');
 DROP TRIGGER IF EXISTS effect_proposal ON crove_finance.journal_entry;
 CREATE TRIGGER effect_proposal BEFORE INSERT ON crove_finance.journal_entry
