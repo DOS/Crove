@@ -1467,6 +1467,85 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
     expect(register({ writes: [CONTACT_1697, PAYMENT_1697, INTERNAL_1697] })).not.toThrow();
   });
 
+  it('fails a command that writes a table it does not declare, the rows the runtime and declared nested commands write aside (#1710)', async () => {
+    const suffix = randomUUID().slice(0, 8);
+    const INBOX = tableWrite(kernelManifest.tables, 'crove_kernel', 'inbox_item', ['org_id', 'kind', 'dedupe_key', 'detail', 'raised_at']);
+    // Writes an Inbox item straight from the handler.
+    const raise = async (ctx: { trx: Parameters<CommandDef<unknown, unknown>['handler']>[0]['trx']; orgId: string; now: Date }, key: string) => {
+      await ctx.trx
+        .insertInto('crove_kernel.inbox_item')
+        .values({ org_id: ctx.orgId, kind: 'kernel.job.dead_lettered', dedupe_key: `t1710:${key}`, detail: JSON.stringify({ queue: 't1710', jobId: randomUUID(), retries: 0 }), raised_at: ctx.now })
+        .execute();
+    };
+    const probe = (name: string, writes: readonly CommandWrite[], handler: CommandDef<unknown, unknown>['handler']) =>
+      defineCommand({ name: `t1710.${name}_${suffix}`, input: z.object({}), risk: 'R1', access: 'system', writes, handler }) as CommandDef<unknown, unknown>;
+    const undeclared = probe('undeclared', [INTERNAL_1697], async (ctx) => {
+      await raise(ctx, `undeclared-${suffix}`);
+      return { ok: true };
+    });
+    const empty = probe('empty', [], async (ctx) => {
+      await raise(ctx, `empty-${suffix}`);
+      return { ok: true };
+    });
+    const declared = probe('declared', [INBOX], async (ctx) => {
+      await raise(ctx, `declared-${suffix}`);
+      return { ok: true };
+    });
+    // Writes nothing itself: an event, an activity row and a nested command that declares its own writes.
+    const delegates = probe('delegates', [], async (ctx) => {
+      await ctx.emit('t1710.delegated', { n: 1 });
+      await ctx.activity('t1710.probe', randomUUID(), 't1710.delegates', 'probe');
+      await ctx.run('kernel.job.dead_letter', { queue: 't1710', jobId: randomUUID(), retries: 0 });
+      return { ok: true };
+    });
+    // A nested command that declares no writes counts as the caller's.
+    const undeclaredNested = defineCommand({ name: `t1710.nested_${suffix}`, input: z.object({}), risk: 'R1', access: 'system', handler: async (ctx) => raise(ctx, `nested-${suffix}`) }) as CommandDef<unknown, unknown>;
+    const viaNested = probe('via_nested', [], async (ctx) => ctx.run(undeclaredNested.name, {}));
+    // A nested command that declares none and writes nothing: its audit row is the runtime's, not the caller's.
+    const readOnlyNested = defineCommand({ name: `t1710.reads_${suffix}`, input: z.object({}), risk: 'R0', access: 'system', handler: async () => ({ read: true }) }) as CommandDef<unknown, unknown>;
+    const viaReadOnly = probe('via_read_only', [], async (ctx) => ctx.run(readOnlyNested.name, {}));
+    // A write beside an event in Promise.all cannot be told from the event's rows, so the command fails.
+    const beside = probe('beside', [], async (ctx) => {
+      await Promise.all([ctx.emit('t1710.beside', { n: 1 }), raise(ctx, `beside-${suffix}`)]);
+      return { ok: true };
+    });
+    // Two events at once: each window would set aside the other's rows too.
+    const twoEvents = probe('two_events', [], async (ctx) => {
+      await Promise.all([ctx.emit('t1710.first', { n: 1 }), ctx.emit('t1710.second', { n: 2 })]);
+      return { ok: true };
+    });
+    // A nested command refused by its own check after it wrote, its error caught by the caller: its rows would commit.
+    const liar = probe('liar', [INTERNAL_1697], async (ctx) => {
+      await raise(ctx, `liar-${suffix}`);
+      return { ok: true };
+    });
+    const catches = probe('catches', [INTERNAL_1697], async (ctx) => {
+      await ctx.run(liar.name, {}).catch(() => null);
+      return { ok: true };
+    });
+    worker.register({ commands: [undeclared, empty, declared, delegates, undeclaredNested, viaNested, readOnlyNested, viaReadOnly, beside, twoEvents, liar, catches] });
+    const as = { actor: SYSTEM, orgId: orgA };
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      for (const command of [undeclared, empty, viaNested]) {
+        await expect(worker.execute(command.name, {}, as), command.name).rejects.toMatchObject({ code: 'INTERNAL' });
+        expect(logged.mock.calls.flat().map(String).join('\n')).toContain(`command ${command.name}: wrote crove_kernel.inbox_item, which it does not declare`);
+      }
+      for (const command of [beside, twoEvents, catches]) {
+        await expect(worker.execute(command.name, {}, as), command.name).rejects.toMatchObject({ code: 'INTERNAL' });
+        expect(logged.mock.calls.flat().map(String).join('\n')).toContain(`command ${command.name}: its writes cannot be checked`);
+      }
+    } finally {
+      logged.mockRestore();
+    }
+    await expect(worker.execute(declared.name, {}, as)).resolves.toEqual({ ok: true });
+    await expect(worker.execute(delegates.name, {}, as)).resolves.toEqual({ ok: true });
+    await expect(worker.execute(viaReadOnly.name, {}, as)).resolves.toEqual({ read: true });
+    // Nothing the refused commands wrote stayed.
+    const kept = await withAdmin(async (c) => (await c.query(`SELECT dedupe_key FROM crove_kernel.inbox_item WHERE org_id = $1 AND dedupe_key LIKE $2 ORDER BY 1`, [orgA, `t1710:%${suffix}`])).rows);
+    expect(kept).toEqual([{ dedupe_key: `t1710:declared-${suffix}` }]);
+  });
+
   it('runs a command as it registered: agent access set on its definition afterwards grants an agent nothing (#1766)', async () => {
     const contactWriter = defineCommand({
       name: `t1766.contact_writer_${randomUUID().slice(0, 8)}`,
