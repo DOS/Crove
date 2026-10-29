@@ -180,7 +180,7 @@ suite('missing invoice requests (#669)', () => {
     workerPool = createPool({ connectionString: login('crove_worker', 'test-worker-pw'), max: 2 });
     workerDb = createDb(workerPool);
     const register = (target: Db, sessions = false) =>
-      new Runtime(target, { manifests: TEST_MANIFESTS, ...sessions ? { sessions: createSessionStatusSource('off'), stepUp: 'required' } : {} }).register({
+      new Runtime(target, { manifests: TEST_MANIFESTS, ...(sessions ? { sessions: createSessionStatusSource('off'), stepUp: 'required' } : {}) }).register({
         commands: [...kernelCommands, ...financeCommands],
         queries: [...kernelQueries({ inboundDomain: INBOUND }), ...financeQueries],
       });

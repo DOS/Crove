@@ -199,7 +199,7 @@ suite('late purchase invoice in an open month (#478)', () => {
     const db: Db = createDb(pool);
     workerPool = createPool({ connectionString: login('crove_worker', 'test-worker-pw'), max: 2 });
     const register = (target: Db, sessions = false) =>
-      new Runtime(target, { manifests: TEST_MANIFESTS, ...sessions ? { sessions: createSessionStatusSource('off'), stepUp: 'required' } : {} }).register({
+      new Runtime(target, { manifests: TEST_MANIFESTS, ...(sessions ? { sessions: createSessionStatusSource('off'), stepUp: 'required' } : {}) }).register({
         commands: [...kernelCommands, ...financeCommands],
         queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries],
       });
