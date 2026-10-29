@@ -154,13 +154,94 @@ export function routePermissionUses(manifests: Manifests): PermissionUse[] {
   );
 }
 
-// The permissions a database function's body or a row-level security policy names, through
-// crove_kernel.ctx_has_permission('...') or a comparison with role_permission.permission.
-export function sqlPermissionUses(by: string, text: string): PermissionUse[] {
-  const out: PermissionUse[] = [];
-  for (const m of text.matchAll(/ctx_has_permission\(\s*'([^']+)'/g)) out.push({ permission: m[1] as string, by });
-  for (const m of text.matchAll(/\bpermission\s*=\s*'([^']+)'/g)) out.push({ permission: m[1] as string, by });
-  return out;
+// The functions whose job is to check a permission their caller passes (#1641): their own comparison names no key.
+const PERMISSION_CHECKERS: ReadonlySet<string> = new Set(['function crove_kernel.ctx_has_permission']);
+// The quoted literals of a SQL fragment ('...'::text included), with doubled quotes undone.
+const sqlLiterals = (fragment: string): string[] => [...fragment.matchAll(/'((?:[^']|'')*)'/g)].map((m) => (m[1] as string).replaceAll("''", "'"));
+const SQL_IDENT = /^[a-z_][a-z0-9_$]*$/i;
+
+// The permissions a database function's body or a row-level security policy names (#1630, #1641), and what it names
+// in a form this cannot attribute (#1641). A key is read from:
+//   crove_kernel.ctx_has_permission('<key>');
+//   a comparison of a permission column (role_permission.permission, p.permission): = '<key>', IN ('<key>', ...),
+//   = ANY (ARRAY['<key>', ...]) and = ANY ('{<key>,...}'), with or without ::text casts as PostgreSQL deparses them;
+//   in each of these, a PL/pgSQL variable instead of the literal, when the body assigns it literals (v := '<key>',
+//   v text := '<key>', v text[] := ARRAY['<key>', ...]).
+// Anything else that hands ctx_has_permission or a permission column a value (a parameter, a variable assigned from
+// a query, a LIKE or a regular expression) is a problem, so a key cannot slip past the manifests; the functions of
+// PERMISSION_CHECKERS, which compare with their own parameter, are the exception.
+export function sqlPermissionUses(by: string, text: string): { uses: PermissionUse[]; problems: string[] } {
+  const uses: PermissionUse[] = [];
+  const problems: string[] = [];
+  // The literals each PL/pgSQL variable is assigned, in a declaration (v text := ..., v text DEFAULT ...) or a
+  // statement (v := ...); a variable also assigned anything else (an expression, a query) is unknown (null).
+  const vars = new Map<string, string[] | null>();
+  for (const m of text.matchAll(/(?::=|\bDEFAULT\b)\s*([^;]*);/gi)) {
+    // The variable is the first word of the statement before the operator, after the last keyword that opens one
+    // (`IF c THEN v := ...`, `DECLARE v text := ...`); a declaration's type follows it.
+    const at = m.index ?? 0;
+    const head = text.slice(Math.max(text.lastIndexOf(';', at - 1), text.lastIndexOf('\n', at - 1)) + 1, at);
+    const words = head.trim().split(/\s+/);
+    const opener = words.map((w) => w.toUpperCase()).findLastIndex((w) => ['DECLARE', 'BEGIN', 'THEN', 'ELSE', 'LOOP'].includes(w));
+    const name = (words[opener + 1] ?? '').toLowerCase();
+    if (!SQL_IDENT.test(name)) continue;
+    const rhs = (m[1] as string).trim();
+    const literals = /^(?:'(?:[^']|'')*'(?:::[a-z_ ]+)?|ARRAY\s*\[\s*'[^\]]*\](?:::[a-z_ [\]]+)?)$/i.test(rhs) ? sqlLiterals(rhs) : null;
+    const before = vars.get(name);
+    vars.set(name, before === null || literals === null ? null : [...(before ?? []), ...literals]);
+  }
+  const resolve = (what: string, value: string) => {
+    const literals = sqlLiterals(value);
+    if (literals.length > 0) {
+      for (const key of literals) uses.push({ permission: key, by });
+      return;
+    }
+    const name = value.replace(/::[a-z_ [\]]+$/i, '').trim().toLowerCase();
+    const known = SQL_IDENT.test(name) ? vars.get(name) : null;
+    if (known) {
+      for (const key of known) uses.push({ permission: key, by });
+      return;
+    }
+    if (!PERMISSION_CHECKERS.has(by)) problems.push(`${by} names a permission through ${what} ${value.trim()}, which this check cannot attribute to a key: write the key as a literal`);
+  };
+
+  for (const m of text.matchAll(/ctx_has_permission\s*\(\s*([^()]*(?:\([^()]*\)[^()]*)*)\)/g)) resolve('ctx_has_permission(...)', m[1] as string);
+  // A permission column, as written or as PostgreSQL deparses it: p.permission, (p.permission)::text.
+  const column = String.raw`\bpermission\)?(?:::[a-z_ ]+)?`;
+  // = ANY (...), and = ANY ((ARRAY[...])::text[]) as PostgreSQL deparses an IN list in a policy.
+  for (const m of text.matchAll(new RegExp(`${column}\\s*(?:=|<>|!=)\\s*ANY\\s*\\(\\s*\\(?\\s*(ARRAY\\s*\\[[^\\]]*\\]|'[^']*'|[a-z_][a-z0-9_$]*)`, 'gi'))) {
+    const list = m[1] as string;
+    if (list.startsWith("'")) for (const key of (sqlLiterals(list)[0] ?? '').replace(/^\{|\}$/g, '').split(',').map((k) => k.trim().replace(/^"|"$/g, '')).filter(Boolean)) uses.push({ permission: key, by });
+    else resolve('= ANY (...)', list);
+  }
+  for (const m of text.matchAll(new RegExp(`${column}\\s*(?:=|<>|!=)\\s*(?!\\s*ANY\\b)('(?:[^']|'')*'|[a-z_][a-z0-9_$.]*)`, 'gi'))) resolve('a comparison with', m[1] as string);
+  for (const m of text.matchAll(new RegExp(`${column}\\s+(?:NOT\\s+)?IN\\s*\\(([^)]*)\\)`, 'gi'))) resolve('IN (...)', m[1] as string);
+  for (const m of text.matchAll(new RegExp(`${column}\\s*(?:(?:NOT\\s+)?(?:I?LIKE|SIMILAR\\s+TO)\\b|!?~~?\\*?)`, 'gi'))) {
+    problems.push(`${by} matches a permission column by pattern (${m[0].trim()}), which this check cannot attribute to a key: compare with literals`);
+  }
+  return { uses, problems };
+}
+
+// What the app's screens gate on (#1641): every check of a member's permissions in apps/app/src
+// (`permissions.includes(...)`, `.indexOf`, `.some`) must pass a permission constant @crove/kernel-contract exports, so a
+// renamed or retired key fails here or at typecheck. Like the screens' route permissions they are display gates, not
+// checks (the server decides), so they are kept apart from staticPermissionUses(). `contract` is the module the
+// constants are read from.
+export function appPermissionUses(files: ReadonlyArray<{ file: string; source: string }>, contract: Record<string, unknown>): { uses: PermissionUse[]; problems: string[] } {
+  const uses: PermissionUse[] = [];
+  const problems: string[] = [];
+  for (const { file, source } of files) {
+    for (const m of stripComments(source).matchAll(/\bpermissions\??\.(?:includes|indexOf|some)\(\s*([^),]*)/g)) {
+      const arg = (m[1] as string).trim();
+      const value = /^[A-Z][A-Z0-9_]*$/.test(arg) ? contract[arg] : undefined;
+      if (typeof value !== 'string') {
+        problems.push(`${file}: a permission check passes ${arg}; pass a permission constant @crove/kernel-contract exports`);
+        continue;
+      }
+      uses.push({ permission: value, by: `${file} (${arg})` });
+    }
+  }
+  return { uses, problems };
 }
 
 // The problems between the manifests and what uses or grants their permissions:

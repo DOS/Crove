@@ -1,10 +1,37 @@
 // Module manifests' permissions, unit part (plan §5.2, §10 G3, #1630): every permission a command or the approval policy
 // names is declared in the manifest of the module its key names, with the risk of those commands, and the contract's
 // ROLE_PERMISSIONS lists exactly the declared permissions a role grants. The seeded role_permission rows and the
-// database's functions are checked in manifest.db.test.ts. Planted mismatches show each check fails.
+// database's functions are checked in manifest.db.test.ts; the SQL forms the scan reads, and the app's permission
+// checks (#1641), here. Planted mismatches show each check fails.
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import * as contract from '@crove/kernel-contract';
 import { ROLE_PERMISSIONS, columns, defineModule, type ModuleManifest } from '@crove/kernel-contract';
-import { MODULE_MANIFESTS, approvalPolicyUses, permissionProblems, sqlPermissionUses, staticPermissionUses, stripComments, type Manifests, type PermissionUse } from './manifest-permissions.ts';
+import {
+  MODULE_MANIFESTS,
+  appPermissionUses,
+  approvalPolicyUses,
+  permissionProblems,
+  sqlPermissionUses,
+  staticPermissionUses,
+  stripComments,
+  type Manifests,
+  type PermissionUse,
+} from './manifest-permissions.ts';
+
+const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
+
+// The app's sources (apps/app/src), tests left out.
+function appSources(dir = join(ROOT, 'apps/app/src'), out: Array<{ file: string; source: string }> = []) {
+  for (const name of readdirSync(dir)) {
+    const path = join(dir, name);
+    if (statSync(path).isDirectory()) appSources(path, out);
+    else if (/\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name)) out.push({ file: relative(ROOT, path).replaceAll('\\', '/'), source: readFileSync(path, 'utf8') });
+  }
+  return out;
+}
 
 describe('module manifests declare their permissions (#1630)', () => {
   it('declares every permission a command or the approval policy names, with the risk of its commands', () => {
@@ -50,9 +77,13 @@ describe('permissionProblems() on planted mismatches', () => {
     expect(permissionProblems(finance([]), { uses: [{ permission: 'finance.period.unlock', by: 'the approval policy (X)' }] })).toEqual([
       'the approval policy (X) names finance.period.unlock, which no manifest declares: declare it in finance.ts',
     ]);
-    expect(permissionProblems(finance([unlock]), { uses: [use, ...sqlPermissionUses('function crove_finance.f', "IF NOT crove_kernel.ctx_has_permission('finance.bank.export') THEN")] })).toEqual([
+    expect(permissionProblems(finance([unlock]), { uses: [use, ...sqlPermissionUses('function crove_finance.f', "IF NOT crove_kernel.ctx_has_permission('finance.bank.export') THEN").uses] })).toEqual([
       'function crove_finance.f names finance.bank.export, which no manifest declares: declare it in finance.ts',
     ]);
+    // A planted permission IN ('<undeclared>') in a function body (#1641).
+    expect(
+      permissionProblems(finance([unlock]), { uses: [use, ...sqlPermissionUses('function crove_finance.g', "WHERE p.permission IN ('finance.period.unlock', 'finance.ledger.erase')").uses] }),
+    ).toEqual(['function crove_finance.g names finance.ledger.erase, which no manifest declares: declare it in finance.ts']);
   });
 
   it('fails on a seeded row of an undeclared permission, or default roles that differ from the rows', () => {
@@ -84,11 +115,69 @@ describe('permissionProblems() on planted mismatches', () => {
     ]);
   });
 
-  it('reads both forms a database function names a permission in', () => {
-    expect(sqlPermissionUses('f', "crove_kernel.ctx_has_permission('finance.period.unlock'::text) AND p.permission = 'finance.proposal.approve'").map((u) => u.permission)).toEqual([
+  it('reads every form a database function or policy names a permission in (#1641)', () => {
+    const keys = (text: string) => {
+      const read = sqlPermissionUses('f', text);
+      expect(read.problems, text).toEqual([]);
+      return read.uses.map((u) => u.permission);
+    };
+    expect(keys("crove_kernel.ctx_has_permission('finance.period.unlock'::text) AND p.permission = 'finance.proposal.approve'")).toEqual([
       'finance.period.unlock',
       'finance.proposal.approve',
     ]);
+    expect(keys("p.permission IN ('a.b.c', 'a.b.d')")).toEqual(['a.b.c', 'a.b.d']);
+    expect(keys("p.permission NOT IN ('a.b.c')")).toEqual(['a.b.c']);
+    // As PostgreSQL deparses IN in a policy, and an array literal.
+    expect(keys("((p.permission)::text = ANY ((ARRAY['a.b.c'::character varying, 'a.b.d'::character varying])::text[]))")).toEqual(['a.b.c', 'a.b.d']);
+    expect(keys(`p.permission = ANY ('{a.b.c,"a.b.d"}'::text[])`)).toEqual(['a.b.c', 'a.b.d']);
+    // Keys held in variables the body assigns literals.
+    const body = [
+      'DECLARE',
+      "  v_unlock text := 'a.b.c';",
+      "  v_keys text[] DEFAULT ARRAY['a.b.d', 'a.b.e'];",
+      'BEGIN',
+      "  IF x THEN v_unlock := 'a.b.f'; END IF;",
+      '  IF crove_kernel.ctx_has_permission(v_unlock) THEN RETURN 1; END IF;',
+      '  PERFORM 1 FROM crove_kernel.role_permission p WHERE p.permission = ANY (v_keys);',
+      'END',
+    ].join('\n');
+    expect(keys(body).sort()).toEqual(['a.b.c', 'a.b.d', 'a.b.e', 'a.b.f']);
+  });
+
+  it('fails on a permission named in a form it cannot attribute to a key (#1641)', () => {
+    const problems = (by: string, text: string) => sqlPermissionUses(by, text).problems;
+    expect(problems('function crove_kernel.f', 'SELECT crove_kernel.ctx_has_permission(p_key)')).toEqual([
+      'function crove_kernel.f names a permission through ctx_has_permission(...) p_key, which this check cannot attribute to a key: write the key as a literal',
+    ]);
+    expect(problems('function crove_kernel.f', 'DECLARE v text; BEGIN SELECT k INTO v FROM t; v := lower(v); PERFORM 1 WHERE p.permission = v; END')).toHaveLength(1);
+    expect(problems('policy crove_finance.t.p', "p.permission LIKE 'finance.%'")).toEqual([
+      'policy crove_finance.t.p matches a permission column by pattern (permission LIKE), which this check cannot attribute to a key: compare with literals',
+    ]);
+    expect(problems('function crove_kernel.f', 'p.permission IN (SELECT k FROM t)')).toHaveLength(1);
+    // The checker itself compares with its parameter, by design.
+    expect(problems('function crove_kernel.ctx_has_permission', 'p.permission = p_permission')).toEqual([]);
+  });
+});
+
+describe("the app's permission checks (#1641)", () => {
+  it('names only permission constants, all of them declared', () => {
+    const { uses, problems } = appPermissionUses(appSources(), contract);
+    expect(problems).toEqual([]);
+    expect(uses.map((u) => u.permission).sort()).toEqual(['finance.period.unlock', 'finance.proposal.approve']);
+    expect(permissionProblems(MODULE_MANIFESTS, { uses: [...staticPermissionUses().uses, ...uses] })).toEqual([]);
+  });
+
+  it('fails on a key written in the app, and on a constant of an undeclared key', () => {
+    const literal = appPermissionUses([{ file: 'apps/app/src/lib/x.ts', source: "permissions.includes('finance.invoice.post')" }], contract);
+    expect(literal.problems).toEqual(["apps/app/src/lib/x.ts: a permission check passes 'finance.invoice.post'; pass a permission constant @crove/kernel-contract exports"]);
+    // A constant with a key no manifest declares (a stand-in for the contract module).
+    const planted = appPermissionUses([{ file: 'apps/app/src/lib/y.ts', source: 'org.permissions?.includes(INVOICE_POST_PERMISSION)' }], { INVOICE_POST_PERMISSION: 'finance.invoice.post' });
+    expect(planted.problems).toEqual([]);
+    expect(permissionProblems(MODULE_MANIFESTS, { uses: [...staticPermissionUses().uses, ...planted.uses] })).toEqual([
+      'apps/app/src/lib/y.ts (INVOICE_POST_PERMISSION) names finance.invoice.post, which no manifest declares: declare it in modules/finance/src/manifest.ts',
+    ]);
+    // A comment is not a check.
+    expect(appPermissionUses([{ file: 'z.ts', source: "// permissions.includes('finance.invoice.post')" }], contract)).toEqual({ uses: [], problems: [] });
   });
 });
 
