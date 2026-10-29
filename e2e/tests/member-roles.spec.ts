@@ -4,7 +4,8 @@ import { expect, test } from '@playwright/test';
 import { createOrg, newEmail, signUp } from '../lib/session.ts';
 import { nextTotp } from '../lib/totp.ts';
 
-test('an owner gives the chief accountant role and takes it back', async ({ page }) => {
+// TEMPORARY (#1912): 20 runs in CI to show the fix holds; reverted before merge.
+for (let run = 1; run <= 20; run += 1) test(`an owner gives the chief accountant role and takes it back (run ${run})`, async ({ page }) => {
   const owner = newEmail('roles');
   await signUp(page, owner);
   await createOrg(page, 'Công ty phân quyền');
