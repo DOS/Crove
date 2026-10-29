@@ -253,7 +253,8 @@ suite('tasks a chart or role change would strand (#1799)', () => {
       { templateKey: 'finance.chief_accountant', leScope: [defaultEntity, branch], reportsTo: null },
       { actor: asMfa(owner), orgId },
     );
-    // A run starts only for an open task of its seat.
+    // A run starts on a wake-up, which giving the seat a task requests.
+    await app.execute('kernel.task.create', { title: 'Việc chung', assigneePositionId: positionId }, { actor: asUser(owner), orgId });
     const ofBranch = await task(branch, positionId);
     const started = await worker.execute<{ runId: string | null }>('kernel.agent.run.start', { agentId }, { actor: { type: 'system', component: 'kernel.agent' }, orgId });
     if (!started.runId) throw new Error('no run');
