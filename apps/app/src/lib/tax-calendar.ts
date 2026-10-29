@@ -1,7 +1,7 @@
 // The tax calendar on the multi-client home screen (issue #921): every client's obligations due in the next 30 days or
 // overdue, in one list by due date, and how a period reads. The dues themselves come from me.clients (each read in its
 // own org on the server); nothing here decides what is due.
-import type { TaxDueView, TaxObligation } from '@crove/kernel-contract';
+import type { TaxDueView } from '@crove/kernel-contract';
 import { periodParts } from './clients.ts';
 
 export interface TaxDueRow extends TaxDueView {
@@ -44,4 +44,3 @@ export function entityToMark(open: readonly { id: string }[], chosen: string | n
   return open.some((e) => e.id === chosen) ? chosen : null;
 }
 
-export type { TaxObligation };

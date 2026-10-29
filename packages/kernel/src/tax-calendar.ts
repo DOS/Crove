@@ -79,10 +79,10 @@ export async function readTaxProfile(ctx: Pick<QueryContext, 'trx' | 'orgId'>): 
 // Who may mark an obligation done, for which legal entity (#1917). Owners, admins and members mark any obligation. With
 // finance installed, the VAT return's mark is finance.vat.return_mark's (rpc.ts routes it there, #1400): owners and
 // admins, and a holder of finance.vat.file org-wide or for that entity (#1508). The same rule as mayFileVat in
-// modules/finance/src/vat.ts and crove_finance.vat_return_filed_guard, through the same context functions, so a due
-// row offers the mark exactly where the server takes it. Only a user marks. `vat` false skips reading the permission
-// for a caller that asks about another obligation only.
-export async function markRule(
+// modules/finance/src/vat.ts and the guard on finance's filed returns (vat_return_filed_guard), through the same context
+// functions, so a due row offers the mark exactly where the server takes it. Only a user marks. `vat` false skips
+// reading the permission for a caller that asks about another obligation only.
+async function markRule(
   ctx: Pick<QueryContext, 'trx' | 'actor' | 'role' | 'installed'>,
   vat = true,
 ): Promise<(obligation: TaxObligation, legalEntityId: string) => boolean> {
