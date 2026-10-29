@@ -2,7 +2,7 @@
 -- effect posted in the same transaction. Idempotent; applied files stay untouched.
 --
 -- proposal_status_guard   approved -> executed needs, besides the ok audit row of the proposal's command written in this
---   transaction by this actor (#1816), crove_finance.ledger_effect_recorded (20261104210000): true for a command that is
+--   transaction by this actor (#1816), crove_finance.ledger_effect_recorded (20261104230000): true for a command that is
 --   not a ledger command, and for a ledger command only when a journal entry tied to the proposal through that command's
 --   path was posted in this transaction. So a session with raw SQL on the runtime's connection that writes the audit row
 --   itself can no longer mark a money-path proposal executed with nothing posted. Copied from
