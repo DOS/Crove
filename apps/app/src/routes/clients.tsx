@@ -21,7 +21,7 @@ import { getConfig } from '../lib/auth.ts';
 import { deadlineTone, periodParts, sortClients, type ClientDeadline } from '../lib/clients.ts';
 import { SM_UP, useMediaQuery } from '../lib/media.ts';
 import { signOut } from '../lib/session-actions.ts';
-import { canMarkTaxDone, dueAcrossClients, entityToMark, type TaxDueRow } from '../lib/tax-calendar.ts';
+import { dueAcrossClients, entityToMark, markableEntities, type TaxDueRow } from '../lib/tax-calendar.ts';
 
 function Deadline({ deadline, slug, canChoose }: { deadline: ClientDeadline | null; slug: string; canChoose: boolean }) {
   const t = useTranslations('clients');
@@ -61,9 +61,11 @@ function Deadline({ deadline, slug, canChoose }: { deadline: ClientDeadline | nu
 // refusal shows next to the row it concerns.
 function TaxCalendarRow({ row, periodLabel }: { row: TaxDueRow; periodLabel: (period: string) => string }) {
   const tt = useTranslations('taxCalendar');
-  // Each legal entity marks its own dues (#1553). This screen has no entity choice, so with several entities still open
-  // it sends the user to that org's Overview, where the shell's switcher picks the entity.
-  const markFor = entityToMark(row.openEntities, undefined);
+  // Each legal entity marks its own dues (#1553), those the server says the user may mark there (#1917). This screen has
+  // no entity choice, so with several such entities still open it sends the user to that org's Overview, where the
+  // shell's switcher picks the entity.
+  const markable = markableEntities(row);
+  const markFor = entityToMark(markable, undefined);
   const done = useMutation({
     mutationFn: () =>
       clientForOrg(row.slug).org.markTaxObligation({ obligation: row.obligation, period: row.period, done: true, ...(markFor ? { legalEntityId: markFor } : {}) }),
@@ -86,27 +88,26 @@ function TaxCalendarRow({ row, periodLabel }: { row: TaxDueRow; periodLabel: (pe
       </TableCell>
       <TableCell className="px-4 py-3 text-muted-foreground">{periodLabel(row.period)}</TableCell>
       <TableCell className="px-4 py-3 text-right">
-        {canMarkTaxDone(row.role, row.obligation, getConfig().modules.includes('finance')) &&
-          (markFor ? (
-            <Button size="sm" variant="outline" onClick={() => done.mutate()} disabled={done.isPending}>
-              {done.isPending ? <Spinner className="text-current" /> : null}
-              {tt('markDone')}
-            </Button>
-          ) : (
-            row.openEntities.length > 1 && (
-              <Link to="/o/$slug/overview" params={{ slug: row.slug }} className="text-xs text-link hover:underline">
-                {tt('openCount', { count: row.openEntities.length })}
-              </Link>
-            )
-          ))}
+        {markFor ? (
+          <Button size="sm" variant="outline" onClick={() => done.mutate()} disabled={done.isPending}>
+            {done.isPending ? <Spinner className="text-current" /> : null}
+            {tt('markDone')}
+          </Button>
+        ) : (
+          markable.length > 1 && (
+            <Link to="/o/$slug/overview" params={{ slug: row.slug }} className="text-xs text-link hover:underline">
+              {tt('openCount', { count: row.openEntities.length })}
+            </Link>
+          )
+        )}
         {done.error && <ErrorText>{errorMessage(done.error)}</ErrorText>}
       </TableCell>
     </TableRow>
   );
 }
 
-// Every client's tax obligations due in the next 30 days or overdue, by due date. Marking one done (owners, admins and
-// members of that client) runs in the client's own org and removes it from the list.
+// Every client's tax obligations due in the next 30 days or overdue, by due date. Marking one done (where that client's
+// server says the user may, #1917) runs in the client's own org and removes it from the list.
 function TaxCalendar({ rows }: { rows: TaxDueRow[] }) {
   const tt = useTranslations('taxCalendar');
   const periodLabel = usePeriodLabel();
