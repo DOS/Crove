@@ -200,11 +200,11 @@ export interface ArchiveBatch {
   version: 1 | 2 | 3 | 4 | 5;
   seq: number;
   window: { from: string; to: string };
-  // Versions 2 and 3: where its voucher numbers and voids start (the epoch, or the window's start).
+  // Versions 2 and up: where its voucher numbers and voids start (the epoch, or the window's start).
   numbersFrom?: string;
-  // Version 3: where its legal entity rows start (the epoch, or the window's start).
+  // Versions 3 and up: where its legal entity rows start (the epoch, or the window's start).
   entitiesFrom?: string;
-  // Versions 4 and 5: where its number allocations, voids and voucher numbers start (the epoch, or the window's start).
+  // Versions 4 and up: where its number allocations, voids and voucher numbers start (the epoch, or the window's start).
   allocationsFrom?: string;
   // Version 5: where its number series and their reset policies start (the epoch, or the window's start).
   seriesFrom?: string;

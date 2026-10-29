@@ -230,8 +230,13 @@ suite('WORM fact stream: the number series reset policy on PostgreSQL (#1623)', 
     const batches = await readBatches(keys);
     const [first, second] = batches;
     expect(first?.version).toBe(4);
-    expect(second).toMatchObject({ version: 5, allocationsFrom: second?.window.from, seriesFrom: EPOCH });
-    batches.slice(2).forEach((b) => expect(b).toMatchObject({ version: 5, seriesFrom: b.window.from }));
+    // Version 5, or a later version that keeps the series rows.
+    expect(second?.version).toBeGreaterThanOrEqual(5);
+    expect(second).toMatchObject({ allocationsFrom: second?.window.from, seriesFrom: EPOCH });
+    batches.slice(2).forEach((b) => {
+      expect(b.version).toBeGreaterThanOrEqual(5);
+      expect(b).toMatchObject({ seriesFrom: b.window.from });
+    });
     const refs = batches.flatMap((b) => b.rows.map(([ref]) => ref));
     // Each series once, those made before the switch included.
     for (const id of Object.values(series)) expect(refs.filter((r) => r === `number_series:${orgId}:${id}`)).toHaveLength(1);
@@ -247,7 +252,10 @@ suite('WORM fact stream: the number series reset policy on PostgreSQL (#1623)', 
     await age(30);
     expect(await writeArchive(worker, store, { lagSeconds: 600 })).toBeGreaterThan(0);
     const after = await readBatches((await store.list('chain/v1/')).slice(keys.length));
-    for (const b of after) expect(b).toMatchObject({ version: 5, seriesFrom: b.window.from });
+    for (const b of after) {
+      expect(b.version).toBeGreaterThanOrEqual(5);
+      expect(b).toMatchObject({ seriesFrom: b.window.from });
+    }
     expect(after.flatMap((b) => b.rows.map(([ref]) => ref))).toContain(`number_series:${orgId}:${series.later}`);
 
     expect(await verifyArchive(worker, store)).toMatchObject({ ok: true, problems: [] });

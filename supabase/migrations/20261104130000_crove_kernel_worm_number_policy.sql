@@ -16,8 +16,11 @@
 -- reference:
 --   number_series:<org_id>:<id>   a series: its legal entity, doc type, period key, creation time, and the reset in
 --                                 force for its doc type in its entity (the policy row's, or 'yearly' without one)
--- A switched reset, or a policy row deleted or added for a doc type in use, changes the row of every series of that
--- doc type; a policy changed or restated before the doc type's first number changes no anchored row. The policy row's
+-- A switched reset, or a policy row deleted or added for a doc type in use with a reset other than 'yearly' (the
+-- default it stands in for), changes the row of every series of that doc type; a policy changed or restated before the
+-- doc type's first number changes no anchored row. A policy rewritten by the owner before the doc type's first number,
+-- outside number_series_policy_set, leaves no audit event; the series is then anchored with the reset it was numbered
+-- under, as any row forged before it is anchored. The policy row's
 -- updated_by and updated_at are left out: restating the reset in force updates them, and the audit event records who.
 --
 -- crove_kernel.archive_series_hashes(from, to) gives those rows for the series created in [from, to), with their
@@ -25,9 +28,11 @@
 -- plus these, from seriesFrom (the epoch for the first version 5 batch, which takes in every series made before it;
 -- the window's start after). Version 1 to 4 batches keep verifying as they were written. A series is created in the
 -- transaction of its first allocation, at the same time as it and as the command's audit event, so
--- archive_next_window cuts the window that holds it, as for the allocations. number_series is small (one row per doc
--- type, entity and period), so no index on created_at.
+-- archive_next_window cuts the window that holds it, as for the allocations. A BRIN index on created_at serves the
+-- range of each batch, as on the allocations.
 SET LOCAL lock_timeout = '2s';
+
+CREATE INDEX IF NOT EXISTS number_series_created_brin ON crove_kernel.number_series USING brin (created_at);
 
 -- Version 5 row hashes over a fixed column list, like versions 1 to 4.
 CREATE OR REPLACE FUNCTION crove_kernel.archive_series_hashes(p_from timestamptz, p_to timestamptz)
