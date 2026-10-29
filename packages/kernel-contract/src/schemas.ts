@@ -1034,6 +1034,10 @@ export const zPeriodLockState = z.object({
   updatedAt: z.string().nullable(),
   // The date of the org's opening entry in force (#366): no other entry posts on or before it.
   openingDate: zLocalDate.nullable(),
+  // Whether the signed-in member may unlock this entity's months: an owner, or finance.period.unlock org-wide or for
+  // this entity (#1507). The server checks again. Absent from a response stored before #1507 (an idempotent replay):
+  // false.
+  unlockable: z.boolean().default(false),
 });
 export type PeriodLockState = z.infer<typeof zPeriodLockState>;
 

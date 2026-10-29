@@ -1,13 +1,9 @@
 // Period lock (#329) on the ledger screen: who may lock and unlock, and months as YYYY-MM. Today and this month in
 // Vietnam come from @crove/kernel-contract (vietnamToday, vietnamMonth), the helper the kernel shares (#560); here they
 // read the browser's clock and only shape the hints, since the kernel decides by the database clock.
-import { PERIOD_UNLOCK_PERMISSION } from '@crove/kernel-contract';
-
-// Who may lock (finance.period.lock: owners and admins) and unlock (finance.period.unlock: owners, and a chief accountant
-// through an org-wide role assignment, ADR-0021, #1279); the kernel checks again.
+// Who may lock (finance.period.lock: owners and admins); the kernel checks again. Who may unlock an entity's months
+// the period lock state says (unlockable, #1507: owners, and the unlock permission org-wide or for that entity).
 export const canLockPeriods = (role: string | null | undefined) => role === 'owner' || role === 'admin';
-export const canUnlockPeriods = (role: string | null | undefined, permissions: readonly string[] = []) =>
-  role === 'owner' || (role != null && permissions.includes(PERIOD_UNLOCK_PERMISSION));
 
 export function previousMonth(month: string): string {
   const [year, m] = month.split('-').map(Number) as [number, number];

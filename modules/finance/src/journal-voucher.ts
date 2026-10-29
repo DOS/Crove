@@ -33,7 +33,7 @@ import {
 } from './domain/journal-voucher.ts';
 import { postJournalEntry } from './ledger.ts';
 import { resolveLegalEntity } from './legal-entity.ts';
-import { dateLabel, periodLockState } from './period-lock.ts';
+import { dateLabel, periodLockedThrough } from './period-lock.ts';
 
 const REQUESTERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
 
@@ -75,7 +75,7 @@ export const prepareJournalVoucher = defineCommand({
     const legalEntityId = await resolveLegalEntity(ctx, input.legalEntityId);
     // A month already locked (in that entity) is refused now, while the user is still on the form; the posting guard
     // refuses it again when the proposal is approved, with a lock made since.
-    const { lockedThrough } = await periodLockState(ctx, legalEntityId);
+    const lockedThrough = await periodLockedThrough(ctx, legalEntityId);
     if (lockedThrough && input.date <= lockedThrough) {
       throw new DomainError('PERIOD_LOCKED', 409, `Sổ đã khóa đến hết ngày ${dateLabel(lockedThrough)}, nên không ghi được bút toán ngày ${dateLabel(input.date)}`, {
         lockedThrough,

@@ -280,7 +280,10 @@ suite('missing invoice requests (#669)', () => {
     expect(outbox[0]).toMatchObject({ to: 'ketoan@khach.test', subject: 'Đề nghị bổ sung hóa đơn đầu vào tháng 9/2026', replyTo: `${token}@${INBOUND}` });
     expect(outbox[0]?.text).toContain('hóa đơn số 9007');
     expect(outbox[0]?.text).toContain('tổng tiền 2.200.000 đồng');
-    expect(outbox[0]?.text).not.toContain('9009');
+    // Not the cancelled invoice. Searched as its line would show it, since a bare '9009' can occur in the random
+    // reply-to token the mail also carries (#1911).
+    expect(outbox[0]?.text).not.toContain('hóa đơn số 9009');
+    expect(outbox[0]?.text).not.toContain('22/09/2026');
     // Still refused once the mail went out.
     expect((await rpc('missingInvoices/request', member, { period: '2026-09' })).body.code).toBe('REQUEST_TOO_SOON');
     const status = await rpc('missingInvoices/status', viewer, undefined);

@@ -39,6 +39,25 @@ export function shiftMonth(month: string, by: 1 | -1): string {
   return `${Math.floor(index / 12)}-${String((index % 12) + 1).padStart(2, '0')}`;
 }
 
+// An owner, or a holder of finance.period.unlock org-wide or for this entity (crove_finance.may_unlock_period, #1507).
+async function mayUnlock(ctx: QueryContext, entity: string): Promise<boolean> {
+  const { rows } = await sql<{ may: boolean }>`SELECT crove_finance.may_unlock_period(${entity}::uuid) AS may`.execute(ctx.trx);
+  return rows[0]?.may === true;
+}
+
+// The last locked day of one legal entity (the one named, else resolveLegalEntity's), or null: what a preparer checks a
+// date against. The screen's state is periodLockState.
+export async function periodLockedThrough(ctx: QueryContext, legalEntityId?: string): Promise<string | null> {
+  const entity = await resolveLegalEntity(ctx, legalEntityId);
+  const row = await ctx.trx
+    .selectFrom('crove_finance.period_lock')
+    .select('locked_through')
+    .where('org_id', '=', ctx.orgId)
+    .where('legal_entity_id', '=', entity)
+    .executeTakeFirst();
+  return row?.locked_through ?? null;
+}
+
 // The lock of one legal entity (#1280: each entity locks its own months): the one named, else resolveLegalEntity's.
 export async function periodLockState(ctx: QueryContext, legalEntityId?: string): Promise<PeriodLockState> {
   const entity = await resolveLegalEntity(ctx, legalEntityId);
@@ -68,6 +87,8 @@ export async function periodLockState(ctx: QueryContext, legalEntityId?: string)
     updatedAt: row?.updated_by ? row.updated_at.toISOString() : null,
     // The opening entry in force (#366): nothing else posts on or before it.
     openingDate: await liveOpeningDate(ctx, entity),
+    // Whether the signed-in member may unlock this entity's months (#1507); unlock_period() decides again.
+    unlockable: await mayUnlock(ctx, entity),
   };
 }
 
@@ -162,11 +183,15 @@ export const periodUnlock = defineCommand({
   risk: 'R3',
   sideEffect: 'internal',
   access: ['owner'],
-  // ADR-0021 section 3: the chief accountant reopens a period too (an org-wide finance.chief_accountant assignment,
-  // #1279); unlock_period() checks the same again.
+  // ADR-0021 section 3: the chief accountant reopens a period too: an org-wide finance.chief_accountant (#1279), or a
+  // finance.entity_chief_accountant for the months of its own entities (#1507). The gate lets a holder for some entity
+  // in; unlock_period() decides for the entity resolved, and checks the org-wide holder again.
   permission: 'finance.period.unlock',
+  permissionScope: 'legal_entity',
   handler: async (ctx, input): Promise<PeriodLockState> => {
     const entity = await resolveLegalEntity(ctx, input.legalEntityId);
+    // An entity chief accountant unlocks only its own entities' months (#1507); unlock_period() checks again.
+    ctx.permissionEntity(entity);
     ctx.audit({ month: input.month, reason: input.reason, legalEntityId: entity });
     try {
       await sql`SELECT crove_finance.unlock_period(${`${input.month}-01`}::date, ${entity}::uuid)`.execute(ctx.trx);

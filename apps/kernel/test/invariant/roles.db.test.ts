@@ -11,12 +11,40 @@ import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
-import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
+import { z } from 'zod';
+import { createOrg, eligibleApprovers, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { BUILTIN_ROLE_KEYS } from '@crove/kernel-contract';
-import { Runtime } from '@crove/kernel-runtime';
+import { Runtime, defineCommand, defineQuery, type CommandDef, type QueryDef } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 import { contextToken } from './fixtures/context-token.ts';
+
+// Probes of the permission gate (#1507), each an owner's command that also admits finance.period.unlock: the default
+// (org-wide holders only, as before), one that admits entity holders but names no entity (it must fail closed), and one
+// that names the entity it is given.
+const gateProbe = (name: string, scope: 'legal_entity' | undefined, names: boolean) =>
+  defineCommand({
+    name,
+    input: z.object({ legalEntityId: z.uuid() }),
+    risk: 'R1',
+    sideEffect: 'none',
+    access: ['owner'],
+    permission: 'finance.period.unlock',
+    ...(scope ? { permissionScope: scope } : {}),
+    writes: [],
+    handler: async (ctx, input) => {
+      if (names) ctx.permissionEntity(input.legalEntityId);
+      return { ok: true };
+    },
+  }) as CommandDef<unknown, unknown>;
+const GATE_PROBES = [gateProbe('t1507.org_gate', undefined, false), gateProbe('t1507.forgets', 'legal_entity', false), gateProbe('t1507.names', 'legal_entity', true)];
+// P12's own list (approval.ts eligibleApprovers) of who may approve a ledger proposal, read in the caller's context.
+const ELIGIBLE_PROBE = defineQuery({
+  name: 't1507.eligible',
+  input: z.object({}),
+  access: ['owner'],
+  handler: async (ctx) => eligibleApprovers(ctx.trx, ctx.orgId, 'finance.purchase.record'),
+}) as QueryDef<unknown, unknown>;
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -126,8 +154,8 @@ suite('role assignments on PostgreSQL (#1279)', () => {
     workerUrl = login('crove_worker', 'test-worker-pw');
     pool = createPool({ connectionString: appUrl, max: 4 });
     rt = new Runtime(createDb(pool), { manifests: TEST_MANIFESTS }).register({
-      commands: [...kernelCommands, ...financeCommands],
-      queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries],
+      commands: [...kernelCommands, ...financeCommands, ...GATE_PROBES],
+      queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries, ELIGIBLE_PROBE],
     });
   }, 120_000);
 
@@ -147,14 +175,17 @@ suite('role assignments on PostgreSQL (#1279)', () => {
       permissions: (await c.query<{ role_key: string; permission: string }>('SELECT role_key, permission FROM crove_kernel.role_permission ORDER BY 1, 2')).rows,
     }));
     expect(roles.map((r) => r.key)).toEqual([...BUILTIN_ROLE_KEYS].sort());
-    // #1507 (step 1 of 2): an entity chief accountant role, limited to its legal entities and granting their period
-    // unlock alone, may be seeded; step 2 expects it.
-    const entityChief = roles.some((r) => r.key === 'finance.entity_chief_accountant');
-    expect(roles.filter((r) => r.scope === 'legal_entity').map((r) => r.key)).toEqual(entityChief ? ['external_accountant', 'finance.entity_chief_accountant'] : ['external_accountant']);
+    // The entity chief accountant (#1507) is limited to its legal entities and grants their period unlock alone.
+    expect(roles.filter((r) => r.scope === 'legal_entity').map((r) => r.key)).toEqual(['external_accountant', 'finance.entity_chief_accountant']);
+    // #1508 (step 1 of 2): both chief accountants may also grant finance.vat.file (marking the VAT return filed, for
+    // their entities); step 2 expects it.
+    const vatFile = permissions.some((p) => p.permission === 'finance.vat.file');
     expect(permissions).toEqual([
       { role_key: 'finance.chief_accountant', permission: 'finance.period.unlock' },
       { role_key: 'finance.chief_accountant', permission: 'finance.proposal.approve' },
-      ...(entityChief ? [{ role_key: 'finance.entity_chief_accountant', permission: 'finance.period.unlock' }] : []),
+      ...(vatFile ? [{ role_key: 'finance.chief_accountant', permission: 'finance.vat.file' }] : []),
+      { role_key: 'finance.entity_chief_accountant', permission: 'finance.period.unlock' },
+      ...(vatFile ? [{ role_key: 'finance.entity_chief_accountant', permission: 'finance.vat.file' }] : []),
     ]);
     // The base roles are not assignable roles.
     expect(roles.map((r) => r.key)).not.toContain('owner');
@@ -480,7 +511,8 @@ suite('role assignments on PostgreSQL (#1279)', () => {
     });
     const accountantRole = await o.assign(asMfa(o.owner), o.chief, 'finance.chief_accountant');
     const permissions = await rt.query<{ permissions: string[] }>('kernel.org.get', {}, { actor: asUser(o.chief), orgId: o.orgId });
-    expect(permissions.permissions).toEqual(['finance.period.unlock', 'finance.proposal.approve']);
+    // #1508 (step 1 of 2): finance.vat.file may come with the role too.
+    expect(permissions.permissions.filter((p) => p !== 'finance.vat.file')).toEqual(['finance.period.unlock', 'finance.proposal.approve']);
     await expect(unlock(asUser(o.chief))).rejects.toMatchObject({ code: 'STEP_UP_REQUIRED' });
     await expect(unlock(asMfa(o.chief))).resolves.toMatchObject({ lockedThrough: null });
     // Revoked: the next unlock is refused.
@@ -490,6 +522,112 @@ suite('role assignments on PostgreSQL (#1279)', () => {
     expect((await rt.query<{ permissions: string[] }>('kernel.org.get', {}, { actor: asUser(o.chief), orgId: o.orgId })).permissions).toEqual([]);
     // The owner still unlocks.
     await expect(unlock(asMfa(o.owner))).resolves.toMatchObject({ lockedThrough: null });
+  });
+
+  it("lets an entity chief accountant unlock only the months of its own entities, and nobody else's (#1507)", async () => {
+    const o = await org();
+    for (const entity of [o.defaultEntity, o.branch]) await o.exec(asUser(o.owner), 'finance.period.lock', { month: '2026-01', legalEntityId: entity });
+    const unlock = (actor: Actor, legalEntityId: string) => o.exec(actor, 'finance.period.unlock', { month: '2026-01', reason: 'Sửa sai sót', legalEntityId });
+    const unlockable = async (userId: string, legalEntityId: string) =>
+      (await rt.query<{ unlockable: boolean }>('finance.period.lock_state', { legalEntityId }, { actor: asUser(userId), orgId: o.orgId })).unlockable;
+    // An org-wide role without permissions first (so the member keeps every entity in sight), then the branch's unlock.
+    await o.assign(asMfa(o.owner), o.chief, 'finance.accountant');
+    await o.assign(asMfa(o.owner), o.chief, 'finance.entity_chief_accountant', o.branch);
+    // No org-wide permission comes with it: not in the org's list, and no approval (P12 counts org-wide assignments).
+    expect((await rt.query<{ permissions: string[] }>('kernel.org.get', {}, { actor: asUser(o.chief), orgId: o.orgId })).permissions).toEqual([]);
+    expect([await unlockable(o.chief, o.branch), await unlockable(o.chief, o.defaultEntity)]).toEqual([true, false]);
+    expect([await unlockable(o.owner, o.branch), await unlockable(o.owner, o.defaultEntity)]).toEqual([true, true]);
+    // The other entity's month: refused by the database, through the command and raw.
+    await expect(unlock(asMfa(o.chief), o.defaultEntity)).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 });
+    await expect(inContext(o.chief, o.orgId, (c) => c.query(`SELECT crove_finance.unlock_period('2026-01-01'::date, $1::uuid)`, [o.defaultEntity]))).rejects.toMatchObject({
+      code: '42501',
+      message: 'PERIOD_LOCK_FORBIDDEN',
+    });
+    // Its own entity's month, with a fresh second factor (R3).
+    await expect(unlock(asUser(o.chief), o.branch)).rejects.toMatchObject({ code: 'STEP_UP_REQUIRED' });
+    await expect(unlock(asMfa(o.chief), o.branch)).resolves.toMatchObject({ legalEntityId: o.branch, lockedThrough: null });
+    // An admin is given no entity role (they see every entity), and a member with the entity role alone sees and unlocks
+    // only that entity.
+    await expect(o.assign(asMfa(o.owner), o.admin, 'finance.entity_chief_accountant', o.branch)).rejects.toMatchObject({ status: 422 });
+    await o.exec(asUser(o.owner), 'finance.period.lock', { month: '2026-01', legalEntityId: o.branch });
+    await o.assign(asMfa(o.owner), o.member, 'finance.entity_chief_accountant', o.branch);
+    await expect(unlock(asMfa(o.member), o.defaultEntity)).rejects.toMatchObject({ status: 403 });
+    await expect(unlock(asMfa(o.member), o.branch)).resolves.toMatchObject({ lockedThrough: null });
+    // The default entity's month is still locked; an org-wide chief accountant unlocks it as before.
+    const wide = await person('wide');
+    await withAdmin((c) => c.query("INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member')", [o.orgId, wide]));
+    await o.assign(asMfa(o.owner), wide, 'finance.chief_accountant');
+    await expect(unlock(asMfa(wide), o.defaultEntity)).resolves.toMatchObject({ lockedThrough: null });
+  });
+
+  it('admits an entity holder only where a command opts in, for its entities, and fails a command that names none (#1507)', async () => {
+    const o = await org();
+    await o.assign(asMfa(o.owner), o.chief, 'finance.accountant');
+    await o.assign(asMfa(o.owner), o.chief, 'finance.entity_chief_accountant', o.branch);
+    const wide = await person('wide');
+    await withAdmin((c) => c.query("INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member')", [o.orgId, wide]));
+    await o.assign(asMfa(o.owner), wide, 'finance.chief_accountant');
+    const run = (actor: Actor, command: string, legalEntityId: string) => o.exec(actor, command, { legalEntityId });
+    const FORBIDDEN = { code: 'FORBIDDEN', status: 403 };
+    // A command without permissionScope gates exactly as before: the org-wide holder and the owner pass, the entity
+    // holder does not.
+    await expect(run(asUser(o.chief), 't1507.org_gate', o.branch)).rejects.toMatchObject(FORBIDDEN);
+    await expect(run(asUser(wide), 't1507.org_gate', o.branch)).resolves.toEqual({ ok: true });
+    await expect(run(asUser(o.owner), 't1507.org_gate', o.branch)).resolves.toEqual({ ok: true });
+    // One that admits entity holders but names no entity fails closed for them, and only for them.
+    await expect(run(asUser(o.chief), 't1507.forgets', o.branch)).rejects.toMatchObject({ ...FORBIDDEN, details: { rule: 'permission_entity' } });
+    await expect(run(asUser(wide), 't1507.forgets', o.branch)).resolves.toEqual({ ok: true });
+    await expect(run(asUser(o.owner), 't1507.forgets', o.branch)).resolves.toEqual({ ok: true });
+    // One that names its entity: the holder's own entity passes, another is refused; the others pass for any.
+    await expect(run(asUser(o.chief), 't1507.names', o.branch)).resolves.toEqual({ ok: true });
+    await expect(run(asUser(o.chief), 't1507.names', o.defaultEntity)).rejects.toMatchObject({ ...FORBIDDEN, details: { rule: 'permission_entity' } });
+    await expect(run(asUser(wide), 't1507.names', o.defaultEntity)).resolves.toEqual({ ok: true });
+    await expect(run(asUser(o.owner), 't1507.names', o.defaultEntity)).resolves.toEqual({ ok: true });
+    // A member who holds nothing passes none of them.
+    for (const command of ['t1507.org_gate', 't1507.forgets', 't1507.names']) await expect(run(asUser(o.member), command, o.branch)).rejects.toMatchObject(FORBIDDEN);
+    // The same without an idempotency key (the runtime's other path): the entity limit holds there too.
+    const bare = (actor: Actor, command: string, legalEntityId: string) => rt.execute(command, { legalEntityId }, { actor, orgId: o.orgId });
+    await expect(bare(asUser(o.chief), 't1507.forgets', o.branch)).rejects.toMatchObject({ ...FORBIDDEN, details: { rule: 'permission_entity' } });
+    await expect(bare(asUser(o.chief), 't1507.names', o.defaultEntity)).rejects.toMatchObject({ ...FORBIDDEN, details: { rule: 'permission_entity' } });
+    await expect(bare(asUser(o.chief), 't1507.names', o.branch)).resolves.toEqual({ ok: true });
+    await expect(bare(asUser(o.chief), 't1507.org_gate', o.branch)).rejects.toMatchObject(FORBIDDEN);
+  });
+
+  it('counts an entity chief accountant for nothing in P12, the approval gate, the accountant preset and its last chief accountant (#1507)', async () => {
+    const o = await org();
+    await o.assign(asMfa(o.owner), o.chief, 'finance.accountant');
+    await o.assign(asMfa(o.owner), o.chief, 'finance.entity_chief_accountant', o.branch);
+    // The accountant preset needs an org-wide chief accountant: the entity one is not one.
+    await expect(o.exec(asMfa(o.owner), 'kernel.org.set_approval_preset', { preset: 'accountant' })).rejects.toMatchObject({ code: 'NO_CHIEF_ACCOUNTANT', status: 422 });
+    const wide = await person('wide');
+    await withAdmin((c) => c.query("INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member')", [o.orgId, wide]));
+    const wideRole = await o.assign(asMfa(o.owner), wide, 'finance.chief_accountant');
+    await o.exec(asMfa(o.owner), 'kernel.org.set_approval_preset', { preset: 'accountant' });
+    // Who may approve a ledger proposal: P12's list in the runtime and the database's gate (#1793) agree, without the
+    // entity chief accountant.
+    expect(await rt.query<string[]>('t1507.eligible', {}, { actor: asUser(o.owner), orgId: o.orgId })).toEqual([wide]);
+    const gate = await inContext(o.owner, o.orgId, async (c) =>
+      (await c.query<{ ids: string[] }>(`SELECT crove_kernel.approval_eligible_now($1::uuid, 'finance.purchase.record') AS ids`, [o.orgId])).rows[0]?.ids,
+    );
+    expect(gate).toEqual([wide]);
+    // Revoking the org-wide one would leave the preset without a chief accountant: refused, the entity one counts for
+    // nothing.
+    await expect(o.revoke(asMfa(o.owner), wideRole.assignmentId)).rejects.toMatchObject({ code: 'LAST_CHIEF_ACCOUNTANT', status: 409 });
+  });
+
+  it('grants the entity chief accountant under the rules of an entity role (#1507)', async () => {
+    const o = await org();
+    // Never to an owner or admin (they see every entity), never to a viewer (it grants a permission).
+    for (const user of [o.owner, o.admin]) {
+      await expect(o.assign(asMfa(o.owner), user, 'finance.entity_chief_accountant', o.branch)).rejects.toMatchObject({ code: 'ROLE_SCOPE_NOT_FOR_ADMINS', status: 422 });
+    }
+    await expect(o.assign(asMfa(o.owner), o.viewer, 'finance.entity_chief_accountant', o.branch)).rejects.toMatchObject({ code: 'ROLE_PRIVILEGED_FOR_VIEWER', status: 422 });
+    // Always for one entity, and only by an owner.
+    await expect(o.assign(asMfa(o.owner), o.member, 'finance.entity_chief_accountant', null)).rejects.toMatchObject({ code: 'ROLE_SCOPE_REQUIRED', status: 422 });
+    await expect(o.assign(asMfa(o.admin), o.member, 'finance.entity_chief_accountant', o.branch)).rejects.toMatchObject({ status: 403 });
+    // A member who holds it alone is limited to that entity: an org-wide role would lift them to every entity.
+    await o.assign(asMfa(o.owner), o.member, 'finance.entity_chief_accountant', o.branch);
+    await expect(o.assign(asMfa(o.owner), o.member, 'finance.accountant')).rejects.toMatchObject({ code: 'ROLE_GRANT_WIDENS_SCOPE', status: 409 });
   });
 
   it('never gives a viewer a role that grants a permission, and a viewer demoted after the grant holds none', async () => {

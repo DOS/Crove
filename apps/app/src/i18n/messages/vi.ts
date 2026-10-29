@@ -792,7 +792,7 @@ export const vi = {
   },
   memberRoles: {
     roles: {
-      finance: { chief_accountant: 'Kế toán trưởng', accountant: 'Kế toán viên', viewer: 'Xem số liệu kế toán' },
+      finance: { chief_accountant: 'Kế toán trưởng', accountant: 'Kế toán viên', viewer: 'Xem số liệu kế toán', entity_chief_accountant: 'Kế toán trưởng của pháp nhân' },
       crm: { sales: 'Nhân viên kinh doanh' },
       desk: { agent: 'Chăm sóc khách hàng' },
       hr: { manager: 'Quản lý nhân sự' },
@@ -803,6 +803,7 @@ export const vi = {
         chief_accountant: 'Duyệt các đề xuất ghi sổ và mở khóa tháng đã khóa sổ, như chủ sở hữu.',
         accountant: 'Cho biết thành viên làm kế toán. Chưa thêm quyền nào ngoài quyền của vai trò cơ bản.',
         viewer: 'Cho biết thành viên chỉ theo dõi số liệu kế toán. Chưa thêm quyền nào ngoài quyền của vai trò cơ bản.',
+        entity_chief_accountant: 'Mở khóa các tháng đã khóa sổ, chỉ của các pháp nhân được giao. Mỗi lần giao là một pháp nhân; có thể giao thêm. Duyệt đề xuất ghi sổ vẫn cần kế toán trưởng của cả tổ chức. Nếu đây là vai trò duy nhất của người này, hãy giao cho họ vai trò Kế toán thuê ngoài cho pháp nhân đó trước khi thu hồi.',
       },
       crm: { sales: 'Chưa thêm quyền nào ngoài quyền của vai trò cơ bản.' },
       desk: { agent: 'Chưa thêm quyền nào ngoài quyền của vai trò cơ bản.' },
@@ -4575,6 +4576,7 @@ export const vi = {
     shortcutHint: 'Ctrl + Enter: lưu và gửi duyệt. Trong trang bài đăng, Ctrl + S: lưu.',
     postTitle: 'Bài đăng',
     postSubtitle: 'Cập nhật lúc {updated}',
+    postDetails: 'Nội dung, duyệt và lịch của bài',
     back: 'Quay lại',
     save: 'Lưu',
     saveFirst: 'Lưu thay đổi trước khi gửi duyệt',
