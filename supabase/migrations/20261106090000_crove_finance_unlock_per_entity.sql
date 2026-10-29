@@ -1,6 +1,6 @@
 -- Crove finance (issue #1507): a month is unlocked by an owner, an org-wide holder of finance.period.unlock (an org-wide
 -- finance.chief_accountant), or a holder of it for that month's legal entity (finance.entity_chief_accountant, assigned
--- per entity; 20261106050000_crove_kernel_entity_permissions.sql). Idempotent; applied files stay untouched.
+-- per entity; 20261106080000_crove_kernel_entity_permissions.sql). Idempotent; applied files stay untouched.
 --
 -- crove_finance.may_unlock_period(entity)  whether the user of the sealed context may unlock that entity's months: an
 --     owner, or finance.period.unlock org-wide or for that entity (crove_kernel.ctx_permission_entities). Read as the
