@@ -869,6 +869,29 @@ function countWrites(statements: { n: number }, closed: () => boolean, command: 
   };
 }
 
+// The handler's ctx.trx under the counting plugin (#1831): a handler cannot take the plugin off (withoutPlugins, on the
+// transaction, its schema module or its executor) or reach the connection under it (getExecutor().provideConnection),
+// so every statement it issues is counted. What it derives from them (withPlugin, withSchema, getExecutor) is guarded
+// the same way; everything else is the transaction's own, called on the transaction itself.
+function guardedTrx(trx: Transaction<Database>, command: string): Transaction<Database> {
+  const refuse = (what: string) => () => {
+    throw new Error(`command ${command}: ${what} on ctx.trx would run statements the declared-writes check does not count (#1831)`);
+  };
+  const guard = <T extends object>(target: T, label: string): T =>
+    new Proxy(target, {
+      get(object, prop) {
+        if (prop === 'withoutPlugins') return refuse(`${label}withoutPlugins()`);
+        if (prop === 'provideConnection') return refuse(`${label}provideConnection()`);
+        const value: unknown = Reflect.get(object, prop, object);
+        const wrap = (out: unknown, next: string): unknown => (typeof out === 'object' && out !== null && 'withoutPlugins' in out ? guard(out, next) : out);
+        if (prop === 'schema') return wrap(value, `${label}schema.`);
+        if (typeof value !== 'function') return value;
+        return (...args: unknown[]) => wrap((value as (...a: unknown[]) => unknown).apply(object, args), prop === 'getExecutor' ? `${label}getExecutor().` : label);
+      },
+    });
+  return guard(trx, '');
+}
+
 // The rows inserted, updated and deleted so far in this transaction, per crove_* table (#1710). The counts need
 // track_counts, which is on by default; with it off they would read zero, so the runtime refuses to go on.
 async function tableWriteCounts(trx: Transaction<Database>): Promise<Map<string, number>> {
@@ -1386,10 +1409,23 @@ export class Runtime {
         }
       })();
     };
-    // Waits for every nested command still running; answers whether any was.
+    // The runtime's writes for this command (ctx.emit, ctx.activity, ctx.numbering) not finished yet (#1831): one the
+    // handler did not await still writes after it settles, and after a refused tryRun's rollback it would survive it.
+    const helpers = new Set<Promise<unknown>>();
+    const helper = <T>(work: Promise<T>): Promise<T> => {
+      const done = work.then(
+        () => undefined,
+        () => undefined,
+      );
+      helpers.add(done);
+      void done.then(() => helpers.delete(done));
+      return work;
+    };
+    // Waits for every nested command still running, and every runtime write the handler left unfinished; answers
+    // whether any was.
     const settleRunning = async (): Promise<boolean> => {
-      const any = running.size > 0;
-      while (running.size > 0) await Promise.all(running);
+      const any = running.size > 0 || helpers.size > 0;
+      while (running.size > 0 || helpers.size > 0) await Promise.all([...running, ...helpers]);
       return any;
     };
     // What the handler writes, table by table, against what the command declares (#1710): a command that declares its
@@ -1452,7 +1488,7 @@ export class Runtime {
           };
     const aside = <T>(work: () => Promise<T>, rolledBackOnError = false): Promise<T> => (scope === null ? work() : scope.aside(work, rolledBackOnError));
     // The handler's own statements, counted for the scope through its ctx.trx.
-    const handlerTrx = scope === null ? trx : trx.withPlugin(countWrites(scope.statements, () => closed, def.name));
+    const handlerTrx = scope === null ? trx : guardedTrx(trx.withPlugin(countWrites(scope.statements, () => closed, def.name)), def.name);
     // Whether the writes of a nested command are its own to declare (it declares writes) or this command's.
     const ownsWrites = (name: string): boolean => this.#commands.get(name)?.writes !== undefined;
     // Set once the handler settled: from then on the runtime writes this command's rows, and nothing the handler
@@ -1472,26 +1508,28 @@ export class Runtime {
       emit: async (type, payload) => {
         refuseClosed('ctx.emit');
         if (!type.startsWith(`${def.name.split('.')[0]}.`)) throw new Error(`command ${def.name} cannot emit ${type}`);
-        const { rows } = await aside(() => sql<{ id: string }>`SELECT crove_kernel.emit(${type}, ${JSON.stringify(payload)}::jsonb, ${commandId}::uuid) AS id`.execute(trx));
+        const { rows } = await helper(aside(() => sql<{ id: string }>`SELECT crove_kernel.emit(${type}, ${JSON.stringify(payload)}::jsonb, ${commandId}::uuid) AS id`.execute(trx)));
         return rows[0]?.id ?? '';
       },
       activity: async (recordType, recordId, kind, summary, options) => {
         refuseClosed('ctx.activity');
-        await aside(() =>
-          trx
-            .insertInto('crove_kernel.activity')
-            .values({
-              org_id: base.orgId,
-              record_type: recordType,
-              record_id: recordId,
-              kind,
-              summary,
-              actor_id: base.actor.type === 'user' ? base.actor.userId : null,
-              // The database stamps it from the sealed context too (activity_stamp_agent).
-              agent_id: base.actor.type === 'agent' ? base.actor.agentId : null,
-              ...(options?.legalEntityId === undefined ? {} : { legal_entity_id: options.legalEntityId }),
-            })
-            .execute(),
+        await helper(
+          aside(() =>
+            trx
+              .insertInto('crove_kernel.activity')
+              .values({
+                org_id: base.orgId,
+                record_type: recordType,
+                record_id: recordId,
+                kind,
+                summary,
+                actor_id: base.actor.type === 'user' ? base.actor.userId : null,
+                // The database stamps it from the sealed context too (activity_stamp_agent).
+                agent_id: base.actor.type === 'agent' ? base.actor.agentId : null,
+                ...(options?.legalEntityId === undefined ? {} : { legal_entity_id: options.legalEntityId }),
+              })
+              .execute(),
+          ),
         );
       },
       audit: (detail) => {
@@ -1516,9 +1554,11 @@ export class Runtime {
       numbering: {
         allocate: async (n) => {
           refuseClosed('ctx.numbering.allocate');
-          const { rows } = await aside(() => sql<{ period_key: string; number: string; allocation_id: string }>`
+          const { rows } = await helper(
+            aside(() => sql<{ period_key: string; number: string; allocation_id: string }>`
             SELECT a.period_key, a.number::text AS number, a.allocation_id
-            FROM crove_kernel.allocate_number(${n.legalEntityId}::uuid, ${n.docType}::text, ${n.documentDate}::date, ${n.targetType}::text, ${n.targetId}::uuid) a`.execute(trx));
+            FROM crove_kernel.allocate_number(${n.legalEntityId}::uuid, ${n.docType}::text, ${n.documentDate}::date, ${n.targetType}::text, ${n.targetId}::uuid) a`.execute(trx)),
+          );
           const row = rows[0];
           const number = Number(row?.number);
           if (!row || !Number.isSafeInteger(number) || number < 1) throw new Error(`command ${def.name}: allocate_number answered no number`);
@@ -1526,7 +1566,7 @@ export class Runtime {
         },
         void: async (n) => {
           refuseClosed('ctx.numbering.void');
-          const { rows } = await aside(() => sql<{ id: string }>`SELECT crove_kernel.void_number(${n.allocationId}::uuid, ${n.reason}::text) AS id`.execute(trx));
+          const { rows } = await helper(aside(() => sql<{ id: string }>`SELECT crove_kernel.void_number(${n.allocationId}::uuid, ${n.reason}::text) AS id`.execute(trx)));
           const voidId = rows[0]?.id;
           if (!voidId) throw new Error(`command ${def.name}: void_number answered no void`);
           return { voidId };
@@ -1668,7 +1708,7 @@ export class Runtime {
     }
     // Before the runtime writes this command's rows: a nested command still running would share the connection with
     // them, and a tryRun's rollback could undo them, so the command fails instead and commits nothing.
-    if (await settleRunning()) throw new Error(`command ${def.name}: the handler returned while a nested command was still running`);
+    if (await settleRunning()) throw new Error(`command ${def.name}: the handler returned while a nested command, ctx.emit, ctx.activity or ctx.numbering was still running`);
     if (writeCheck !== null) {
       if (writeCheck.unmeasured) {
         throw new Error(

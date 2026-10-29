@@ -13,7 +13,7 @@ import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { agentCommands, createOrg, decideApproval, eligibleApprovers, kernelCommands, kernelManifest, kernelQueries, runAgentWake, upsertIdentity } from '@crove/kernel';
 import { tableWrite } from '@crove/kernel-contract';
-import { Runtime, defineCommand, defineQuery, type Actor, type AgentActor, type AgentApprovers, type AgentRuntime, type CommandDef, type CommandWrite, type QueryDef, type Risk } from '@crove/kernel-runtime';
+import { DomainError, Runtime, defineCommand, defineQuery, type Actor, type AgentActor, type AgentApprovers, type AgentRuntime, type CommandDef, type CommandWrite, type QueryDef, type Risk } from '@crove/kernel-runtime';
 import { financeCommands, financeManifest, financeQueries } from '@crove/mod-finance';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
@@ -1570,6 +1570,66 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
     // Nothing the refused commands wrote stayed.
     const kept = await withAdmin(async (c) => (await c.query(`SELECT dedupe_key FROM crove_kernel.inbox_item WHERE org_id = $1 AND dedupe_key LIKE $2 ORDER BY 1`, [orgA, `t1710:%${suffix}`])).rows);
     expect(kept).toEqual([{ dedupe_key: `t1710:declared-${suffix}` }]);
+  });
+
+  // #1831: a handler cannot issue a statement the counting plugin does not see, and a refused nested command's ctx.emit
+  // it did not await cannot write after the rollback.
+  it('keeps every handler statement under the write check, and no event of a refused nested command after its rollback (#1831)', async () => {
+    const suffix = randomUUID().slice(0, 8);
+    const probe = (name: string, writes: readonly CommandWrite[] | undefined, handler: CommandDef<unknown, unknown>['handler']) =>
+      defineCommand({ sideEffect: 'none', name: `t1831.${name}_${suffix}`, input: z.object({}), risk: 'R1', access: 'system', ...(writes === undefined ? {} : { writes }), handler }) as CommandDef<unknown, unknown>;
+    const insert = `INSERT INTO crove_kernel.inbox_item (org_id, kind, dedupe_key, detail, raised_at) VALUES ('${orgA}', 'kernel.job.dead_lettered', 't1831:${suffix}', '{}', now())`;
+    // Every way off the plugin, or under it to the connection, is refused before a statement runs.
+    const bypasses: Record<string, CommandDef<unknown, unknown>['handler']> = {
+      without_plugins: async (ctx) => sql.raw(insert).execute(ctx.trx.withoutPlugins()),
+      executor_without_plugins: async (ctx) => ctx.trx.getExecutor().withoutPlugins().executeQuery(sql.raw(insert).compile(ctx.trx)),
+      provide_connection: async (ctx) => ctx.trx.getExecutor().provideConnection((connection) => connection.executeQuery(sql.raw(insert).compile(ctx.trx))),
+      derived_without_plugins: async (ctx) => sql.raw(insert).execute(ctx.trx.withPlugin({ transformQuery: ({ node }) => node, transformResult: async ({ result }) => result }).withoutPlugins()),
+      schema_without_plugins: async (ctx) => ctx.trx.schema.withoutPlugins().createTable(`t1831_${suffix}`).addColumn('a', 'integer').execute(),
+    };
+    const refused = Object.entries(bypasses).map(([name, handler]) => probe(name, [], handler));
+    // A nested command that declares its writes, refused after it starts an event it does not await; its caller goes on.
+    const leaves = probe('leaves_event', [], async (ctx) => {
+      void ctx.emit('t1831.left_behind', { suffix });
+      throw new DomainError('T1831_REFUSED', 422, 'refused');
+    });
+    const recovers = probe('recovers', [], async (ctx) => {
+      const result = await ctx.tryRun(leaves.name, {}, { recover: () => true });
+      return { status: result.status };
+    });
+    // A handler that returns with an event still being written fails.
+    const returnsEarly = probe('returns_early', [], async (ctx) => {
+      void ctx.emit('t1831.unawaited', { suffix });
+      return { ok: true };
+    });
+    // The guarded ctx.trx still runs what handlers do: queries, raw SQL, a derived plugin.
+    const plain = probe('plain', [], async (ctx) => {
+      const one = await sql<{ one: number }>`SELECT 1 AS one`.execute(ctx.trx);
+      const two = await ctx.trx.withPlugin({ transformQuery: ({ node }) => node, transformResult: async ({ result }) => result }).selectNoFrom(sql<number>`2`.as('two')).executeTakeFirst();
+      return { one: one.rows[0]?.one, two: two?.two };
+    });
+    worker.register({ commands: [...refused, leaves, recovers, returnsEarly, plain] });
+    const as = { actor: SYSTEM, orgId: orgA };
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      for (const command of refused) {
+        await expect(worker.execute(command.name, {}, as), command.name).rejects.toMatchObject({ code: 'INTERNAL' });
+        expect(logged.mock.calls.flat().map(String).join('\n'), command.name).toMatch(new RegExp(`command ${command.name}: \\S+ on ctx\\.trx would run statements the declared-writes check does not count`));
+      }
+      await expect(worker.execute(returnsEarly.name, {}, as)).rejects.toMatchObject({ code: 'INTERNAL' });
+      expect(logged.mock.calls.flat().map(String).join('\n')).toContain(`command ${returnsEarly.name}: the handler returned while a nested command, ctx.emit, ctx.activity or ctx.numbering was still running`);
+    } finally {
+      logged.mockRestore();
+    }
+    await expect(worker.execute(recovers.name, {}, as)).resolves.toEqual({ status: 'refused' });
+    await expect(worker.execute(plain.name, {}, as)).resolves.toEqual({ one: 1, two: 2 });
+    // Nothing the refused handlers tried stayed, and the refused nested command's event went with its rollback.
+    const left = await withAdmin(async (c) => ({
+      inbox: (await c.query('SELECT 1 FROM crove_kernel.inbox_item WHERE org_id = $1 AND dedupe_key = $2', [orgA, `t1831:${suffix}`])).rowCount,
+      events: (await c.query("SELECT type FROM crove_kernel.outbox_event WHERE org_id = $1 AND type LIKE 't1831.%' AND payload->>'suffix' = $2", [orgA, suffix])).rows,
+      table: (await c.query('SELECT to_regclass($1) AS t', [`public.t1831_${suffix}`])).rows[0]?.t,
+    }));
+    expect(left).toEqual({ inbox: 0, events: [], table: null });
   });
 
   it('runs a command as it registered: agent access set on its definition afterwards grants an agent nothing (#1766)', async () => {
