@@ -4,13 +4,14 @@
 //   another org gets that same refusal whatever the org holds;
 // - a row for the proposal's own command needs the proposal 'approved' (a state only the approving transaction sees),
 //   so a pending, executed, rejected, failed or expired proposal is refused for it;
-// - a row for another command naming an executed, rejected, failed or expired proposal is refused too; one naming a
-//   pending or approved proposal is written while option A stands (an edit's reviser, a command the execution runs)
-//   and refused once option B lands (#1706), so both answers pass here until then;
+// - a row for another command naming an executed, rejected, failed or expired proposal in proposal_id is refused too;
+//   one naming a pending or approved proposal there is written while option A stands (an edit's reviser, a command the
+//   execution runs) and refused once option B lands (#1706), so both answers pass here until then;
 // - the runtime's own flows still pass: uploading, editing (the reviser's row names the pending proposal) and
 //   approving a purchase invoice (the record's row names it approved, and so does the row of
-//   kernel.party.link_for_tax_code, which the record runs for a supplier the org does not know yet). A row names the
-//   proposal in its proposal_id or, once option B lands, a command it runs names it in detail.under_proposal;
+//   kernel.party.link_for_tax_code, which the record runs for a supplier the org does not know yet). Under option A
+//   every such row names the proposal in proposal_id; under option B only the proposal's own command's row does, and
+//   the rows of the reviser and of the commands the execution runs name it in detail.under_proposal;
 // - staff writes are not checked, as audit_event_stamp.
 // #1706 lands in two steps (AGENTS.md, protected paths): this copy accepts both behaviors, so the change itself runs
 // against it, and the next one asks for option B alone.
@@ -255,7 +256,7 @@ suite('audit rows naming a proposal on PostgreSQL (#1695)', () => {
     expect(await rowsNaming(foreignPending)).toEqual([]);
   });
 
-  it("needs the proposal approved for its own command's row, and refuses another command's row naming a decided one", async () => {
+  it("needs the proposal approved for its own command's row, and refuses another command's row naming an executed, rejected, failed or expired one", async () => {
     const o = await org();
     const seen: Record<string, Record<string, string>> = {};
     for (const status of STATUSES) {
