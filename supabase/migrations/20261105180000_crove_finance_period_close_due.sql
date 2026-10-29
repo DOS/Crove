@@ -23,15 +23,23 @@ SET LOCAL lock_timeout = '2s';
 CREATE OR REPLACE FUNCTION crove_finance.period_close_due(p_after uuid, p_limit int)
 RETURNS TABLE (org_id uuid, vat_filing_period text, locked_through date)
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
-  SELECT t.org_id, t.vat_filing_period,
-         CASE WHEN pg_catalog.bool_and(l.locked_through IS NOT NULL) THEN pg_catalog.min(l.locked_through) END
-  FROM crove_kernel.tenant t
-  LEFT JOIN crove_finance.period_lock l ON l.org_id = t.org_id
-  WHERE t.status = 'active'
-    AND t.org_id > coalesce(p_after, '00000000-0000-0000-0000-000000000000'::uuid)
-  GROUP BY t.org_id, t.vat_filing_period
+  -- The page of orgs first, then each one's locks: the bound applies before any lock is read.
+  SELECT t.org_id, t.vat_filing_period, l.locked_through
+  FROM (
+    SELECT o.org_id, o.vat_filing_period
+    FROM crove_kernel.tenant o
+    WHERE o.status = 'active'
+      AND o.org_id > coalesce(p_after, '00000000-0000-0000-0000-000000000000'::uuid)
+    ORDER BY o.org_id
+    LIMIT LEAST(GREATEST(p_limit, 1), 500)
+  ) t
+  -- No lock row at all aggregates to NULL too (bool_and over no rows).
+  CROSS JOIN LATERAL (
+    SELECT CASE WHEN pg_catalog.bool_and(p.locked_through IS NOT NULL) THEN pg_catalog.min(p.locked_through) END AS locked_through
+    FROM crove_finance.period_lock p
+    WHERE p.org_id = t.org_id
+  ) l
   ORDER BY t.org_id
-  LIMIT LEAST(GREATEST(p_limit, 1), 500)
 $$;
 REVOKE ALL ON FUNCTION crove_finance.period_close_due(uuid, int) FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant;
 GRANT EXECUTE ON FUNCTION crove_finance.period_close_due(uuid, int) TO crove_worker;

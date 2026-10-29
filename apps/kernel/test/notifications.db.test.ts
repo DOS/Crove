@@ -310,21 +310,23 @@ suite('in-app notifications of the kernel and finance (#671)', () => {
     await lock(null, '2026-01-01', '2026-09-30');
     await lock(second as string, '2026-01-01', '2026-07-31');
     await lock(third as string, '2026-01-01', '2026-08-31');
-    // Every page the sweep reads, one org per page: each org once, this one with its earliest lock.
-    const walk = async () => {
+    // Every page the sweep reads: one org per page, or whole pages, each org once either way.
+    const walk = async (page = 1) => {
       const seen: Array<{ org_id: string; locked_through: string | null }> = [];
       let after: string | null = null;
       for (;;) {
         const { rows }: { rows: Array<{ org_id: string; locked_through: string | null }> } = await sql<{ org_id: string; locked_through: string | null }>`
-          SELECT org_id, pg_catalog.to_char(locked_through, 'YYYY-MM-DD') AS locked_through FROM crove_finance.period_close_due(${after}::uuid, 1)`.execute(workerDb);
+          SELECT org_id, pg_catalog.to_char(locked_through, 'YYYY-MM-DD') AS locked_through FROM crove_finance.period_close_due(${after}::uuid, ${page}::int)`.execute(workerDb);
         if (rows.length === 0) return seen;
         seen.push(...rows);
         after = rows.at(-1)?.org_id ?? null;
       }
     };
-    const seen = await walk();
-    expect(new Set(seen.map((r) => r.org_id)).size).toBe(seen.length);
-    expect(seen.filter((r) => r.org_id === org.orgId)).toEqual([{ org_id: org.orgId, locked_through: '2026-07-31' }]);
+    for (const page of [1, 500]) {
+      const seen = await walk(page);
+      expect(new Set(seen.map((r) => r.org_id)).size, `page ${page}`).toBe(seen.length);
+      expect(seen.filter((r) => r.org_id === org.orgId), `page ${page}`).toEqual([{ org_id: org.orgId, locked_through: '2026-07-31' }]);
+    }
     // An entity whose lock row locks nothing leaves the period open: the org has no lock.
     await lock(third as string, null, null);
     expect((await walk()).filter((r) => r.org_id === org.orgId)).toEqual([{ org_id: org.orgId, locked_through: null }]);
