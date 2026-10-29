@@ -232,13 +232,29 @@ suite('invites scoped to legal entities on PostgreSQL (#1281)', () => {
     const member = await person('member');
     await accept(tokenOf(await invite(o.orgId, o.owner.id, member.email, 'member')), member.id);
     expect(await scopeOf(member.id, o.orgId)).toEqual(['*']);
-    // A scoped invite still pending when its invitee joined another way: accepting it keeps what they have.
+    // A scoped invite still pending when its invitee joined another way. Accepting it kept what they have and ignored
+    // the scope until #1459, which refuses it instead (409 INVITE_SCOPE_ALREADY_MEMBER) and changes nothing, the invite
+    // still pending: either holds until that lands. Their access is untouched either way.
     const second = await person('second');
     const pending = await invite(o.orgId, o.owner.id, second.email, 'viewer', [o.a]);
     await admin((c) => c.query("INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member')", [o.orgId, second.id]));
-    await expect(accept(tokenOf(pending), second.id)).resolves.toMatchObject({ role: 'member' });
+    const outcome = await accept(tokenOf(pending), second.id).then(
+      (value) => ({ ok: true as const, value }),
+      (error: { code?: string; status?: number }) => ({ ok: false as const, code: error.code, status: error.status }),
+    );
+    if (outcome.ok) {
+      expect(outcome.value).toMatchObject({ role: 'member' });
+      expect(await acceptAudit(o.orgId, second.id)).toMatchObject({ already_member: true, scope_applied: false, legal_entity_ids: [o.a] });
+    } else {
+      expect(outcome).toEqual({ ok: false, code: 'INVITE_SCOPE_ALREADY_MEMBER', status: 409 });
+      expect(await acceptAudit(o.orgId, second.id)).toBeUndefined();
+      const status = await admin(
+        async (c) => (await c.query<{ status: string }>('SELECT status FROM crove_kernel.member_invite WHERE org_id = $1 AND id = $2', [o.orgId, pending.inviteId])).rows[0]?.status,
+      );
+      expect(status).toBe('pending');
+    }
+    expect(await membership(o.orgId, second.id)).toBe('member');
     expect(await assignments(o.orgId, second.id)).toEqual([]);
     expect(await scopeOf(second.id, o.orgId)).toEqual(['*']);
-    expect(await acceptAudit(o.orgId, second.id)).toMatchObject({ already_member: true, scope_applied: false, legal_entity_ids: [o.a] });
   });
 });
