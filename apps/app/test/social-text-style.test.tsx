@@ -22,10 +22,13 @@ describe('text style buttons', () => {
   it('names each style and Bỏ định dạng, in Vietnamese and English', () => {
     const html = render(<TextStyleButtons targetId="social-body" value="Khuyến mãi" onChange={() => undefined} />);
     expect(html).toContain('role="group" aria-label="Kiểu chữ"');
-    for (const label of ['In đậm', 'In nghiêng', 'Vừa đậm vừa nghiêng']) expect(html).toContain(`aria-label="${label}"`);
+    // Each button's name is its style's, from hidden text beside the glyph (#1572).
+    for (const label of ['In đậm', 'In nghiêng', 'Vừa đậm vừa nghiêng']) expect(html).toContain(`<span class="sr-only">${label}</span>`);
+    expect(html).toContain('<span aria-hidden="true">BI</span>');
     expect(html).toContain('>Bỏ định dạng</button>');
     const en = render(<TextStyleButtons targetId="social-body" value="" onChange={() => undefined} />, 'en');
-    for (const label of ['Text style', 'Bold', 'Italic', 'Bold italic']) expect(en).toContain(`aria-label="${label}"`);
+    expect(en).toContain('aria-label="Text style"');
+    for (const label of ['Bold', 'Italic', 'Bold italic']) expect(en).toContain(`<span class="sr-only">${label}</span>`);
     expect(en).toContain('>Remove style</button>');
   });
 

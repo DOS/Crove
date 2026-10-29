@@ -4240,6 +4240,8 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
           </Button>
         </div>
       )}
+      {/* The cards below title their parts with h3: this names the level between them and the page's h1 (#1572). */}
+      <h2 className="sr-only">{t('postDetails')}</h2>
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div className="space-y-4">
           <SharedFields

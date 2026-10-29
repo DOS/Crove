@@ -4574,6 +4574,7 @@ export const en = {
     shortcutHint: 'Ctrl + Enter: save and submit. On a post, Ctrl + S: save.',
     postTitle: 'Post',
     postSubtitle: 'Updated {updated}',
+    postDetails: 'Content, review and schedule',
     back: 'Back',
     save: 'Save',
     saveFirst: 'Save your changes before submitting',
