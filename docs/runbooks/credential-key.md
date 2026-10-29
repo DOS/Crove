@@ -46,6 +46,8 @@ Rotate when someone who could read the key loses that access, when the key may h
    ```
 4. When the log shows 0 active left and no team chat alerts waiting for the Social module, or shows no `[credential-reseal]` line at all (the worker logs nothing once nothing is left; the SQL above says the same), and the channels and team chats left to reconnect are ones you are ready to reconnect or save again, remove `CREDENTIAL_KEY_PREVIOUS` and restart. A credential still under the old key after that no longer opens: its channel shows as needing a reconnect. A team chat alert target still under the old key no longer opens either: its alerts stop, and a test line from the Channels page says the chat must be saved again.
 
+The passes reseal the envelopes of orgs being offboarded as well (#1889): staff can reopen such an org before its purge (`org-offboarding.md`), so its tokens must outlive the previous key. A closed org has none left: its purge deletes its credentials and chat alert targets. An org closed by hand without the purge keeps them, and they stay counted as active until it is purged.
+
 Only one previous key is kept: finish one rotation (step 4) before starting the next, or envelopes sealed with the oldest key stop opening. A second rotation that cannot wait (a leak) while team chat alerts still wait for the Social module loses them: an owner or admin saves each team chat again once Social is on.
 
 A leaked key and a leaked database together expose every token sealed with that key: rotate, then reconnect the channels so the platforms issue new tokens, and revoke the old ones on each platform where it offers that.
