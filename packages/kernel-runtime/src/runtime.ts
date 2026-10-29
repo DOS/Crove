@@ -269,7 +269,12 @@ export interface CommandContext extends QueryContext {
   // an approval names the git SHA of its policy).
   build: string;
   emit(type: string, payload: Record<string, unknown>): Promise<string>;
-  activity(recordType: string, recordId: string, kind: string, summary: string): Promise<void>;
+  // A timeline row about a record. options.legalEntityId names the legal entity the row belongs to when its record
+  // names none (a month's lock, a year archive, a mail; #1725): the row is then read only in contexts whose scope holds
+  // that entity. The database refuses an entity outside the writer's scope (le_scope) or other than the entity of a
+  // record whose type it maps (b_legal_entity, LEGAL_ENTITY_MISMATCH). Without it a mapped record type takes its
+  // record's entity and any other row is org-level.
+  activity(recordType: string, recordId: string, kind: string, summary: string, options?: { legalEntityId?: string }): Promise<void>;
   // Adds fields to this command's own audit row (for example the policy outcome of an approval).
   audit(detail: Record<string, unknown>): void;
   // Runs another registered command in the same transaction (audited on its own row).
@@ -1470,7 +1475,7 @@ export class Runtime {
         const { rows } = await aside(() => sql<{ id: string }>`SELECT crove_kernel.emit(${type}, ${JSON.stringify(payload)}::jsonb, ${commandId}::uuid) AS id`.execute(trx));
         return rows[0]?.id ?? '';
       },
-      activity: async (recordType, recordId, kind, summary) => {
+      activity: async (recordType, recordId, kind, summary, options) => {
         refuseClosed('ctx.activity');
         await aside(() =>
           trx
@@ -1484,6 +1489,7 @@ export class Runtime {
               actor_id: base.actor.type === 'user' ? base.actor.userId : null,
               // The database stamps it from the sealed context too (activity_stamp_agent).
               agent_id: base.actor.type === 'agent' ? base.actor.agentId : null,
+              ...(options?.legalEntityId === undefined ? {} : { legal_entity_id: options.legalEntityId }),
             })
             .execute(),
         );

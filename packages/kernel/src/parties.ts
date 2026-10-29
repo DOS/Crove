@@ -380,7 +380,8 @@ export const linkPartyEntity = defineCommand({
       .returning('id')
       .executeTakeFirst();
     ctx.audit({ partyId: party.id, legalEntityId: entity.id, already: added === undefined });
-    if (added) await ctx.activity('kernel.party', party.id, 'party.entity_linked', `Gắn ${party.name} cho pháp nhân ${entity.name}`);
+    // The row names the entity: it is read only where that entity is (#1725).
+    if (added) await ctx.activity('kernel.party', party.id, 'party.entity_linked', `Gắn ${party.name} cho pháp nhân ${entity.name}`, { legalEntityId: entity.id });
     return { partyId: party.id, legalEntityId: entity.id, linked: true as const };
   },
 });
@@ -403,7 +404,7 @@ export const unlinkPartyEntity = defineCommand({
       .executeTakeFirst();
     const found = Number(removed.numDeletedRows) > 0;
     ctx.audit({ partyId: party.id, legalEntityId: entity.id, found });
-    if (found) await ctx.activity('kernel.party', party.id, 'party.entity_unlinked', `Bỏ gắn ${party.name} khỏi pháp nhân ${entity.name}`);
+    if (found) await ctx.activity('kernel.party', party.id, 'party.entity_unlinked', `Bỏ gắn ${party.name} khỏi pháp nhân ${entity.name}`, { legalEntityId: entity.id });
     return { partyId: party.id, legalEntityId: entity.id, linked: false as const };
   },
 });
