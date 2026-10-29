@@ -126,7 +126,7 @@ export function CustomersPage() {
       <div className="mb-4 max-w-sm">
         <Input type="search" placeholder={t('search')} aria-label={t('search')} maxLength={100} value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
-      {customers.isLoading ? (
+      {customers.isPending ? (
         <TableSkeleton columns={4} />
       ) : customers.error && rows.length === 0 ? (
         <ErrorText>{errorMessage(customers.error)}</ErrorText>
