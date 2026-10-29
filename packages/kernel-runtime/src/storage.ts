@@ -21,7 +21,8 @@ export interface BlobStore {
   // Throws BlobNotFoundError when nothing is stored under the key. With a versioned generation (s3:, gcs:) the store
   // reads that exact version; content: and null read the current object. Callers that hold a file reference use
   // readVerified, which also checks the sha256. With maxBytes the store refuses a larger object (BlobTooLargeError)
-  // without reading more than that; a store that ignores it is checked by readVerified after the read.
+  // without reading more than that; a store that ignores it is checked by readVerified after the read. A maxBytes that
+  // is not a whole number of bytes (assertReadCap) is refused with a RangeError before anything is read (#1189).
   get(key: string, generation?: string | null, maxBytes?: number): Promise<Uint8Array>;
   // Removes the blob; a missing key is not an error.
   delete(key: string): Promise<void>;

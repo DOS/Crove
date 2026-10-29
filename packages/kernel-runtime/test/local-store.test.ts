@@ -57,8 +57,7 @@ describe('LocalDiskStore', () => {
     const key = fileKey(orgId, sha256Hex(bytes));
     await store.put(key, bytes);
     for (const cap of [Number.NaN, -1, 1.5, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 2 ** 53]) {
-      await expect(store.get(key, null, cap), String(cap)).rejects.toThrow(RangeError);
-      await expect(store.get(key, null, cap), String(cap)).rejects.toThrow(/invalid read cap/);
+      await expect(store.get(key, null, cap), String(cap)).rejects.toThrow(new RangeError('invalid read cap'));
     }
     // Even for a key with nothing under it: the cap is checked first.
     await expect(store.get(fileKey(orgId, sha256Hex('missing')), null, Number.NaN)).rejects.toThrow(/invalid read cap/);

@@ -550,7 +550,7 @@ export class S3BlobStore implements BlobStore {
   // exact staging key and the bucket and expires after UPLOAD_TTL_SECONDS.
   private async presignUpload(presigner: S3Client, key: string, maxBytes: number): Promise<PresignedUpload> {
     if (!isStagingKey(key)) throw new Error('invalid staging key');
-    if (!Number.isInteger(maxBytes) || maxBytes < 1) throw new Error('invalid upload size limit');
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) throw new Error('invalid upload size limit');
     const issued = Date.now();
     const { url, fields } = await createPresignedPost(presigner, {
       Bucket: this.bucket,
