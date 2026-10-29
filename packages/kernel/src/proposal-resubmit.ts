@@ -98,6 +98,12 @@ export const resubmitProposal = defineCommand({
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới gửi lại được đề xuất');
     // Locked, so two requests to ask for it again serialize and the second finds the first's proposal.
+    // A proposal read from a file: the file row first, as kernel.file.reextract locks it before the file's proposal, so
+    // asking again and reading again in another entity (#1764) serialize instead of one waiting on the other's reading.
+    const fileOf = await ctx.trx.selectFrom('crove_kernel.proposal').select('source_file_id').where('org_id', '=', ctx.orgId).where('id', '=', input.id).executeTakeFirst();
+    if (fileOf?.source_file_id) {
+      await ctx.trx.selectFrom('crove_kernel.file').select('id').where('org_id', '=', ctx.orgId).where('id', '=', fileOf.source_file_id).forUpdate().execute();
+    }
     const old = await ctx.trx
       .selectFrom('crove_kernel.proposal')
       .selectAll()

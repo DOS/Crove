@@ -227,7 +227,15 @@ export const reextractFile = defineCommand({
         requested_by: ctx.actor.userId,
       })
       .returning(['id', 'version'])
-      .executeTakeFirstOrThrow();
+      .executeTakeFirstOrThrow()
+      .catch((error: unknown) => {
+        // The version is the next after the readings the caller sees (extraction_assign_version): taken, the file has
+        // a reading of an entity outside the caller's scope (#1764 review). Answered as a file it cannot read, naming
+        // nothing of that reading.
+        const pg = error as { code?: string; constraint?: string } | null;
+        if (pg?.code === '23505' && pg.constraint === 'extraction_version_uq') throw new DomainError('NOT_FOUND', 404, 'Không tìm thấy tệp');
+        throw error;
+      });
     ctx.audit({
       version: run.version,
       previous_version: latest.version,

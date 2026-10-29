@@ -14,7 +14,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
 import type { ExtractClient } from '@crove/extract-contract';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
-import { kernelCommands, kernelQueries } from '@crove/kernel';
+import { kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import type { BankStatementRow, CashVoucherPage, FixedAsset, JournalVoucherRequest, CashVoucherRequest } from '@crove/kernel-contract';
 import { Runtime, fileKey, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
 import { extractAndPropose, financeCommands, financeQueries, type JournalEntryView, type VatReport } from '@crove/mod-finance';
@@ -351,6 +351,64 @@ suite('finance books per legal entity, part 2b (#1280)', () => {
     await ingest(branch);
     const proposalId = String((await read(await versionOf())).proposalId);
     expect(await entityOf('crove_kernel.proposal', proposalId)).toBe(branch);
+
+    // A member limited to the default entity (an external accountant's assignment) reaches the branch no way.
+    const scopedId = await upsertIdentity(createDb(pool), { issuer: 'le-areas', subject: randomUUID(), email: 'scoped@le-areas.test', name: null });
+    await admin(async (c) => {
+      await c.query(`INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member')`, [org.orgId, scopedId]);
+      await c.query(`INSERT INTO crove_kernel.role_assignment (org_id, user_id, role_key, legal_entity_id, granted_by) VALUES ($1, $2, 'external_accountant', $3, $4)`, [
+        org.orgId,
+        scopedId,
+        defaultEntity,
+        owner.userId,
+      ]);
+    });
+    const scoped = { actor: asUser(scopedId), orgId: org.orgId };
+    const readings = async () => Number((await admin((c) => c.query<{ n: string }>('SELECT count(*) AS n FROM crove_kernel.extraction WHERE org_id = $1 AND file_id = $2', [org.orgId, fileId]))).rows[0]?.n);
+    const before = await readings();
+    // Uploading in the branch: refused, the same way as an entity that does not exist.
+    await expect(
+      runtime.execute(
+        'kernel.file.ingest',
+        { filename: 'hd.xml', contentType: 'application/xml', sizeBytes: bytes.byteLength, sha256, storageKey, generation, source: 'upload', legalEntityId: branch },
+        scoped,
+      ),
+    ).rejects.toMatchObject({ code: 'LEGAL_ENTITY_NOT_ALLOWED', status: 403 });
+    // Nor by writing the file row itself.
+    const rawFile = await (async () => {
+      const c = new pg.Client({ connectionString: appUrl });
+      await c.connect();
+      try {
+        await c.query('BEGIN');
+        await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [scopedId, org.orgId]);
+        const sha = randomUUID().replaceAll('-', '').padEnd(64, '0');
+        await c.query(
+          `INSERT INTO crove_kernel.file (org_id, sha256, storage_key, filename, content_type, size_bytes, source, upload_entity_id)
+           VALUES ($1, $2, $3, 'x.xml', 'application/xml', 1, 'upload', $4)`,
+          [org.orgId, sha, fileKey(org.orgId, sha), branch],
+        );
+        return null;
+      } catch (error) {
+        return error as { code?: string; message?: string };
+      } finally {
+        await c.query('ROLLBACK').catch(() => {});
+        await c.end();
+      }
+    })();
+    expect(rawFile).toMatchObject({ code: '42501', message: 'LEGAL_ENTITY_NOT_ALLOWED' });
+    // Reading the branch's document again: refused, in its own entity or naming the branch, and naming nothing of the
+    // branch's reading.
+    await expect(runtime.execute('kernel.file.reextract', { fileId }, scoped)).rejects.toMatchObject({ code: 'NOT_FOUND', status: 404 });
+    await expect(runtime.execute('kernel.file.reextract', { fileId, legalEntityId: branch }, scoped)).rejects.toMatchObject({ code: 'LEGAL_ENTITY_NOT_ALLOWED' });
+    // Uploading the branch's bytes again in its own entity starts no reading there.
+    await expect(
+      runtime.execute(
+        'kernel.file.ingest',
+        { filename: 'hd.xml', contentType: 'application/xml', sizeBytes: bytes.byteLength, sha256, storageKey, generation, source: 'upload', legalEntityId: defaultEntity },
+        scoped,
+      ),
+    ).resolves.toMatchObject({ fileId, duplicate: true });
+    expect(await readings()).toBe(before);
     // The Inbox list (#1543) names the proposal's own entity.
     expect(await listedEntityOf(proposalId)).toBe(branch);
     // A revision may name its own entity, but never move it to another (#1764): the command and the database refuse.
