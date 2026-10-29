@@ -91,11 +91,12 @@ itself (S2, row formulas). Crove keeps what was filed, so the next return can st
   confirmed by the accountant on the VAT screen ("Đánh dấu đã nộp tờ khai"). `computed`: marked done from the tax
   calendar, so Crove's own working ([22] from the return before, [25] the suggested deduction of #917, [43] by the
   formulas of the file); the screen then says the figures were not taken from the filed return.
-- **The done mark hangs on it:** `finance.vat.return_mark` (owners and admins, R1, audited without the figures) appends
+- **The done mark hangs on it:** `finance.vat.return_mark` (owners and admins, and a chief accountant for the return's legal entity through `finance.vat.file`, #1508; R1, audited without the figures) appends
   the row and runs `kernel.tax_obligation.done` for `vat_return` in the same transaction; done false appends a
   `withdrawn` row and runs `kernel.tax_obligation.undo`. With the finance module on, the tax calendar's button for the
   VAT return (`org.markTaxObligation`) goes through this command. In the database, `vat_return_filed_guard` refuses an
-  insert by anyone but an owner or admin of the org in context naming themselves, and
+  insert by anyone but an owner or admin of the org in context, or a holder of `finance.vat.file` org-wide or for the
+  row's legal entity (#1508), naming themselves, and
   `vat_return_filed_requires_audit` lets a row commit only with the command's audit row; no role updates or deletes a
   row. The record is kept with the books (the org purge never deletes it).
 - **Which return is the previous one:** the month, and the quarter when that month ends one, that end the day before

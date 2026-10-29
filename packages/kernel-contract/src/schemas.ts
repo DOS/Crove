@@ -967,8 +967,7 @@ export const zVatReturnMark = z.strictObject({
   period: zVatPeriod,
   done: z.boolean(),
   figures: z.strictObject({ carriedIn: zVatWholeDong, deductible: zVatWholeDong, carriedOut: zVatWholeDong }).optional(),
-  // The legal entity whose return it is (#1280), as in zLegalEntityChoice. Only the default entity's return carries
-  // the tax calendar's done mark for now; another entity's is recorded in vat_return_filed alone.
+  // The legal entity whose return it is (#1280), as in zLegalEntityChoice; its tax calendar done mark comes with it.
   legalEntityId: zId.optional(),
 });
 

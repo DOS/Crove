@@ -37,7 +37,8 @@ describe('module manifests declare their permissions (#1630)', () => {
   it('declares every permission a command or the approval policy names, with the risk of its commands', () => {
     const { uses, problems } = staticPermissionUses();
     expect(problems).toEqual([]);
-    // The three gates on main: kernel.proposal.approve and its bulk form, finance.period.unlock, and the ledger policy.
+    // The gates on main: kernel.proposal.approve and its bulk form, finance.period.unlock, finance.vat.return_mark, and
+    // the ledger policy.
     expect(uses.map((u) => `${u.by}: ${u.permission}`).sort()).toEqual([
       'command finance.period.unlock: finance.period.unlock',
       'command finance.vat.return_mark: finance.vat.file',

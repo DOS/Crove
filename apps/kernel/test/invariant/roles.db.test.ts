@@ -663,6 +663,32 @@ suite('role assignments on PostgreSQL (#1279)', () => {
     await expect(mark(asUser(wide), o.defaultEntity)).resolves.toMatchObject({ done: true });
     await expect(mark(asUser(o.admin), o.branch, '2026-10')).resolves.toMatchObject({ done: true });
     await expect(mark(asUser(o.member), o.branch, '2026-10')).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 });
+    // Taking a mark back is the same right: not another entity's, its own entity's yes.
+    const withdraw = (actor: Actor, legalEntityId: string) => o.exec(actor, 'finance.vat.return_mark', { period: '2026-09', done: false, legalEntityId });
+    await expect(withdraw(asUser(o.chief), o.defaultEntity)).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 });
+    await expect(withdraw(asUser(o.chief), o.branch)).resolves.toMatchObject({ done: false });
+    // A viewer never, whatever the role (a role that grants a permission is never given to one).
+    await expect(mark(asUser(o.viewer), o.branch, '2026-11')).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 });
+  });
+
+  it('lets a member who holds the entity chief accountant role alone mark only their entity, named or not (#1508)', async () => {
+    const o = await org();
+    await o.assign(asMfa(o.owner), o.member, 'finance.entity_chief_accountant', o.branch);
+    const mark = (legalEntityId: string | undefined) =>
+      o.exec(asUser(o.member), 'finance.vat.return_mark', {
+        period: '2026-09',
+        done: true,
+        figures: { carriedIn: '0', deductible: '0', carriedOut: '0' },
+        ...(legalEntityId ? { legalEntityId } : {}),
+      });
+    // Their scope is the branch alone: the default entity is out of sight, and no entity named means theirs.
+    await expect(mark(o.defaultEntity)).rejects.toMatchObject({ status: 403 });
+    await expect(mark(undefined)).resolves.toMatchObject({ done: true });
+    const filed = await withAdmin(
+      async (c) =>
+        (await c.query<{ entity: string }>(`SELECT legal_entity_id AS entity FROM crove_finance.vat_return_filed WHERE org_id = $1 AND marked_by = $2`, [o.orgId, o.member])).rows,
+    );
+    expect(filed).toEqual([{ entity: o.branch }]);
   });
 
   it('never gives a viewer a role that grants a permission, and a viewer demoted after the grant holds none', async () => {

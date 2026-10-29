@@ -234,7 +234,8 @@ function CarryForward({ data, text, onChange }: { data: VatReport; text: string;
   );
 }
 
-// The period's return as filed (#1400): owners and admins mark it filed with [22], [25] and [43] as on the return, which
+// The period's return as filed (#1400): owners, admins and the entity's chief accountant (#1508) mark it filed with [22],
+// [25] and [43] as on the return, which
 // the next period's [22] starts from, and the tax calendar marks it done; or take both marks back.
 function FiledReturn({
   data,
