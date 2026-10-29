@@ -13,6 +13,7 @@ import { Runtime } from '@crove/kernel-runtime';
 import { socialCommands, socialQueries, type NotificationItem, type PostView } from '@crove/mod-social';
 import { reviewAnswer } from '../src/review-link.ts';
 import { TEST_MANIFESTS } from './manifests.ts';
+import { contextToken } from './context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -231,7 +232,7 @@ suite('social in-app notifications on PostgreSQL (#637)', () => {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      await client.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [o.admin, o.orgId]);
+      await client.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [o.orgId, contextToken(o.admin, o.orgId)]);
       const { rows } = await client.query<{ user_id: string }>('SELECT user_id FROM crove_social.notification');
       expect(new Set(rows.map((r) => r.user_id))).toEqual(new Set([o.admin]));
       await expect(client.query('UPDATE crove_social.notification SET user_id = $1', [o.owner])).rejects.toMatchObject({ code: '42501' });

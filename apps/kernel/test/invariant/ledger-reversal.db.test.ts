@@ -15,6 +15,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove
 import { Runtime } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
+import { contextToken } from './fixtures/context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -76,7 +77,7 @@ suite('journal reversal on PostgreSQL (#138)', () => {
     const app = await connect(appUrl);
     await app.query('BEGIN');
     try {
-      await app.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [userId, orgId]);
+      await app.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgId, contextToken(userId, orgId)]);
       const result = await fn(app);
       await app.query('COMMIT');
       return result;
@@ -289,10 +290,10 @@ suite('journal reversal on PostgreSQL (#138)', () => {
     const c1 = await connect(appUrl);
     const c2 = await connect(appUrl);
     await c1.query('BEGIN');
-    await c1.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [users.solo, solo]);
+    await c1.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [solo, contextToken(users.solo, solo)]);
     await postSql(c1, '2026-10-15', mirror(SALE), target);
     await c2.query('BEGIN');
-    await c2.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [users.solo, solo]);
+    await c2.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [solo, contextToken(users.solo, solo)]);
     const pid2 = (await c2.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0]?.pid;
     const second = postSql(c2, '2026-10-15', mirror(SALE), target).then(
       () => null,

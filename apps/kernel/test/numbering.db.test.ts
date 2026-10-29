@@ -15,6 +15,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity, type NumberSeriesPage } from '@crove/kernel';
 import { Runtime, type InputHashMode } from '@crove/kernel-runtime';
 import { TEST_MANIFESTS } from './manifests.ts';
+import { enterUser } from './context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -55,7 +56,8 @@ suite('gapless numbering on PostgreSQL (#1401)', () => {
   function connect(inputHash: InputHashMode = 'keyed') {
     pool = createPool({ connectionString: appUrl, max: 4 });
     db = createDb(pool);
-    rt = new Runtime(db, { manifests: TEST_MANIFESTS, inputHash }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
+    // No context token key: the database starts at a version before enter_user_context (#1822).
+    rt = new Runtime(db, { manifests: TEST_MANIFESTS, contextTokenKey: null, inputHash }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
   }
 
   // The voucher's number columns, also before the migration added number_period and number_allocation_id.
@@ -67,7 +69,7 @@ suite('gapless numbering on PostgreSQL (#1401)', () => {
     await c.connect();
     try {
       await c.query('BEGIN');
-      await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [user, org]);
+      await enterUser(c, user, org);
       const { rows } = await (kind === 'journal'
         ? c.query<{ id: string; number: number; number_period: string; number_allocation_id: string }>(
             `INSERT INTO crove_finance.journal_voucher AS v (org_id, voucher_date, description) VALUES ($1, $2, 'test')
@@ -199,7 +201,7 @@ suite('gapless numbering on PostgreSQL (#1401)', () => {
     await c.connect();
     try {
       await c.query('BEGIN');
-      await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [member, orgId]);
+      await enterUser(c, member, orgId);
       await expect(c.query(`SELECT crove_kernel.number_series_policy_set(NULL, 'finance.cash_voucher.cash_payment', 'monthly')`)).rejects.toMatchObject({
         code: '42501',
         message: 'NUMBER_FORBIDDEN',
@@ -246,7 +248,7 @@ suite('gapless numbering on PostgreSQL (#1401)', () => {
       await c.connect();
       try {
         await c.query('BEGIN');
-        await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [owner, orgId]);
+        await enterUser(c, owner, orgId);
         const { rows } = await c.query<{ number: string; allocation_id: string }>(
           `SELECT number::text AS number, allocation_id FROM crove_kernel.allocate_number(NULL, 'test.doc', '2027-04-02', 'test.record', $1::uuid)`,
           [randomUUID()],
@@ -272,7 +274,7 @@ suite('gapless numbering on PostgreSQL (#1401)', () => {
     await c.connect();
     try {
       await c.query('BEGIN');
-      await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [owner, orgId]);
+      await enterUser(c, owner, orgId);
       await expect(c.query(`SELECT crove_kernel.void_number($1, 'hủy phiếu')`, [voucher.allocation])).rejects.toMatchObject({
         code: '42501',
         message: 'NUMBER_SERIES_RESERVED',
@@ -302,7 +304,7 @@ suite('gapless numbering on PostgreSQL (#1401)', () => {
       const c = new pg.Client({ connectionString: appUrl });
       await c.connect();
       await c.query('BEGIN');
-      await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [user, orgId]);
+      await enterUser(c, user, orgId);
       return c;
     };
     let first: pg.Client | undefined;

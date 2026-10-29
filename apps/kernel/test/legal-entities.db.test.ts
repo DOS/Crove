@@ -13,6 +13,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove
 import type { LegalEntity } from '@crove/kernel-contract';
 import { Runtime } from '@crove/kernel-runtime';
 import { TEST_MANIFESTS } from './manifests.ts';
+import { contextToken } from './context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -250,7 +251,7 @@ suite('legal entities on PostgreSQL (#1278)', () => {
       ] as const) {
         await c.query('BEGIN');
         try {
-          await c.query('SELECT crove_kernel.enter_context($1, $2)', [user, o.orgId]);
+          await c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [o.orgId, contextToken(user, o.orgId)]);
           await expect(
             (async () => {
               await c.query(`UPDATE crove_kernel.tenant SET tax_code = '0101234564' WHERE org_id = $1`, [o.orgId]);
@@ -309,7 +310,7 @@ suite('legal entities on PostgreSQL (#1278)', () => {
       const inContext = async (sql: string, params: unknown[]) => {
         await c.query('BEGIN');
         try {
-          await c.query('SELECT crove_kernel.enter_context($1, $2)', [o.owner, o.orgId]);
+          await c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [o.orgId, contextToken(o.owner, o.orgId)]);
           return await c.query(sql, params);
         } finally {
           await c.query('ROLLBACK');

@@ -29,6 +29,7 @@ import {
   type ArchiveBatch,
 } from '../../src/worm.ts';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
+import { contextToken } from './fixtures/context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -74,7 +75,7 @@ suite('WORM fact stream: legal entities on PostgreSQL (#1489)', () => {
   // A journal entry in the org's default entity, through the posting path.
   async function post(amount: string): Promise<string> {
     const id = await db.transaction().execute(async (trx) => {
-      await sql`SELECT crove_kernel.enter_context(${userId}::uuid, ${orgId}::uuid)`.execute(trx);
+      await sql`SELECT crove_kernel.enter_user_context(${orgId}::uuid, ${contextToken(userId, orgId)}::text)`.execute(trx);
       const lines = [
         { line_no: 1, account_code: '6422', debit: amount, credit: '0' },
         { line_no: 2, account_code: '331', debit: '0', credit: amount },

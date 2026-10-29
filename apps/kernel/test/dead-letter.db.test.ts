@@ -20,6 +20,7 @@ import { pruneInboxItems, takeDeadLetter } from '../src/dead-letter.ts';
 import { jobGroup, jobKey } from '../src/job-keys.ts';
 import { JOB_SCHEMA, QUEUES } from '../src/jobs-schema.ts';
 import { TEST_MANIFESTS } from './manifests.ts';
+import { contextToken } from './context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -288,7 +289,7 @@ suite('dead letters raise an Inbox item in their own org (#1720)', () => {
     await client.connect();
     try {
       await client.query('BEGIN');
-      await client.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [people.owner, orgA.orgId]);
+      await client.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgA.orgId, contextToken(people.owner, orgA.orgId)]);
       await expect(
         client.query(`INSERT INTO crove_kernel.inbox_item (org_id, kind, dedupe_key) VALUES ($1, 'kernel.job.dead_lettered', 'job:made-up')`, [orgA.orgId]),
       ).rejects.toMatchObject({ code: '42501', message: expect.stringContaining('inbox_item_raise') });

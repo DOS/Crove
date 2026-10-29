@@ -15,6 +15,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove
 import { DomainError, Runtime, defineCommand, isSecurityRefusal, type RefusalAuditLimits } from '@crove/kernel-runtime';
 import { pruneRefusalTally } from '../../src/worker.ts';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
+import { contextToken } from './fixtures/context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -319,7 +320,7 @@ suite('refusal audit bound on PostgreSQL (#162)', () => {
       await expect(app.query(`SELECT crove_kernel.refusal_tally_note('x', 'Y', false, 3, 5, 0, 3600)`)).rejects.toMatchObject({ code: '42501', message: 'NO_CONTEXT' });
       await app.query('BEGIN');
       try {
-        await app.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [org.owner, org.orgId]);
+        await app.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [org.orgId, contextToken(org.owner, org.orgId)]);
         for (const args of [
           [null, 'Y', false, 3, 5, 0, 3600],
           ['', 'Y', false, 3, 5, 0, 3600],

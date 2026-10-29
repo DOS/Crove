@@ -16,6 +16,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
 import { TEST_MANIFESTS } from './manifests.ts';
+import { enterUser } from './context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -108,7 +109,8 @@ suite('activity entity backfill on PostgreSQL (#1805)', () => {
     appUrl = app.toString();
     pool = createPool({ connectionString: appUrl, max: 2 });
     const db = createDb(pool);
-    const rt = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
+    // No context token key: the database starts at a version before enter_user_context (#1822).
+    const rt = new Runtime(db, { manifests: TEST_MANIFESTS, contextTokenKey: null }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
     owner = await upsertIdentity(db, { issuer: 'test', subject: randomUUID(), email: 'owner@activity-backfill.test', name: null });
     ({ orgId } = await createOrg(rt, { type: 'user', userId: owner, aal: 'aal1' }, 'Hai pháp nhân cũ'));
     member = await upsertIdentity(db, { issuer: 'test', subject: randomUUID(), email: 'member@activity-backfill.test', name: null });
@@ -193,7 +195,7 @@ suite('activity entity backfill on PostgreSQL (#1805)', () => {
     let seen: string[];
     try {
       await c.query('BEGIN');
-      await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [member, orgId]);
+      await enterUser(c, member, orgId);
       const ids = (await c.query<{ id: string }>('SELECT id FROM crove_kernel.activity WHERE id = ANY($1::uuid[])', [Object.values(rows)])).rows.map((r) => r.id);
       seen = Object.entries(rows)
         .filter(([, id]) => ids.includes(id))

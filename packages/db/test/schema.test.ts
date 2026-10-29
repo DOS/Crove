@@ -27,6 +27,7 @@ describe('Database', () => {
     type DefinerOnly =
       | 'credential'
       | 'context_key'
+      | 'context_token_key'
       | 'auth_session_org'
       | 'inbound_drop'
       | 'outbox_pending'

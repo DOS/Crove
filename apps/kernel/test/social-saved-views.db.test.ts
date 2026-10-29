@@ -14,6 +14,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove
 import { Runtime, defineQuery } from '@crove/kernel-runtime';
 import { SAVED_VIEW_LIMIT, socialCommands, socialQueries, type SavedView } from '@crove/mod-social';
 import { TEST_MANIFESTS } from './manifests.ts';
+import { contextToken } from './context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -51,7 +52,7 @@ suite('social saved views on PostgreSQL (#1300)', () => {
     await client.connect();
     try {
       await client.query('BEGIN');
-      await client.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [user, orgId]);
+      await client.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgId, contextToken(user, orgId)]);
       return await fn(client);
     } finally {
       await client.query('ROLLBACK').catch(() => {});

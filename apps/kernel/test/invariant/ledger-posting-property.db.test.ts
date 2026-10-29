@@ -18,6 +18,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove
 import { Runtime } from '@crove/kernel-runtime';
 import { money } from '@crove/l10n-vn';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
+import { contextToken } from './fixtures/context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -132,7 +133,7 @@ suite('posting path property (#138)', () => {
   async function post(lines: Line[], sourceId: string): Promise<{ id: string } | { error: { code?: string; message: string } }> {
     await app.query('BEGIN');
     try {
-      await app.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [userId, orgId]);
+      await app.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgId, contextToken(userId, orgId)]);
       const { rows } = await app.query<{ id: string }>(
         `SELECT crove_finance.post_journal_entry('2026-10-01', 'property', 'test', $1::uuid, $2::jsonb) AS id`,
         [sourceId, JSON.stringify(lines)],
