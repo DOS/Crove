@@ -701,7 +701,11 @@ suite('kernel on PostgreSQL', () => {
       expect(rows[0]?.definers).toBe(0);
     });
     expect(await migrate({ adminUrl, dir: MIGRATIONS })).toEqual([]);
-    const stop = await startWorker({ connectionString: workerUrl, workerDb, runtime: workerRuntime, store, extractor: null, extract, inboundDomain: 'in.test' });
+    const stop = await startWorker({ connectionString: workerUrl, workerDb, runtime: workerRuntime, store, extractor: null, extract, inboundDomain: 'in.test', instance: 'kernel-db-worker' });
+    const modulesOf = async () =>
+      (await withAdmin((admin) => admin.query<{ modules: string[] | null }>(`SELECT modules FROM crove_kernel.worker_heartbeat WHERE instance = 'kernel-db-worker'`))).rows[0]?.modules;
+    // A running worker records the modules it works, the kernel among them (#1877).
+    expect(await modulesOf()).toContain('kernel');
     try {
       await until(async () => (await emailProposals()) === 1);
       expect(await pending()).toBe(0);
@@ -720,6 +724,8 @@ suite('kernel on PostgreSQL', () => {
     } finally {
       await stop();
     }
+    // A clean stop records no modules, so the prober's job age no longer counts them for this worker (#1887).
+    expect(await modulesOf()).toEqual([]);
 
     // The worker refuses a blob that does not match the size or hash the API enqueued.
     const blobId = newInboundBlobId();
