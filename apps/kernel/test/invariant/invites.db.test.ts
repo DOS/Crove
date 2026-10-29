@@ -486,6 +486,20 @@ suite('member invites with consent on PostgreSQL (issue #35)', () => {
     await runtime.execute('kernel.member.remove', { userId: plain.id }, { actor: asMfa(owner.id), orgId });
     expect((await lastAudit(orgId, 'kernel.member.remove'))?.detail).toMatchObject({ revoked_invites: [], revoked_invites_to_member: [] });
     expect(await inviteStatus(toOther.inviteId)).toEqual({ status: 'pending', revoked_by: null });
+
+    // An invite the removal did not see (addressed to the email the account takes only after it): refused all the same,
+    // since it is older than the removal. Invited again after the removal, they join as anyone does.
+    const subject = randomUUID();
+    const [oldEmail, newEmail] = [`old-${subject.slice(0, 8)}@invites.test`, `new-${subject.slice(0, 8)}@invites.test`];
+    const moved = await upsertIdentity(db, { issuer: 'test', subject, email: oldEmail, name: null });
+    const toNewEmail = await invite(orgId, owner.id, newEmail, 'member');
+    await admin((c) => c.query("INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member')", [orgId, moved]));
+    await runtime.execute('kernel.member.remove', { userId: moved }, { actor: asMfa(owner.id), orgId });
+    expect(await inviteStatus(toNewEmail.inviteId)).toEqual({ status: 'pending', revoked_by: null });
+    expect(await upsertIdentity(db, { issuer: 'test', subject, email: newEmail, name: null })).toBe(moved);
+    await expect(accept(tokenOf(toNewEmail), moved)).rejects.toMatchObject({ code: 'INVITE_REVOKED' });
+    expect(await memberships(moved)).toEqual([]);
+    await expect(accept(tokenOf(await invite(orgId, owner.id, newEmail, 'viewer')), moved)).resolves.toMatchObject({ orgId, role: 'viewer' });
   });
 
   // Acceptance locks the inviter's membership row before the invite row, the order the member commands use, so an

@@ -45,7 +45,7 @@ import { fileHoldCommands } from './evidence-holds.ts';
 import { extractionCommands, legalEntityMoveRefused, readAgainIn, refuseWhileReextracting } from './extraction.ts';
 import { ingestFileRow, zIngestFile } from './files.ts';
 import { createOrgCommand, myOrgs, orgCreateCommand, type OrgCreateLimits, type OrgSummary } from './identity.ts';
-import { acceptInvite, createInvite, inviteCreateCommand, normalizeEmail, revokeInvite, type InviteLimits } from './invites.ts';
+import { acceptInvite, createInvite, inviteCreateCommand, revokeInvite, type InviteLimits } from './invites.ts';
 import { mailCommands, queueContactMail } from './mail.ts';
 import { auditLogCommands } from './audit-log.ts';
 import { personalDataCommands } from './personal-data.ts';
@@ -212,6 +212,23 @@ export const removeMember = defineCommand({
     const { actorId, target, owners } = await lockForMemberChange(ctx, input.userId);
     if (input.userId === actorId) throw new DomainError('CANNOT_REMOVE_SELF', 422, 'Bạn không thể tự xóa mình khỏi tổ chức');
     if (target.role === 'owner' && owners <= 1) throw LAST_OWNER(input.userId, null);
+    // The org's pending invites addressed to them are revoked too (#1880): a member cannot use one (a scoped one is
+    // refused, #1459), but once removed they could rejoin through it, with whatever role and scope it names. Before the
+    // membership row goes, in the order the member commands use (membership rows, then invites): an acceptance that
+    // holds the invite row meets a member row that is only locked, does not wait for it and finishes first, and one that
+    // does not waits for this update and then finds the invite revoked. Matched as invite_for_user matches the
+    // accepting account's verified email (lower(btrim(user_account.email))); crove_kernel.invite_accept also refuses an
+    // invite made before its invitee's removal, for invites addressed to members removed before this existed.
+    const addressedInvites = target.email
+      ? await ctx.trx
+          .updateTable('crove_kernel.member_invite')
+          .set({ status: 'revoked', revoked_at: ctx.now, revoked_by: actorId })
+          .where('org_id', '=', ctx.orgId)
+          .where('email', '=', sql<string>`pg_catalog.lower(pg_catalog.btrim(${target.email}))`)
+          .where('status', '=', 'pending')
+          .returning('id')
+          .execute()
+      : [];
     // The seats they hold become vacant (position_holder_user_fk): their open tasks the vacant seat's scope does not
     // read go up the chart once they are gone (#1799).
     const seats = await positionsHeldBy(ctx, input.userId);
@@ -227,19 +244,6 @@ export const removeMember = defineCommand({
       .where('status', '=', 'pending')
       .returning('id')
       .execute();
-    // So do the org's pending invites addressed to them (#1880): a member cannot use one (a scoped one is refused,
-    // #1459), but once removed they could rejoin through it, with whatever role and scope it names, until it expires.
-    // Invites are bound to the email the account verified (user_account.email), stored normalized.
-    const addressedInvites = target.email
-      ? await ctx.trx
-          .updateTable('crove_kernel.member_invite')
-          .set({ status: 'revoked', revoked_at: ctx.now, revoked_by: actorId })
-          .where('org_id', '=', ctx.orgId)
-          .where('email', '=', normalizeEmail(target.email))
-          .where('status', '=', 'pending')
-          .returning('id')
-          .execute()
-      : [];
     ctx.audit({
       target_user: input.userId,
       role: null,
