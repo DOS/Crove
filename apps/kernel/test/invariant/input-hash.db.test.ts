@@ -28,6 +28,7 @@ import { loadConfig } from '../../src/config.ts';
 import { createKernel, defaultAdapters, type IdentityPort } from '../../src/kernel.ts';
 import { LocalArchiveStore, verifyArchive, writeArchive } from '../../src/worm.ts';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
+import { contextToken } from './fixtures/context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -326,7 +327,7 @@ suite('keyed input hash on PostgreSQL (#1732)', () => {
       await expect(app.query(`SELECT crove_kernel.command_input_hash('user:x', 'c', '{}')`)).rejects.toThrow(/NO_CONTEXT/);
       await expect(app.query('SELECT * FROM crove_kernel.mail_hash_key')).rejects.toThrow(/permission denied/);
       await app.query('BEGIN');
-      await app.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [users.ownerA, orgs.a]);
+      await app.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgs.a, contextToken(users.ownerA, orgs.a)]);
       const own = `user:${users.ownerA}`;
       const { rows } = await app.query<{ h: string }>('SELECT crove_kernel.command_input_hash($1, $2, $3) AS h', [own, 'c', '{}']);
       expect(rows[0]?.h).toBe(`k1:${await hmacOf(orgs.a, own, 'c', '{}')}`);

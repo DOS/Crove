@@ -15,6 +15,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove
 import { CredentialVault, Runtime, parseVaultKey } from '@crove/kernel-runtime';
 import { runChannelOptionJob, socialCommands, socialQueries, type ChannelOptionList } from '@crove/mod-social';
 import { TEST_MANIFESTS } from './manifests.ts';
+import { contextToken } from './context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -114,7 +115,7 @@ suite('YouTube playlists and WordPress terms as channel options on PostgreSQL (#
     const c = await pool.connect();
     try {
       await c.query('BEGIN');
-      await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [user, o.orgId]);
+      await c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [o.orgId, contextToken(user, o.orgId)]);
       return await c.query(text, params);
     } finally {
       await c.query('ROLLBACK').catch(() => {});

@@ -13,6 +13,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove
 import { Runtime, fileKey, sha256Hex } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
+import { contextToken } from './fixtures/context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -61,7 +62,7 @@ suite('evidence integrity on PostgreSQL (ADR-0013, issue #109)', () => {
     const c = await connect(appUrl);
     try {
       await c.query('BEGIN');
-      await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [userId, orgA]);
+      await c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgA, contextToken(userId, orgA)]);
       return await fn(c);
     } finally {
       await c.query('ROLLBACK').catch(() => undefined);
@@ -366,7 +367,7 @@ suite('evidence integrity on PostgreSQL (ADR-0013, issue #109)', () => {
     const c = await connect(appUrl);
     try {
       await c.query('BEGIN');
-      await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [users.member, orgA]);
+      await c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgA, contextToken(users.member, orgA)]);
       await expect(c.query('UPDATE crove_kernel.file_upload SET used_at = now() WHERE id = $1', [uploadId])).rejects.toMatchObject({ message: 'UPLOAD_NOT_YOURS' });
     } finally {
       await c.query('ROLLBACK').catch(() => undefined);

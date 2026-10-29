@@ -12,6 +12,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
 import { TEST_MANIFESTS } from './manifests.ts';
+import { contextToken } from './context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -88,7 +89,7 @@ suite('context cost micro-benchmark (#117)', () => {
 
   const transaction = async (c: pg.ClientBase) => {
     await c.query('BEGIN');
-    await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [owner, orgId]);
+    await c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgId, contextToken(owner, orgId)]);
     await c.query('SELECT count(*) FROM crove_kernel.party');
     await c.query('COMMIT');
   };
@@ -196,7 +197,7 @@ suite('context cost micro-benchmark (#117)', () => {
     await c.connect();
     try {
       await c.query('BEGIN');
-      await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [owner, orgId]);
+      await c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgId, contextToken(owner, orgId)]);
       const { rows } = await c.query<{ a: unknown; b: unknown }>(
         'SELECT crove_kernel.ctx_verified() AS a, crove_kernel.ctx_verified_recheck() AS b',
       );
@@ -215,7 +216,7 @@ suite('context cost micro-benchmark (#117)', () => {
       const n = 1000;
       const statement = async (fn: string) => {
         await c.query('BEGIN');
-        await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [owner, orgId]);
+        await c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgId, contextToken(owner, orgId)]);
         const us = await time(n, () => c.query(`SELECT count(*) FROM crove_kernel.party WHERE org_id = (SELECT (${fn}() ->> 'org')::uuid)`));
         await c.query('COMMIT');
         return us;

@@ -14,6 +14,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove
 import { CredentialVault, Runtime, parseVaultKey, type BlobStore } from '@crove/kernel-runtime';
 import { CHANNEL_OPTION_PER_MINUTE, runChannelOptionJob, runPublishJob, socialCommands, socialQueries, type ChannelOptionList, type PostView } from '@crove/mod-social';
 import { TEST_MANIFESTS } from './manifests.ts';
+import { contextToken } from './context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -101,7 +102,7 @@ suite('channel options on PostgreSQL (#1120)', () => {
     const c = await pool.connect();
     try {
       await c.query('BEGIN');
-      await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [user, o.orgId]);
+      await c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [o.orgId, contextToken(user, o.orgId)]);
       return await c.query(text, params);
     } finally {
       await c.query('ROLLBACK').catch(() => {});

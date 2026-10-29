@@ -15,6 +15,7 @@ import { Runtime } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
 import { notesCommands, notesQueries } from '@crove/mod-notes';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
+import { contextToken } from './fixtures/context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -141,8 +142,8 @@ suite('to-do reminders on PostgreSQL (#1675, ADR-0037)', () => {
   it('refuses the claim to every login and context but the worker login outside every context', async () => {
     const callers: Array<[string, string, (c: pg.Client) => Promise<unknown>]> = [
       ['the app login, no context', appUrl, async () => {}],
-      ['the to-do owner', appUrl, (c) => c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [users.mine, orgId])],
-      ['an owner of the org', appUrl, (c) => c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [users.owner, orgId])],
+      ['the to-do owner', appUrl, (c) => c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgId, contextToken(users.mine, orgId)])],
+      ['an owner of the org', appUrl, (c) => c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgId, contextToken(users.owner, orgId)])],
       ['the system context', workerUrl, (c) => c.query('SELECT crove_kernel.enter_system_context($1::uuid)', [orgId])],
       ['an agent context', workerUrl, (c) => c.query('SELECT crove_kernel.enter_agent_context($1::uuid, $2::uuid, $3::uuid)', [orgId, agent.agentId, agent.runId])],
     ];
@@ -200,7 +201,7 @@ suite('to-do reminders on PostgreSQL (#1675, ADR-0037)', () => {
     expect(JSON.stringify(written)).not.toContain(SECRET);
     // No member but the owner is notified, and nobody but a system command writes one.
     await expect(
-      inContext(appUrl, (c) => c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [users.other, orgId]), (c) => c.query(`SELECT * FROM crove_kernel.notification WHERE kind = 'notes.todo_due'`)),
+      inContext(appUrl, (c) => c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgId, contextToken(users.other, orgId)]), (c) => c.query(`SELECT * FROM crove_kernel.notification WHERE kind = 'notes.todo_due'`)),
     ).resolves.toMatchObject({ rowCount: 0 });
     await expect(app.execute('notes.todo.remind', input, { actor: asUser(users.other), orgId })).rejects.toMatchObject({ status: 403 });
   });

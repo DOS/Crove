@@ -22,6 +22,7 @@ import { extractAndPropose, financeCommands, financeQueries } from '@crove/mod-f
 import { actorOf, createAuthenticator } from '../../src/auth.ts';
 import { loadConfig } from '../../src/config.ts';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
+import { contextToken } from './fixtures/context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -121,7 +122,7 @@ suite('kernel invariants on PostgreSQL', () => {
   // The API login role in its owner's context in org B; org A keeps only the entries approvals post.
   function inOrgB<T>(fn: (trx: Transaction<Database>) => Promise<T>): Promise<T> {
     return db.transaction().execute(async (trx) => {
-      await sql`SELECT crove_kernel.enter_context(${users.outsider}::uuid, ${orgB}::uuid)`.execute(trx);
+      await sql`SELECT crove_kernel.enter_user_context(${orgB}::uuid, ${contextToken(users.outsider, orgB)}::text)`.execute(trx);
       return fn(trx);
     });
   }
@@ -197,7 +198,7 @@ suite('kernel invariants on PostgreSQL', () => {
   it('isolates tenants with RLS, including when no context is set', async () => {
     await ingest(orgA, users.owner, new TextEncoder().encode('<a>org-a</a>'));
     const visible = await db.transaction().execute(async (trx) => {
-      await sql`SELECT crove_kernel.enter_context(${users.outsider}::uuid, ${orgB}::uuid)`.execute(trx);
+      await sql`SELECT crove_kernel.enter_user_context(${orgB}::uuid, ${contextToken(users.outsider, orgB)}::text)`.execute(trx);
       return trx.selectFrom('crove_kernel.file').select('org_id').execute();
     });
     expect(visible.every((r) => r.org_id === orgB)).toBe(true);
@@ -205,7 +206,7 @@ suite('kernel invariants on PostgreSQL', () => {
     expect(noContext).toHaveLength(0);
     await expect(
       db.transaction().execute(async (trx) => {
-        await sql`SELECT crove_kernel.enter_context(${users.outsider}::uuid, ${orgB}::uuid)`.execute(trx);
+        await sql`SELECT crove_kernel.enter_user_context(${orgB}::uuid, ${contextToken(users.outsider, orgB)}::text)`.execute(trx);
         await trx
           .insertInto('crove_kernel.party')
           .values({ org_id: orgA, name: 'smuggled' })
@@ -345,7 +346,7 @@ suite('kernel invariants on PostgreSQL', () => {
         await app.query(`CREATE CAST (${from} AS ${to}) WITH FUNCTION pg_temp.${name}(${from}) ${kind}`);
       }
       await app.query('BEGIN');
-      await app.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [users.outsider, orgB]);
+      await app.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgB, contextToken(users.outsider, orgB)]);
       // Objects reach a text column only through the planted cast; without it they are not account codes.
       const lines = [
         { line_no: 1, account_code: { v: '6422' }, debit: '100', credit: '0' },
@@ -389,7 +390,7 @@ suite('kernel invariants on PostgreSQL', () => {
         return sql`SELECT id FROM crove_kernel.user_account`.execute(trx);
       });
     await expect(read(db)).rejects.toMatchObject(DENIED);
-    await expect(read(db, (trx) => sql`SELECT crove_kernel.enter_context(${users.outsider}::uuid, ${orgB}::uuid)`.execute(trx))).rejects.toMatchObject(
+    await expect(read(db, (trx) => sql`SELECT crove_kernel.enter_user_context(${orgB}::uuid, ${contextToken(users.outsider, orgB)}::text)`.execute(trx))).rejects.toMatchObject(
       DENIED,
     );
     await expect(read(workerDb)).rejects.toMatchObject(DENIED);

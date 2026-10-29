@@ -17,6 +17,7 @@ import { approvalPolicies, createOrg, decideApproval, kernelCommands, kernelQuer
 import { Runtime, defineCommand, type AgentActor, type CommandDef } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
+import { contextToken } from './fixtures/context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -97,7 +98,7 @@ suite('the approval gate in the database (#1793)', () => {
     }
   }
   const asMember = <T>(userId: string, fn: (c: pg.Client) => Promise<T>, org = orgId) =>
-    inContext(appUrl, (c) => c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [userId, org]), fn);
+    inContext(appUrl, (c) => c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [org, contextToken(userId, org)]), fn);
 
   // A pending ledger proposal written by staff, with its snapshot and authors.
   async function proposal(snapshot: string[], authors: string[], org = orgId): Promise<string> {
@@ -261,7 +262,7 @@ suite('the approval gate in the database (#1793)', () => {
         await a.query('UPDATE crove_kernel.tenant SET approval_preset = $2 WHERE org_id = $1', [orgId, c.preset]);
         for (const actor of actors) {
           const ts = await db.transaction().execute(async (trx) => {
-            await sql`SELECT crove_kernel.enter_context(${actor}::uuid, ${orgId}::uuid)`.execute(trx);
+            await sql`SELECT crove_kernel.enter_user_context(${orgId}::uuid, ${contextToken(actor, orgId)}::text)`.execute(trx);
             return decideApproval(trx, orgId, asUser(actor), { command: c.command, status: c.status, eligible_approvers: c.snapshot, authors: c.authors }, { lock: false });
           });
           const inDb = (
