@@ -880,8 +880,10 @@ function countWrites(counters: readonly { n: number }[], closed: () => boolean, 
 
 // The statements of a SQL text as PostgreSQL's lexer splits them: each with its comments taken out and its literals
 // kept, split at the semicolons outside a string ('...', E'...' with backslash escapes, U&'...'), a quoted identifier
-// ("..."), a dollar-quoted body ($tag$...$tag$), a line comment (--) or a block comment (/* */, nested).
-function sqlStatements(text: string): string[] {
+// ("..."), a dollar-quoted body ($tag$...$tag$), a line comment (--) or a block comment (/* */, nested). An identifier
+// goes on over non-ASCII characters and $, as in PostgreSQL. backslashes: read a backslash as an escape in every
+// string, as PostgreSQL does with standard_conforming_strings off (a handler could turn it off for its transaction).
+function sqlStatements(text: string, backslashes = false): string[] {
   const statements: string[] = [];
   let current = '';
   let i = 0;
@@ -909,7 +911,7 @@ function sqlStatements(text: string): string[] {
       continue;
     }
     if (ch === "'" || ch === '"') {
-      const escapes = ch === "'" && /[eE]$/.test(current) && !/[\w$]$/.test(current.slice(0, -1));
+      const escapes = ch === "'" && (backslashes || (/[eE]$/.test(current) && !/[\w$\u0080-￿]$/.test(current.slice(0, -1))));
       let j = i + 1;
       while (j < text.length) {
         if (escapes && text[j] === '\\') j += 2;
@@ -921,7 +923,7 @@ function sqlStatements(text: string): string[] {
       i = j + 1;
       continue;
     }
-    if (ch === '$' && !/[\w$]$/.test(current)) {
+    if (ch === '$' && !/[\w$\u0080-￿]$/.test(current)) {
       const tag = /^\$([A-Za-z_\u0080-￿][\w\u0080-￿]*)?\$/.exec(text.slice(i));
       if (tag) {
         const close = text.indexOf(tag[0], i + tag[0].length);
@@ -963,13 +965,15 @@ function transactionControl(statement: string): string | null {
 
 // Refuses a statement of a handler (or a query) that takes control of the transaction (#1831, transactionControl).
 // It reads the query as it will run: compiled to SQL, values as placeholders, every statement of it as PostgreSQL's
-// lexer splits them (the simple query protocol runs several). The handler adds no plugin after this one (the
+// lexer splits them (the simple query protocol runs several), once with standard strings and once with backslash
+// escapes in every string, so a statement either reading finds is refused. The handler adds no plugin after this one (the
 // invariant suite's scan refuses withPlugin in server sources), so the node it checks is the node that runs.
 function refuseTransactionControl(command: string): KyselyPlugin {
   const compiler = new PostgresQueryCompiler();
   return Object.freeze({
     transformQuery: ({ node, queryId }) => {
-      for (const statement of sqlStatements(compiler.compileQuery(node, queryId).sql)) {
+      const text = compiler.compileQuery(node, queryId).sql;
+      for (const statement of [...sqlStatements(text), ...sqlStatements(text, true)]) {
         const control = transactionControl(statement);
         if (control !== null) throw new Error(`command ${command}: ${control} controls the transaction, which is the runtime's (#1831)`);
       }

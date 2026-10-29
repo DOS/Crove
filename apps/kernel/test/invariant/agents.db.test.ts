@@ -1716,6 +1716,9 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
       dollarInComment: sql.raw('SELECT 1 -- $$\n; COMMIT; SELECT $$x$$'),
       commentedDollars: sql.raw('-- $a$\nCOMMIT -- $a$'),
       nestedComment: sql.raw('/* a /* b */ c */ COMMIT'),
+      // An identifier goes on over non-ASCII characters and $, and a backslash escapes once standard strings are off.
+      nonAsciiIdentifier: sql.raw('SELECT 1 AS é$x$; COMMIT; SELECT 1 AS é$x$'),
+      backslashQuote: sql.raw("SELECT set_config('standard_conforming_strings', 'off', true); SELECT 'x\\''; COMMIT; SELECT '1'"),
     };
     const probes = Object.entries(statements).flatMap(([key, statement]) =>
       [undefined, []].map(
