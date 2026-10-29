@@ -17,6 +17,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove
 import { Runtime } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
 import { TEST_MANIFESTS } from './manifests.ts';
+import { enterUser } from './context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -201,7 +202,7 @@ suite('tasks a chart or role change would strand (#1799)', () => {
       await c.connect();
       try {
         await c.query('BEGIN');
-        await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [user, orgId]);
+        await enterUser(c, user, orgId);
         return (await c.query<{ n: number }>(`SELECT count(*)::int AS n FROM crove_kernel.activity WHERE record_type = 'kernel.task' AND record_id = $1`, [ofDefault])).rows[0]?.n;
       } finally {
         await c.query('ROLLBACK').catch(() => {});
@@ -377,8 +378,8 @@ suite('tasks a chart or role change would strand (#1799)', () => {
         await c.end();
       }
     };
-    await expect(ask('crove_app', 'test-app-pw', (c) => c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [owner, orgId]))).resolves.toBe('answered');
-    await expect(ask('crove_app', 'test-app-pw', (c) => c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [someone, orgId]))).resolves.toBe(
+    await expect(ask('crove_app', 'test-app-pw', (c) => enterUser(c, owner, orgId))).resolves.toBe('answered');
+    await expect(ask('crove_app', 'test-app-pw', (c) => enterUser(c, someone, orgId))).resolves.toBe(
       'TASK_REROUTE_OWNER_ONLY',
     );
     await expect(ask('crove_worker', 'test-worker-pw', (c) => c.query('SELECT crove_kernel.enter_system_context($1::uuid)', [orgId]))).resolves.toMatch(
