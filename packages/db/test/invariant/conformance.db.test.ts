@@ -8,34 +8,39 @@
 //   fk-index      such a foreign key has a supporting index: a valid btree index whose leading key columns are
 //                 exactly the key's distinct columns, either total or partial on "<key column> IS NOT NULL" only (a
 //                 NULL key is never checked), so deleting a parent (an org purge) never scans the child;
-//   timestamp     no column in a crove_* schema is timestamp without time zone (directly, as an array, or through
-//                 a domain); partitions are skipped, since their columns are their parent's;
+//   timestamp     no column in a crove_* schema is timestamp without time zone (directly, as an array, through a
+//                 domain, or inside a composite or range type such as tsrange, #1219); partitions are skipped, since
+//                 their columns are their parent's;
 //   money         a money column (named by MONEY_NAME, or listed in MONEY_COLUMNS) is numeric, directly or through a
-//                 domain such as crove_finance.amount, and no column has the locale-bound money type;
+//                 domain such as crove_finance.amount, and no column has the locale-bound money type, inside a
+//                 composite or range type either;
 //   cross-module  a foreign key from a crove_* table stays in its own schema or points to crove_kernel: modules
 //                 never reference each other, the kernel never references a module, and nothing references a
 //                 schema outside crove_*;
-//   trigger       no trigger running a crove_* function sits on a table outside the crove_* schemas.
+//   trigger       no trigger running a crove_* function sits on a table outside the crove_* schemas;
+//   event-trigger an event trigger runs a crove_* function only as recorded in EVENT_TRIGGER_EXCEPTIONS (#1219): it
+//                 fires on every session's DDL, the database's own and Supabase's included.
 // Existing deviations are explicit exceptions below, one reason each, recorded with their exact shape: a new
 // deviation, a changed one, or an exception that no longer matches anything fails. Every rule is also shown failing
 // on deliberately broken fixtures, built inside a transaction that is rolled back.
-// Scope: the catalog of this database only. Tables without org_id (user_account, the pg-boss queue) are global and
-// only meet the timestamp, money, cross-module and trigger rules; triggers that Supabase-managed schemas would add
-// on a hosted database are not seen here, since plain PostgreSQL has none.
+// Scope: the catalog of this database only, migrated and with the DDL watch's event triggers installed as the kernel
+// does at start. Tables without org_id (user_account, the pg-boss queue) are global and only meet the timestamp,
+// money, cross-module and trigger rules; triggers that Supabase-managed schemas would add on a hosted database are not
+// seen here, since plain PostgreSQL has none.
 // Part of the invariant suite: CI runs this file from the base branch on protected-path PRs (AGENTS.md).
 // Set CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { migrate } from '../../src/migrate.ts';
+import { installDdlWatch, migrate } from '../../src/migrate.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
 
 // The org itself: the only table a tenant foreign key may reference by org_id alone.
 const ORG_TABLE = 'crove_kernel.tenant';
-// Column names that hold an amount of money.
-const MONEY_NAME = /(^|_)(amount|cost|price|subtotal|total|debit|credit|balance|fee)$/;
+// Column names that hold an amount of money: the ledger's words, and those of a budget or a currency (#1219).
+const MONEY_NAME = /(^|_)(amount|cost|price|subtotal|total|debit|credit|balance|fee|budget|spend|spent|vnd|usd)$/;
 // Money columns the naming rule does not catch.
 const MONEY_COLUMNS = new Set(['crove_kernel.budget_policy.monthly_limit']);
 
@@ -70,6 +75,18 @@ const COLUMN_EXCEPTIONS: Record<string, { rule: 'timestamp' | 'money'; type: str
   'crove_jobs.instance.pool_total': { rule: 'money', type: 'integer', reason: 'pg-boss: the size of a worker connection pool, a count and not money.' },
   'crove_jobs.job.singleton_on': { rule: 'timestamp', type: 'timestamp without time zone', reason: 'pg-boss: the singleton time slot, set and compared by pg-boss itself.' },
 };
+// Event triggers that run a crove_* function, with their event, function, enabled state (pg_event_trigger.evtenabled:
+// O origin, A always, R replica, D disabled) and the command tags they are limited to, or all.
+const EVENT_TRIGGER_EXCEPTIONS: Record<string, { shape: string; reason: string }> = {
+  crove_ddl_watch: {
+    shape: 'ddl_command_end crove_kernel.ddl_watch() A all',
+    reason: 'The DDL watch (#1202): records DDL run outside the migration pipeline; installDdlWatch attaches it.',
+  },
+  crove_ddl_watch_drop: {
+    shape: 'sql_drop crove_kernel.ddl_watch() A all',
+    reason: 'The DDL watch (#1202) for dropped objects; installDdlWatch attaches it.',
+  },
+};
 // Exceptions whose object an open PR adds or fixes. CI runs main's copy of this file on that PR, so the entry has to
 // be on main first; while it is listed here, an exception that matches nothing is not stale. Remove the key once the
 // PR is merged. One key per line, sorted, with a trailing comma.
@@ -77,10 +94,10 @@ const PENDING_EXCEPTIONS = new Set<string>([
   // 'crove_schema.table_name',
 ]);
 
-type Rule = 'pk' | 'fk-shape' | 'fk-index' | 'timestamp' | 'money' | 'cross-module' | 'trigger';
+type Rule = 'pk' | 'fk-shape' | 'fk-index' | 'timestamp' | 'money' | 'cross-module' | 'trigger' | 'event-trigger';
 interface Violation {
   rule: Rule;
-  // The table, column (<table>.<column>), constraint or trigger (<table>.<name>) at fault.
+  // The table, column (<table>.<column>), constraint, trigger (<table>.<name>) or event trigger (<name>) at fault.
   key: string;
   // The shape found, compared with an exception's recorded shape.
   detail: string;
@@ -173,8 +190,10 @@ async function findViolations(client: pg.ClientBase): Promise<Violation[]> {
     if (!supported) out.push({ rule: 'fk-index', key: fk.key, detail: fk.cols.join(',') });
   }
 
-  // Column types, resolved through domains and arrays down to their base type.
-  const columns = await client.query<{ key: string; type: string; chain: string[] }>(
+  // Column types, resolved through domains and arrays down to their base type (chain), and further through the
+  // attributes of composite types and the subtypes of range and multirange types (deep): a timestamp or money type
+  // anywhere in deep breaks the rule, while a money column must be numeric along chain itself.
+  const columns = await client.query<{ key: string; type: string; chain: string[]; deep: string[] }>(
     `WITH RECURSIVE col AS (
        SELECT pg_catalog.format('%I.%I.%I', n.nspname, c.relname, a.attname) AS key,
               pg_catalog.format_type(a.atttypid, a.atttypmod) AS type, a.atttypid AS start
@@ -183,20 +202,30 @@ async function findViolations(client: pg.ClientBase): Promise<Violation[]> {
        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
        WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f') AND NOT c.relispartition AND starts_with(n.nspname, 'crove_')
          AND a.attnum > 0 AND NOT a.attisdropped),
-     chain(start, oid) AS (
-       SELECT DISTINCT start, start FROM col
+     chain(start, oid, deep) AS (
+       SELECT DISTINCT start, start, false FROM col
        UNION
-       SELECT chain.start, CASE WHEN t.typtype = 'd' THEN t.typbasetype ELSE t.typelem END
+       SELECT chain.start, next.oid, chain.deep OR next.deep
        FROM chain JOIN pg_catalog.pg_type t ON t.oid = chain.oid
-       WHERE t.typtype = 'd' OR (t.typcategory = 'A' AND t.typelem <> 0))
-     SELECT col.key, col.type, ARRAY(SELECT chain.oid::regtype::text FROM chain WHERE chain.start = col.start) AS chain
+       CROSS JOIN LATERAL (
+         SELECT t.typbasetype AS oid, false AS deep WHERE t.typtype = 'd'
+         UNION ALL
+         SELECT t.typelem, false WHERE t.typtype <> 'd' AND t.typcategory = 'A' AND t.typelem <> 0
+         UNION ALL
+         SELECT a.atttypid, true FROM pg_catalog.pg_attribute a
+         WHERE t.typtype = 'c' AND a.attrelid = t.typrelid AND a.attnum > 0 AND NOT a.attisdropped
+         UNION ALL
+         SELECT r.rngsubtype, true FROM pg_catalog.pg_range r WHERE r.rngtypid = t.oid OR r.rngmultitypid = t.oid) AS next)
+     SELECT col.key, col.type,
+            ARRAY(SELECT chain.oid::regtype::text FROM chain WHERE chain.start = col.start AND NOT chain.deep) AS chain,
+            ARRAY(SELECT DISTINCT chain.oid::regtype::text FROM chain WHERE chain.start = col.start) AS deep
      FROM col ORDER BY 1`,
   );
-  for (const { key, type, chain } of columns.rows) {
-    if (chain.includes('timestamp without time zone')) out.push({ rule: 'timestamp', key, detail: type });
+  for (const { key, type, chain, deep } of columns.rows) {
+    if (deep.includes('timestamp without time zone')) out.push({ rule: 'timestamp', key, detail: type });
     const column = key.slice(key.lastIndexOf('.') + 1);
     const isMoney = MONEY_NAME.test(column) || MONEY_COLUMNS.has(key);
-    if (chain.includes('money') || (isMoney && !chain.includes('numeric'))) out.push({ rule: 'money', key, detail: type });
+    if (deep.includes('money') || (isMoney && !chain.includes('numeric'))) out.push({ rule: 'money', key, detail: type });
   }
 
   // Foreign keys from any crove_* table to another schema than its own or crove_kernel.
@@ -222,6 +251,18 @@ async function findViolations(client: pg.ClientBase): Promise<Violation[]> {
   );
   for (const { key, fn } of triggers.rows) out.push({ rule: 'trigger', key, detail: fn });
 
+  const eventTriggers = await client.query<{ key: string; detail: string }>(
+    `SELECT e.evtname AS key,
+            pg_catalog.concat_ws(' ', e.evtevent, e.evtfoid::regprocedure::text, e.evtenabled,
+                                 COALESCE(pg_catalog.array_to_string(e.evttags, ','), 'all')) AS detail
+     FROM pg_catalog.pg_event_trigger e
+     JOIN pg_catalog.pg_proc p ON p.oid = e.evtfoid
+     JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+     WHERE starts_with(n.nspname, 'crove_')
+     ORDER BY 1`,
+  );
+  for (const { key, detail } of eventTriggers.rows) out.push({ rule: 'event-trigger', key, detail });
+
   return out;
 }
 
@@ -231,6 +272,7 @@ function compare(violations: Violation[], pending: ReadonlySet<string> = PENDING
   for (const [table, { pk }] of Object.entries(PK_EXCEPTIONS)) recorded.set(`pk ${table}`, pk);
   for (const [key, { cols }] of Object.entries(FK_INDEX_EXCEPTIONS)) recorded.set(`fk-index ${key}`, cols);
   for (const [key, { rule, type }] of Object.entries(COLUMN_EXCEPTIONS)) recorded.set(`${rule} ${key}`, type);
+  for (const [name, { shape }] of Object.entries(EVENT_TRIGGER_EXCEPTIONS)) recorded.set(`event-trigger ${name}`, shape);
   const matched = new Set<string>();
   const unexpected: string[] = [];
   for (const v of violations) {
@@ -255,6 +297,8 @@ suite('tenant schema conformance (G3)', () => {
     const url = new URL(ADMIN as string);
     url.pathname = `/${dbName}`;
     await migrate({ adminUrl: url.toString(), dir: MIGRATIONS });
+    // As the kernel does at start (apps/kernel/src/main.ts), so the event-trigger rule sees what a deployment has.
+    expect(await installDdlWatch({ adminUrl: url.toString() }), 'CROVE_TEST_ADMIN_URL must be a superuser to attach the DDL watch').toBe('installed');
     admin = new pg.Client({ connectionString: url.toString() });
     await admin.connect();
   }, 300_000);
@@ -282,10 +326,11 @@ suite('tenant schema conformance (G3)', () => {
   });
 
   it('keeps the exception lists sorted and reasoned', () => {
-    for (const keys of [Object.keys(PK_EXCEPTIONS), Object.keys(FK_INDEX_EXCEPTIONS), Object.keys(COLUMN_EXCEPTIONS), [...PENDING_EXCEPTIONS]]) {
+    const lists: Record<string, { reason: string }>[] = [PK_EXCEPTIONS, FK_INDEX_EXCEPTIONS, COLUMN_EXCEPTIONS, EVENT_TRIGGER_EXCEPTIONS];
+    for (const keys of [...lists.map((list) => Object.keys(list)), [...PENDING_EXCEPTIONS]]) {
       expect(keys).toEqual([...keys].sort());
     }
-    for (const reason of [...Object.values(PK_EXCEPTIONS).map((e) => e.reason), ...Object.values(FK_INDEX_EXCEPTIONS).map((e) => e.reason), ...Object.values(COLUMN_EXCEPTIONS).map((e) => e.reason)]) {
+    for (const reason of lists.flatMap((list) => Object.values(list).map((e) => e.reason))) {
       expect(reason.trim().length).toBeGreaterThan(10);
     }
   });
@@ -369,16 +414,25 @@ suite('tenant schema conformance (G3)', () => {
   it('fails a timestamp without time zone column', async () => {
     const found = await withFixture(`${parent}
       CREATE DOMAIN ${FIXTURE}.local_time AS timestamp;
+      CREATE TYPE ${FIXTURE}.stamped AS (at timestamp, n integer);
+      CREATE TYPE ${FIXTURE}.nested AS (inner_stamps ${FIXTURE}.stamped[], label text);
+      CREATE TYPE ${FIXTURE}.zoned AS (at timestamptz, n integer);
       CREATE TABLE ${FIXTURE}.times (org_id uuid NOT NULL, id uuid NOT NULL, PRIMARY KEY (org_id, id),
-        plain timestamp, several timestamp[], via_domain ${FIXTURE}.local_time, fine timestamptz);
+        plain timestamp, several timestamp[], via_domain ${FIXTURE}.local_time, fine timestamptz,
+        composite ${FIXTURE}.stamped, nested ${FIXTURE}.nested, zoned_composite ${FIXTURE}.zoned,
+        span tsrange, spans tsmultirange, zoned_span tstzrange);
       CREATE VIEW ${FIXTURE}.times_view AS SELECT now()::timestamp AS seen;
       CREATE TABLE ${FIXTURE}.times_split (org_id uuid NOT NULL, id uuid NOT NULL, at timestamp, PRIMARY KEY (org_id, id))
         PARTITION BY LIST (org_id);
       CREATE TABLE ${FIXTURE}.times_split_rest PARTITION OF ${FIXTURE}.times_split DEFAULT;
       ALTER TABLE crove_jobs.queue ADD COLUMN g3_fixture_at timestamp;`);
     expect(named(found, 'timestamp')).toEqual([
+      `${FIXTURE}.times.composite: ${FIXTURE}.stamped`,
+      `${FIXTURE}.times.nested: ${FIXTURE}.nested`,
       `${FIXTURE}.times.plain: timestamp without time zone`,
       `${FIXTURE}.times.several: timestamp without time zone[]`,
+      `${FIXTURE}.times.span: tsrange`,
+      `${FIXTURE}.times.spans: tsmultirange`,
       `${FIXTURE}.times.via_domain: ${FIXTURE}.local_time`,
       // Once, on the partitioned table.
       `${FIXTURE}.times_split.at: timestamp without time zone`,
@@ -390,13 +444,19 @@ suite('tenant schema conformance (G3)', () => {
 
   it('fails a money column that is not numeric', async () => {
     const found = await withFixture(`${parent}
+      CREATE TYPE ${FIXTURE}.priced AS (label text, fee money);
       CREATE TABLE ${FIXTURE}.prices (org_id uuid NOT NULL, id uuid NOT NULL, PRIMARY KEY (org_id, id),
         amount bigint, unit_price double precision, vat_amount text, fee money, subtotal crove_finance.amount,
-        total numeric(20,4), quantity real);
+        total numeric(20,4), quantity real, budget integer, spent bigint, total_vnd double precision,
+        monthly_budget numeric, priced ${FIXTURE}.priced);
       ALTER TABLE crove_jobs.queue ADD COLUMN g3_fixture_fee integer;`);
     expect(named(found, 'money')).toEqual([
       `${FIXTURE}.prices.amount: bigint`,
+      `${FIXTURE}.prices.budget: integer`,
       `${FIXTURE}.prices.fee: money`,
+      `${FIXTURE}.prices.priced: ${FIXTURE}.priced`,
+      `${FIXTURE}.prices.spent: bigint`,
+      `${FIXTURE}.prices.total_vnd: double precision`,
       `${FIXTURE}.prices.unit_price: double precision`,
       `${FIXTURE}.prices.vat_amount: text`,
       'crove_jobs.queue.g3_fixture_fee: integer',
@@ -427,6 +487,21 @@ suite('tenant schema conformance (G3)', () => {
       CREATE TRIGGER g3_fixture_inside BEFORE UPDATE ON ${FIXTURE}.parent
         FOR EACH ROW EXECUTE FUNCTION crove_kernel.reject_mutation();`);
     expect(named(found, 'trigger')).toEqual(['g3_fixture_outside.g3_fixture_guard: crove_kernel.reject_mutation()']);
+  });
+
+  it('fails an event trigger running a crove_* function that is not recorded, or recorded with another shape', async () => {
+    const found = await withFixture(`${parent}
+      CREATE FUNCTION ${FIXTURE}.on_ddl() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN END $$;
+      CREATE FUNCTION public.g3_fixture_outside_ddl() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN END $$;
+      CREATE EVENT TRIGGER g3_fixture_crove ON ddl_command_start WHEN TAG IN ('CREATE TABLE') EXECUTE FUNCTION ${FIXTURE}.on_ddl();
+      CREATE EVENT TRIGGER g3_fixture_outside ON ddl_command_start EXECUTE FUNCTION public.g3_fixture_outside_ddl();
+      ALTER EVENT TRIGGER crove_ddl_watch_drop DISABLE;`);
+    // A trigger of a function outside crove_* is not Crove's.
+    expect(named(found, 'event-trigger')).toEqual([`g3_fixture_crove: ddl_command_start ${FIXTURE}.on_ddl() O CREATE TABLE`]);
+    expect(compare(found).unexpected).toEqual([
+      'event-trigger crove_ddl_watch_drop: sql_drop crove_kernel.ddl_watch() D all (exception records sql_drop crove_kernel.ddl_watch() A all)',
+      `event-trigger g3_fixture_crove: ddl_command_start ${FIXTURE}.on_ddl() O CREATE TABLE`,
+    ]);
   });
 
   it('reports a new deviation, a changed one and a stale exception', async () => {
