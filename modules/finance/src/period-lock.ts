@@ -148,7 +148,8 @@ export const periodLock = defineCommand({
     } catch (error) {
       lockRefusal(error, input.month);
     }
-    await ctx.activity('finance.period', ctx.orgId, 'period.locked', `Khóa sổ tháng ${monthLabel(input.month)}`);
+    // The month is the entity's: its row is read only where that entity is (#1725).
+    await ctx.activity('finance.period', ctx.orgId, 'period.locked', `Khóa sổ tháng ${monthLabel(input.month)}`, { legalEntityId: entity });
     return periodLockState(ctx, entity);
   },
 });
@@ -172,7 +173,9 @@ export const periodUnlock = defineCommand({
     } catch (error) {
       lockRefusal(error, input.month);
     }
-    await ctx.activity('finance.period', ctx.orgId, 'period.unlocked', `Mở khóa sổ tháng ${monthLabel(input.month)} (lý do: ${input.reason})`);
+    await ctx.activity('finance.period', ctx.orgId, 'period.unlocked', `Mở khóa sổ tháng ${monthLabel(input.month)} (lý do: ${input.reason})`, {
+      legalEntityId: entity,
+    });
     return periodLockState(ctx, entity);
   },
 });

@@ -60,7 +60,7 @@ export const numberVoid = defineCommand({
       .selectFrom('crove_kernel.number_allocation as a')
       .innerJoin('crove_kernel.number_series as s', (join) => join.onRef('s.org_id', '=', 'a.org_id').onRef('s.id', '=', 'a.series_id'))
       .leftJoin('crove_kernel.number_void as v', (join) => join.onRef('v.org_id', '=', 'a.org_id').onRef('v.allocation_id', '=', 'a.id'))
-      .select(['a.id', 'a.number', 'a.target_type', 'a.target_id', 's.doc_type', 's.period_key', 'v.id as void_id'])
+      .select(['a.id', 'a.number', 'a.target_type', 'a.target_id', 'a.legal_entity_id', 's.doc_type', 's.period_key', 'v.id as void_id'])
       .where('a.org_id', '=', ctx.orgId)
       .where('a.id', '=', input.allocationId)
       .executeTakeFirst();
@@ -80,7 +80,11 @@ export const numberVoid = defineCommand({
     const number = Number(allocation.number);
     const voided = { voidId, allocationId: allocation.id, docType: allocation.doc_type, periodKey: allocation.period_key, number };
     ctx.audit({ ...voided, targetType: allocation.target_type, targetId: allocation.target_id, reason: input.reason });
-    await ctx.activity(allocation.target_type, allocation.target_id, 'number.voided', `Hủy số ${number} (${allocation.doc_type}, ${allocation.period_key}): ${input.reason}`);
+    // The allocation's entity, whatever its target type: the row is read only where that entity is (#1728), and for a
+    // target type the trigger maps, the database checks it is the record's own.
+    await ctx.activity(allocation.target_type, allocation.target_id, 'number.voided', `Hủy số ${number} (${allocation.doc_type}, ${allocation.period_key}): ${input.reason}`, {
+      legalEntityId: allocation.legal_entity_id,
+    });
     return voided;
   },
 });
