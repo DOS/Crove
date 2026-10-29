@@ -1,6 +1,7 @@
 // The member's working hours and days off in Settings (issue #1313). Each member sets their own: the hours a booking
 // page of theirs offers (crm, #1318), in their time zone, and the days they are off. Vietnamese public holidays are
-// off without being listed. A viewer sees their hours and changes nothing. The server enforces every rule.
+// off without being listed. A viewer sees their hours and changes nothing. The server enforces every rule. Dates read
+// dd/mm/yyyy and times 24-hour HH:mm whatever the browser's language (DESIGN.md §5.5, #1428).
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { useTranslations } from 'use-intl';
@@ -8,8 +9,9 @@ import { CALENDAR_RANGE_MAX_DAYS, type MyCalendar, type Weekday } from '@crove/k
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Checkbox } from '@crove/ui/components/checkbox';
-import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
+import { DateInput } from '../components/date-input.tsx';
+import { TimeInput } from '../components/time-input.tsx';
 import { ErrorText, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { errorMessage, orpc, queryClient } from '../lib/api.ts';
@@ -52,9 +54,10 @@ function HoursForm({ calendar, canEdit }: { calendar: MyCalendar; canEdit: boole
             </label>
             {d.on ? (
               <>
-                <Input type="time" className="w-28" value={d.start} disabled={!canEdit} onChange={(e) => set(i, { start: e.target.value })} aria-label={t('startOf', { day: t(`weekdays.${WEEKDAY_KEYS[d.weekday]}`) })} />
+                <TimeInput className="w-28" value={d.start} disabled={!canEdit} onChange={(start) => set(i, { start })} aria-label={t('startOf', { day: t(`weekdays.${WEEKDAY_KEYS[d.weekday]}`) })} />
                 <span className="text-subtle-foreground">-</span>
-                <Input type="time" className="w-28" value={d.end} disabled={!canEdit} onChange={(e) => set(i, { end: e.target.value })} aria-label={t('endOf', { day: t(`weekdays.${WEEKDAY_KEYS[d.weekday]}`) })} />
+                {/* Midnight at the end of the day is "24:00", which no time field shows: it reads 00:00, which hoursOf takes back. */}
+                <TimeInput className="w-28" value={d.end === '24:00' ? '00:00' : d.end} disabled={!canEdit} onChange={(end) => set(i, { end })} aria-label={t('endOf', { day: t(`weekdays.${WEEKDAY_KEYS[d.weekday]}`) })} />
               </>
             ) : (
               <span className="text-subtle-foreground">{t('off')}</span>
@@ -123,9 +126,9 @@ function DaysOff({ calendar, canEdit }: { calendar: MyCalendar; canEdit: boolean
       )}
       {canEdit && (
         <form className="mt-2 flex flex-wrap items-center gap-2" onSubmit={submit} aria-label={t('addDayOff')}>
-          <Input type="date" required className="w-44" value={from} onChange={(e) => setFrom(e.target.value)} aria-label={t('from')} />
+          <DateInput required className="w-44" value={from} onChange={setFrom} aria-label={t('from')} />
           <span className="text-subtle-foreground">-</span>
-          <Input type="date" className="w-44" min={from || undefined} value={to} onChange={(e) => setTo(e.target.value)} aria-label={t('to')} />
+          <DateInput className="w-44" min={from || undefined} value={to} onChange={setTo} aria-label={t('to')} />
           <Button type="submit" variant="outline" size="sm" disabled={add.isPending || !from}>
             {add.isPending ? <Spinner className="text-current" /> : null}
             {t('addDayOff')}
