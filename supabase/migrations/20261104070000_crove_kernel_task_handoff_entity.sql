@@ -33,7 +33,10 @@
 --     parent's row rather than NEW.legal_entity_id. Org-level tasks (NULL) are checked exactly as before.
 --
 -- EXECUTE matrix: the three helpers for the worker login role only, which runs agent commands and so writes every
--- agent task (the trigger runs them as the writer). They read and write nothing else.
+-- agent task (the trigger runs them as the writer, and only in an agent context, which only the worker enters; any other
+-- role writing there would get "permission denied", never a row). They read and write nothing else. The two-argument
+-- task_escalation_target of 20261018160000 is no longer called; it stays as it was (granted to crove_tenant), so this
+-- file only adds and replaces.
 SET LOCAL lock_timeout = '2s';
 
 CREATE OR REPLACE FUNCTION crove_kernel.member_covers_legal_entity(p_user_id uuid, p_legal_entity_id uuid)

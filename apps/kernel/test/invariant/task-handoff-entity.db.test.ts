@@ -1,9 +1,12 @@
-// Delegation and escalation within a task's legal entity (#1788) on PostgreSQL, as the real login roles. Since #1762 a
-// task carries its record's legal entity under the RESTRICTIVE le_scope policy, and a delegated or escalated child takes
-// its parent's. So an agent hands such a task only to a position whose holder reads that entity: an agent by its
-// position's le_scope, a person by the scope enter_context seals for them (their role assignments), which an agent
-// limited to some entities cannot see in full and asks the definer member_covers_legal_entity for. Org-level tasks are
-// unaffected. Set CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
+// Delegation and escalation within a task's legal entity (#1788, T18 targets checked by the database) on PostgreSQL, as
+// the real login roles. Since #1762 a task carries its record's legal entity under the RESTRICTIVE le_scope policy, and
+// a delegated or escalated child takes its parent's. So an agent hands such a task only to a position whose holder reads
+// that entity: an agent or a vacant position by its le_scope, a person by the scope enter_context seals for them (their
+// role assignments), which an agent limited to some entities cannot see in full and asks the definer
+// member_covers_legal_entity for. The commands refuse first (OUTSIDE_LEGAL_ENTITY, the entity-aware escalation target),
+// and the task trigger refuses the same rows written straight in SQL. Org-level tasks are unaffected.
+// Part of the invariant suite: keep it self-contained (package code under test, no helpers from outside
+// test/invariant/). Set CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
@@ -15,7 +18,7 @@ import { Runtime, type AgentActor } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
-const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
+const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
 const TEMPLATE = 'finance.chief_accountant';
 const SYSTEM = { type: 'system' as const, component: 'kernel.agent' };
 const suite = ADMIN ? describe : describe.skip;
@@ -270,7 +273,7 @@ suite('delegation and escalation within the task legal entity on PostgreSQL (#17
     expect(await listed(owner)).toContain(toOwner.taskId);
   });
 
-  it('answers a person scope only to the worker, and only for an entity the caller reads', async () => {
+  it('lets only the worker run the three helpers (EXECUTE matrix), and answers a person scope only for an entity the caller reads', async () => {
     const functions = [
       'crove_kernel.member_covers_legal_entity(uuid,uuid)',
       'crove_kernel.position_reads_legal_entity(uuid,uuid,uuid)',
