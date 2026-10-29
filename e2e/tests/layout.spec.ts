@@ -4,16 +4,24 @@
 // scrolling, and a deep link opens with its app selected (#1528). The same session walks every screen of every app
 // under Trusted Types (#681) and expects no CSP violation; it shares this spec's sign-up because every spec draws on
 // one sign-up budget (auth-rate-limits.spec.ts).
+import { fileURLToPath } from 'node:url';
 import AxeBuilder from '@axe-core/playwright';
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { collectCspViolations } from '../lib/csp.ts';
+import { confirmUnverifiedSignature } from '../lib/inbox.ts';
 import { createOrg, newEmail, signInNewUser, signUp } from '../lib/session.ts';
+import { nextTotp } from '../lib/totp.ts';
 
 test.use({ viewport: { width: 1280, height: 600 } });
 
 // The landmark and heading rules of axe (best-practice): one <main>, all content inside a landmark, landmarks told apart,
 // one h1, and no heading that skips a level.
 const STRUCTURE_RULES = ['landmark-one-main', 'region', 'landmark-unique', 'page-has-heading-one', 'heading-order'];
+
+// The e-invoice the Inbox specs upload, and its parties (synthetic tax codes, checksum-invalid on purpose, #157).
+const INVOICE = fileURLToPath(new URL('../../apps/extract/test/fixtures/einvoice-basic.xml', import.meta.url));
+const SELLER_TAX_CODE = '0101234564';
+const BUYER = 'CÔNG TY CỔ PHẦN NGƯỜI MUA MẪU';
 
 test('the sidebar keeps sign-out and Settings in view on a short window, and each app has its own short menu', async ({ page }) => {
   const violations = await collectCspViolations(page);
@@ -60,14 +68,9 @@ test('the sidebar keeps sign-out and Settings in view on a short window, and eac
   await expect(page).toHaveURL(/\/login$/);
 });
 
-// Every sidebar screen at phone width, in both themes (#1517; DESIGN.md §7 and §10): the page never scrolls sideways,
-// and axe finds no serious or critical violation of the WCAG 2.2 AA rules. The screens are the links of every app's
-// menu, gathered at desktop width where the sidebar shows; each is then opened from a fresh document. Its own user,
-// created confirmed without the sign-up form, so it draws nothing from the sign-up budget.
-test('every sidebar screen fits 360px with no horizontal scroll and passes an axe scan, in light and dark (#1517)', async ({ page }) => {
-  test.setTimeout(300_000);
-  await signInNewUser(page, newEmail('layout-a11y'));
-  await createOrg(page, 'Công ty Kiểm tra truy cập');
+// The paths of every app's menu, gathered at desktop width where the sidebar shows: the app's own screens only, since
+// the sidebar also links out (the support address).
+async function appScreens(page: Page): Promise<string[]> {
   const sidebar = page.getByRole('complementary');
   const apps = sidebar.getByRole('list', { name: 'Ứng dụng' });
   const links = new Set<string>();
@@ -76,18 +79,23 @@ test('every sidebar screen fits 360px with no horizontal scroll and passes an ax
   for (let i = 0; i < appCount; i++) {
     await apps.getByRole('link').nth(i).click();
     await page.waitForLoadState('networkidle');
-    // The app's own screens only: the sidebar also links out (the support address).
     const paths = await sidebar.getByRole('link').evaluateAll((anchors) => anchors.filter((a) => (a as HTMLAnchorElement).origin === location.origin).map((a) => (a as HTMLAnchorElement).pathname));
     for (const path of paths) links.add(path);
   }
   expect(links.size).toBeGreaterThan(5);
+  return [...links];
+}
 
+// Opens each path from a fresh document at 360px, in light and dark, and returns what fails (DESIGN.md §7 and §10): a
+// page that scrolls sideways, a serious or critical violation of the WCAG 2.2 AA rules, and any landmark or heading
+// order violation.
+async function phoneWidthProblems(page: Page, paths: readonly string[]): Promise<string[]> {
   await page.setViewportSize({ width: 360, height: 780 });
   const problems: string[] = [];
   for (const theme of ['light', 'dark'] as const) {
     // The theme the app reads at load (lib/theme.ts), from this browser only.
     await page.evaluate((value) => localStorage.setItem('crove-theme', value), theme);
-    for (const path of links) {
+    for (const path of paths) {
       await page.goto(path);
       await page.waitForLoadState('networkidle');
       await expect(page.locator('html')).toHaveClass(theme === 'dark' ? /\bdark\b/ : /^(?!.*\bdark\b)/);
@@ -103,7 +111,74 @@ test('every sidebar screen fits 360px with no horizontal scroll and passes an ax
       for (const v of structure.violations) problems.push(`${theme} ${path}: ${v.id} on ${v.nodes.map((n) => n.target.join(' ')).slice(0, 3).join(', ')}`);
     }
   }
-  expect(problems).toEqual([]);
+  return problems;
+}
+
+// Every sidebar screen at phone width, in both themes (#1517; DESIGN.md §7 and §10): the page never scrolls sideways,
+// and axe finds no serious or critical violation of the WCAG 2.2 AA rules. Each screen is opened from a fresh document.
+// Its own user, created confirmed without the sign-up form, so it draws nothing from the sign-up budget.
+test('every sidebar screen fits 360px with no horizontal scroll and passes an axe scan, in light and dark (#1517)', async ({ page }) => {
+  test.setTimeout(300_000);
+  await signInNewUser(page, newEmail('layout-a11y'));
+  await createOrg(page, 'Công ty Kiểm tra truy cập');
+  expect(await phoneWidthProblems(page, await appScreens(page))).toEqual([]);
+});
+
+// The same walk on an org with data (#1572), so what a screen shows only then (table rows, badges, a proposal's detail,
+// a post's channels) is scanned too. The data comes through the app, as a user makes it: an approved sale e-invoice,
+// whose buyer becomes a customer, and a Social post waiting for review on the sandbox channel. Their detail pages join
+// the sidebar's screens.
+test('every sidebar screen and the detail pages pass the 360px and axe walk on an org with data (#1572)', async ({ page }) => {
+  test.setTimeout(360_000);
+  await signInNewUser(page, newEmail('layout-a11y-data'));
+  const slug = await createOrg(page, 'Công ty Có dữ liệu');
+  const details: string[] = [];
+
+  await test.step('make the org the invoice seller, so the invoice is a sale and its buyer a customer', async () => {
+    await page.getByRole('navigation').getByRole('link', { name: 'Cài đặt' }).click();
+    await page.getByRole('button', { name: 'Nhập', exact: true }).click();
+    const taxForm = page.getByRole('form', { name: 'Mã số thuế' });
+    await taxForm.getByLabel('Mã số thuế').fill(SELLER_TAX_CODE);
+    await taxForm.getByRole('button', { name: 'Lưu' }).click();
+    await expect(page.getByRole('definition').getByText(SELLER_TAX_CODE, { exact: true })).toBeVisible();
+  });
+
+  await test.step('upload the e-invoice and approve it with a second factor', async () => {
+    await page.goto(`/o/${slug}/inbox`);
+    await page.locator('input[type=file]').setInputFiles(INVOICE);
+    const proposal = page.getByRole('row').filter({ has: page.getByRole('link', { name: BUYER }) });
+    await expect(proposal).toBeVisible({ timeout: 60_000 });
+    await proposal.getByRole('link', { name: BUYER }).click();
+    details.push(new URL(page.url()).pathname);
+    await confirmUnverifiedSignature(page);
+    await page.getByRole('button', { name: 'Duyệt và ghi sổ' }).click();
+    await page.getByRole('button', { name: 'Bật xác thực hai lớp' }).click();
+    const secret = (await page.getByLabel('Khóa thiết lập').textContent())?.trim() ?? '';
+    await page.getByLabel('Mã xác thực').fill((await nextTotp(secret)).code);
+    await page.getByRole('button', { name: 'Xác nhận' }).click();
+    await expect(page).toHaveURL(new RegExp(`/o/${slug}/inbox$`));
+    await expect(page.getByText('Không có đề xuất nào chờ duyệt')).toBeVisible();
+    await page.goto(`/o/${slug}/customers`);
+    await expect(page.getByRole('row').filter({ hasText: BUYER })).toBeVisible();
+  });
+
+  await test.step('connect the sandbox channel and submit a post for review', async () => {
+    await page.goto(`/o/${slug}/social`);
+    await page.getByRole('link', { name: 'Kết nối kênh' }).first().click();
+    await page.getByLabel('Tên kênh thử').fill('Fanpage Kiểm tra');
+    await page.getByRole('button', { name: 'Kết nối kênh thử' }).click();
+    await expect(page.getByText('Fanpage Kiểm tra').first()).toBeVisible();
+    await page.getByRole('link', { name: 'Quay lại' }).click();
+    await page.getByRole('link', { name: 'Soạn bài' }).click();
+    await page.getByLabel('Nội dung chung').fill('Khai trương chi nhánh mới, giảm 10% tuần đầu.');
+    await page.getByRole('button', { name: 'Lưu và gửi duyệt' }).click();
+    await expect(page).toHaveURL(/\/social\/[0-9a-f-]{36}$/);
+    await expect(page.getByText('Chờ duyệt', { exact: true })).toBeVisible();
+    details.push(new URL(page.url()).pathname);
+  });
+
+  await page.goto(`/o/${slug}/inbox`);
+  expect(await phoneWidthProblems(page, [...(await appScreens(page)), ...details])).toEqual([]);
 });
 
 // The Social home's nine tabs at phone width (#1043): they wrap inside the screen, and the page never scrolls sideways.
