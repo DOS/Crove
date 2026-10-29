@@ -21,10 +21,14 @@ BEGIN
   LOOP
     BEGIN
       PERFORM pg_catalog.set_config('lock_timeout', '2s', true);
-      UPDATE crove_jobs.job j SET dead_letter = q.dead_letter
-        FROM crove_jobs.queue q
-       WHERE q.name OPERATOR(pg_catalog.=) j.name AND q.dead_letter IS NOT NULL AND j.dead_letter IS NULL
-         AND j.state OPERATOR(pg_catalog.=) ANY (ARRAY['created', 'retry', 'active']::crove_jobs.job_state[]);
+      -- Twice: pg-boss moves a failing job to retry by deleting its row and inserting a new one, so a job a worker
+      -- moved after the first statement's snapshot was taken is found by the second, which takes a new one.
+      FOR k IN 1..2 LOOP
+        UPDATE crove_jobs.job j SET dead_letter = q.dead_letter
+          FROM crove_jobs.queue q
+         WHERE q.name OPERATOR(pg_catalog.=) j.name AND q.dead_letter IS NOT NULL AND j.dead_letter IS NULL
+           AND j.state OPERATOR(pg_catalog.=) ANY (ARRAY['created', 'retry', 'active']::crove_jobs.job_state[]);
+      END LOOP;
       EXIT;
     EXCEPTION WHEN lock_not_available THEN
       n := n + 1;

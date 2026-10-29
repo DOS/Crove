@@ -126,6 +126,12 @@ suite('dead-letter Inbox items on PostgreSQL (#1747)', () => {
           outcome(c.query('UPDATE crove_kernel.inbox_item SET dismissed_at = now(), dismissed_by = crove_kernel.ctx_user_id() WHERE id = $1', [items.open])),
         ),
       ).toEqual({ ok: true, rows: 0 });
+      // Nor with an update that reads no column, where a SELECT policy does not apply (#1780 review).
+      expect(
+        await inContext(appUrl, asMember(user), (c) =>
+          outcome(c.query('UPDATE crove_kernel.inbox_item SET dismissed_at = now(), dismissed_by = crove_kernel.ctx_user_id()')),
+        ),
+      ).toEqual({ ok: true, rows: 0 });
     }
   });
 
