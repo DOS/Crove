@@ -49,6 +49,8 @@ function sessionStore(): Storage | undefined {
 
 // The MFA_REQUIRED answer being checked, so a burst of refused requests asks once.
 let checkingMfa: Promise<void> | null = null;
+// When the queries refused with MFA_REQUIRED were last sent again (#1912).
+const lastMfaRetry = { at: -Infinity };
 
 // A stale or revoked session signs the user out locally; main.tsx then routes to /login. A session revoked in this
 // org only leaves the org: the start page then lists only the orgs this session can enter (issue #247). A session that
@@ -72,6 +74,7 @@ const onError = createSessionErrorHandler({
       stillOwed: () => secondFactorStillOwed(),
       openChallenge: () => window.location.assign('/mfa'),
       retryRefused: () => void queryClient.invalidateQueries({ predicate: (query) => isMfaRequired(query.state.error) }),
+      lastRetry: lastMfaRetry,
     }).finally(() => {
       checkingMfa = null;
     });

@@ -134,11 +134,26 @@ export async function secondFactorStillOwed(client: Pick<Client, 'mfa'> = auth()
 // factor, or a failed check; otherwise the refused requests go again, now with the session this tab has verified. A
 // burst sent just before this tab saved that session would otherwise keep its error on screen: such as the refresh the
 // invalidation stream asks for when the server closes it because the factor was verified (reason 'mfa'), whose queries
-// do not retry an MFA refusal by themselves.
-export async function afterMfaRefusal(deps: { stillOwed: () => Promise<boolean>; openChallenge: () => void; retryRefused: () => void }): Promise<void> {
+// do not retry an MFA refusal by themselves. Once per MFA_RETRY_GAP_MS: a server that keeps refusing what this tab sees
+// as verified gets no loop of retries, and the error stays on screen as before.
+export const MFA_RETRY_GAP_MS = 5_000;
+
+export async function afterMfaRefusal(deps: {
+  stillOwed: () => Promise<boolean>;
+  openChallenge: () => void;
+  retryRefused: () => void;
+  lastRetry: { at: number };
+  now?: () => number;
+}): Promise<void> {
   const owed = await deps.stillOwed().catch(() => true);
-  if (owed) deps.openChallenge();
-  else deps.retryRefused();
+  if (owed) {
+    deps.openChallenge();
+    return;
+  }
+  const now = (deps.now ?? Date.now)();
+  if (now - deps.lastRetry.at < MFA_RETRY_GAP_MS) return;
+  deps.lastRetry.at = now;
+  deps.retryRefused();
 }
 
 // Supabase Auth error codes with a message of their own; any other error shows the server's message.
