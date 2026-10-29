@@ -145,6 +145,27 @@ function parseJournalVoucher(kind: string, raw: unknown): JournalVoucherProposal
   return result.success ? result.data : null;
 }
 
+// The kinds whose revision names the legal entity it posts to (#1543): an invoice, a cash voucher and a general journal
+// voucher. No other kind's payload is read for it.
+const ENTITY_NAMING_KINDS: readonly string[] = [PURCHASE_KIND, VOUCHER_KIND, JOURNAL_VOUCHER_KIND];
+
+// The legal entity a proposal shows, the same in kernel.inbox.list and kernel.inbox.get (#1625): the one its revision
+// names (`named`, the payload's legalEntityId) when its kind names one and the value is an id, else the proposal's own
+// (#1538), the entity row security scopes it by, which an edit never moves (#1764). Shown only: who sees the proposal
+// is decided by its own entity, never by this.
+export function revisionLegalEntity(kind: string, named: unknown, own: string): string {
+  if (ENTITY_NAMING_KINDS.includes(kind) && typeof named === 'string') {
+    const id = zId.safeParse(named);
+    if (id.success) return id.data.toLowerCase();
+  }
+  return own;
+}
+
+// A top-level key of a stored payload, whatever the rest of it holds.
+function payloadKey(payload: unknown, key: string): unknown {
+  return payload !== null && typeof payload === 'object' && !Array.isArray(payload) ? (payload as Record<string, unknown>)[key] : undefined;
+}
+
 function toInboxItem(row: {
   id: string;
   kind: string;
@@ -169,8 +190,8 @@ function toInboxItem(row: {
     direction,
     sellerName: payload?.seller.name ?? null,
     buyerName: direction === 'sale' ? (payload?.buyer.name ?? null) : null,
-    // The legal entity the revision names (#1543), else the proposal's own (#1764), as the list gives it.
-    legalEntityId: payload?.legalEntityId ?? voucher?.legalEntityId ?? row.legal_entity_id,
+    // The legal entity the revision names (#1543), else the proposal's own (#1764), as the list gives it (#1625).
+    legalEntityId: revisionLegalEntity(row.kind, payloadKey(row.payload, 'legalEntityId'), row.legal_entity_id),
     total: payload?.invoice.total ?? voucher?.total ?? null,
     issueDate: payload?.invoice.issueDate ?? voucher?.date ?? null,
     failedChecks: countChecks(payload, 'fail'),
@@ -217,9 +238,10 @@ export const inboxList = defineQuery({
         sql<string | null>`left(payload #>> '{seller,name}', 500)`.as('seller_name'),
         sql<boolean>`coalesce(payload ->> 'direction' = 'sale', false)`.as('is_sale'),
         sql<string | null>`left(payload #>> '{buyer,name}', 500)`.as('buyer_name'),
-        // The legal entity the revision names (#1543): a voucher's from its form. Else the proposal's own (#1538): the
-        // entity of its reading or of its request, where approval records it (#1756); an edit never moves it (#1764).
-        sql<string | null>`left(coalesce(payload ->> 'legalEntityId', legal_entity_id::text), 36)`.as('legal_entity_id'),
+        // The legal entity the revision names (#1543), read as kernel.inbox.get reads it (revisionLegalEntity, #1625),
+        // and the proposal's own (#1538): the entity of its reading or of its request, which an edit never moves (#1764).
+        sql<string | null>`left(payload ->> 'legalEntityId', 64)`.as('named_entity'),
+        'legal_entity_id',
         // A voucher (#327) and a general journal voucher (#888) keep their total and date at the top of their payload.
         sql<string | null>`left(CASE WHEN kind IN (${VOUCHER_KIND}, ${JOURNAL_VOUCHER_KIND}) THEN payload ->> 'total' ELSE payload #>> '{invoice,total}' END, 30)`.as('total'),
         sql<string | null>`left(CASE WHEN kind IN (${VOUCHER_KIND}, ${JOURNAL_VOUCHER_KIND}) THEN payload ->> 'date' ELSE payload #>> '{invoice,issueDate}' END, 10)`.as('issue_date'),
@@ -245,7 +267,7 @@ export const inboxList = defineQuery({
       revision: row.revision,
       sellerName: row.seller_name,
       buyerName: row.kind === PURCHASE_KIND && row.is_sale ? row.buyer_name : null,
-      legalEntityId: row.legal_entity_id && zId.safeParse(row.legal_entity_id).success ? row.legal_entity_id : null,
+      legalEntityId: revisionLegalEntity(row.kind, row.named_entity, row.legal_entity_id),
       total: row.total && zMoney.safeParse(row.total).success ? row.total : null,
       issueDate: row.issue_date && zLocalDate.safeParse(row.issue_date).success ? row.issue_date : null,
       failedChecks: Number(row.failed_checks),
