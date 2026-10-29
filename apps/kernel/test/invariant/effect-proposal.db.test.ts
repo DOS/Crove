@@ -262,9 +262,10 @@ suite('ledger rows naming a proposal on PostgreSQL (#1853)', () => {
       ]);
     await expect(as(limited, write(ofBranch))).resolves.toMatchObject({ ok: true });
     await expect(as(limited, write(ofDefault))).resolves.toMatchObject({ ok: false, ...REFUSED });
-    // The reversal path (#1871): post_journal_entry writes as crove_definer_tenant, whose read of the proposal is held to
-    // the writer's legal entities by the same row policy. An entry of the branch, then its reversal ordered by the
-    // proposal, as the member limited to the branch posts them.
+    // The reversal path (#1871): post_journal_entry writes as crove_definer_tenant, which reads the proposal under the
+    // restrictive le_scope policy it inherits as a member of crove_tenant, so its read is held to the writer's legal
+    // entities. A role change (BYPASSRLS, a policy for other roles only) would lift that, and this case would fail. An
+    // entry of the branch, then its reversal ordered by the proposal, as the member limited to the branch posts them.
     const reverseInBranch = (proposalId: string) => async (c: pg.Client) => {
       const { rows } = await c.query<{ id: string }>(
         `SELECT crove_finance.post_journal_entry('2026-10-15'::date, 'gốc', 'test.original', $1::uuid, $2::jsonb, NULL, 1, $3::uuid) AS id`,
