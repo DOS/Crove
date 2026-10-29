@@ -333,7 +333,7 @@ describe('G5 PII scan (#1628)', () => {
     writeFileSync(file, Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x00]));
     const run = spawnSync(process.execPath, [SCRIPT, file], { encoding: 'utf8' });
     expect(run.status).toBe(1);
-    expect(run.stderr).toContain('an office or data file outside a fixture directory');
+    expect(run.stderr).toContain('an office, data, archive, database, key or photo file outside a fixtures directory');
   });
 
   it('lists 20k tracked paths without running out of buffer (#1640)', () => {
