@@ -7,6 +7,7 @@
 //
 // Exit codes: 0 every automatic check passed, 1 a check failed, 2 the check could not run (bad arguments).
 import { randomBytes } from 'node:crypto';
+import { parseVaultKey } from '@crove/kernel-runtime';
 import { parseExportKey } from './export-seal.ts';
 import { loadProberConfig } from './prober.ts';
 
@@ -175,6 +176,18 @@ export function checkEnv(env: Env): CheckResult[] {
     const secret = value(env, name);
     if (secret && (KNOWN_DEFAULTS.has(secret) || /change-?me/i.test(secret))) secrets.push(`${name} still has a sample value`);
   }
+  // The credential keys (ADR-0025): a key that does not parse stops the API and the worker; the ids of those that do
+  // name what the worker opens, for the manual line below (#1888).
+  const credentialKeys: string[] = [];
+  for (const name of ['CREDENTIAL_KEY', 'CREDENTIAL_KEY_PREVIOUS']) {
+    const key = value(env, name);
+    if (!key || KNOWN_DEFAULTS.has(key) || /change-?me/i.test(key)) continue;
+    try {
+      credentialKeys.push(`${name} (${parseVaultKey(key).id})`);
+    } catch {
+      secrets.push(`${name} is not a 32-byte key as base64 or 64 hex characters (openssl rand -base64 32)`);
+    }
+  }
   add('Secrets', secrets, 'the database passwords, AUTH_JWT_SECRET and EXPORT_ENCRYPTION_KEY are set, and no secret is a shipped sample value');
 
   // Email confirmation and MFA step-up. docker-compose.yml falls back to AUTH_AUTOCONFIRM=true, so it must be set.
@@ -293,6 +306,14 @@ export function checkEnv(env: Env): CheckResult[] {
             message: 'PROBER_HEARTBEAT_URL is unset: nothing pages the owner when the prober itself stops or cannot deliver; set it (docs/runbooks/alerts.md) or accept that',
           },
         ]),
+    // Envelopes under a key the worker cannot open (#1888): only the worker sees the database's key ids, so it logs them.
+    {
+      item: 'Credential key',
+      status: 'manual',
+      message:
+        `the worker opens tokens sealed under ${credentialKeys.length > 0 && value(env, 'CREDENTIAL_KEY') ? credentialKeys.join(' and ') : 'the key in CREDENTIAL_KEY_FILE (docker compose: /data/keys/credential.key on the keys volume)'}; ` +
+        'confirm its log has no "[credential-reseal] ERROR sealed under a key this worker cannot open" line: CREDENTIAL_KEY_PREVIOUS was removed before every channel token and team chat target was resealed (docs/runbooks/credential-key.md)',
+    },
     {
       item: 'Extraction sandbox',
       status: 'manual',

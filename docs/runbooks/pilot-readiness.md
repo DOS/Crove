@@ -44,6 +44,7 @@ The sign-up probe does not trust what the instance says about itself (`/api/conf
 - An unset variable fails: `docker compose` then falls back to a value published in this repository.
 - A changed database password takes effect at the next `migrate` run (`docker compose up` runs it), which sets the role passwords. Changing `POSTGRES_PASSWORD` after the database volume exists does not change the superuser password; change it in PostgreSQL too (`ALTER ROLE postgres PASSWORD ...`).
 - The credential key (`CREDENTIAL_KEY` or the key file on the `keys` volume) is generated per deployment; back it up apart from the database (`credential-key.md`).
+- Checked by `pilot:check`: `CREDENTIAL_KEY` and `CREDENTIAL_KEY_PREVIOUS`, when set, are valid 32-byte keys. A manual item names the key ids the worker opens (or the key file) and asks you to confirm that the worker log has no `[credential-reseal] ERROR sealed under a key this worker cannot open` line. That line means `CREDENTIAL_KEY_PREVIOUS` was removed before every channel token and team chat target was resealed (#1888, `credential-key.md`).
 
 ## 2. `AUTH_AUTOCONFIRM=false` and MFA step-up on
 

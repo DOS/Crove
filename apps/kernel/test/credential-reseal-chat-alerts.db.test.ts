@@ -147,9 +147,12 @@ suite('team chat alert targets resealed after a key rotation on PostgreSQL (#863
       leftActive: 0,
       leftInactive: 0,
       leftWaiting: 1,
+      unopenable: [],
       skipped: false,
     });
     expect(await keyOf(waiting)).toBe(keyA.id);
+    // The previous key retired too early (#1888): the waiting target is reported under its key id, as waiting.
+    expect((await resealCredentials({ runtime: kernelOnly, broker: onlyB, workerDb })).unopenable).toEqual([{ keyId: keyA.id, active: 0, waiting: 1 }]);
     // Social on again: the next pass reseals it, and nothing is left.
     expect(await resealCredentials({ runtime: worker, broker: rotated, workerDb })).toEqual({
       resealed: 1,
@@ -157,6 +160,7 @@ suite('team chat alert targets resealed after a key rotation on PostgreSQL (#863
       leftActive: 0,
       leftInactive: 0,
       leftWaiting: 0,
+      unopenable: [],
       skipped: false,
     });
     expect(await keyOf(waiting)).toBe(keyB.id);
