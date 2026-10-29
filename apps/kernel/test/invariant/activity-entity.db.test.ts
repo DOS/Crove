@@ -2,8 +2,10 @@
 // locks and unlocks, year archives and missing-invoice mails carry the entity they were for, so a member limited to
 // one entity reads none of another entity's, and org-level rows stay visible to every member.
 //   - Through the commands: finance.period.lock and unlock, finance.archive.build (one row per entity whose books the
-//     package holds).
-//   - Through SQL in each context: a row of those record types must name its entity (activity_entity_named); a writer
+//     package holds); kernel.tax_obligation.done and undo, kernel.party.link_entity and unlink_entity, whose rows are on
+//     org-level record types (kernel.tenant, kernel.party) but name the entity they are about (#1805).
+//   - Through SQL in each context: a row of those record types, or of those four kinds, must name its entity
+//     (activity_entity_named); a writer
 //     limited to one entity cannot name another (le_scope); a named entity other than the record's is still refused
 //     for a record type the trigger maps (LEGAL_ENTITY_MISMATCH); a mapped type whose record is not there keeps the
 //     entity the writer names (a bank import with no new line, #1728).
@@ -188,9 +190,49 @@ suite('activity rows of one legal entity whose record names none (#1725, #1728)'
     expect(seen).toEqual([{ record_type: 'kernel.tenant', kind: 'test.row', legal_entity_id: null }]);
   });
 
+  it("shows a member limited to one entity its own tax obligation marks and party links, and none of another entity's (#1805)", async () => {
+    const party = await admin(
+      async (a) =>
+        (await a.query<{ id: string }>(`INSERT INTO crove_kernel.party (org_id, name, source_trust) VALUES ($1, 'Nhà cung cấp chung', 'external') RETURNING id`, [orgId]))
+          .rows[0]?.id as string,
+    );
+    for (const entity of [defaultEntity, branch]) {
+      await runtime.execute('kernel.tax_obligation.done', { obligation: 'vat_return', period: '2025-06', legalEntityId: entity }, { actor: asUser(owner), orgId });
+      await runtime.execute('kernel.tax_obligation.undo', { obligation: 'vat_return', period: '2025-06', legalEntityId: entity }, { actor: asUser(owner), orgId });
+      await runtime.execute('kernel.party.link_entity', { partyId: party, legalEntityId: entity }, { actor: asUser(owner), orgId });
+      await runtime.execute('kernel.party.unlink_entity', { partyId: party, legalEntityId: entity }, { actor: asUser(owner), orgId });
+    }
+    const kinds = new Set(['org.tax_obligation_done', 'org.tax_obligation_undone', 'party.entity_linked', 'party.entity_unlinked']);
+    const ownerRows = (await readAs(owner, ['kernel.tenant', 'kernel.party'])).filter((r) => kinds.has(r.kind));
+    expect(ownerRows.map((r) => r.legal_entity_id).sort()).toEqual([...Array(4).fill(defaultEntity), ...Array(4).fill(branch)].sort());
+    const memberRows = (await readAs(member, ['kernel.tenant', 'kernel.party'])).filter((r) => kinds.has(r.kind));
+    expect(memberRows.map((r) => r.kind).sort()).toEqual([...kinds].sort());
+    expect(memberRows.every((r) => r.legal_entity_id === branch)).toBe(true);
+  });
+
   it('refuses a row of an entity-named record type that names no entity', async () => {
     for (const type of ['finance.period', 'finance.archive', 'kernel.mail_message']) {
       await expect(write(owner, type, orgId, null), type).rejects.toMatchObject({ code: '23514', message: expect.stringContaining('activity_entity_named') });
+    }
+    // Nor a tax obligation mark or a party link, on record types that are otherwise org-level (#1805).
+    for (const [type, kind] of [
+      ['kernel.tenant', 'org.tax_obligation_done'],
+      ['kernel.tenant', 'org.tax_obligation_undone'],
+      ['kernel.party', 'party.entity_linked'],
+      ['kernel.party', 'party.entity_unlinked'],
+    ] as const) {
+      await expect(
+        asApp(owner, (c) =>
+          c.query(`INSERT INTO crove_kernel.activity (org_id, record_type, record_id, kind, summary, actor_id) VALUES ($1, $2, $3, $4, 'Dòng thử', $5)`, [
+            orgId,
+            type,
+            orgId,
+            kind,
+            owner,
+          ]),
+        ),
+        kind,
+      ).rejects.toMatchObject({ code: '23514', message: expect.stringContaining('activity_entity_named') });
     }
     // A missing-invoice mail of the default entity is the owner's to read, not the branch member's.
     await asApp(

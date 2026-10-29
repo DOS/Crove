@@ -77,7 +77,8 @@ suite('audit rows naming a proposal on PostgreSQL (#1695)', () => {
 
   // Stands in for kernel.proposal.approve around a command the execution runs: it marks the proposal approved by
   // itself (as the approval does), runs `OTHER` with the proposal's id (the runtime passes it on, as to every command an
-  // execution runs) and marks it executed. With approve false it runs `OTHER` with the id as the proposal stands.
+  // execution runs), writes the ok row of the proposal's own command `OWN` as its run would (#1816: the move to
+  // executed needs it) and marks it executed. With approve false it runs `OTHER` with the id as the proposal stands.
   const approveNested = defineCommand({
     sideEffect: 'none',
     name: 'kernel.test_approve_nested',
@@ -90,6 +91,8 @@ suite('audit rows naming a proposal on PostgreSQL (#1695)', () => {
       if (input.approve) await sql`SELECT crove_kernel.proposal_approve(${input.proposalId}::uuid, 1, ${ctx.commandId}::uuid)`.execute(ctx.trx);
       await ctx.run(OTHER, { taxCode: '0101234567' }, { proposalId: input.proposalId });
       if (input.approve) {
+        await sql`INSERT INTO crove_kernel.audit_event (org_id, actor_type, actor_id, command, command_id, outcome, input_sha256, proposal_id)
+                  VALUES (${ctx.orgId}::uuid, 'user', ${ctx.actor.userId}::uuid, ${OWN}, gen_random_uuid(), 'ok', repeat('0', 64), ${input.proposalId}::uuid)`.execute(ctx.trx);
         await ctx.trx.updateTable('crove_kernel.proposal').set({ status: 'executed' }).where('org_id', '=', ctx.orgId).where('id', '=', input.proposalId).execute();
       }
       return {};
@@ -270,9 +273,9 @@ suite('audit rows naming a proposal on PostgreSQL (#1695)', () => {
             // A user's context approves only through the gate (#1793).
             await c.query('SELECT crove_kernel.proposal_approve($1::uuid, 1, gen_random_uuid())', [pending]);
             await c.query(
-              `INSERT INTO crove_kernel.audit_event (org_id, actor_type, command, command_id, outcome, input_sha256, proposal_id)
-               VALUES ($1, 'user', $2, gen_random_uuid(), 'ok', repeat('0', 64), $3)`,
-              [o.orgId, OWN, pending],
+              `INSERT INTO crove_kernel.audit_event (org_id, actor_type, actor_id, command, command_id, outcome, input_sha256, proposal_id)
+               VALUES ($1, 'user', $4, $2, gen_random_uuid(), 'ok', repeat('0', 64), $3)`,
+              [o.orgId, OWN, pending, o.owner],
             );
             await c.query(`UPDATE crove_kernel.proposal SET status = 'executed' WHERE org_id = $1 AND id = $2`, [o.orgId, pending]);
             await c.query('COMMIT');
@@ -331,9 +334,15 @@ suite('audit rows naming a proposal on PostgreSQL (#1695)', () => {
     const o = await org();
     const id = await proposal(o.orgId, o.owner, 'pending');
     await runtime.execute('kernel.test_approve_nested', { proposalId: id, approve: true }, { actor: asUser(o.owner), orgId: o.orgId });
-    expect(await rowsNaming(id)).toEqual([{ command: OTHER, outcome: 'ok' }]);
+    expect(await rowsNaming(id)).toEqual([
+      { command: OWN, outcome: 'ok' },
+      { command: OTHER, outcome: 'ok' },
+    ]);
     // The same run against the executed proposal writes nothing: its nested row is refused, so the command fails.
     await expect(runtime.execute('kernel.test_approve_nested', { proposalId: id, approve: false }, { actor: asUser(o.owner), orgId: o.orgId })).rejects.toThrow();
-    expect(await rowsNaming(id)).toEqual([{ command: OTHER, outcome: 'ok' }]);
+    expect(await rowsNaming(id)).toEqual([
+      { command: OWN, outcome: 'ok' },
+      { command: OTHER, outcome: 'ok' },
+    ]);
   });
 });
