@@ -383,12 +383,24 @@ suite('tasks a chart or role change would strand (#1799)', () => {
     const holder = await member('queued', 'member', null);
     const next = await member('queued-next', 'member', null);
     const own = await seat('Kế toán kho', holder, null);
+    const as = { actor: asMfa(owner), orgId };
+    let assignmentId = '';
+    // Every command that may re-route, in an order each can run in.
     const changes: Array<[string, () => Promise<unknown>]> = [
-      ['kernel.position.assign', () => app.execute('kernel.position.assign', { id: own, holder: { type: 'user', userId: next } }, { actor: asMfa(owner), orgId })],
+      ['kernel.position.update', () => app.execute('kernel.position.update', { id: own, title: 'Kế toán kho hàng' }, as)],
+      ['kernel.position.assign', () => app.execute('kernel.position.assign', { id: own, holder: { type: 'user', userId: next } }, as)],
       [
         'kernel.member.role.assign',
-        () => app.execute('kernel.member.role.assign', { userId: next, roleKey: 'external_accountant', legalEntityId: defaultEntity }, { actor: asMfa(owner), orgId }),
+        async () =>
+          ({ assignmentId } = await app.execute<{ assignmentId: string }>(
+            'kernel.member.role.assign',
+            { userId: next, roleKey: 'external_accountant', legalEntityId: defaultEntity },
+            as,
+          )),
       ],
+      ['kernel.member.role.revoke', () => app.execute('kernel.member.role.revoke', { assignmentId }, as)],
+      ['kernel.member.change_role', () => app.execute('kernel.member.change_role', { userId: next, role: 'admin' }, as)],
+      ['kernel.member.remove', () => app.execute('kernel.member.remove', { userId: next }, as)],
     ];
     for (const [name, run] of changes) {
       const chart = new pg.Client({ connectionString: adminUrl });
@@ -413,7 +425,8 @@ suite('tasks a chart or role change would strand (#1799)', () => {
   // re-route holds the target seat FOR SHARE and waits for its holder's membership, which another session holds and
   // which then asks for that seat. A third session holds the seat at first, so that the other session is already
   // waiting when the re-route starts its wait for the membership: PostgreSQL checks for a deadlock once per wait, after
-  // deadlock_timeout (1 s for the re-route, 30 s for the other session), so the re-route is the one that finds it.
+  // deadlock_timeout (the server's default of 1 s for the re-route, 30 s for the other session), so the re-route is the
+  // one that finds it.
   it('retries a deadlock on its own locks from its savepoint, which drops them (#1858)', async () => {
     const lead = await member('deadlock-lead', 'member', null);
     const holder = await member('deadlock-holder', 'member', null);

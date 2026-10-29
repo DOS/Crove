@@ -5,9 +5,9 @@
 // escalation target of #1788 (the nearest active position up the chart held by a person who reads the entity), else to
 // the owners at the root (no position). The task keeps its entity, its parent and its history; a lease an agent held on
 // it ends (an in-progress task starts again as todo). The database moves them set-based and writes an activity row per
-// task (crove_kernel.task_reroute: two statements whatever the count, its targets locked first and a task moved only to
-// a locked one, a deadlock retried once), so a narrowing never waits on how many tasks there are. One event per new holder and entity
-// (kernel.task.rerouted) becomes one notice for whoever has them now (kernel.notification.dispatch).
+// task (crove_kernel.task_reroute: two statements whatever the count, its targets locked first and a task moved only
+// to a locked one, a deadlock retried once), so a narrowing never waits on how many tasks there are. One event per new
+// holder and entity (kernel.task.rerouted) becomes one notice for whoever has them now (kernel.notification.dispatch).
 import { sql } from 'kysely';
 import type { CommandContext } from '@crove/kernel-runtime';
 
@@ -21,11 +21,13 @@ export interface ReroutedTask {
 // The moved task ids an event carries at most; the notice counts what is still waiting there.
 export const REROUTED_EVENT_TASKS = 200;
 
-// One chart or role change of an org at a time (#1858). Each command that may re-route calls this before any lock of its
-// own: task_reroute locks the target seats and their holders' memberships after the command locked its seat or members,
-// and its retry of a deadlock cannot release those earlier locks, so two such commands of an org must not interleave.
+// One chart or role change of an org at a time (#1858). Each command that may re-route calls this before any lock of
+// its own: task_reroute locks the target seats and their holders' memberships after the command locked its seat or
+// members, and its retry of a deadlock cannot release those earlier locks, so two such commands of an org must not
+// interleave.
 export async function lockChartChanges(ctx: Pick<CommandContext, 'trx' | 'orgId'>): Promise<void> {
-  await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`crove_kernel.chart:${ctx.orgId}`}, 0))`.execute(ctx.trx);
+  const key = `crove_kernel.chart:${ctx.orgId}`;
+  await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${key}, 0))`.execute(ctx.trx);
 }
 
 export async function rerouteStrandedTasks(ctx: CommandContext, positionIds: readonly string[]): Promise<ReroutedTask[]> {

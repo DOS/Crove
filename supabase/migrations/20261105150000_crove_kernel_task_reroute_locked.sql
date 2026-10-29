@@ -98,9 +98,10 @@ BEGIN
       END IF;
     END;
   END LOOP;
-  -- Answered after the block, so a retried attempt never adds rows twice.
+  -- Answered after the block, so a retried attempt never adds rows twice; in task id order across the rounds.
   RETURN QUERY SELECT r.t, r.f, r.e, r.o
-    FROM ROWS FROM (pg_catalog.unnest(v_ids), pg_catalog.unnest(v_from), pg_catalog.unnest(v_entities), pg_catalog.unnest(v_to)) AS r (t, f, e, o);
+    FROM ROWS FROM (pg_catalog.unnest(v_ids), pg_catalog.unnest(v_from), pg_catalog.unnest(v_entities), pg_catalog.unnest(v_to)) AS r (t, f, e, o)
+    ORDER BY r.t;
 END $$;
 REVOKE ALL ON FUNCTION crove_kernel.task_reroute(uuid[]) FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant;
 GRANT EXECUTE ON FUNCTION crove_kernel.task_reroute(uuid[]) TO crove_app;
