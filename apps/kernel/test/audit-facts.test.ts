@@ -347,7 +347,8 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
     readWrites(name, from, end, ours, flag, depth);
     for (const call of scope.matchAll(/(?<![\w$.])([A-Za-z_$][\w$]*)\s*\(/g)) {
       const fn = functions.find((f) => f.name === call[1]);
-      if (!fn || !ours(call.index ?? 0)) continue;
+      // A call, not the function's own definition (`function fill(facts) {`).
+      if (!fn || !ours(call.index ?? 0) || /\bfunction\s*$/.test(code.slice(0, from + (call.index ?? 0)))) continue;
       const open = from + (call.index ?? 0) + call[0].length - 1;
       splitTop(balanced(code, open).slice(1, -1)).forEach((arg, i) => {
         const param = fn.params[i];
@@ -406,7 +407,9 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
   // Whether `name` is written in `scope` (starting at `from`) by a for...of or a destructuring assignment
   // (`[facts] = rows`, `({ raw: facts } = input)`): a pattern around it, not declared, followed by `=`.
   const unfollowedWrite = (name: string, scope: string, from: number, own: (offset: number) => boolean) => {
-    if (new RegExp(`\\bfor\\s*\\(\\s*${escape(name)}\\s+(?:of|in)\\b`).test(scope)) return true;
+    for (const m of scope.matchAll(new RegExp(`\\bfor\\s*\\(\\s*${escape(name)}\\s+(?:of|in)\\b`, 'g'))) {
+      if (own(m.index ?? 0)) return true;
+    }
     for (const m of scope.matchAll(new RegExp(`[{[,:]\\s*${escape(name)}\\s*(?=[,}\\]=])`, 'g'))) {
       if (!own(m.index ?? 0)) continue;
       let pos = from + (m.index ?? 0) + m[0].length;
@@ -595,8 +598,28 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
     const open = (e.index ?? 0) + e[0].length - 1;
     return { start: open, end: open + balanced(code, open).length };
   });
+  // The object around a property is a type when a type alias, an interface, a generic or an annotation opens it.
+  // The innermost bracket open at `pos` (`pos` itself when it opens one).
+  const openerOf = (pos: number) => {
+    let depth = 0;
+    for (let i = pos; i >= 0; i--) {
+      const c = code[i] as string;
+      if (')]}'.includes(c)) depth++;
+      else if ('([{'.includes(c) && depth-- === 0) return i;
+    }
+    return -1;
+  };
+  const inType = (at: number) => {
+    const opener = openerOf(at);
+    if (opener === -1 || code[opener] !== '{') return false;
+    const before = code.slice(Math.max(0, opener - 300), opener);
+    if (/(?:\btype\s+[\w$]+(?:<[^>]*>)?\s*=|\binterface\s+[\w$]+(?:<[^>]*>)?(?:\s+extends\s+[^{]+)?|[<|&]|\b(?:const|let|var)\s+[\w$]+\s*:)\s*$/.test(before)) return true;
+    // A parameter's annotation: `name:` (or `name?:`) inside a parameter list, not a property inside an object.
+    return /[(,]\s*[\w$]+\??\s*:\s*$/.test(before) && code[openerOf(opener - 1)] === '(';
+  };
   for (const m of code.matchAll(/[{,]\s*audit\s*:\s*/g)) {
     const at = (m.index ?? 0) + m[0].length;
+    if (inType(m.index ?? 0)) continue;
     const value = valueAt(code, at).trim();
     const inError = errorArgs.some((e) => e.start < at && at < e.end);
     if (code[at] === '{') sites.push({ at, arg: `(${balanced(code, at)})` });
@@ -940,6 +963,13 @@ describe('audit facts and classified columns (#1626, #1632)', () => {
       'facts: the facts are a name the scan cannot trace; write them out',
     ]);
     expect(check('const { rows } = await sql<{ audit: boolean }>`select 1`.execute(ctx.trx);')).toEqual([]);
+    for (const type of ['type LogOptions = { audit: AuditFacts };', 'interface LogOptions { audit: AuditFacts }', 'function log(ctx: C, options: { audit: AuditFacts }) {}']) {
+      expect(check(type), type).toEqual([]);
+    }
+    expect(check('const options = { retry: 1, nested: { audit: facts } };')).toEqual([untracedFacts]);
+    // A function's own definition is no call, and a same-named parameter's loop is no write to the fact's variable.
+    expect(check('const facts = { id: 1 };\nfunction fill(facts: F) { facts.code = party.tax_code; }\nctx.audit(facts);')).toEqual([]);
+    expect(check('const facts = {};\nfunction other(facts: F[]) { for (facts of list) {} }\nctx.audit(facts);')).toEqual([]);
     // A let with no value is traced only through plain assignments; any other write is a finding, never assigned untraced.
     for (const write of ['({ facts } = await load(ctx));', '[facts] = rows;', 'for (facts of list) {}']) {
       expect(check(`let facts;\n${write}\nctx.audit(facts);`), write).toEqual([unfollowed]);
