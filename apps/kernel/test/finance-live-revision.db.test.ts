@@ -137,7 +137,9 @@ suite('a re-posted source counts once in the finance lists (#1338)', () => {
     // Exported while revision 1 is in force: the journal and the MISA purchases file of its dates.
     await exported({ from: '2026-09-01', to: '2026-09-15' });
     await exported({ from: '2026-09-01', to: '2026-09-15', format: 'misa_sme_purchases' });
-    // The reversal of revision 1 voids the document in the same transaction, as finance.journal.reverse does.
+    // The reversal of revision 1 voids the document in the same transaction, as finance.journal.reverse does. The void
+    // stays: a purchase document has one void (#1928), so revision 2 counts in the ledger while the document stays out
+    // of VAT and MISA. This test pins only that each list shows the document once.
     let reversal = '';
     await inTransaction(async (c) => {
       reversal = await entry(c, { date: '2026-09-20', sourceType: 'test.reversal', sourceId: randomUUID(), reverses: first, lines: mirror(lines) });
@@ -151,15 +153,17 @@ suite('a re-posted source counts once in the finance lists (#1338)', () => {
     await inTransaction(async (c) => {
       second = await entry(c, { date: '2026-09-25', sourceType: 'finance.purchase_document', sourceId: document, revision: 2, lines });
     });
-    // Exported after revision 2: the journal of its dates, and a MISA file, which leaves the voided document out.
+    // Exported after revision 2: the journal of its dates, the journal of the month, which holds both revisions, and a
+    // MISA file, which leaves the voided document out.
     await exported({ from: '2026-09-20', to: '2026-09-30' });
+    await exported({ from: '2026-09-01', to: '2026-09-30' });
     await exported({ from: '2026-09-01', to: '2026-09-30', format: 'misa_sme_purchases' });
 
     // Two entries name the document; the list shows it once, with revision 2.
     const listed = (await query<Array<{ id: string; journalEntryId: string | null }>>('finance.documents.list', {})).filter((d) => d.id === document);
     expect(listed).toEqual([expect.objectContaining({ id: document, journalEntryId: second })]);
     expect(await query('finance.documents.get', { id: document })).toMatchObject({ id: document, journalEntryId: second, voided: { reversalEntryId: reversal } });
-    // The voided document stays out of the MISA export and the VAT working, as before.
+    // The voided document stays out of the MISA export, as before.
     expect(await query<unknown[]>('finance.vouchers.purchases', { from: '2026-09-01', to: '2026-09-30' })).toEqual([]);
     // The document's export history: each file that took one of its revisions in, once.
     const history = await query<Array<{ format: string; from: string | null; to: string | null }>>('finance.document.exports', { documentId: document });
@@ -167,6 +171,7 @@ suite('a re-posted source counts once in the finance lists (#1338)', () => {
       ['journal', '2026-09-01', '2026-09-15'],
       ['misa_sme_purchases', '2026-09-01', '2026-09-15'],
       ['journal', '2026-09-20', '2026-09-30'],
+      ['journal', '2026-09-01', '2026-09-30'],
     ]);
     // The journal lists every entry: both revisions and the reversal.
     const journal = await query<Array<{ id: string }>>('finance.journal.list', { from: '2026-09-01', to: '2026-09-30' });

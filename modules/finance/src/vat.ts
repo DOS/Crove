@@ -169,9 +169,9 @@ function invoiceView(
 
 // The recorded documents of one direction in the period, except those voided by a reversal (#165), oldest first:
 // purchases for the input side, by posting date (#478), and sales (#313) for the output side, by invoice date. The
-// party is the supplier or the customer. Each document has exactly one entry of its own: journal_entry is unique by
-// source, and a document commits only together with its entry (purchase_document_entry, #560), so the inner join drops
-// none. A reversal is an entry of another source.
+// party is the supplier or the customer. Each document has one entry in force: of its revisions (#1283) the join keeps
+// the latest (#1338), and a document commits only together with its entry (purchase_document_entry, #560), so the
+// inner join drops none. A reversal is an entry of another source.
 interface PeriodInvoice {
   view: VatInvoiceView;
   paymentMethod: string | null;
