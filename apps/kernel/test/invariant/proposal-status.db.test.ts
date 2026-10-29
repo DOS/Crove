@@ -4,6 +4,8 @@
 // tenant writer (owner, member and viewer contexts on crove_app, the system context on crove_worker); an agent context
 // writes no proposal at all. A decided proposal's decision, and a terminal one's content and result, stay as they were,
 // and it cannot be rebuilt: no insert of an approved or executed proposal, no delete of a decided one, no new id.
+// Since #1816 approved -> executed needs the ok audit row of the proposal's own command, naming it, written in the
+// same transaction by the same writer (the runtime writes it when the command ran), so a plain update is refused.
 // Staff (the database owner) are not checked. Approval, rejection and expiry through the runtime still pass. Part of the
 // invariant suite: keep it self-contained (package code under test, no helpers from outside test/invariant/). Set
 // CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
@@ -29,9 +31,9 @@ const ALLOWED = new Set(['pending>approved', 'pending>rejected', 'pending>expire
 // Since #1793 only the system context moves a proposal to approved by an update (the worker executing an agent's
 // approval); a user's context goes through the gate (crove_kernel.proposal_approve, proposal-approve-gate.db.test.ts).
 const SYSTEM_ONLY = new Set(['pending>approved']);
-// #1816 (step 1 of 2): approved -> executed is about to need the ok row of the proposal's command, written in the same
-// transaction by the same actor, so a plain update may pass or be refused here; step 2 expects the refusal.
-const TIGHTENING = new Set(['approved>executed']);
+// Since #1816 approved -> executed needs the ok row of the proposal's command, written in the same transaction by the
+// same writer: a plain update is refused (the next tests write that row first).
+const NEEDS_RUN = new Set(['approved>executed']);
 const REFUSED = { code: '23514', message: 'PROPOSAL_STATUS_TRANSITION' };
 const suite = ADMIN ? describe : describe.skip;
 
@@ -188,10 +190,7 @@ suite('proposal status transitions on PostgreSQL (#1707)', () => {
         for (const to of STATUSES.filter((s) => s !== from)) {
           const outcome = await as(writer, (c) => c.query(move(from, to), [rows[from], owner, orgId]));
           const where = `${writer.name}: ${from} -> ${to}`;
-          if (TIGHTENING.has(`${from}>${to}`)) {
-            if (!outcome.ok) expect(outcome, where).toMatchObject(REFUSED);
-            else expect(outcome.value.rowCount, where).toBe(1);
-          } else if (ALLOWED.has(`${from}>${to}`) && (writer.name === 'system' || !SYSTEM_ONLY.has(`${from}>${to}`))) {
+          if (ALLOWED.has(`${from}>${to}`) && !NEEDS_RUN.has(`${from}>${to}`) && (writer.name === 'system' || !SYSTEM_ONLY.has(`${from}>${to}`))) {
             expect(outcome, where).toMatchObject({ ok: true });
             expect(outcome.ok && outcome.value.rowCount, where).toBe(1);
           } else {
@@ -247,6 +246,66 @@ suite('proposal status transitions on PostgreSQL (#1707)', () => {
       // A pending proposal's other columns stay writable, as the reminders write them.
       const reminded = await as(writer, (c) => c.query('UPDATE crove_kernel.proposal SET reminded_at = now() WHERE id = $1', [pending]));
       expect(reminded, `${writer.name}: reminded_at`).toMatchObject({ ok: true });
+    }
+  });
+
+  it('moves an approved proposal to executed only after the ok row of its command, by the same writer in the same transaction (#1816)', async () => {
+    // The row the runtime writes when a command ran with the proposal's id; audit_event_stamp sets its actor and time.
+    const ran = (command: string, outcome: string, proposalId: string) => (c: pg.Client) =>
+      c.query(
+        `INSERT INTO crove_kernel.audit_event (org_id, actor_type, command, command_id, outcome, input_sha256, proposal_id)
+         VALUES ($1, 'user', $2, gen_random_uuid(), $3, repeat('0', 64), $4)`,
+        [orgId, command, outcome, proposalId],
+      );
+    const execute = (id: string) => (c: pg.Client) => c.query(`UPDATE crove_kernel.proposal SET status = 'executed', result = '{"ok": true}' WHERE org_id = $1 AND id = $2`, [orgId, id]);
+    for (const writer of writers()) {
+      const approved = await proposal('approved');
+      const other = await proposal('approved');
+      // The command's own ok row, naming it, in this transaction: the move passes.
+      const done = await as(writer, async (c) => {
+        await ran('t1707.prop', 'ok', approved)(c);
+        return execute(approved)(c);
+      });
+      expect(done.ok && done.value.rowCount, `${writer.name}: after its run`).toBe(1);
+      // Another command's row, a failed run, or a run naming another proposal: refused.
+      for (const [label, row] of [
+        ['another command', ran('t1707.other', 'ok', approved)],
+        ['a failed run', ran('t1707.prop', 'failed', approved)],
+        ['another proposal', ran('t1707.prop', 'ok', other)],
+      ] as const) {
+        const outcome = await as(writer, async (c) => {
+          await row(c);
+          return execute(approved)(c);
+        });
+        expect(outcome, `${writer.name}: after ${label}`).toMatchObject({ ok: false, ...REFUSED });
+      }
+    }
+    // A row committed by an earlier transaction does not carry a later move, and another writer's row in the same
+    // transaction cannot be had (the stamp writes the context's actor), so the earlier one is the case to check.
+    const approved = await proposal('approved');
+    const [ownerWriter, memberWriter] = writers() as [Writer, Writer];
+    const c = new pg.Client({ connectionString: appUrl });
+    await c.connect();
+    try {
+      await c.query('BEGIN');
+      await ownerWriter.enter(c);
+      await ran('t1707.prop', 'ok', approved)(c);
+      await c.query('COMMIT');
+    } finally {
+      await c.end();
+    }
+    for (const writer of [ownerWriter, memberWriter]) {
+      await expect(as(writer, execute(approved)), `${writer.name}: after an earlier transaction's run`).resolves.toMatchObject({ ok: false, ...REFUSED });
+    }
+    // The check answers for the org of the context only: the same row, asked about from another org, is not there.
+    for (const writer of writers()) {
+      const answer = await as(writer, async (c) => {
+        await ran('t1707.prop', 'ok', approved)(c);
+        const asked = (org: string) =>
+          c.query<{ recorded: boolean }>('SELECT crove_kernel.proposal_execution_recorded($1::uuid, $2::uuid, $3) AS recorded', [org, approved, 't1707.prop']);
+        return { own: (await asked(orgId)).rows[0]?.recorded, other: (await asked(randomUUID())).rows[0]?.recorded };
+      });
+      expect(answer, `${writer.name}: asked for its org and another`).toMatchObject({ ok: true, value: { own: true, other: false } });
     }
   });
 
