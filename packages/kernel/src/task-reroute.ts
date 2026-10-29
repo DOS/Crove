@@ -17,11 +17,40 @@ export interface ReroutedTask {
   toPositionId: string | null;
 }
 
+// How many times the targets are locked and the answer read again before the move goes ahead with the last answer.
+const TARGET_ROUNDS = 3;
+
 export async function rerouteStrandedTasks(ctx: CommandContext, positionIds: readonly string[]): Promise<ReroutedTask[]> {
   const positions = [...new Set(positionIds)];
   if (positions.length === 0) return [];
-  const { rows } = await sql<{ task_id: string; from_position_id: string; legal_entity_id: string; to_position_id: string | null }>`
-    SELECT task_id, from_position_id, legal_entity_id, to_position_id FROM crove_kernel.task_stranded(${positions}::uuid[])`.execute(ctx.trx);
+  const stranded = async () =>
+    (
+      await sql<{ task_id: string; from_position_id: string; legal_entity_id: string; to_position_id: string | null }>`
+        SELECT task_id, from_position_id, legal_entity_id, to_position_id FROM crove_kernel.task_stranded(${positions}::uuid[])`.execute(ctx.trx)
+    ).rows;
+  // A target keeps its holder and that holder's roles until this command commits: its seat and its holder's membership
+  // are locked (FOR SHARE) before the answer is read again, so a concurrent kernel.position.assign or role change of
+  // the target waits, then sees the moved task and re-routes it in turn. Seats in id order, then members in user order.
+  const locked = new Set<string>();
+  let rows = await stranded();
+  for (let round = 0; round < TARGET_ROUNDS; round++) {
+    const fresh = [...new Set(rows.flatMap((r) => (r.to_position_id && !locked.has(r.to_position_id) ? [r.to_position_id] : [])))].sort();
+    if (fresh.length === 0) break;
+    const seats = await ctx.trx
+      .selectFrom('crove_kernel.position')
+      .select(['id', 'holder_user_id'])
+      .where('org_id', '=', ctx.orgId)
+      .where('id', 'in', fresh)
+      .orderBy('id')
+      .forShare()
+      .execute();
+    const holders = [...new Set(seats.flatMap((s) => (s.holder_user_id ? [s.holder_user_id] : [])))].sort();
+    if (holders.length > 0) {
+      await ctx.trx.selectFrom('crove_kernel.tenant_member').select('user_id').where('org_id', '=', ctx.orgId).where('user_id', 'in', holders).orderBy('user_id').forShare().execute();
+    }
+    for (const id of fresh) locked.add(id);
+    rows = await stranded();
+  }
   const moved: ReroutedTask[] = [];
   for (const row of rows) {
     await ctx.trx

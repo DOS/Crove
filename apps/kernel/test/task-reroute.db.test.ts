@@ -1,6 +1,7 @@
 // Open tasks a chart or role change would strand go up the chart (#1799) on PostgreSQL, as the real login roles. A task
 // of a legal entity is listed by its position's holder only while that holder reads the entity (#1762, #1788). When a
-// change takes that away (another holder, a narrower seat scope, a person's first entity assignment, a demotion), the
+// change takes that away (another holder, a narrower seat scope, a person's first entity assignment, a demotion, an
+// owner's own), the
 // command moves each such open task to the entity-aware escalation target of #1788, else to the owners, with an
 // activity row that takes the task's entity, an event the notification dispatch turns into a notice for whoever has it
 // now, and the moves in the command's audit row. Org-level tasks and tasks the holder still reads stay. The database
@@ -215,6 +216,19 @@ suite('tasks a chart or role change would strand (#1799)', () => {
     await app.execute('kernel.member.change_role', { userId: limited, role: 'member' }, { actor: asMfa(owner), orgId });
 
     expect(await taskRow(ofDefault)).toEqual({ assignee: null, status: 'waiting' });
+  });
+
+  it('moves them when an owner demotes themself while another owner stays', async () => {
+    const coOwner = await member('co-owner', 'admin', defaultEntity);
+    await admin((c) => c.query(`UPDATE crove_kernel.tenant_member SET role = 'owner' WHERE org_id = $1 AND user_id = $2`, [orgId, coOwner]));
+    const own = await seat('Phó giám đốc', coOwner, null);
+    const ofBranch = await task(branch, own);
+
+    await app.execute('kernel.member.change_role', { userId: coOwner, role: 'member' }, { actor: asMfa(coOwner), orgId });
+
+    expect(await taskRow(ofBranch)).toEqual({ assignee: null, status: 'todo' });
+    // The other owner is told; the one who acted is not.
+    expect((await trail(ofBranch)).notified).toEqual([owner]);
   });
 
   it('answers which tasks only in an owner context', async () => {

@@ -15,7 +15,9 @@
 --     for the owners at the root. Org-level tasks (no entity) are never stranded. Only in a user context of an owner of
 --     the org, the role of every command that calls it: the helpers it uses are the worker's alone (#1788's EXECUTE
 --     matrix, unchanged), and the definer reads them as their owner. It answers task ids and positions of the org of
---     the sealed context, which an owner reads anyway, and writes nothing: the command moves each task as the owner.
+--     the sealed context, which an owner reads anyway, and writes nothing: the command moves each task as the owner. The
+--     owner check reads the role the context was sealed with (enter_context, at the start of the command), so an owner
+--     who demotes themself still re-routes.
 --     EXECUTE for crove_app only.
 SET LOCAL lock_timeout = '2s';
 
@@ -25,10 +27,9 @@ LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp A
 DECLARE
   v_org uuid := crove_kernel.ctx_org_id();
 BEGIN
-  IF crove_kernel.ctx_actor_type() IS DISTINCT FROM 'user'
-     OR NOT EXISTS (
-       SELECT 1 FROM crove_kernel.tenant_member m
-       WHERE m.org_id = v_org AND m.user_id = crove_kernel.ctx_user_id() AND m.role = 'owner') THEN
+  -- The role the context was sealed with, at the start of the command: an owner who demotes themself (another owner
+  -- stays) still re-routes their own seats' tasks after the change.
+  IF crove_kernel.ctx_actor_type() IS DISTINCT FROM 'user' OR (crove_kernel.ctx_verified() ->> 'role') IS DISTINCT FROM 'owner' THEN
     RAISE EXCEPTION 'TASK_STRANDED_OWNER_ONLY' USING ERRCODE = '42501';
   END IF;
   RETURN QUERY
