@@ -183,6 +183,8 @@ function runtimeImports(raw: string): { names: string[]; problems: string[] } {
     if (m[2] === 'vm' || !/^\s*\{\s*createRequire\s*\}\s*$/.test(m[1] ?? '')) problems.push(`imports ${m[2]}`);
   }
   if (/\bvm\s*\./.test(text)) problems.push('the vm module');
+  // A database handle without ctx.trx's plugins: its statements would escape the declared-writes count (#1831).
+  if (/\.\s*withoutPlugins\s*\(|\.\s*getExecutor\s*\(/.test(text)) problems.push("a handle past ctx.trx's plugins");
   return { names, problems };
 }
 
@@ -368,6 +370,9 @@ describe('declared command writes against the manifests (#1697, #1710)', () => {
       `import { runInThisContext } from 'vm';`,
       `import { Module } from 'node:module';`,
       `const v = vm.runInThisContext(code);`,
+      // Past the counting plugin of ctx.trx (#1831).
+      'await ctx.trx.withoutPlugins().insertInto(table).values(row).execute();',
+      'const executor = ctx.trx.getExecutor();',
       // The class passed on through another module (#1771 review): kernel.ts exporting it, another file importing it.
       'export {\n  Runtime,\n};',
       'export default Runtime;',
