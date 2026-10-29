@@ -147,14 +147,12 @@ suite('role assignments on PostgreSQL (#1279)', () => {
       permissions: (await c.query<{ role_key: string; permission: string }>('SELECT role_key, permission FROM crove_kernel.role_permission ORDER BY 1, 2')).rows,
     }));
     expect(roles.map((r) => r.key)).toEqual([...BUILTIN_ROLE_KEYS].sort());
-    // #1507 (step 1 of 2): an entity chief accountant role, limited to its legal entities and granting their period
-    // unlock alone, may be seeded; step 2 expects it.
-    const entityChief = roles.some((r) => r.key === 'finance.entity_chief_accountant');
-    expect(roles.filter((r) => r.scope === 'legal_entity').map((r) => r.key)).toEqual(entityChief ? ['external_accountant', 'finance.entity_chief_accountant'] : ['external_accountant']);
+    // The entity chief accountant (#1507) is limited to its legal entities and grants their period unlock alone.
+    expect(roles.filter((r) => r.scope === 'legal_entity').map((r) => r.key)).toEqual(['external_accountant', 'finance.entity_chief_accountant']);
     expect(permissions).toEqual([
       { role_key: 'finance.chief_accountant', permission: 'finance.period.unlock' },
       { role_key: 'finance.chief_accountant', permission: 'finance.proposal.approve' },
-      ...(entityChief ? [{ role_key: 'finance.entity_chief_accountant', permission: 'finance.period.unlock' }] : []),
+      { role_key: 'finance.entity_chief_accountant', permission: 'finance.period.unlock' },
     ]);
     // The base roles are not assignable roles.
     expect(roles.map((r) => r.key)).not.toContain('owner');
@@ -490,6 +488,42 @@ suite('role assignments on PostgreSQL (#1279)', () => {
     expect((await rt.query<{ permissions: string[] }>('kernel.org.get', {}, { actor: asUser(o.chief), orgId: o.orgId })).permissions).toEqual([]);
     // The owner still unlocks.
     await expect(unlock(asMfa(o.owner))).resolves.toMatchObject({ lockedThrough: null });
+  });
+
+  it("lets an entity chief accountant unlock only the months of its own entities, and nobody else's (#1507)", async () => {
+    const o = await org();
+    for (const entity of [o.defaultEntity, o.branch]) await o.exec(asUser(o.owner), 'finance.period.lock', { month: '2026-01', legalEntityId: entity });
+    const unlock = (actor: Actor, legalEntityId: string) => o.exec(actor, 'finance.period.unlock', { month: '2026-01', reason: 'Sửa sai sót', legalEntityId });
+    const unlockable = async (userId: string, legalEntityId: string) =>
+      (await rt.query<{ unlockable: boolean }>('finance.period.lock_state', { legalEntityId }, { actor: asUser(userId), orgId: o.orgId })).unlockable;
+    // An org-wide role without permissions first (so the member keeps every entity in sight), then the branch's unlock.
+    await o.assign(asMfa(o.owner), o.chief, 'finance.accountant');
+    await o.assign(asMfa(o.owner), o.chief, 'finance.entity_chief_accountant', o.branch);
+    // No org-wide permission comes with it: not in the org's list, and no approval (P12 counts org-wide assignments).
+    expect((await rt.query<{ permissions: string[] }>('kernel.org.get', {}, { actor: asUser(o.chief), orgId: o.orgId })).permissions).toEqual([]);
+    expect([await unlockable(o.chief, o.branch), await unlockable(o.chief, o.defaultEntity)]).toEqual([true, false]);
+    expect([await unlockable(o.owner, o.branch), await unlockable(o.owner, o.defaultEntity)]).toEqual([true, true]);
+    // The other entity's month: refused by the database, through the command and raw.
+    await expect(unlock(asMfa(o.chief), o.defaultEntity)).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 });
+    await expect(inContext(o.chief, o.orgId, (c) => c.query(`SELECT crove_finance.unlock_period('2026-01-01'::date, $1::uuid)`, [o.defaultEntity]))).rejects.toMatchObject({
+      code: '42501',
+      message: 'PERIOD_LOCK_FORBIDDEN',
+    });
+    // Its own entity's month, with a fresh second factor (R3).
+    await expect(unlock(asUser(o.chief), o.branch)).rejects.toMatchObject({ code: 'STEP_UP_REQUIRED' });
+    await expect(unlock(asMfa(o.chief), o.branch)).resolves.toMatchObject({ legalEntityId: o.branch, lockedThrough: null });
+    // An admin is given no entity role (they see every entity), and a member with the entity role alone sees and unlocks
+    // only that entity.
+    await expect(o.assign(asMfa(o.owner), o.admin, 'finance.entity_chief_accountant', o.branch)).rejects.toMatchObject({ status: 422 });
+    await o.exec(asUser(o.owner), 'finance.period.lock', { month: '2026-01', legalEntityId: o.branch });
+    await o.assign(asMfa(o.owner), o.member, 'finance.entity_chief_accountant', o.branch);
+    await expect(unlock(asMfa(o.member), o.defaultEntity)).rejects.toMatchObject({ status: 403 });
+    await expect(unlock(asMfa(o.member), o.branch)).resolves.toMatchObject({ lockedThrough: null });
+    // The default entity's month is still locked; an org-wide chief accountant unlocks it as before.
+    const wide = await person('wide');
+    await withAdmin((c) => c.query("INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member')", [o.orgId, wide]));
+    await o.assign(asMfa(o.owner), wide, 'finance.chief_accountant');
+    await expect(unlock(asMfa(wide), o.defaultEntity)).resolves.toMatchObject({ lockedThrough: null });
   });
 
   it('never gives a viewer a role that grants a permission, and a viewer demoted after the grant holds none', async () => {

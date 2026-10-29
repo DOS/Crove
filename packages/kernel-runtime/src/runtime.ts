@@ -132,6 +132,10 @@ export interface CommandDef<I = unknown, O = unknown> {
   // applies from the next command, and a user without it is refused FORBIDDEN before any step-up. The handler still
   // decides per record (the approval policy for approvals).
   permission?: string;
+  // 'legal_entity': a user who holds the permission for some legal entity only (an entity-scoped assignment,
+  // crove_kernel.ctx_permission_entities) passes the gate too, and the handler checks the entity it acts on (#1507).
+  // Default 'org': an org-wide assignment only. Only beside a permission.
+  permissionScope?: 'org' | 'legal_entity';
   target?: (input: I) => { type: string; id: string } | null;
   // Org-less commands (creating an org) start without an org. `bootstrap` calls a definer that creates the
   // org with the actor as a member, or returns the org an earlier request with the same idempotency key
@@ -1163,6 +1167,9 @@ export class Runtime {
       if (c.permission !== undefined && (typeof c.access === 'string' || !/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/.test(c.permission))) {
         throw new Error(`command ${c.name}: a permission is declared only beside a role list, as <module>.<name>`);
       }
+      if (c.permissionScope !== undefined && (c.permission === undefined || (c.permissionScope !== 'org' && c.permissionScope !== 'legal_entity'))) {
+        throw new Error(`command ${c.name}: a permission scope is 'org' or 'legal_entity', and only beside a permission`);
+      }
       if ((c.access === 'proposal_revision') !== (typeof c.revises === 'string' && c.revises.length > 0)) {
         throw new Error(`command ${c.name}: a reviser (access 'proposal_revision') names the command it revises, and only a reviser does`);
       }
@@ -1423,7 +1430,11 @@ export class Runtime {
 
   private async holdsPermission(trx: Transaction<Database>, def: CommandDef<unknown, unknown>, actor: Actor, entered: Entered): Promise<boolean> {
     if (def.permission === undefined || actor.type !== 'user' || entered.role === null || typeof def.access === 'string') return false;
-    const { rows } = await sql<{ held: boolean }>`SELECT crove_kernel.ctx_has_permission(${def.permission}::text) AS held`.execute(trx);
+    const { rows } =
+      def.permissionScope === 'legal_entity'
+        ? // Held org-wide or for some entity: the handler decides the entity (#1507).
+          await sql<{ held: boolean }>`SELECT pg_catalog.cardinality(crove_kernel.ctx_permission_entities(${def.permission}::text)) > 0 AS held`.execute(trx)
+        : await sql<{ held: boolean }>`SELECT crove_kernel.ctx_has_permission(${def.permission}::text) AS held`.execute(trx);
     return rows[0]?.held === true;
   }
 

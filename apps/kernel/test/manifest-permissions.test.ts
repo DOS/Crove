@@ -183,7 +183,8 @@ describe("the app's permission checks (#1641)", () => {
   it('names only permission constants, all of them declared', () => {
     const { uses, problems } = appPermissionUses(appSources(), contract);
     expect(problems).toEqual([]);
-    expect(uses.map((u) => u.permission).sort()).toEqual(['finance.period.unlock', 'finance.proposal.approve']);
+    // The unlock is decided per legal entity by the lock state the server answers (unlockable, #1507), not by the org list.
+    expect(uses.map((u) => u.permission).sort()).toEqual(['finance.proposal.approve']);
     expect(permissionProblems(MODULE_MANIFESTS, { uses: [...staticPermissionUses().uses, ...uses] })).toEqual([]);
   });
 

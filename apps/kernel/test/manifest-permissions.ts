@@ -157,7 +157,7 @@ export function routePermissionUses(manifests: Manifests): PermissionUse[] {
 }
 
 // The functions whose job is to check a permission their caller passes (#1641): their own comparison names no key.
-const PERMISSION_CHECKERS: ReadonlySet<string> = new Set(['function crove_kernel.ctx_has_permission']);
+const PERMISSION_CHECKERS: ReadonlySet<string> = new Set(['function crove_kernel.ctx_has_permission', 'function crove_kernel.ctx_permission_entities']);
 // The quoted literals of a SQL fragment ('...'::text included), with doubled quotes undone.
 const sqlLiterals = (fragment: string): string[] => [...fragment.matchAll(/'((?:[^']|'')*)'/g)].map((m) => (m[1] as string).replaceAll("''", "'"));
 const SQL_IDENT = /^[a-z_][a-z0-9_$]*$/i;
