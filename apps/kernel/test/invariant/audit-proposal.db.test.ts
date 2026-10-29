@@ -16,7 +16,7 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { sql } from 'kysely';
+import { CompiledQuery, sql } from 'kysely';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -35,6 +35,17 @@ const FIXTURE = readFileSync(new URL('./fixtures/einvoice-basic.xml', import.met
 // The command every proposal in this file executes, and another command that may run under it.
 const OWN = 'finance.purchase.record';
 const OTHER = 'kernel.party.link_for_tax_code';
+// What the record of OWN posts, as it would post it, in the transaction that marks the proposal executed: a purchase
+// document naming the proposal and its journal entry (#1842 asks it of a ledger proposal's move to executed). $1 the
+// org (whose first party is the seller), $2 the proposal, $3 the invoice number.
+const PURCHASED = `
+  WITH d AS (
+    INSERT INTO crove_finance.purchase_document (org_id, party_id, invoice_number, invoice_date, subtotal, vat_amount, total, proposal_id)
+    SELECT $1::uuid, p.id, $3::text, '2026-10-15', 100000, 0, 100000, $2::uuid FROM crove_kernel.party p WHERE p.org_id = $1::uuid ORDER BY p.id LIMIT 1
+    RETURNING id)
+  SELECT crove_finance.post_journal_entry('2026-10-15'::date, 'audit proposal', 'finance.purchase_document', d.id,
+    '[{"line_no": 1, "account_code": "6422", "debit": "100000", "credit": "0"}, {"line_no": 2, "account_code": "331", "debit": "0", "credit": "100000"}]'::jsonb)
+  FROM d`;
 const STATUSES = ['pending', 'approved', 'executed', 'rejected', 'failed', 'expired'] as const;
 type Status = (typeof STATUSES)[number];
 const REFUSED = { code: '42501', message: 'AUDIT_PROPOSAL_MISMATCH' };
@@ -77,8 +88,9 @@ suite('audit rows naming a proposal on PostgreSQL (#1695)', () => {
 
   // Stands in for kernel.proposal.approve around a command the execution runs: it marks the proposal approved by
   // itself (as the approval does), runs `OTHER` with the proposal's id (the runtime passes it on, as to every command an
-  // execution runs), writes the ok row of the proposal's own command `OWN` as its run would (#1816: the move to
-  // executed needs it) and marks it executed. With approve false it runs `OTHER` with the id as the proposal stands.
+  // execution runs), writes the ok row of the proposal's own command `OWN` and the purchase it posts as its run would
+  // (#1816 and #1842: the move to executed needs both) and marks it executed. With approve false it runs `OTHER` with
+  // the id as the proposal stands.
   const approveNested = defineCommand({
     sideEffect: 'none',
     name: 'kernel.test_approve_nested',
@@ -93,6 +105,7 @@ suite('audit rows naming a proposal on PostgreSQL (#1695)', () => {
       if (input.approve) {
         await sql`INSERT INTO crove_kernel.audit_event (org_id, actor_type, actor_id, command, command_id, outcome, input_sha256, proposal_id)
                   VALUES (${ctx.orgId}::uuid, 'user', ${ctx.actor.userId}::uuid, ${OWN}, gen_random_uuid(), 'ok', repeat('0', 64), ${input.proposalId}::uuid)`.execute(ctx.trx);
+        await ctx.trx.executeQuery(CompiledQuery.raw(PURCHASED, [ctx.orgId, input.proposalId, randomUUID()]));
         await ctx.trx.updateTable('crove_kernel.proposal').set({ status: 'executed' }).where('org_id', '=', ctx.orgId).where('id', '=', input.proposalId).execute();
       }
       return {};
@@ -115,6 +128,8 @@ suite('audit rows naming a proposal on PostgreSQL (#1695)', () => {
     const person = (name: string) => upsertIdentity(db, { issuer: 'test', subject: `${name}-${tag}`, email: `${name}-${tag}@audit-proposal.test`, name: null });
     const owner = await person('owner');
     const { orgId } = await createOrg(runtime, asUser(owner), `Đề xuất ${tag}`);
+    // The seller of the purchases the hand-made executions post.
+    await admin((c) => c.query(`INSERT INTO crove_kernel.party (org_id, name, source_trust) VALUES ($1, 'Người bán', 'external')`, [orgId]));
     // An admin who uploads and edits, so the owner may approve (four-eyes, P10).
     const adminUser = await person('admin');
     const email = `admin-${tag}@audit-proposal.test`;
@@ -277,6 +292,7 @@ suite('audit rows naming a proposal on PostgreSQL (#1695)', () => {
                VALUES ($1, 'user', $4, $2, gen_random_uuid(), 'ok', repeat('0', 64), $3)`,
               [o.orgId, OWN, pending, o.owner],
             );
+            await c.query(PURCHASED, [o.orgId, pending, randomUUID()]);
             await c.query(`UPDATE crove_kernel.proposal SET status = 'executed' WHERE org_id = $1 AND id = $2`, [o.orgId, pending]);
             await c.query('COMMIT');
           } catch (error) {
