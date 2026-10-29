@@ -16,6 +16,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
 import { TEST_MANIFESTS } from './manifests.ts';
+import { contextToken } from './context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -193,7 +194,7 @@ suite('activity entity backfill on PostgreSQL (#1805)', () => {
     let seen: string[];
     try {
       await c.query('BEGIN');
-      await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [member, orgId]);
+      await c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgId, contextToken(member, orgId)]);
       const ids = (await c.query<{ id: string }>('SELECT id FROM crove_kernel.activity WHERE id = ANY($1::uuid[])', [Object.values(rows)])).rows.map((r) => r.id);
       seen = Object.entries(rows)
         .filter(([, id]) => ids.includes(id))

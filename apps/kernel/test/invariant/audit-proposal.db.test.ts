@@ -28,6 +28,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove
 import { DomainError, Runtime, defineCommand, fileKey, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
 import { extractAndPropose, financeCommands, financeQueries } from '@crove/mod-finance';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
+import { contextToken } from './fixtures/context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -155,7 +156,7 @@ suite('audit rows naming a proposal on PostgreSQL (#1695)', () => {
       }
     });
   }
-  const userContext = (userId: string, orgId: string) => ({ sql: 'SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', params: [userId, orgId] });
+  const userContext = (userId: string, orgId: string) => ({ sql: 'SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', params: [orgId, contextToken(userId, orgId)] });
   const systemContext = (orgId: string) => ({ sql: 'SELECT crove_kernel.enter_system_context($1::uuid)', params: [orgId] });
   const outcome = (promise: Promise<unknown>) =>
     promise.then(
@@ -269,7 +270,7 @@ suite('audit rows naming a proposal on PostgreSQL (#1695)', () => {
         withClient(appUrl, async (c) => {
           await c.query('BEGIN');
           try {
-            await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [o.owner, o.orgId]);
+            await c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [o.orgId, contextToken(o.owner, o.orgId)]);
             // A user's context approves only through the gate (#1793).
             await c.query('SELECT crove_kernel.proposal_approve($1::uuid, 1, gen_random_uuid())', [pending]);
             await c.query(

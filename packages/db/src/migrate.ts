@@ -14,6 +14,33 @@ export interface MigrateOptions {
   log?: (message: string) => void;
   // How long to wait for another run's migration lock before failing; unset waits as long as it takes (#1803).
   lockWaitMs?: number;
+  // The deployment's context token key (#1822, ADR-0028 section 9), base64 of 32 to 64 bytes, installed after the
+  // migrations. Unset: CROVE_CONTEXT_TOKEN_KEY from the environment, when set; null: none is installed.
+  contextTokenKey?: string | null;
+}
+
+// Decodes a context token key (base64, 32 to 64 bytes). The error never shows the value.
+export function contextTokenKeyBytes(value: string): Buffer {
+  const trimmed = value.trim();
+  const bytes = /^[A-Za-z0-9+/_-]+={0,2}$/.test(trimmed) ? Buffer.from(trimmed, 'base64') : Buffer.alloc(0);
+  if (bytes.length < 32 || bytes.length > 64) throw new Error('CROVE_CONTEXT_TOKEN_KEY must be base64 of 32 to 64 random bytes');
+  return bytes;
+}
+
+// Installs the context token key in the database (#1822): as a bind parameter, so the key is never part of a
+// statement's text (the server log, pg_stat_statements). The function keeps the key it replaces as the previous one.
+export async function installContextTokenKey(client: pg.ClientBase, key: string, log: (message: string) => void = () => {}): Promise<void> {
+  const bytes = contextTokenKeyBytes(key);
+  // A database migrated only up to a version before the key's migration (tests of older states) has no installer.
+  const { rows: found } = await client.query<{ present: boolean }>(
+    "SELECT pg_catalog.to_regprocedure('crove_kernel.context_token_key_install(bytea)') IS NOT NULL AS present",
+  );
+  if (found[0]?.present !== true) {
+    log('context token key not installed: the database has no crove_kernel.context_token_key_install yet');
+    return;
+  }
+  const { rows } = await client.query<{ result: string }>('SELECT crove_kernel.context_token_key_install($1::bytea) AS result', [bytes]);
+  log(`context token key ${rows[0]?.result ?? 'not installed'}`);
 }
 
 export interface MigrationFile {
@@ -128,6 +155,8 @@ export async function migrate(options: MigrateOptions): Promise<string[]> {
     if (violations.length > 0) {
       throw new Error(`database hardening check failed (External-tenant gate T17):\n  - ${violations.join('\n  - ')}`);
     }
+    const contextTokenKey = options.contextTokenKey === undefined ? process.env.CROVE_CONTEXT_TOKEN_KEY : options.contextTokenKey;
+    if (contextTokenKey) await installContextTokenKey(client, contextTokenKey, log);
   } finally {
     await unmarkPipelineSession(client).catch(() => {});
     await client.query("SELECT pg_advisory_unlock(hashtext('crove_migrate'))").catch(() => {});

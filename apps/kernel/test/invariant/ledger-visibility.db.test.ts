@@ -14,6 +14,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
+import { contextToken } from './fixtures/context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -64,7 +65,7 @@ suite('ledger checks independent of caller visibility (#76)', () => {
     const app = await connect(appUrl);
     await app.query('BEGIN');
     try {
-      await app.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [userId, orgId]);
+      await app.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgId, contextToken(userId, orgId)]);
       const { rows } = await app.query<{ n: number }>('SELECT count(*)::int AS n FROM crove_finance.journal_line WHERE entry_id = $1', [entryId]);
       return { all, visible: rows[0]?.n };
     } finally {
@@ -77,7 +78,7 @@ suite('ledger checks independent of caller visibility (#76)', () => {
     const app = await connect(appUrl);
     await app.query('BEGIN');
     try {
-      await app.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [users.a, orgA]);
+      await app.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgA, contextToken(users.a, orgA)]);
       const { rows } = await app.query<{ id: string }>(
         `SELECT crove_finance.post_journal_entry('2026-10-01', 'visibility', 'test', $1::uuid, $2::jsonb) AS id`,
         [randomUUID(), JSON.stringify(lines)],
@@ -96,7 +97,7 @@ suite('ledger checks independent of caller visibility (#76)', () => {
     await withAdmin(async (a) => {
       await a.query('BEGIN');
       try {
-        await a.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [users.a, orgA]);
+        await a.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgA, contextToken(users.a, orgA)]);
         await a.query('SET LOCAL ROLE crove_definer_tenant');
         const { rows } = await a.query<{ id: string }>(
           `INSERT INTO crove_finance.journal_entry (org_id, entry_date, description, source_type, source_id)
@@ -229,7 +230,7 @@ suite('ledger checks independent of caller visibility (#76)', () => {
 
     const entryOfB = await withAdmin(async (a) => {
       await a.query('BEGIN');
-      await a.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [users.b, orgB]);
+      await a.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgB, contextToken(users.b, orgB)]);
       await a.query('SET LOCAL ROLE crove_definer_tenant');
       const { rows: r } = await a.query<{ id: string }>(
         `SELECT crove_finance.post_journal_entry('2026-10-01', 'b', 'test', $1::uuid,
@@ -243,7 +244,7 @@ suite('ledger checks independent of caller visibility (#76)', () => {
     const app = await connect(appUrl);
     await app.query('BEGIN');
     try {
-      await app.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [users.a, orgA]);
+      await app.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgA, contextToken(users.a, orgA)]);
       for (const text of [
         'SELECT crove_finance.assert_entry_balanced($1::uuid, $2::uuid)',
         'SELECT crove_finance.require_entry_balanced($1::uuid, $2::uuid)',
@@ -260,7 +261,7 @@ suite('ledger checks independent of caller visibility (#76)', () => {
     await withAdmin(async (a) => {
       await a.query('BEGIN');
       try {
-        await a.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [users.a, orgA]);
+        await a.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgA, contextToken(users.a, orgA)]);
         await a.query('SET LOCAL ROLE crove_definer_tenant');
         await expect(a.query('SELECT crove_finance.assert_entry_balanced($1::uuid, $2::uuid)', [orgB, entryOfB])).rejects.toMatchObject({
           code: '42501',
@@ -290,7 +291,7 @@ suite('ledger checks independent of caller visibility (#76)', () => {
       const c = await connect(url);
       await c.query('BEGIN');
       try {
-        await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [users.a, orgA]);
+        await c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgA, contextToken(users.a, orgA)]);
         if (enterAs) await c.query(`SET LOCAL ROLE ${enterAs}`);
         await expect(c.query('SELECT crove_finance.check_entry_balanced()')).rejects.toThrow(/permission denied/);
       } finally {

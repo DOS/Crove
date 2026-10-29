@@ -1,5 +1,9 @@
 import { defineConfig } from 'vitest/config';
 
+// The context token key of the test suites (#1822): public, refused by the kernel's config on a public URL. The
+// migration runner installs it in every test database and runtimes sign their user contexts with it.
+const env = { CROVE_CONTEXT_TOKEN_KEY: 'dGVzdC1vbmx5LWNvbnRleHQtdG9rZW4ta2V5LTAxMjM0NTY3ODk=' };
+
 // Database test files a CI part leaves to another part (#1041): comma-separated globs from the repository root.
 const DB_EXCLUDE = (process.env.CROVE_DB_TEST_EXCLUDE ?? '').split(',').filter(Boolean);
 
@@ -9,6 +13,7 @@ export default defineConfig({
       {
         test: {
           name: 'unit',
+          env,
           include: ['packages/*/test/**/*.test.ts', 'modules/*/test/**/*.test.ts', 'apps/kernel/test/**/*.test.ts', 'apps/extract/test/**/*.test.ts', 'apps/app/test/**/*.test.{ts,tsx}', 'apps/web/test/**/*.test.ts', 'tools/test/**/*.test.ts'],
           exclude: ['**/*.db.test.ts', 'packages/agent/test/**/*.ai.test.ts', '**/node_modules/**'],
         },
@@ -18,6 +23,7 @@ export default defineConfig({
         // endpoint in AI_BASE_URL / AI_MODEL and skip themselves when it is not set.
         test: {
           name: 'ai',
+          env,
           include: ['packages/agent/test/**/*.ai.test.ts'],
           exclude: ['**/node_modules/**'],
           testTimeout: 300_000,
@@ -26,6 +32,7 @@ export default defineConfig({
       {
         test: {
           name: 'db',
+          env,
           include: ['packages/*/test/**/*.db.test.ts', 'modules/*/test/**/*.db.test.ts', 'apps/kernel/test/**/*.db.test.ts'],
           exclude: ['**/node_modules/**', ...DB_EXCLUDE],
           fileParallelism: false,

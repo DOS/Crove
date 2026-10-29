@@ -16,6 +16,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
+import { contextToken } from './fixtures/context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -56,7 +57,7 @@ suite('period balances on PostgreSQL (#1284)', () => {
     withClient(appUrl, async (c) => {
       await c.query('BEGIN');
       try {
-        await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [userId, orgId]);
+        await c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgId, contextToken(userId, orgId)]);
         const { rows } = await c.query<{ id: string }>(
           `SELECT crove_finance.post_journal_entry($1::date, 'period balance', 'test.balance', $2::uuid, $3::jsonb, $4::uuid, $5::int) AS id`,
           [date, sourceId, JSON.stringify(lines), opts.reverses ?? null, opts.revision ?? 1],
@@ -176,7 +177,7 @@ suite('period balances on PostgreSQL (#1284)', () => {
           `TRUNCATE ${TABLE}`,
         ]) {
           await c.query('BEGIN');
-          if (role === 'crove_app') await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [userId, orgA]);
+          if (role === 'crove_app') await c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgA, contextToken(userId, orgA)]);
           await expect(c.query(statement), `${role}: ${statement.split(' ')[0]}`).rejects.toThrow(/permission denied/);
           await c.query('ROLLBACK');
         }
@@ -260,7 +261,7 @@ suite('period balances on PostgreSQL (#1284)', () => {
         await c.connect();
         clients.push(c);
         await c.query('BEGIN');
-        await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [userId, orgA]);
+        await c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgA, contextToken(userId, orgA)]);
       }
       // Every posting returns while all CLIENTS transactions are still open: none holds a row another one needs (with a
       // balance row updated in place, the second posting would wait for the first to commit, and this would time out).

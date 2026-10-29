@@ -17,6 +17,7 @@ import { createOrg, kernelCommands, kernelQueries, previewInvite, upsertIdentity
 import { Runtime } from '@crove/kernel-runtime';
 import { createSessionStatusSource } from '../../src/sessions.ts';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
+import { contextToken } from './fixtures/context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -271,7 +272,7 @@ suite('member invites with consent on PostgreSQL (issue #35)', () => {
     ]) {
       await expect(
         db.transaction().execute(async (trx) => {
-          await sql`SELECT crove_kernel.enter_context(${memberElsewhere.id}::uuid, ${otherOrg}::uuid)`.execute(trx);
+          await sql`SELECT crove_kernel.enter_user_context(${otherOrg}::uuid, ${contextToken(memberElsewhere.id, otherOrg)}::text)`.execute(trx);
           await call.execute(trx);
         }),
       ).rejects.toThrow(/INVITE_GATE_FORBIDDEN/);
@@ -569,7 +570,7 @@ suite('member invites with consent on PostgreSQL (issue #35)', () => {
     });
     // Raw SQL as the API role in B's context reaches none of A's invites.
     const touched = await db.transaction().execute(async (trx) => {
-      await sql`SELECT crove_kernel.enter_context(${ownerB.id}::uuid, ${orgB}::uuid)`.execute(trx);
+      await sql`SELECT crove_kernel.enter_user_context(${orgB}::uuid, ${contextToken(ownerB.id, orgB)}::text)`.execute(trx);
       const seen = await sql`SELECT 1 FROM crove_kernel.member_invite WHERE id = ${created.inviteId}::uuid`.execute(trx);
       const updated = await sql`UPDATE crove_kernel.member_invite SET status = 'revoked', revoked_at = now(), revoked_by = ${ownerB.id}::uuid
                                 WHERE id = ${created.inviteId}::uuid`.execute(trx);
@@ -598,7 +599,7 @@ suite('member invites with consent on PostgreSQL (issue #35)', () => {
     const created = await invite(orgId, owner.id, outsider.email);
     const asApp = <T>(fn: (trx: Transaction<Database>) => Promise<T>) =>
       db.transaction().execute(async (trx) => {
-        await sql`SELECT crove_kernel.enter_context(${owner.id}::uuid, ${orgId}::uuid)`.execute(trx);
+        await sql`SELECT crove_kernel.enter_user_context(${orgId}::uuid, ${contextToken(owner.id, orgId)}::text)`.execute(trx);
         return fn(trx);
       });
     await expect(asApp((trx) => sql`INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES (${orgId}::uuid, ${outsider.id}::uuid, 'member')`.execute(trx))).rejects.toThrow(

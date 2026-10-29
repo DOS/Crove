@@ -15,6 +15,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove
 import type { TaxDueView } from '@crove/kernel-contract';
 import { Runtime, type InputHashMode } from '@crove/kernel-runtime';
 import { TEST_MANIFESTS } from './manifests.ts';
+import { contextToken } from './context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -202,7 +203,7 @@ suite('tax obligations done per legal entity on PostgreSQL (#1496)', () => {
     const asAccountant = async (sql: string, params: unknown[] = []) => {
       await client.query('BEGIN');
       try {
-        await client.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [accountant, orgId]);
+        await client.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgId, contextToken(accountant, orgId)]);
         return await client.query(sql, params);
       } finally {
         await client.query('ROLLBACK');

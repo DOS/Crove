@@ -14,6 +14,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime, type InputHashMode } from '@crove/kernel-runtime';
 import { TEST_MANIFESTS } from './manifests.ts';
+import { contextToken } from './context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -179,7 +180,7 @@ suite('kernel projections per legal entity on PostgreSQL (#1280 part 3)', () => 
     const asAccountant = async (sql: string, params: unknown[] = []) => {
       await client.query('BEGIN');
       try {
-        await client.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [accountant, orgId]);
+        await client.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgId, contextToken(accountant, orgId)]);
         return await client.query(sql, params);
       } finally {
         await client.query('ROLLBACK');

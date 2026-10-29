@@ -15,6 +15,7 @@ import { Runtime } from '@crove/kernel-runtime';
 import { PUSH_DEVICE_LIMIT, PUSH_FAILURE_LIMIT, socialCommands, socialQueries, type PushDevice } from '@crove/mod-social';
 import { createPushSender, generateVapidKeys, loadVapidKeys, runPushJob, type PushSender } from '../src/web-push.ts';
 import { TEST_MANIFESTS } from './manifests.ts';
+import { contextToken } from './context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -173,7 +174,7 @@ suite('social browser push on PostgreSQL (#1238)', () => {
       await client.connect();
       try {
         await client.query('BEGIN');
-        await client.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [user, o.orgId]);
+        await client.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [o.orgId, contextToken(user, o.orgId)]);
         return await fn(client);
       } finally {
         await client.query('ROLLBACK').catch(() => {});

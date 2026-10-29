@@ -20,6 +20,7 @@ import { Runtime } from '@crove/kernel-runtime';
 import { findPeriodBalanceDifferences } from '../src/period-balance.ts';
 import { GENESIS_SHA256, LocalArchiveStore, archiveKey, batchSha256, chainSha256, verifyArchive, type ArchiveBatch } from '../src/worm.ts';
 import { TEST_MANIFESTS } from './manifests.ts';
+import { contextToken } from './context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -88,7 +89,7 @@ suite('finance books per legal entity (#1280)', () => {
     const c = await pool.connect();
     try {
       await c.query('BEGIN');
-      await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [userId, orgId]);
+      await c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgId, contextToken(userId, orgId)]);
       const result = await fn(c);
       await c.query(commit ? 'COMMIT' : 'ROLLBACK');
       return result;

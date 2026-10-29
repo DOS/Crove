@@ -9,6 +9,7 @@
 - Amended: 2026-10-16, issue #272: a Supabase Auth access token issued to an OAuth client is refused on every surface and in every session check mode (fact 11, sections 1 and 8)
 - Amended: 2026-10-16, issue #277: the self-host `/auth/v1` proxy refuses the same tokens before they reach Supabase Auth (section 1)
 - Amended: 2026-10-16, issue #276: in `db` mode the session check also refuses a session bound to an OAuth client (`auth.sessions.oauth_client_id`), whatever claims its token carries (sections 1, 3 and 8)
+- Amended: 2026-10-29, issue #1822: the database enters a user's context only from a context token the kernel signs, and checks the session it names (section 9, added; sections 1 to 8 unchanged)
 
 ## Context and problem statement
 
@@ -192,6 +193,18 @@ Choice: the self-host compose stack sets `GOTRUE_JWT_EXP=900` (15 minutes) as de
 | R3 without `aal2` or without an MFA timestamp in the last 5 minutes | 403 `STEP_UP_REQUIRED` |
 | Self-host before `auth-grants` has run | 503, `/readyz` reason `auth_grants` |
 | R3 live check: network error, timeout, 429 or 5xx, or no Auth URL configured | 503 `AUTH_UNAVAILABLE` |
+
+### 9. The database checks the session: context tokens (added 2026-10-29, issue #1822)
+
+Sections 1 to 8 check the access token and the session in the kernel, then call `crove_kernel.enter_context(user, org)` on the API's login, `crove_app`. That function took the user from its caller and checked only membership, so raw SQL on `crove_app` (an injection, a leaked database credential) could seal a context as any member of any org. This section moves the binding into the database. Sections 1 to 8 stay as they are.
+
+- **The token.** After the checks of sections 1 to 5 pass, the runtime signs a context token for the transaction it is about to open: `v1.<user>.<session|->.<org>.<aal1|aal2>.<mfa epoch|->.<exp epoch>.<signature>`, where the signature is HMAC-SHA256 (hex) of everything before it under the deployment's context token key. The kernel does not verify Supabase Auth tokens in PostgreSQL: hosted Supabase signs them with ES256 or RS256 keys from a JWKS that the database cannot fetch or verify, and the stream rebuilds actors outside a request, so the runtime is the one place that sees every verified actor.
+- **The key.** 32 to 64 random bytes, `CROVE_CONTEXT_TOKEN_KEY` (base64), held by the kernel and installed in the database by the migration runner through `crove_kernel.context_token_key_install`, as a bind parameter and never as a statement literal, so it never reaches `pg_stat_statements` or a statement log. The database keeps it as its HMAC pads in `crove_kernel.context_token_key`, which no login role may read or write. `docker compose run --rm --no-deps crove context-token-key` prints a new one; the boot refuses the test suites' key on a public URL, and the API checks at boot, through `context_token_valid`, that its key is the database's.
+- **Entering.** `crove_kernel.enter_user_context(org, token)`, granted to `crove_app` alone, refuses a token whose signature does not verify (`CONTEXT_TOKEN_INVALID`), one made for another org (`CONTEXT_TOKEN_ORG`), one past its expiry (`CONTEXT_TOKEN_EXPIRED`), and one naming a session revoked for good (`SESSION_REVOKED`) or in this org (`SESSION_REVOKED_IN_ORG`). Everything else is `enter_context`'s: membership, the org's state, the legal entity scope, the re-entry guard, the seal. The comparison of signatures runs over every byte, under the current and the previous key, whatever matched.
+- **Lifetime and clock skew.** A token lives 60 seconds by the kernel's clock: it is signed right before the transaction opens and used once. The database checks the expiry against its own clock, with 30 seconds either way for skew between the two hosts: it refuses a token once its clock is 30 seconds past the expiry, and a token whose expiry lies more than 90 seconds ahead of it. A skew of more than 30 seconds fails closed (every request refused), never open.
+- **Rotation.** Installing a new key keeps the one it replaces as the previous key and drops any older one, so a rotation never cuts a request in flight, and tokens signed with the old key stop verifying within the TTL once the next rotation runs. Rotate by setting the new key on the migration job and the kernel together, running the migration job first.
+- **Two steps** (AGENTS.md, changing an invariant on purpose). Step 1 (#1822 PR A) adds the token path and moves the tests to it; `enter_context` stays granted to `crove_app`, and a kernel without a key keeps today's path, so nothing changes for a deployment that has not set one. Step 2 (PR B) revokes `enter_context` from `crove_app` and makes the key required at boot, failing closed; it lands only after the key is installed in production.
+- **Not yet in the seal.** The session, `aal` and MFA time travel in the token but are not yet part of the sealed context, so the database does not check P11 (fresh MFA for R3) itself; the kernel still does (section 5). A later issue may add them.
 
 ## Consequences
 
