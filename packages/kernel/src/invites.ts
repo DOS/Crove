@@ -453,7 +453,7 @@ export const acceptInvite = defineCommand({
       // A scoped invite (#1281): the entities, and whether the definer granted them. An existing member's acceptance of
       // a scoped invite is refused (#1459), so scope_applied is false only for an unscoped invite.
       legal_entity_ids: invite.legal_entity_ids,
-      scope_applied: invite.legal_entity_ids !== null && !alreadyMember,
+      scope_applied: invite.legal_entity_ids !== null,
     });
     await ctx.activity(
       'kernel.member',

@@ -240,6 +240,10 @@ suite('invites scoped to legal entities on PostgreSQL (#1281)', () => {
     expect(await inviteStatus(o.orgId, scoped.inviteId)).toBe('revoked');
     expect(await inviteStatus(o.orgId, asAdmin.inviteId)).toBe('revoked');
     expect(await inviteStatus(o.orgId, plain.inviteId)).toBe('pending');
+    const revokedBy = await admin(
+      async (c) => (await c.query<{ revoked_by: string }>('SELECT revoked_by FROM crove_kernel.member_invite WHERE org_id = $1 AND id = $2', [o.orgId, scoped.inviteId])).rows[0]?.revoked_by,
+    );
+    expect(revokedBy).toBe(o.owner.id);
     const audit = await admin(
       async (c) =>
         (
@@ -250,9 +254,20 @@ suite('invites scoped to legal entities on PostgreSQL (#1281)', () => {
         ).rows[0]?.detail,
     );
     expect([...(audit?.revoked_invites ?? [])].sort()).toEqual([scoped.inviteId, asAdmin.inviteId].sort());
-    // Promoted back to owner, nothing is restored: the revoked invite stays revoked.
+    // Promoted back to owner, nothing is restored or revoked: the revoked invite stays revoked, the plain one pending.
     await runtime.execute('kernel.member.change_role', { userId: coOwner.id, role: 'owner' }, { actor: asMfa(o.owner.id), orgId: o.orgId });
     expect(await inviteStatus(o.orgId, scoped.inviteId)).toBe('revoked');
+    expect(await inviteStatus(o.orgId, plain.inviteId)).toBe('pending');
+    const promotion = await admin(
+      async (c) =>
+        (
+          await c.query<{ detail: { revoked_invites: string[]; role: string } }>(
+            `SELECT detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'kernel.member.change_role' AND outcome = 'ok' AND target_id = $2 AND detail->>'role' = 'owner'`,
+            [o.orgId, coOwner.id],
+          )
+        ).rows[0]?.detail,
+    );
+    expect(promotion?.revoked_invites).toEqual([]);
   });
 
   it('never changes an existing member\'s access', async () => {
