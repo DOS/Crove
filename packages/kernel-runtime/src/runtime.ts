@@ -1,6 +1,7 @@
 // The single write path. Every state change is a typed command executed through Runtime.execute(),
 // inside one transaction that enters the tenant context checked by RLS, and writes audit + outbox.
-import { sql, type KyselyPlugin, type RawBuilder, type Transaction } from 'kysely';
+import { PostgresQueryCompiler, sql, type KyselyPlugin, type RawBuilder, type Transaction } from 'kysely';
+import { randomUUID } from 'node:crypto';
 import { v7 as uuidv7 } from 'uuid';
 import type { z } from 'zod';
 import { contextTaint, singleCell, type CellResolver, type Database, type Db, type MemberRole } from '@crove/db';
@@ -864,7 +865,7 @@ function countWrites(counters: readonly { n: number }[], closed: () => boolean, 
   const count = () => {
     for (const counter of counters) counter.n += 1;
   };
-  return {
+  return Object.freeze({
     transformQuery: ({ node }) => {
       if (closed()) throw new Error(`command ${command}: a statement on ctx.trx after the handler returned (#1710)`);
       count();
@@ -874,7 +875,122 @@ function countWrites(counters: readonly { n: number }[], closed: () => boolean, 
       count();
       return result;
     },
-  };
+  } satisfies KyselyPlugin);
+}
+
+// The statements of a SQL text as PostgreSQL's lexer splits them: each with its comments taken out and its literals
+// kept, split at the semicolons outside a string ('...', E'...' with backslash escapes, U&'...'), a quoted identifier
+// ("..."), a dollar-quoted body ($tag$...$tag$), a line comment (--) or a block comment (/* */, nested). An identifier
+// goes on over non-ASCII characters and $, as in PostgreSQL. backslashes: read a backslash as an escape in every
+// string, as PostgreSQL does with standard_conforming_strings off (a handler could turn it off for its transaction).
+function sqlStatements(text: string, backslashes = false): string[] {
+  const statements: string[] = [];
+  let current = '';
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i] as string;
+    const next = text[i + 1];
+    if (ch === '-' && next === '-') {
+      // PostgreSQL ends a line comment at a carriage return as well as a newline.
+      while (i < text.length && text[i] !== '\n' && text[i] !== '\r') i += 1;
+      current += ' ';
+      continue;
+    }
+    if (ch === '/' && next === '*') {
+      let depth = 1;
+      i += 2;
+      while (i < text.length && depth > 0) {
+        if (text[i] === '/' && text[i + 1] === '*') {
+          depth += 1;
+          i += 2;
+        } else if (text[i] === '*' && text[i + 1] === '/') {
+          depth -= 1;
+          i += 2;
+        } else i += 1;
+      }
+      current += ' ';
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      const escapes = ch === "'" && (backslashes || (/[eE]$/.test(current) && !/[\w$\u0080-￿]$/.test(current.slice(0, -1))));
+      let j = i + 1;
+      while (j < text.length) {
+        if (escapes && text[j] === '\\') j += 2;
+        else if (text[j] === ch && text[j + 1] === ch) j += 2;
+        else if (text[j] === ch) break;
+        else j += 1;
+      }
+      current += text.slice(i, j + 1);
+      i = j + 1;
+      continue;
+    }
+    if (ch === '$' && !/[\w$\u0080-￿]$/.test(current)) {
+      const tag = /^\$([A-Za-z_\u0080-￿][\w\u0080-￿]*)?\$/.exec(text.slice(i));
+      if (tag) {
+        const close = text.indexOf(tag[0], i + tag[0].length);
+        const stop = close === -1 ? text.length : close + tag[0].length;
+        current += text.slice(i, stop);
+        i = stop;
+        continue;
+      }
+    }
+    if (ch === ';') {
+      statements.push(current);
+      current = '';
+      i += 1;
+      continue;
+    }
+    current += ch;
+    i += 1;
+  }
+  statements.push(current);
+  return statements;
+}
+
+// Why a statement would take control of the transaction from the runtime, or null. The runtime opens, commits and
+// rolls back the transaction, and owns the savepoints named crove_* (a tryRun's). A handler may set, release and roll
+// back to savepoints of its own (Social's digest does, around one mail), which cannot reach past the runtime's: a
+// ROLLBACK TO a savepoint set before a tryRun's removes the runtime's savepoint too, and its own rollback then fails.
+function transactionControl(statement: string): string | null {
+  const text = statement.trim().replace(/^[(\s]+/, '').toUpperCase();
+  if (/^(?:BEGIN|START|COMMIT|END|ABORT|PREPARE)\b/.test(text)) return text.split(/\s+/)[0] ?? text;
+  const savepoint = /^(?:SAVEPOINT|RELEASE(?:\s+SAVEPOINT)?|ROLLBACK(?:\s+(?:WORK|TRANSACTION))?\s+TO(?:\s+SAVEPOINT)?)\s+(\S+)/.exec(text);
+  if (savepoint) {
+    const name = (savepoint[1] ?? '').replace(/^"|"$/g, '');
+    // A name spelled with Unicode escapes (U&"...") is refused rather than decoded.
+    return name.startsWith('CROVE_') || name.startsWith('U&') ? `a savepoint of the runtime (${name.toLowerCase()})` : null;
+  }
+  if (/^(?:SAVEPOINT|RELEASE|ROLLBACK)\b/.test(text)) return text.split(/\s+/)[0] ?? text;
+  return null;
+}
+
+// Refuses a statement of a handler (or a query) that takes control of the transaction (#1831, transactionControl).
+// It reads the query as it will run: compiled to SQL, values as placeholders, every statement of it as PostgreSQL's
+// lexer splits them (the simple query protocol runs several), once with standard strings and once with backslash
+// escapes in every string, so a statement either reading finds is refused. The handler adds no plugin after this one (the
+// invariant suite's scan refuses withPlugin in server sources), so the node it checks is the node that runs.
+// On top, fail closed: a query is one statement (no handler needs several in one), and no statement runs once the
+// handler settled (closed), whether or not its writes are checked: a refused nested command's late statement would
+// otherwise land after its savepoint rolled back.
+function refuseTransactionControl(command: string, closed: () => boolean = () => false): KyselyPlugin {
+  const compiler = new PostgresQueryCompiler();
+  return Object.freeze({
+    transformQuery: ({ node, queryId }) => {
+      if (closed()) throw new Error(`command ${command}: a statement on ctx.trx after the handler returned (#1831)`);
+      const text = compiler.compileQuery(node, queryId).sql;
+      for (const statements of [sqlStatements(text), sqlStatements(text, true)]) {
+        if (statements.slice(1).some((statement) => statement.trim() !== '')) {
+          throw new Error(`command ${command}: one query holds several statements, which the runtime refuses (#1831)`);
+        }
+        for (const statement of statements) {
+          const control = transactionControl(statement);
+          if (control !== null) throw new Error(`command ${command}: ${control} controls the transaction, which is the runtime's (#1831)`);
+        }
+      }
+      return node;
+    },
+    transformResult: async ({ result }) => result,
+  } satisfies KyselyPlugin);
 }
 
 // The rows inserted, updated and deleted so far in this transaction, per crove_* table (#1710). A partition counts
@@ -1510,12 +1626,34 @@ export class Runtime {
     // The handler's own statements, counted for the scope through its ctx.trx: on the scope's counter, and in a caller's
     // scope also on the counters of the nested runs this one is part of (base.writeCounters).
     const counters: readonly { n: number }[] = scope === null ? [] : writeCheck !== null ? [scope.statements] : (base.writeCounters ?? [scope.statements]);
-    const handlerTrx = scope === null ? trx : trx.withPlugin(countWrites(counters, () => closed, def.name));
+    // Transaction control is the runtime's: a handler's raw COMMIT or ROLLBACK, or a savepoint of the runtime's, could
+    // end the command's atomicity or keep a refused nested command's writes past its rollback (#1831), whether or not
+    // its writes are checked.
+    const guardedTrx = trx.withPlugin(refuseTransactionControl(def.name, () => closed));
+    const handlerTrx = scope === null ? guardedTrx : guardedTrx.withPlugin(countWrites(counters, () => closed, def.name));
     // Whether the writes of a nested command are its own to declare (it declares writes) or this command's.
     const ownsWrites = (name: string): boolean => this.#commands.get(name)?.writes !== undefined;
     // Set once the handler settled: from then on the runtime writes this command's rows, and nothing the handler
     // left running may write, run a command or roll back to a savepoint in this transaction.
     let closed = false;
+    // The rows the runtime is writing for the handler (ctx.emit, ctx.activity, ctx.numbering) right now. The handler may
+    // not await them; they still finish before the command does, and before a refused command's savepoint rolls back,
+    // so no row of it lands after its rollback (#1831).
+    const writing = new Set<Promise<unknown>>();
+    const pending = <T>(work: () => Promise<T>): Promise<T> => {
+      const promise = work();
+      writing.add(promise);
+      void promise.then(
+        () => writing.delete(promise),
+        () => writing.delete(promise),
+      );
+      // The handler gets a promise of its own, so a failure it neither awaits nor catches is still an unhandled
+      // rejection, as before the tracking above handled the original.
+      return promise.then((value) => value);
+    };
+    const settleWriting = async () => {
+      while (writing.size > 0) await Promise.allSettled(writing);
+    };
     const refuseClosed = (what: string) => {
       if (closed) throw new Error(`command ${def.name}: ${what} after the handler returned`);
     };
@@ -1527,31 +1665,33 @@ export class Runtime {
       proposalId: base.proposalId,
       now: new Date(),
       build: this.build,
-      emit: async (type, payload) => {
-        refuseClosed('ctx.emit');
-        if (!type.startsWith(`${def.name.split('.')[0]}.`)) throw new Error(`command ${def.name} cannot emit ${type}`);
-        const { rows } = await aside(() => sql<{ id: string }>`SELECT crove_kernel.emit(${type}, ${JSON.stringify(payload)}::jsonb, ${commandId}::uuid) AS id`.execute(trx));
-        return rows[0]?.id ?? '';
-      },
-      activity: async (recordType, recordId, kind, summary, options) => {
-        refuseClosed('ctx.activity');
-        await aside(() =>
-          trx
-            .insertInto('crove_kernel.activity')
-            .values({
-              org_id: base.orgId,
-              record_type: recordType,
-              record_id: recordId,
-              kind,
-              summary,
-              actor_id: base.actor.type === 'user' ? base.actor.userId : null,
-              // The database stamps it from the sealed context too (activity_stamp_agent).
-              agent_id: base.actor.type === 'agent' ? base.actor.agentId : null,
-              ...(options?.legalEntityId === undefined ? {} : { legal_entity_id: options.legalEntityId }),
-            })
-            .execute(),
-        );
-      },
+      emit: (type, payload) =>
+        pending(async () => {
+          refuseClosed('ctx.emit');
+          if (!type.startsWith(`${def.name.split('.')[0]}.`)) throw new Error(`command ${def.name} cannot emit ${type}`);
+          const { rows } = await aside(() => sql<{ id: string }>`SELECT crove_kernel.emit(${type}, ${JSON.stringify(payload)}::jsonb, ${commandId}::uuid) AS id`.execute(trx));
+          return rows[0]?.id ?? '';
+        }),
+      activity: (recordType, recordId, kind, summary, options) =>
+        pending(async () => {
+          refuseClosed('ctx.activity');
+          await aside(() =>
+            trx
+              .insertInto('crove_kernel.activity')
+              .values({
+                org_id: base.orgId,
+                record_type: recordType,
+                record_id: recordId,
+                kind,
+                summary,
+                actor_id: base.actor.type === 'user' ? base.actor.userId : null,
+                // The database stamps it from the sealed context too (activity_stamp_agent).
+                agent_id: base.actor.type === 'agent' ? base.actor.agentId : null,
+                ...(options?.legalEntityId === undefined ? {} : { legal_entity_id: options.legalEntityId }),
+              })
+              .execute(),
+          );
+        }),
       audit: (detail) => {
         refuseClosed('ctx.audit');
         const own = { ...detail };
@@ -1574,23 +1714,25 @@ export class Runtime {
         return tracked(() => scope.undoneIfRolledBack((counter) => tryNested<R>(name, nestedInput, options, counter), (result) => result.status === 'refused'));
       },
       numbering: {
-        allocate: async (n) => {
-          refuseClosed('ctx.numbering.allocate');
-          const { rows } = await aside(() => sql<{ period_key: string; number: string; allocation_id: string }>`
-            SELECT a.period_key, a.number::text AS number, a.allocation_id
-            FROM crove_kernel.allocate_number(${n.legalEntityId}::uuid, ${n.docType}::text, ${n.documentDate}::date, ${n.targetType}::text, ${n.targetId}::uuid) a`.execute(trx));
-          const row = rows[0];
-          const number = Number(row?.number);
-          if (!row || !Number.isSafeInteger(number) || number < 1) throw new Error(`command ${def.name}: allocate_number answered no number`);
-          return { periodKey: row.period_key, number, allocationId: row.allocation_id };
-        },
-        void: async (n) => {
-          refuseClosed('ctx.numbering.void');
-          const { rows } = await aside(() => sql<{ id: string }>`SELECT crove_kernel.void_number(${n.allocationId}::uuid, ${n.reason}::text) AS id`.execute(trx));
-          const voidId = rows[0]?.id;
-          if (!voidId) throw new Error(`command ${def.name}: void_number answered no void`);
-          return { voidId };
-        },
+        allocate: (n) =>
+          pending(async () => {
+            refuseClosed('ctx.numbering.allocate');
+            const { rows } = await aside(() => sql<{ period_key: string; number: string; allocation_id: string }>`
+              SELECT a.period_key, a.number::text AS number, a.allocation_id
+              FROM crove_kernel.allocate_number(${n.legalEntityId}::uuid, ${n.docType}::text, ${n.documentDate}::date, ${n.targetType}::text, ${n.targetId}::uuid) a`.execute(trx));
+            const row = rows[0];
+            const number = Number(row?.number);
+            if (!row || !Number.isSafeInteger(number) || number < 1) throw new Error(`command ${def.name}: allocate_number answered no number`);
+            return { periodKey: row.period_key, number, allocationId: row.allocation_id };
+          }),
+        void: (n) =>
+          pending(async () => {
+            refuseClosed('ctx.numbering.void');
+            const { rows } = await aside(() => sql<{ id: string }>`SELECT crove_kernel.void_number(${n.allocationId}::uuid, ${n.reason}::text) AS id`.execute(trx));
+            const voidId = rows[0]?.id;
+            if (!voidId) throw new Error(`command ${def.name}: void_number answered no void`);
+            return { voidId };
+          }),
       },
     };
     // ctx.run and ctx.tryRun call these only while the handler runs, after both are defined.
@@ -1613,7 +1755,7 @@ export class Runtime {
       this.#savepointSeq += 1;
       // With a random part: ROLLBACK TO goes to the newest savepoint of that name, so a nested handler that could guess
       // it could set its own, shadow this one, and keep its writes while the caller sees a refusal (#1797).
-      const savepoint = sql.raw(`crove_try_run_${this.#savepointSeq}_${uuidv7().replaceAll('-', '')}`);
+      const savepoint = sql.raw(`crove_try_run_${this.#savepointSeq}_${randomUUID().replaceAll('-', '')}`);
       await sql`SAVEPOINT ${savepoint}`.execute(trx);
       // Undoes the nested command. Every path that does not return its value takes it, so a handler that catches the
       // error and goes on never keeps a refused or failed command's writes, and an aborted transaction is usable again.
@@ -1724,14 +1866,19 @@ export class Runtime {
       closed = true;
     } catch (error) {
       closed = true;
-      // A nested command the handler left running still uses this transaction's connection: let it settle before the
-      // transaction rolls back.
+      // A nested command or a runtime write the handler left running still uses this transaction's connection: let
+      // them settle before the transaction (or a tryRun's savepoint) rolls back.
+      await settleWriting();
       await settleRunning();
       throw error;
     }
+    // Read before waiting: a nested command the handler left running may fail while the runtime's writes settle, and
+    // must still fail this command.
+    const leftRunning = running.size > 0;
+    await settleWriting();
     // Before the runtime writes this command's rows: a nested command still running would share the connection with
     // them, and a tryRun's rollback could undo them, so the command fails instead and commits nothing.
-    if (await settleRunning()) throw new Error(`command ${def.name}: the handler returned while a nested command was still running`);
+    if ((await settleRunning()) || leftRunning) throw new Error(`command ${def.name}: the handler returned while a nested command was still running`);
     if (writeCheck !== null) {
       if (writeCheck.unmeasured) {
         throw new Error(
@@ -2041,7 +2188,7 @@ export class Runtime {
         reached = true;
         this.authorizeQuery(def, options.actor, entered);
         refuseStreamed(def);
-        return (await def.handler(this.queryContext(trx, options.orgId, options.actor, entered), input)) as O;
+        return (await def.handler(this.queryContext(trx.withPlugin(refuseTransactionControl(name)), options.orgId, options.actor, entered), input)) as O;
       });
     } catch (error) {
       const domain = toDomainError(error);
@@ -2077,7 +2224,7 @@ export class Runtime {
           const entered = await this.enterContext(trx, options.actor, options.orgId);
           reached = true;
           this.authorizeQuery(def, options.actor, entered);
-          return (await def.handler(this.queryContext(trx, options.orgId, options.actor, entered), input, sink)) as O;
+          return (await def.handler(this.queryContext(trx.withPlugin(refuseTransactionControl(name)), options.orgId, options.actor, entered), input, sink)) as O;
         });
     } catch (error) {
       const domain = toDomainError(error);

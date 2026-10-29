@@ -4,8 +4,9 @@
 // batch verifies with its own version. A policy restated, or changed before its doc type's first number, changes no
 // anchored row. The database owner (here a superuser) disables the triggers and switches a doc type's reset (monthly to
 // yearly), deletes a policy row and adds one for a doc type in use: the verifier fails on each, on the version 5
-// batches only.
-// Only the worker may run the series hashes.
+// batches only. A series numbered monthly under a reset switched back to yearly before the archiver anchored it verifies
+// as written, and fails as series_period_mismatch (#1811, #1820).
+// Only the worker may run the series hashes and the series misfits.
 // Part of the invariant suite: CI runs this file from the base branch on protected-path PRs (AGENTS.md).
 // Set CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
 import { randomUUID } from 'node:crypto';
@@ -170,16 +171,20 @@ suite('WORM fact stream: the number series reset policy on PostgreSQL (#1623)', 
     await root.end();
   });
 
-  it('lets only the worker run the series hashes', async () => {
-    const allowed = await admin(async (c) => {
-      const { rows } = await c.query<{ role: string }>(
-        `SELECT r AS role FROM unnest(ARRAY['crove_app', 'crove_worker', 'crove_tenant', 'crove_definer_tenant', 'crove_prober']) r
-         WHERE has_function_privilege(r, 'crove_kernel.archive_series_hashes(timestamptz,timestamptz)', 'EXECUTE')`,
-      );
-      return rows.map((r) => r.role);
-    });
-    expect(allowed).toEqual(['crove_worker']);
+  it('lets only the worker run the series hashes and the series misfits', async () => {
+    for (const fn of ['crove_kernel.archive_series_hashes(timestamptz,timestamptz)', 'crove_kernel.archive_series_misfits()']) {
+      const allowed = await admin(async (c) => {
+        const { rows } = await c.query<{ role: string }>(
+          `SELECT r AS role FROM unnest(ARRAY['crove_app', 'crove_worker', 'crove_tenant', 'crove_definer_tenant', 'crove_prober']) r
+           WHERE has_function_privilege(r, $1, 'EXECUTE')`,
+          [fn],
+        );
+        return rows.map((r) => r.role);
+      });
+      expect(allowed, fn).toEqual(['crove_worker']);
+    }
     await expect(sql`SELECT * FROM crove_kernel.archive_series_hashes('epoch', now())`.execute(db)).rejects.toThrow(/permission denied/);
+    await expect(sql`SELECT * FROM crove_kernel.archive_series_misfits()`.execute(db)).rejects.toThrow(/permission denied/);
   });
 
   it('anchors the series made before the switch in the first version 5 batch, each with its reset, and later ones in their own window', async () => {
@@ -292,5 +297,31 @@ suite('WORM fact stream: the number series reset policy on PostgreSQL (#1623)', 
     expect(result.problems.every((p) => p.code === 'row_changed' && p.ref?.startsWith('number_series:'))).toBe(true);
     // The version 4 batch, which predates the series rows, still verifies as written.
     expect(result.problems.filter((p) => p.seq === 1)).toEqual([]);
+  });
+
+  it('fails the verifier on a series numbered monthly under a reset switched back to yearly before it was anchored (#1811, #1820)', async () => {
+    // Monthly before the doc type's first number, as the owner may; the first number opens the series 2026-11.
+    await setPolicy('test.planted', 'monthly');
+    const planted = await allocate('test.planted', '2026-11-05');
+    // The database owner switches the reset back to yearly with the triggers off, inside the archiver's lag.
+    await admin(async (c) => {
+      await c.query(`ALTER TABLE crove_kernel.number_series_policy DISABLE TRIGGER USER`);
+      await c.query(`UPDATE crove_kernel.number_series_policy SET reset = 'yearly' WHERE org_id = $1 AND doc_type = 'test.planted'`, [orgId]);
+      await c.query(`ALTER TABLE crove_kernel.number_series_policy ENABLE TRIGGER USER`);
+    });
+    // Past the lag, after the last batch's window.
+    await age(15);
+    expect(await writeArchive(worker, store, { lagSeconds: 600 })).toBeGreaterThan(0);
+    const ref = `number_series:${orgId}:${planted}`;
+    const batches = await readBatches(await store.list('chain/v1/'));
+    const holder = batches.find((b) => b.rows.some(([r]) => r === ref));
+    expect(holder?.version).toBeGreaterThanOrEqual(5);
+
+    const result = await verifyArchive(worker, store);
+    expect(result.ok).toBe(false);
+    // Anchored as {period_key: '2026-11', reset: 'yearly'}, its row verifies as written: only its period key gives it away.
+    expect(result.problems.filter((p) => p.ref === ref)).toEqual([{ code: 'series_period_mismatch', seq: holder?.seq, ref }]);
+    // The series whose reset was switched after they were anchored are reported as changed rows, not again as misfits.
+    expect(result.problems.filter((p) => p.code === 'series_period_mismatch')).toHaveLength(1);
   });
 });
