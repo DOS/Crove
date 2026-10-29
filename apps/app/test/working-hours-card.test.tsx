@@ -80,9 +80,9 @@ describe('WorkingHoursCard', () => {
     for (const input of native) expect(input).toContain('aria-hidden="true"');
     expect(inputs.filter((i) => i.includes(`placeholder="${en.common.datePlaceholder}"`))).toHaveLength(2);
     expect(inputs.filter((i) => i.includes(`placeholder="${en.common.timePlaceholder}"`))).toHaveLength(2);
-    // Midnight at the end of the day reads 00:00, as it is typed.
+    // Midnight at the end of the day reads 00:00, as it is typed: the start and the end, each field and its picker.
     const monday = html.split('<li')[1] ?? '';
-    expect(monday.match(/value="00:00"/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(monday.match(/value="00:00"/g)).toHaveLength(4);
   });
 
   it('says when the default hours apply, and offers a viewer nothing to change', () => {

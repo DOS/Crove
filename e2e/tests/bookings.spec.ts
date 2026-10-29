@@ -89,7 +89,8 @@ test('a visitor books on the public page, the host sees it in the app, cancels i
 
   await test.step('Settings shows the hours as 24-hour times and the days off as dd/mm/yyyy (#1428)', async () => {
     // Dates on the Vietnamese wall clock, three weeks ahead so the days off list shows them.
-    const day = (offset: number) => new Date(Date.now() + 7 * 3_600_000 + offset * 86_400_000).toISOString().slice(0, 10);
+    const today = Date.now() + 7 * 3_600_000;
+    const day = (offset: number) => new Date(today + offset * 86_400_000).toISOString().slice(0, 10);
     const dmy = (iso: string) => iso.split('-').reverse().join('/');
     await page.getByRole('navigation').getByRole('link', { name: 'Cài đặt' }).click();
     // The host's hours run all day: from 00:00 to midnight at the end of the day, which reads 00:00 too.
