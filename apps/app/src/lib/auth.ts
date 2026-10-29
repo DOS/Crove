@@ -130,6 +130,17 @@ export async function secondFactorStillOwed(client: Pick<Client, 'mfa'> = auth()
   return within(needsSecondFactorNow(client), true);
 }
 
+// What a request refused with MFA_REQUIRED leads to (#1611, #1912): the challenge when the session still owes its second
+// factor, or a failed check; otherwise the refused requests go again, now with the session this tab has verified. A
+// burst sent just before this tab saved that session would otherwise keep its error on screen: such as the refresh the
+// invalidation stream asks for when the server closes it because the factor was verified (reason 'mfa'), whose queries
+// do not retry an MFA refusal by themselves.
+export async function afterMfaRefusal(deps: { stillOwed: () => Promise<boolean>; openChallenge: () => void; retryRefused: () => void }): Promise<void> {
+  const owed = await deps.stillOwed().catch(() => true);
+  if (owed) deps.openChallenge();
+  else deps.retryRefused();
+}
+
 // Supabase Auth error codes with a message of their own; any other error shows the server's message.
 const AUTH_ERRORS = [
   'invalid_credentials',

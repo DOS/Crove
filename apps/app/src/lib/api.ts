@@ -5,7 +5,7 @@ import { createTanstackQueryUtils } from '@orpc/tanstack-query';
 import { MutationCache, QueryCache, QueryClient } from '@tanstack/react-query';
 import { DIRECT_UPLOAD_MAX_BYTES, MAX_IMPORT_BYTES, MAX_SOCIAL_VIDEO_BYTES, MAX_UPLOAD_BYTES, type contract, type UploadPurpose } from '@crove/kernel-contract';
 import { activeLocale, translator } from '../i18n/runtime.ts';
-import { accessToken, auth, getConfig, secondFactorStillOwed } from './auth.ts';
+import { accessToken, afterMfaRefusal, auth, getConfig, secondFactorStillOwed } from './auth.ts';
 import { ClientError, apiErrorFromResponse, describeError, isMfaRequired, isOrgAccessRevoked, isUnauthenticated, retryWhileBusy } from './errors.ts';
 import { createSessionErrorHandler, rememberOrgLeft, requestHeaders, takeOrgLeft } from './org-access.ts';
 
@@ -66,15 +66,15 @@ const onError = createSessionErrorHandler({
   openMfa: () => {
     if (window.location.pathname === '/mfa' || checkingMfa) return;
     // A request sent just before this tab verified a second factor is refused too (#1611): loading /mfa then would drop
-    // the screen and the work under way on it (a step-up's approval and its toast). A failed answer opens /mfa.
-    checkingMfa = secondFactorStillOwed()
-      .catch(() => true)
-      .then((owed) => {
-        if (owed) window.location.assign('/mfa');
-      })
-      .finally(() => {
-        checkingMfa = null;
-      });
+    // the screen and the work under way on it (a step-up's approval and its toast). A failed answer opens /mfa. When
+    // nothing is owed, the queries refused this way load again with the verified session (#1912).
+    checkingMfa = afterMfaRefusal({
+      stillOwed: () => secondFactorStillOwed(),
+      openChallenge: () => window.location.assign('/mfa'),
+      retryRefused: () => void queryClient.invalidateQueries({ predicate: (query) => isMfaRequired(query.state.error) }),
+    }).finally(() => {
+      checkingMfa = null;
+    });
   },
 });
 
