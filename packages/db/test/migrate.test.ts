@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { readMigrations } from '../src/migrate.ts';
+import { applyConcurrentIndexes, CONCURRENT_INDEX_MARKER, concurrentIndexes, readMigrations } from '../src/migrate.ts';
 
 describe('migration files', () => {
   it('hash the same with CRLF and LF line endings', async () => {
@@ -34,6 +34,73 @@ describe('migration files', () => {
     const dir = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
     const files = await readMigrations(dir);
     expect(new Set(files.map((f) => f.version)).size).toBe(files.length);
+  });
+
+  it('reads a file marked to build indexes concurrently, and refuses anything else in it (#1791)', () => {
+    const marked = (body: string) => `-- Indexes on a hot table.\n${CONCURRENT_INDEX_MARKER}\n\n${body}`;
+    expect(concurrentIndexes('a.sql', 'CREATE INDEX IF NOT EXISTS i ON crove_kernel.t (a);')).toBeNull();
+    // The marker counts only among the leading comment lines.
+    expect(concurrentIndexes('a.sql', `SELECT 1;\n${CONCURRENT_INDEX_MARKER}\n`)).toBeNull();
+    expect(
+      concurrentIndexes(
+        'a.sql',
+        marked(
+          "CREATE INDEX CONCURRENTLY IF NOT EXISTS Audit_Event_X_idx ON crove_kernel.audit_event (org_id, occurred_at DESC);\n" +
+            "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS outbox_y_idx ON crove_kernel.outbox_event USING btree (org_id, (payload->>'k')) INCLUDE (id)\n  WHERE status = 'pending';\n",
+        ),
+      ),
+    ).toEqual([
+      { sql: 'CREATE INDEX CONCURRENTLY IF NOT EXISTS Audit_Event_X_idx ON crove_kernel.audit_event (org_id, occurred_at DESC)', name: 'audit_event_x_idx', schema: 'crove_kernel', table: 'audit_event' },
+      {
+        sql: "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS outbox_y_idx ON crove_kernel.outbox_event USING btree (org_id, (payload->>'k')) INCLUDE (id)\n  WHERE status = 'pending'",
+        name: 'outbox_y_idx',
+        schema: 'crove_kernel',
+        table: 'outbox_event',
+      },
+    ]);
+    for (const body of [
+      'CREATE INDEX CONCURRENTLY IF NOT EXISTS i ON crove_kernel.t (a);\nDROP TABLE crove_kernel.t;',
+      'CREATE INDEX CONCURRENTLY i ON crove_kernel.t (a);',
+      'CREATE INDEX IF NOT EXISTS i ON crove_kernel.t (a);',
+      'CREATE INDEX CONCURRENTLY IF NOT EXISTS i ON t (a);',
+      'CREATE INDEX CONCURRENTLY IF NOT EXISTS ON crove_kernel.t (a);',
+      'BEGIN;\nCREATE INDEX CONCURRENTLY IF NOT EXISTS i ON crove_kernel.t (a);\nCOMMIT;',
+      'CREATE INDEX CONCURRENTLY IF NOT EXISTS i ON crove_kernel.t (a);\n-- a comment between statements\n',
+      'CREATE INDEX CONCURRENTLY IF NOT EXISTS i ON crove_kernel.t (a) /* x */;',
+      'CREATE INDEX CONCURRENTLY IF NOT EXISTS i ON crove_kernel.t ((f($$x$$)));',
+      'CREATE INDEX CONCURRENTLY IF NOT EXISTS "I" ON crove_kernel.t (a);',
+      "CREATE INDEX CONCURRENTLY IF NOT EXISTS i ON crove_kernel.t (a) WHERE b = 'x;DROP TABLE crove_kernel.t;--';",
+      "CREATE INDEX CONCURRENTLY IF NOT EXISTS i ON crove_kernel.t (a) WHERE b = E'\\'';",
+      '',
+    ]) {
+      expect(() => concurrentIndexes('a.sql', marked(body)), body).toThrow(/marked -- crove:concurrent-index but/);
+    }
+  });
+
+  it('refuses a name longer than the 63 bytes PostgreSQL keeps (#1791 review)', () => {
+    const name = `i_${'x'.repeat(62)}`;
+    expect(() => concurrentIndexes('a.sql', `${CONCURRENT_INDEX_MARKER}\nCREATE INDEX CONCURRENTLY IF NOT EXISTS ${name} ON crove_kernel.t (a);\n`)).toThrow(
+      new RegExp(`names ${name}, longer than the 63 bytes`),
+    );
+    expect(concurrentIndexes('a.sql', `${CONCURRENT_INDEX_MARKER}\nCREATE INDEX CONCURRENTLY IF NOT EXISTS ${name.slice(0, 63)} ON crove_kernel.t (a);\n`)).toHaveLength(1);
+  });
+
+  it('stops the run when the session settings cannot be restored after good builds, and keeps a build error first (#1791 review)', async () => {
+    // A client that answers the settings read and the pinning, refuses the restore and, when told to, the build.
+    const client = (buildFails: boolean) =>
+      ({
+        escapeIdentifier: (s: string) => `"${s}"`,
+        query: async (sql: string) => {
+          if (sql.includes("current_setting('search_path')")) return { rows: [{ path: 'public', statement: '0', lock: '0' }] };
+          if (sql.includes("set_config('search_path', 'pg_catalog, pg_temp'")) return { rows: [] };
+          if (sql.includes('set_config($1, $2, false)')) throw new Error('restore refused');
+          if (buildFails) throw new Error('build refused');
+          return { rows: [] };
+        },
+      }) as unknown as Parameters<typeof applyConcurrentIndexes>[0];
+    await expect(applyConcurrentIndexes(client(false), 'a.sql', [])).rejects.toThrow(/could not restore the session's settings after the index builds: restore refused/);
+    const index = { sql: 'CREATE INDEX CONCURRENTLY IF NOT EXISTS i ON crove_kernel.t (a)', name: 'i', schema: 'crove_kernel', table: 't' };
+    await expect(applyConcurrentIndexes(client(true), 'a.sql', [index])).rejects.toThrow(/build refused/);
   });
 
   it('the repository migrations are not copies of each other', async () => {

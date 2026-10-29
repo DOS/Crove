@@ -196,7 +196,10 @@ export const taxObligationDone = defineCommand({
       .returning('id')
       .executeTakeFirst();
     ctx.audit({ obligation: input.obligation, period: input.period, legalEntityId, already: inserted === undefined });
-    if (inserted) await ctx.activity('kernel.tenant', ctx.orgId, 'org.tax_obligation_done', `Đã xong: ${TAX_OBLIGATION_LABELS[input.obligation]} kỳ ${input.period}`);
+    // One entity's obligation: its row is read only where that entity is (#1725).
+    if (inserted) {
+      await ctx.activity('kernel.tenant', ctx.orgId, 'org.tax_obligation_done', `Đã xong: ${TAX_OBLIGATION_LABELS[input.obligation]} kỳ ${input.period}`, { legalEntityId });
+    }
     return { obligation: input.obligation, period: input.period, legalEntityId, done: true as const };
   },
 });
@@ -219,7 +222,11 @@ export const taxObligationUndo = defineCommand({
       .executeTakeFirst();
     const found = Number(removed.numDeletedRows) > 0;
     ctx.audit({ obligation: input.obligation, period: input.period, legalEntityId, found });
-    if (found) await ctx.activity('kernel.tenant', ctx.orgId, 'org.tax_obligation_undone', `Bỏ đánh dấu đã xong: ${TAX_OBLIGATION_LABELS[input.obligation]} kỳ ${input.period}`);
+    if (found) {
+      await ctx.activity('kernel.tenant', ctx.orgId, 'org.tax_obligation_undone', `Bỏ đánh dấu đã xong: ${TAX_OBLIGATION_LABELS[input.obligation]} kỳ ${input.period}`, {
+        legalEntityId,
+      });
+    }
     return { obligation: input.obligation, period: input.period, legalEntityId, done: false as const };
   },
 });
