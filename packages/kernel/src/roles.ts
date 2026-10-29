@@ -14,7 +14,7 @@ import { BUILTIN_ROLE_KEYS, zId, zRoleAssignInput, type BuiltinRoleKey, type Mem
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext, type QueryContext } from '@crove/kernel-runtime';
 import { lastChiefAccountant } from './approval.ts';
-import { positionsHeldBy, rerouteStrandedTasks } from './task-reroute.ts';
+import { lockChartChanges, positionsHeldBy, rerouteStrandedTasks } from './task-reroute.ts';
 
 const ADMINS: readonly MemberRole[] = ['owner', 'admin'];
 
@@ -98,6 +98,8 @@ export async function myPermissions(ctx: QueryContext): Promise<string[]> {
 async function lockForRoleChange(ctx: CommandContext, targetId: string): Promise<{ actorId: string; role: MemberRole }> {
   if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới giao được vai trò');
   const actorId = ctx.actor.userId;
+  // Before the members' locks: both callers re-route (#1858).
+  await lockChartChanges(ctx);
   const rows = await ctx.trx
     .selectFrom('crove_kernel.tenant_member')
     .select(['user_id', 'role'])
