@@ -334,9 +334,11 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
     const assigned = [
       ...scope.matchAll(new RegExp(`(?<![\\w$.])(?<!\\b(?:const|let|var)\\s+)${escape(name)}\\s*(?:\\*\\*|\\?\\?|\\|\\||&&|[-+*/%&|^])?=(?![=>])\\s*`, 'g')),
     ].filter((w) => ours(w.index ?? 0));
-    // A write the scan cannot follow (a destructuring assignment, `({ raw: facts } = input)`, or a for...of) leaves the
-    // name untraced, as does a let with no value that is never assigned.
-    if (unfollowedWrite(name, scope, from, ours) || (init === '' && assigned.length === 0)) return false;
+    // A write the scan cannot follow (a destructuring assignment, `({ raw: facts } = input)`, or a for...of) is a finding,
+    // and the rest of what the name holds is still read; a let with no value that is never assigned is untraced.
+    if (unfollowedWrite(name, scope, from, ours)) {
+      flag(`${name} is written by a destructuring assignment or a for...of the scan cannot follow; assign it plainly`);
+    } else if (init === '' && assigned.length === 0) return false;
     const isBuilt = (value: string) => BUILT.test(value) || /^new\s+(?:Map|Set)\s*</.test(value);
     // The initializer is read whatever is assigned later (`let facts = { code }; if (redact) facts = {};`).
     if (!isBuilt(init) && !listed) checkHeld(name, init, from, flag, depth);
@@ -419,7 +421,8 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
             break;
           }
         }
-        if (opener === -1 || code[opener] === '(') break;
+        // A bracket after a name is a member access (`previous[field] = ...`), not a pattern.
+        if (opener === -1 || code[opener] === '(' || (code[opener] === '[' && /[\w$)\]]\s*$/.test(code.slice(0, opener)))) break;
         const after = code.slice(opener + balanced(code, opener).length);
         if (/^\s*=(?![=>])/.test(after)) {
           if (!/\b(?:const|let|var)\s*$/.test(code.slice(0, opener))) return true;
@@ -866,6 +869,7 @@ describe('audit facts and classified columns (#1626, #1632)', () => {
   it('fails on aliases, reassignments, computed calls and other audit calls (#1821)', () => {
     const check = (source: string) => scan('fixture.ts', source, classified).map((f) => `${f.fact}: ${f.problem}`);
     const untracedFacts = 'facts: the facts are a name the scan cannot trace; write them out';
+    const unfollowed = 'facts: facts is written by a destructuring assignment or a for...of the scan cannot follow; assign it plainly';
     // A query's column read by the alias it was selected as.
     const aliased = "const before = await ctx.trx.selectFrom('crove_kernel.party').select(['id', 'tax_code as code']).executeTakeFirstOrThrow();";
     expect(check(`${aliased}\nctx.audit({ previous: before.code });`)).toEqual(['previous: the value reads the classified column tax_code as code outside auditValue(...)']);
@@ -894,7 +898,7 @@ describe('audit facts and classified columns (#1626, #1632)', () => {
       'facts: facts.email is a classified column and its value is not auditValue(...)',
       'facts: the value reads the classified column email outside auditValue(...)',
     ]);
-    expect(check('let facts: Record<string, unknown>;\nfacts = {};\n({ raw: facts } = input);\nctx.audit(facts);')).toEqual([untracedFacts]);
+    expect(check('let facts: Record<string, unknown>;\nfacts = {};\n({ raw: facts } = input);\nctx.audit(facts);')).toEqual([unfollowed]);
     expect(check('function fill(facts: Record<string, unknown>) { facts.email = input.email; }\nconst facts = {};\nfill(facts);\nctx.audit(facts);')).toEqual([
       'facts: facts.email is a classified column and its value is not auditValue(...)',
       'facts: the value reads the classified column email outside auditValue(...)',
@@ -936,11 +940,16 @@ describe('audit facts and classified columns (#1626, #1632)', () => {
       'facts: the facts are a name the scan cannot trace; write them out',
     ]);
     expect(check('const { rows } = await sql<{ audit: boolean }>`select 1`.execute(ctx.trx);')).toEqual([]);
-    // A let with no value is traced only through plain assignments; any other write fails closed.
-    const untraced = untracedFacts;
-    for (const write of ['({ facts } = await load(ctx));', '[facts] = rows;', 'for (facts of list) {}', '']) {
-      expect(check(`let facts;\n${write}\nctx.audit(facts);`), write).toEqual([untraced]);
+    // A let with no value is traced only through plain assignments; any other write is a finding, never assigned untraced.
+    for (const write of ['({ facts } = await load(ctx));', '[facts] = rows;', 'for (facts of list) {}']) {
+      expect(check(`let facts;\n${write}\nctx.audit(facts);`), write).toEqual([unfollowed]);
     }
+    expect(check('let facts;\nctx.audit(facts);')).toEqual([untracedFacts]);
+    // An unfollowed write does not hide what the initializer holds.
+    expect(check('let previous = { code: p.tax_code };\nif (replace) ({ previous } = input);\nctx.audit({ previous });')).toEqual([
+      'previous: previous is written by a destructuring assignment or a for...of the scan cannot follow; assign it plainly',
+      'code: the value reads the classified column tax_code outside auditValue(...)',
+    ]);
     expect(check("const facts = { email: input.email };\nthrow new DomainError('X', 409, 'x', undefined, { audit: facts });")).toEqual([
       'email: the key names a classified column and its value is not auditValue(...)',
     ]);
