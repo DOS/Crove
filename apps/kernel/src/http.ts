@@ -1847,7 +1847,8 @@ export function createHttpApp(deps: HttpDeps) {
     const root = relative(process.cwd(), config.WEB_DIST) || '.';
     // The install manifest names the app after the deployment's brand (#1691), read and rendered once like index.html.
     // On the static files' own route, so it stays one of the SPA's public files; revalidated on every fetch, so a
-    // renamed deployment is installed under its new name. Without the file, the static route answers as before.
+    // renamed deployment is installed under its new name. Without the file, or with one that is not JSON, the static
+    // route answers as before.
     const manifestPath = join(config.WEB_DIST, ...WEB_MANIFEST_PATH.split('/').filter(Boolean));
     let manifest: string | null = null;
     app.use('/assets/*', async (c, next) => {
@@ -1855,7 +1856,11 @@ export function createHttpApp(deps: HttpDeps) {
       if (manifest === null) {
         const source = await readFile(manifestPath, 'utf8').catch(() => null);
         if (source === null) return next();
-        manifest = brandedManifest(source, config.BRAND_NAME);
+        try {
+          manifest = brandedManifest(source, config.BRAND_NAME);
+        } catch {
+          return next();
+        }
       }
       return c.body(manifest, 200, { 'content-type': 'application/manifest+json', 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff' });
     });

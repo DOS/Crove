@@ -265,10 +265,25 @@ describe('configuration guards', () => {
         expect(response.headers.get('cache-control')).toBe('no-cache');
         expect(await response.json()).toEqual({ ...rest, name: brand, short_name: brand });
       }
+      // HEAD answers like GET; another method goes on to the static route, as before.
+      const branded = serve({ BRAND_NAME: 'Tên Mới' });
+      const head = await branded.request('/assets/manifest.webmanifest', { method: 'HEAD' });
+      expect(head.status).toBe(200);
+      expect(head.headers.get('content-type')).toBe('application/manifest+json');
+      expect((await branded.request('/assets/manifest.webmanifest', { method: 'POST' })).headers.get('content-type')).not.toBe('application/manifest+json');
       // The other static files are still the files themselves.
-      const script = await serve({ BRAND_NAME: 'Tên Mới' }).request('/assets/app.js');
+      const script = await branded.request('/assets/app.js');
       expect(script.status).toBe(200);
       expect(await script.text()).toBe('export {};\n');
+      // A build without the manifest, or with one that is not JSON: the static route answers as before, nothing breaks.
+      for (const broken of [null, '{ not json']) {
+        await rm(join(dist, 'assets', 'manifest.webmanifest'), { force: true });
+        if (broken !== null) writeFileSync(join(dist, 'assets', 'manifest.webmanifest'), broken);
+        const response = await serve({ BRAND_NAME: 'Tên Mới' }).request('/assets/manifest.webmanifest');
+        expect(response.status, String(broken)).not.toBe(500);
+        expect(response.headers.get('cache-control'), String(broken)).not.toBe('no-cache');
+        if (broken !== null) expect(await response.text()).toBe(broken);
+      }
     } finally {
       await rm(dist, { recursive: true, force: true });
     }
