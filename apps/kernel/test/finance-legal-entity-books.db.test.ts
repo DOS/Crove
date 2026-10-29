@@ -15,6 +15,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove
 import { Runtime } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
 import { TEST_MANIFESTS } from './manifests.ts';
+import { contextToken } from './context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -58,7 +59,7 @@ suite('finance books per legal entity, part 2a (#1280)', () => {
     const c = await appPool.connect();
     try {
       await c.query('BEGIN');
-      await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [userId, orgId]);
+      await c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgId, contextToken(userId, orgId)]);
       const result = await fn(c);
       await c.query(commit ? 'COMMIT' : 'ROLLBACK');
       return result;
@@ -233,7 +234,7 @@ suite('finance books per legal entity, part 2a (#1280)', () => {
           admin(async (a) => {
             await a.query('BEGIN');
             try {
-              await a.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [owner, orgId]);
+              await a.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgId, contextToken(owner, orgId)]);
               await a.query(`SET LOCAL ROLE ${role}`);
               return await a.query(q);
             } finally {

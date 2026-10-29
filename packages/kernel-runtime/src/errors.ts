@@ -146,6 +146,9 @@ export function toDomainError(error: unknown): DomainError {
       if (pg.message?.includes('CONTEXT_REENTRY')) return new DomainError('INTERNAL', 500, 'Lỗi hệ thống');
       // A context or seal that does not verify (plan §4.5 item 5, T11): tampering or a bug, never a user's 403.
       if (pg.message?.includes('CONTEXT_SEAL_INVALID')) return new DomainError('INTERNAL', 500, 'Lỗi hệ thống');
+      // A context token that does not verify, names another org or has expired (#1822): a bug, a wrong key or a clock
+      // far off, never a user's 403.
+      if (pg.message?.includes('CONTEXT_TOKEN_')) return new DomainError('INTERNAL', 500, 'Lỗi hệ thống');
       if (pg.message?.includes('NOT_A_MEMBER')) return new DomainError('NOT_A_MEMBER', 403, 'Bạn không thuộc tổ chức này');
       if (pg.message?.includes('USER_DISABLED')) return new DomainError('USER_DISABLED', 403, 'Tài khoản của bạn đã bị khóa');
       // A write in an agent context without the task lease its run must hold (ADR-0029 section 4): the run lost its

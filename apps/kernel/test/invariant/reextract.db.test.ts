@@ -19,6 +19,7 @@ import { Runtime, fileKey, sha256Hex, type BlobStore } from '@crove/kernel-runti
 import type { ParsedInvoice } from '@crove/l10n-vn';
 import { extractAndPropose, financeCommands, financeQueries } from '@crove/mod-finance';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
+import { contextToken } from './fixtures/context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -346,7 +347,7 @@ suite('re-extraction invariants on PostgreSQL (issue #40)', () => {
     // Not even the runtime roles can rewrite a finished version or delete one.
     const asApp = (statement: string) =>
       db.transaction().execute(async (trx) => {
-        await sql`SELECT crove_kernel.enter_context(${users.owner}::uuid, ${orgA}::uuid)`.execute(trx);
+        await sql`SELECT crove_kernel.enter_user_context(${orgA}::uuid, ${contextToken(users.owner, orgA)}::text)`.execute(trx);
         await sql.raw(statement).execute(trx);
       });
     await expect(asApp(`UPDATE crove_kernel.extraction SET result = '{}'::jsonb WHERE file_id = '${fileId}' AND version = 1`)).rejects.toThrow(/EXTRACTION_IMMUTABLE/);
@@ -357,7 +358,7 @@ suite('re-extraction invariants on PostgreSQL (issue #40)', () => {
     const inserted = await db
       .transaction()
       .execute(async (trx) => {
-        await sql`SELECT crove_kernel.enter_context(${users.owner}::uuid, ${orgA}::uuid)`.execute(trx);
+        await sql`SELECT crove_kernel.enter_user_context(${orgA}::uuid, ${contextToken(users.owner, orgA)}::text)`.execute(trx);
         const { rows: made } = await sql<{ version: number; requested_by: string | null }>`
           INSERT INTO crove_kernel.extraction (org_id, file_id, version, status, requested_by)
           VALUES (${orgA}::uuid, ${fileId}::uuid, 1, 'pending', ${users.admin}::uuid) RETURNING version, requested_by`.execute(trx);

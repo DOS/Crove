@@ -22,6 +22,7 @@ import { createHttpApp } from '../src/http.ts';
 import { createSessionStatusSource } from '../src/sessions.ts';
 import { inProcessExtract } from './extract-service.ts';
 import { TEST_MANIFESTS } from './manifests.ts';
+import { contextToken } from './context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -430,7 +431,7 @@ suite('sales e-invoices (#313)', () => {
     const outcome = async (c: pg.Client, enter: boolean, params: unknown[]) => {
       await c.query('BEGIN');
       try {
-        if (enter) await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [owner.userId, org.orgId]);
+        if (enter) await c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [org.orgId, contextToken(owner.userId, org.orgId)]);
         await c.query(insertLine, params);
         return null;
       } catch (error) {

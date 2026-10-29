@@ -105,7 +105,8 @@ suite('proposals per legal entity and agent position scopes on PostgreSQL (#1538
     const runtimeFor = (url: string) => {
       const pool = createPool({ connectionString: url, max: 4 });
       pools.push(pool);
-      return new Runtime(createDb(pool), { manifests: TEST_MANIFESTS, inputHash }).register({
+      // No context token key: the database starts at a version before enter_user_context (#1822).
+      return new Runtime(createDb(pool), { manifests: TEST_MANIFESTS, contextTokenKey: null, inputHash }).register({
         commands: [...kernelCommands, ...financeCommands, prepare1538, proposal1538],
         queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries],
       });

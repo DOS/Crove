@@ -16,6 +16,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove
 import { Runtime } from '@crove/kernel-runtime';
 import { notesCommands, notesQueries } from '@crove/mod-notes';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
+import { contextToken } from './fixtures/context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -167,7 +168,7 @@ suite('notes purge delays on PostgreSQL (#1733, ADR-0037)', () => {
   it('lists for the sweep only former members past the delay, with ids only, marking the unrecorded, to the worker login outside every context', async () => {
     const callers: Array<[string, string, (c: pg.Client) => Promise<unknown>]> = [
       ['the app login, no context', appUrl, async () => {}],
-      ['an owner of the org', appUrl, (c) => c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [users.owner, orgId])],
+      ['an owner of the org', appUrl, (c) => c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgId, contextToken(users.owner, orgId)])],
       ['the system context', workerUrl, system],
     ];
     for (const [name, url, enter] of callers) {

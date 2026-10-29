@@ -13,6 +13,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
+import { contextToken } from './fixtures/context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -89,7 +90,7 @@ suite('tax code invariants (#430)', () => {
       }
     });
   }
-  const userContext = (userId: string, orgId: string) => ({ sql: 'SELECT crove_kernel.enter_context($1, $2)', params: [userId, orgId] });
+  const userContext = (userId: string, orgId: string) => ({ sql: 'SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', params: [orgId, contextToken(userId, orgId)] });
   const setCode = (orgId: string, code: string | null) => ({ sql: 'UPDATE crove_kernel.tenant SET tax_code = $2 WHERE org_id = $1', params: [orgId, code] });
   // An audit row of the command, as execute() would write it, naming `actorId` and the new value.
   const forgedAudit = (orgId: string, actorId: string, code: string) => ({

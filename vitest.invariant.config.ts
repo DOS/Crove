@@ -5,8 +5,12 @@
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
+// The context token key of the test suites (#1822), as in vitest.config.ts.
+const env = { CROVE_CONTEXT_TOKEN_KEY: Buffer.from('test-only-context-token-key-0123456789').toString('base64') };
+
 export default defineConfig({
   test: {
+    env,
     root: fileURLToPath(new URL('.', import.meta.url)),
     include: ['apps/*/test/invariant/**/*.test.ts', 'packages/*/test/invariant/**/*.test.ts', 'modules/*/test/invariant/**/*.test.ts'],
     exclude: ['**/node_modules/**'],

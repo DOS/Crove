@@ -15,6 +15,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove
 import { Runtime } from '@crove/kernel-runtime';
 import { sourceRevisionError } from '@crove/mod-finance';
 import { TEST_MANIFESTS } from './manifests.ts';
+import { contextToken } from './context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -70,7 +71,7 @@ suite('journal entry source revisions (#1283)', () => {
       if (p.dateStyle) await app.query(`SELECT set_config('DateStyle', $1, false)`, [p.dateStyle]);
       await app.query('BEGIN');
       try {
-        await app.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [userId, orgId]);
+        await app.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgId, contextToken(userId, orgId)]);
         const args = [p.date ?? '2026-10-01', p.description ?? 'Mua văn phòng phẩm', p.sourceType ?? 'test.source', p.sourceId, JSON.stringify(p.lines), p.reverses ?? null];
         const { rows } =
           p.revision === undefined

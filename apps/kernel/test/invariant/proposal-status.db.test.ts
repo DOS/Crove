@@ -19,6 +19,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove
 import { Runtime, type AgentActor } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
+import { contextToken } from './fixtures/context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -71,9 +72,9 @@ suite('proposal status transitions on PostgreSQL (#1707)', () => {
     enter: (c: pg.Client) => Promise<unknown>;
   }
   const writers = (): Writer[] => [
-    { name: 'owner', url: () => appUrl, enter: (c) => c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [owner, orgId]) },
-    { name: 'member', url: () => appUrl, enter: (c) => c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [member, orgId]) },
-    { name: 'viewer', url: () => appUrl, enter: (c) => c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [viewer, orgId]) },
+    { name: 'owner', url: () => appUrl, enter: (c) => c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgId, contextToken(owner, orgId)]) },
+    { name: 'member', url: () => appUrl, enter: (c) => c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgId, contextToken(member, orgId)]) },
+    { name: 'viewer', url: () => appUrl, enter: (c) => c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgId, contextToken(viewer, orgId)]) },
     { name: 'system', url: () => workerUrl, enter: (c) => c.query('SELECT crove_kernel.enter_system_context($1::uuid)', [orgId]) },
   ];
 

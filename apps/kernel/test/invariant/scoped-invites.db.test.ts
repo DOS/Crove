@@ -14,6 +14,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
+import { contextToken } from './fixtures/context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -96,7 +97,7 @@ suite('invites scoped to legal entities on PostgreSQL (#1281)', () => {
     await app.connect();
     try {
       await app.query('BEGIN');
-      await app.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [userId, orgId]);
+      await app.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgId, contextToken(userId, orgId)]);
       const { rows } = await app.query<{ scope: string[] }>('SELECT crove_kernel.ctx_le_scope() AS scope');
       await app.query('ROLLBACK');
       return [...(rows[0]?.scope ?? [])].sort();
@@ -161,7 +162,7 @@ suite('invites scoped to legal entities on PostgreSQL (#1281)', () => {
       await app.connect();
       try {
         await app.query('BEGIN');
-        await app.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [userId, o.orgId]);
+        await app.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [o.orgId, contextToken(userId, o.orgId)]);
         await app.query(
           `INSERT INTO crove_kernel.member_invite (org_id, email, role, invited_by, legal_entity_ids) VALUES ($1, $2, 'member', $3, $4::uuid[])`,
           [o.orgId, `raw-${randomUUID().slice(0, 6)}@scoped.test`, inviter, entities],

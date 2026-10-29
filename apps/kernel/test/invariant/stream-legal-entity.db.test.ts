@@ -29,6 +29,7 @@ import { createHttpApp, type StreamDeps } from '../../src/http.ts';
 import { createSessionStatusSource } from '../../src/sessions.ts';
 import { ENTITY_HINT_TYPES, StreamHub, createDbTicketStore, createPgNotificationSource } from '../../src/stream.ts';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
+import { contextToken } from './fixtures/context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -145,7 +146,7 @@ suite('invariant: invalidation hints honor the legal-entity scope', () => {
     const c = await pool.connect();
     try {
       await c.query('BEGIN');
-      await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [userIds.get('owner'), orgId]);
+      await c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgId, contextToken(userIds.get('owner') as string, orgId)]);
       const { rows } = await c.query<{ id: string }>(
         `SELECT crove_finance.post_journal_entry('2026-10-01'::date, 'stream le invariant', 'test.stream', $1::uuid, $2::jsonb, NULL, 1, $3::uuid) AS id`,
         [
