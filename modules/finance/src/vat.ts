@@ -410,7 +410,8 @@ export const vatPeriodQuery = defineQuery({
 });
 
 // Whether the signed-in member may mark this entity's VAT return filed (#1508): an owner or an admin, or finance.vat.file
-// org-wide or for the entity. finance.vat.return_mark and vat_return_filed_guard decide again.
+// org-wide or for the entity. finance.vat.return_mark and vat_return_filed_guard decide again; roles.db.test.ts pins this
+// answer to what the command does, per member and entity (#1923).
 async function mayFileVat(ctx: QueryContext, legalEntityId: string): Promise<boolean> {
   if (ctx.actor.type !== 'user') return false;
   if (ctx.role === 'owner' || ctx.role === 'admin') return true;

@@ -726,4 +726,51 @@ suite('VAT working per month or quarter (#316)', () => {
     });
     expect((await period('2026-09')).carryForward.previous).toBeNull();
   });
+
+  it("takes a filed mark's audit row only for the row's own legal entity (#1923)", async () => {
+    const [defaultEntity, branch] = await admin(async (c) => {
+      const found = (await c.query<{ id: string }>('SELECT id FROM crove_kernel.legal_entity WHERE org_id = $1 AND is_default', [org.orgId])).rows[0]?.id as string;
+      const made = (
+        await c.query<{ id: string }>(`INSERT INTO crove_kernel.legal_entity (org_id, name, kind, created_by) VALUES ($1, 'Chi nhánh nhật ký', 'branch', $2) RETURNING id`, [
+          org.orgId,
+          owner.userId,
+        ])
+      ).rows[0]?.id as string;
+      return [found, made];
+    });
+    // In the owner's context, past the command: an ok audit row of finance.vat.return_mark as the command writes it
+    // (stamped with the owner and this transaction's time), then a filed row of the default entity. The deferred audit
+    // check runs at once, and the transaction is rolled back either way.
+    const attempt = async (auditEntity: string | null) => {
+      const c = await pool.connect();
+      try {
+        await c.query('BEGIN');
+        await c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [org.orgId, contextToken(owner.userId, org.orgId)]);
+        const detail = { period: '2026-12', done: true, source: 'entered', recorded: true, ...(auditEntity ? { legal_entity_id: auditEntity } : {}) };
+        await c.query(
+          `INSERT INTO crove_kernel.audit_event (org_id, actor_type, actor_id, command, command_id, outcome, input_sha256, detail)
+           VALUES ($1, 'user', $2, 'finance.vat.return_mark', gen_random_uuid(), 'ok', repeat('0', 64), $3::jsonb)`,
+          [org.orgId, owner.userId, JSON.stringify(detail)],
+        );
+        await c.query(
+          `INSERT INTO crove_finance.vat_return_filed (org_id, legal_entity_id, period, status, source, carried_in_amount, deductible_amount, carried_out_amount, marked_by)
+           VALUES ($1, $2, '2026-12', 'filed', 'entered', 0, 0, 0, $3)`,
+          [org.orgId, defaultEntity, owner.userId],
+        );
+        await c.query('SET CONSTRAINTS ALL IMMEDIATE');
+        return null;
+      } catch (error) {
+        return (error as { message: string }).message;
+      } finally {
+        await c.query('ROLLBACK').catch(() => {});
+        c.release();
+      }
+    };
+    // The branch's audit row does not stand for the default entity's mark, nor one that names no entity; the row's own
+    // entity does, in any case.
+    expect(await attempt(branch)).toBe('VAT_RETURN_UNAUDITED');
+    expect(await attempt(null)).toBe('VAT_RETURN_UNAUDITED');
+    expect(await attempt(defaultEntity)).toBeNull();
+    expect(await attempt(defaultEntity.toUpperCase())).toBeNull();
+  });
 });

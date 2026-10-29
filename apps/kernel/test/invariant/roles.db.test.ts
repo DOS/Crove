@@ -691,6 +691,57 @@ suite('role assignments on PostgreSQL (#1279)', () => {
     expect(filed).toEqual([{ entity: o.branch }]);
   });
 
+  it('tells the VAT screen it may mark exactly where finance.vat.return_mark lets it mark (#1923)', async () => {
+    const o = await org();
+    // chief reads every entity (an org-wide accountant) and files the branch's alone, so its default entity answer
+    // comes from the permission, not from a period it cannot read.
+    await o.assign(asMfa(o.owner), o.chief, 'finance.accountant');
+    await o.assign(asMfa(o.owner), o.chief, 'finance.entity_chief_accountant', o.branch);
+    const [wide, only] = [await person('wide'), await person('only')];
+    await withAdmin((c) => c.query("INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member'), ($1, $3, 'member')", [o.orgId, wide, only]));
+    await o.assign(asMfa(o.owner), wide, 'finance.chief_accountant');
+    // The entity role alone limits its holder to the branch: the default entity is out of their sight.
+    await o.assign(asMfa(o.owner), only, 'finance.entity_chief_accountant', o.branch);
+    const actors = { owner: o.owner, admin: o.admin, member: o.member, viewer: o.viewer, chief: o.chief, wide, only };
+    // filable as finance.vat.period answers it (an entity the member cannot read is refused, a screen without the mark),
+    // then whether the command marks, for the default entity and then the branch. Each mark takes a period of its own.
+    let n = 0;
+    const seen: Record<string, boolean[]> = {};
+    for (const [name, userId] of Object.entries(actors)) {
+      seen[name] = [];
+      for (const legalEntityId of [o.defaultEntity, o.branch]) {
+        const period = `${2020 + Math.floor(n / 12)}-${String((n % 12) + 1).padStart(2, '0')}`;
+        n += 1;
+        const filable = await rt.query<{ filable?: boolean }>('finance.vat.period', { period, legalEntityId }, { actor: asUser(userId), orgId: o.orgId }).then(
+          (r) => r.filable === true,
+          (error: unknown) => {
+            expect(error).toMatchObject({ code: 'LEGAL_ENTITY_NOT_ALLOWED', status: 403 });
+            return false;
+          },
+        );
+        const marked = await o
+          .exec(asUser(userId), 'finance.vat.return_mark', { period, done: true, figures: { carriedIn: '0', deductible: '0', carriedOut: '0' }, legalEntityId })
+          .then(
+            () => true,
+            (error: { status?: number }) => {
+              expect(error.status).toBe(403);
+              return false;
+            },
+          );
+        seen[name].push(filable, marked);
+      }
+    }
+    expect(seen).toEqual({
+      owner: [true, true, true, true],
+      admin: [true, true, true, true],
+      member: [false, false, false, false],
+      viewer: [false, false, false, false],
+      chief: [false, false, true, true],
+      wide: [true, true, true, true],
+      only: [false, false, true, true],
+    });
+  });
+
   it('never gives a viewer a role that grants a permission, and a viewer demoted after the grant holds none', async () => {
     const o = await org();
     await expect(o.assign(asMfa(o.owner), o.viewer, 'finance.chief_accountant')).rejects.toMatchObject({ code: 'ROLE_PRIVILEGED_FOR_VIEWER', status: 422 });
