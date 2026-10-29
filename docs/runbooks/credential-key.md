@@ -32,13 +32,19 @@ Rotate when someone who could read the key loses that access, when the key may h
    [credential-reseal] resealed 12, failed 0; left under an older key: 0 active, 3 to reconnect
    ```
 
-   The counts include team chat alert targets. "Active" counts what the next passes will reseal. "To reconnect" counts credentials of connections that are expired, in error or revoked, or whose connecting member left, and chat alert targets whose saver is no longer an owner or admin: their tokens are not used anyway, and they are sealed with the new key when an owner or admin reconnects the channel or saves the team chat again. A token refresh and a reconnect also seal with the new key. To check by hand (as the database owner; no `crove_*` role can read the tables):
+   The counts include team chat alert targets, whether or not the Social module is on. With Social left out (`CROVE_MODULES`), its targets cannot be resealed, so the log counts them apart and says to keep the previous key:
+
+   ```text
+   [credential-reseal] resealed 0, failed 0; left under an older key: 0 active, 0 to reconnect, 2 team chat alerts waiting for the Social module (keep CREDENTIAL_KEY_PREVIOUS)
+   ```
+
+   Turn Social on again (or finish the rotation before turning it off) and they reseal on the next pass. "Active" counts what the next passes will reseal. "To reconnect" counts credentials of connections that are expired, in error or revoked, or whose connecting member left, and chat alert targets whose saver is no longer an owner or admin: their tokens are not used anyway, and they are sealed with the new key when an owner or admin reconnects the channel or saves the team chat again. A token refresh and a reconnect also seal with the new key. To check by hand (as the database owner; no `crove_*` role can read the tables):
 
    ```sql
    SELECT key_id, count(*) FROM crove_kernel.credential GROUP BY key_id;
    SELECT key_id, count(*) FROM crove_social.chat_alert_target GROUP BY key_id;
    ```
-4. When the log shows 0 active left (and the channels and team chats left to reconnect are ones you are ready to reconnect or save again), remove `CREDENTIAL_KEY_PREVIOUS` and restart. A credential still under the old key after that no longer opens: its channel shows as needing a reconnect. A team chat alert target still under the old key no longer opens either: its alerts stop, and a test line from the Channels page says the chat must be saved again.
+4. When the log shows 0 active left and no team chat alerts waiting for the Social module (and the channels and team chats left to reconnect are ones you are ready to reconnect or save again), remove `CREDENTIAL_KEY_PREVIOUS` and restart. A credential still under the old key after that no longer opens: its channel shows as needing a reconnect. A team chat alert target still under the old key no longer opens either: its alerts stop, and a test line from the Channels page says the chat must be saved again.
 
 Only one previous key is kept: finish one rotation (step 4) before starting the next, or envelopes sealed with the oldest key stop opening.
 
