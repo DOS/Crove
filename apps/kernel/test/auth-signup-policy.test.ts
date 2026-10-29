@@ -222,7 +222,7 @@ describe('emailChangeGate (#564 item 4)', () => {
   // the string as it was: Supabase Auth would start the change to the first address.
   it('refuses a body that repeats the email key, exactly or after Go folding', () => {
     for (const body of [
-      '{"email":"me@gmail.com","email":null}',
+      '{"email":"test_user@gmail.com","email":null}',
       '{"EMAIL":"x@evil.test","EMAIL":null}',
       '{"email":"x@evil.test","Email":null}',
       '{"email":"x@evil.test","email":""}',

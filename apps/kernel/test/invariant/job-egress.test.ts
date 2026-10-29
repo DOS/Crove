@@ -9,9 +9,9 @@ import { deriveRisk, type CommandDef } from '@crove/kernel-runtime';
 import { crmCommands } from '@crove/mod-crm';
 import { FINANCE_NOTIFYING_EVENTS, financeCommands } from '@crove/mod-finance';
 import { CHAT_ALERTING_EVENTS, CHAT_ALERT_TEST_EVENT, NOTIFYING_EVENTS, socialCommands } from '@crove/mod-social';
-import { MAIL_QUEUES, QUEUES, SOCIAL_PUBLISH_QUEUES, TENANT_HOSTED_PROVIDERS, queueEgress, socialPublishQueue, type JobEgress } from '../src/jobs-schema.ts';
-import { orgPurgeCommand } from '../src/org-purge.ts';
-import { DEPS_REACH, Sources, emittersOf, reachOf, sendSites, workSites, type DynamicRuns, type Known, type WorkSite } from './job-egress.ts';
+import { MAIL_QUEUES, QUEUES, SOCIAL_PUBLISH_QUEUES, TENANT_HOSTED_PROVIDERS, queueEgress, socialPublishQueue, type JobEgress } from '../../src/jobs-schema.ts';
+import { orgPurgeCommand } from '../../src/org-purge.ts';
+import { DEPS_REACH, PENDING_DEPS, Sources, depsCoverage, emittersOf, reachOf, sendSites, workSites, type DynamicRuns, type Known, type WorkSite } from './job-egress.ts';
 
 const known: Known = {
   imports: { CHAT_ALERTING_EVENTS, CHAT_ALERT_TEST_EVENT, NOTIFYING_EVENTS, KERNEL_NOTIFYING_EVENTS, FINANCE_NOTIFYING_EVENTS },
@@ -215,8 +215,22 @@ describe('job egress (#1653)', () => {
       if (decl?.type === 'TSInterfaceDeclaration' && decl.id.name === 'WorkerDeps') for (const m of decl.body.body) fields.push(m.key.name);
     }
     expect(fields.length).toBeGreaterThan(20);
-    const topLevel = [...new Set(Object.keys(DEPS_REACH).map((k) => k.split('.')[0] as string))];
-    expect(topLevel.sort()).toEqual([...fields].sort());
+    expect(depsCoverage(fields, DEPS_REACH, PENDING_DEPS)).toEqual([]);
+  });
+
+  it('lets a new field be classified before it lands, only when named as pending with an issue (#1663)', () => {
+    const reach = { mailer: [], 'mailer.from': [], webhooks: ['provider:webhook'] };
+    // A field nobody classified fails; so does a classification of a field that is neither there nor pending.
+    expect(depsCoverage(['mailer', 'blobs'], reach, {})).toEqual([
+      'WorkerDeps field blobs is not classified in DEPS_REACH',
+      'DEPS_REACH classifies webhooks, which WorkerDeps does not have; to land it first, name it in PENDING_DEPS with the issue that adds it',
+    ]);
+    // Named as pending with an issue, the classification lands first; once the field is there, the entry passes too.
+    expect(depsCoverage(['mailer'], reach, { webhooks: '#1234' })).toEqual([]);
+    expect(depsCoverage(['mailer', 'webhooks'], reach, { webhooks: '#1234' })).toEqual([]);
+    expect(depsCoverage(['mailer'], reach, { webhooks: 'soon' })).toEqual(['PENDING_DEPS names webhooks without an issue (#<number>)']);
+    // Pending never excuses the other direction: a field must still be classified.
+    expect(depsCoverage(['mailer', 'webhooks'], { mailer: [] }, { webhooks: '#1234' })).toEqual(['WorkerDeps field webhooks is not classified in DEPS_REACH']);
   });
 
   it('keeps the network out of the modules and packages/kernel, so the worker reaches it only from apps/kernel', () => {

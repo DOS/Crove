@@ -866,7 +866,7 @@ export interface KernelInboxItemTable {
   id: ColumnType<string, string | undefined, NotGranted>;
   kind: ColumnType<string, string, NotGranted>;
   dedupe_key: ColumnType<string, string, NotGranted>;
-  detail: ColumnType<unknown, string | undefined, NotGranted>;
+  detail: ColumnType<unknown, string | undefined, string>;
   raised_at: ColumnType<Date, Date | string | undefined, NotGranted>;
   dismissed_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   dismissed_by: string | null;
