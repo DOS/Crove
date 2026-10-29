@@ -268,7 +268,10 @@ suite('proposal status transitions on PostgreSQL (#1707)', () => {
         return execute(approved)(c);
       });
       expect(done.ok && done.value.rowCount, `${writer.name}: after its run`).toBe(1);
-      // Another command's row, a failed run, or a run naming another proposal: refused.
+      // Another command's row, a failed run, or a run naming another proposal: refused. Another command's row naming
+      // the proposal in proposal_id is refused by the move while #1695's option A stands, and by audit_event_proposal
+      // itself once option B lands (#1706, in two steps), so either refusal passes for it until then.
+      const auditRefused = { ok: false, code: '42501', message: 'AUDIT_PROPOSAL_MISMATCH' };
       for (const [label, row] of [
         ['another command', ran('t1707.other', 'ok', approved)],
         ['a failed run', ran('t1707.prop', 'failed', approved)],
@@ -278,7 +281,8 @@ suite('proposal status transitions on PostgreSQL (#1707)', () => {
           await row(c);
           return execute(approved)(c);
         });
-        expect(outcome, `${writer.name}: after ${label}`).toMatchObject({ ok: false, ...REFUSED });
+        if (label === 'another command') expect([{ ok: false, ...REFUSED }, auditRefused], `${writer.name}: after ${label}`).toContainEqual(outcome);
+        else expect(outcome, `${writer.name}: after ${label}`).toMatchObject({ ok: false, ...REFUSED });
       }
     }
     // A row committed by an earlier transaction does not carry a later move, and another writer's row in the same

@@ -176,6 +176,9 @@ function singleFile(outputPath, writable) {
             // database to the next: sorted, so the file depends only on the migrations.
             typeDefinition: declaration.typeDefinition.map((line) => line.split(' & ').sort().join(' & ')),
             comment: [`Every table of ${SCHEMAS.join(', ')} that ${TENANT_ROLE} may read.`],
+            // Kanel lists the schemas in the order the catalog gives them, which a migration can change (#1842): sorted,
+            // so the file depends only on what the schemas hold.
+            typeDefinition: [declaration.typeDefinition.join(' ').split(' & ').sort().join(' & ')],
             typeImports: typeImports(declaration),
             exportAs: 'named',
           };
