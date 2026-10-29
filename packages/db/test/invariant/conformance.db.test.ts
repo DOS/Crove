@@ -257,7 +257,8 @@ async function findViolations(client: pg.ClientBase): Promise<Violation[]> {
                                  COALESCE(pg_catalog.array_to_string(e.evttags, ','), 'all')) AS detail
      FROM pg_catalog.pg_event_trigger e
      JOIN pg_catalog.pg_proc p ON p.oid = e.evtfoid
-     WHERE starts_with(p.pronamespace::regnamespace::text, 'crove_')
+     JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+     WHERE starts_with(n.nspname, 'crove_')
      ORDER BY 1`,
   );
   for (const { key, detail } of eventTriggers.rows) out.push({ rule: 'event-trigger', key, detail });
@@ -297,7 +298,7 @@ suite('tenant schema conformance (G3)', () => {
     url.pathname = `/${dbName}`;
     await migrate({ adminUrl: url.toString(), dir: MIGRATIONS });
     // As the kernel does at start (apps/kernel/src/main.ts), so the event-trigger rule sees what a deployment has.
-    expect(await installDdlWatch({ adminUrl: url.toString() })).toBe('installed');
+    expect(await installDdlWatch({ adminUrl: url.toString() }), 'CROVE_TEST_ADMIN_URL must be a superuser to attach the DDL watch').toBe('installed');
     admin = new pg.Client({ connectionString: url.toString() });
     await admin.connect();
   }, 300_000);
