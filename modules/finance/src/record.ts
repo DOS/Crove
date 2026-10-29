@@ -292,6 +292,7 @@ export const revisePurchase = defineCommand({
     // The rate of a foreign-currency invoice read without one (#918): the proposal is converted to VND at it.
     exchangeRate: zExchangeRate.optional(),
     // The legal entity whose books the invoice is recorded in (#1280): the editor must see it; approval posts it there.
+    // Only the proposal's own since #1764: kernel.proposal.edit and the database refuse another.
     legalEntityId: zId.optional(),
   }),
   risk: 'R1',

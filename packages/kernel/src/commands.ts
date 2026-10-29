@@ -41,7 +41,7 @@ import {
 import { archiveCommands } from './archives.ts';
 import { imageSizeCommands } from './image-sizes.ts';
 import { fileHoldCommands } from './evidence-holds.ts';
-import { extractionCommands, refuseWhileReextracting } from './extraction.ts';
+import { extractionCommands, legalEntityMoveRefused, readAgainIn, refuseWhileReextracting } from './extraction.ts';
 import { ingestFileRow, zIngestFile } from './files.ts';
 import { createOrgCommand, myOrgs, orgCreateCommand, type OrgCreateLimits, type OrgSummary } from './identity.ts';
 import { acceptInvite, createInvite, inviteCreateCommand, revokeInvite, type InviteLimits } from './invites.ts';
@@ -234,7 +234,14 @@ export const ingestFile = defineCommand({
   risk: 'R2',
   sideEffect: 'external',
   access: MEMBERS,
-  handler: (ctx, input) => ingestFileRow(ctx, input, ctx.actor.type === 'user' ? ctx.actor.userId : null),
+  handler: async (ctx, input) => {
+    const filed = await ingestFileRow(ctx, input, ctx.actor.type === 'user' ? ctx.actor.userId : null);
+    // The same document uploaded again in another entity (#1764): read again there when it may be.
+    if (filed.duplicate && input.legalEntityId !== undefined && input.source === 'upload' && ctx.actor.type === 'user') {
+      await readAgainIn(ctx, filed.fileId, input.legalEntityId);
+    }
+    return filed;
+  },
 });
 
 // Staged uploads (plan §7.6, ADR-0013). At most this many open (unused, unexpired) grants per user and org.
@@ -516,7 +523,7 @@ export const editProposal = defineCommand({
   name: 'kernel.proposal.edit',
   proposalEditor: true,
   // lineAccounts, an exchangeRate for a foreign-currency invoice read without one (#918), the legal entity whose books
-  // the invoice goes to (#1280), or several of them.
+  // the invoice goes to (#1280, only the proposal's own since #1764), or several of them.
   input: z
     .object({
       id: zId,
@@ -533,6 +540,9 @@ export const editProposal = defineCommand({
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới chỉnh sửa được');
     const proposal = await lockPendingProposal(ctx, input.id, input.revision);
+    // A proposal stays in its legal entity (#1764): moving it would show one entity's document to another's members,
+    // and its entity never changes (ADR-0021, b_legal_entity). The database refuses it too (proposal_entity_payload).
+    if (input.legalEntityId !== undefined && input.legalEntityId.toLowerCase() !== proposal.legal_entity_id) throw legalEntityMoveRefused();
     await refuseWhileReextracting(ctx, proposal.source_file_id);
     // The module's reviser for this proposal's command, from the registered definitions (their `revises`).
     const reviser = ctx.reviserOf(proposal.command);
@@ -550,6 +560,8 @@ export const editProposal = defineCommand({
       { proposalId: proposal.id },
     );
     if (!revised.changed) return { revision: proposal.revision, changed: false };
+    const named = zId.safeParse((revised.payload as { legalEntityId?: unknown } | null)?.legalEntityId);
+    if (named.success && named.data.toLowerCase() !== proposal.legal_entity_id) throw legalEntityMoveRefused();
     const revision = proposal.revision + 1;
     await ctx.trx
       .updateTable('crove_kernel.proposal')

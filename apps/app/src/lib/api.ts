@@ -142,7 +142,7 @@ const tooLarge = (file: File, purpose: UploadPurpose) =>
 
 // One file through a presigned staging upload (plan §7.6): a single-use form from the kernel, the bytes straight to
 // the bucket, then the kernel reads them back, hashes them and records the file.
-async function uploadStaged(file: File, purpose: UploadPurpose): Promise<Uploaded> {
+async function uploadStaged(file: File, purpose: UploadPurpose, legalEntityId?: string): Promise<Uploaded> {
   if (file.size > maxBytesFor(purpose)) throw tooLarge(file, purpose);
   const grant = (await (await apiFetch('/api/files/uploads', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ purpose }) })).json()) as {
     uploadId: string;
@@ -161,7 +161,7 @@ async function uploadStaged(file: File, purpose: UploadPurpose): Promise<Uploade
     apiFetch(`/api/files/uploads/${grant.uploadId}/complete`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ filename: file.name, purpose }),
+      body: JSON.stringify({ filename: file.name, purpose, ...(legalEntityId ? { legalEntityId } : {}) }),
     }),
   );
   return (await response.json()) as Uploaded;
@@ -170,12 +170,14 @@ async function uploadStaged(file: File, purpose: UploadPurpose): Promise<Uploade
 // Bulk intake (#314) sends a file of at most DIRECT_UPLOAD_MAX_BYTES through the kernel even when the store takes
 // presigned uploads: a batch of 200 e-invoice XML files would otherwise open 200 upload grants, past the per-user grant
 // rate. The kernel refuses a larger one on that path (#432).
-// One document of an upload batch, alone in its request, so a refused file never fails the others.
-export async function uploadDocument(file: File): Promise<Uploaded> {
+// One document of an upload batch, alone in its request, so a refused file never fails the others. legalEntityId: the
+// entity it is booked in (#1764), the shell's choice; the kernel checks the uploader sees it, and it never changes.
+export async function uploadDocument(file: File, legalEntityId?: string): Promise<Uploaded> {
   if (file.size > MAX_UPLOAD_BYTES) throw tooLarge(file, 'document');
-  if (getConfig().uploads === 'presigned' && file.size > DIRECT_UPLOAD_MAX_BYTES) return uploadStaged(file, 'document');
+  if (getConfig().uploads === 'presigned' && file.size > DIRECT_UPLOAD_MAX_BYTES) return uploadStaged(file, 'document', legalEntityId);
   const form = new FormData();
   form.append('purpose', 'document');
+  if (legalEntityId) form.append('legalEntityId', legalEntityId);
   form.append('file', file);
   const response = await retryWhileBusy(() => apiFetch('/api/files', { method: 'POST', body: form }));
   const { files } = (await response.json()) as { files: Uploaded[] };
