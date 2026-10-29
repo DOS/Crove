@@ -9,6 +9,7 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { sql } from 'kysely';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
@@ -287,5 +288,45 @@ suite('in-app notifications of the kernel and finance (#671)', () => {
       );
       expect(rows.map((r) => r.role)).toEqual(['crove_worker']);
     });
+  });
+
+  it("answers one row per org from the sweep's definer, with the earliest lock across its legal entities (#1532)", async () => {
+    // Two more entities for the org, each with a lock of its own (one row per org and entity since #1503).
+    const [second, third] = await admin(async (c) => {
+      const add = async (name: string) =>
+        (await c.query<{ id: string }>(`INSERT INTO crove_kernel.legal_entity (org_id, name, kind, created_by) VALUES ($1, $2, 'branch', $3) RETURNING id`, [org.orgId, name, people.owner]))
+          .rows[0]?.id as string;
+      return [await add('Chi nhánh Một'), await add('Chi nhánh Hai')];
+    });
+    const lock = (entity: string | null, from: string | null, through: string | null) =>
+      admin((c) =>
+        c.query(
+          `INSERT INTO crove_finance.period_lock (org_id, legal_entity_id, locked_from, locked_through)
+           VALUES ($1, coalesce($2::uuid, (SELECT e.id FROM crove_kernel.legal_entity e WHERE e.org_id = $1 AND e.is_default)), $3::date, $4::date)
+           ON CONFLICT (org_id, legal_entity_id) DO UPDATE SET locked_from = EXCLUDED.locked_from, locked_through = EXCLUDED.locked_through`,
+          [org.orgId, entity, from, through],
+        ),
+      );
+    await lock(null, '2026-01-01', '2026-09-30');
+    await lock(second as string, '2026-01-01', '2026-07-31');
+    await lock(third as string, '2026-01-01', '2026-08-31');
+    // Every page the sweep reads, one org per page: each org once, this one with its earliest lock.
+    const walk = async () => {
+      const seen: Array<{ org_id: string; locked_through: string | null }> = [];
+      let after: string | null = null;
+      for (;;) {
+        const { rows }: { rows: Array<{ org_id: string; locked_through: string | null }> } = await sql<{ org_id: string; locked_through: string | null }>`
+          SELECT org_id, pg_catalog.to_char(locked_through, 'YYYY-MM-DD') AS locked_through FROM crove_finance.period_close_due(${after}::uuid, 1)`.execute(workerDb);
+        if (rows.length === 0) return seen;
+        seen.push(...rows);
+        after = rows.at(-1)?.org_id ?? null;
+      }
+    };
+    const seen = await walk();
+    expect(new Set(seen.map((r) => r.org_id)).size).toBe(seen.length);
+    expect(seen.filter((r) => r.org_id === org.orgId)).toEqual([{ org_id: org.orgId, locked_through: '2026-07-31' }]);
+    // An entity whose lock row locks nothing leaves the period open: the org has no lock.
+    await lock(third as string, null, null);
+    expect((await walk()).filter((r) => r.org_id === org.orgId)).toEqual([{ org_id: org.orgId, locked_through: null }]);
   });
 });
