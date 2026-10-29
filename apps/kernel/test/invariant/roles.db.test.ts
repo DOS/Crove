@@ -147,10 +147,14 @@ suite('role assignments on PostgreSQL (#1279)', () => {
       permissions: (await c.query<{ role_key: string; permission: string }>('SELECT role_key, permission FROM crove_kernel.role_permission ORDER BY 1, 2')).rows,
     }));
     expect(roles.map((r) => r.key)).toEqual([...BUILTIN_ROLE_KEYS].sort());
-    expect(roles.filter((r) => r.scope === 'legal_entity').map((r) => r.key)).toEqual(['external_accountant']);
+    // #1507 (step 1 of 2): an entity chief accountant role, limited to its legal entities and granting their period
+    // unlock alone, may be seeded; step 2 expects it.
+    const entityChief = roles.some((r) => r.key === 'finance.entity_chief_accountant');
+    expect(roles.filter((r) => r.scope === 'legal_entity').map((r) => r.key)).toEqual(entityChief ? ['external_accountant', 'finance.entity_chief_accountant'] : ['external_accountant']);
     expect(permissions).toEqual([
       { role_key: 'finance.chief_accountant', permission: 'finance.period.unlock' },
       { role_key: 'finance.chief_accountant', permission: 'finance.proposal.approve' },
+      ...(entityChief ? [{ role_key: 'finance.entity_chief_accountant', permission: 'finance.period.unlock' }] : []),
     ]);
     // The base roles are not assignable roles.
     expect(roles.map((r) => r.key)).not.toContain('owner');
@@ -327,6 +331,64 @@ suite('role assignments on PostgreSQL (#1279)', () => {
     await o.exec(asMfa(o.owner), 'kernel.member.remove', { userId: o.viewer });
     expect((await withAdmin((c) => c.query('SELECT 1 FROM crove_kernel.role_assignment WHERE org_id = $1 AND user_id = $2', [o.orgId, o.viewer]))).rowCount).toBe(0);
     await expect(scopeOf(o.viewer, o.orgId)).rejects.toMatchObject({ message: 'NOT_A_MEMBER' });
+  });
+
+  it('refuses to demote an owner or admin to member or viewer while they hold org-wide and entity roles together (#1367)', async () => {
+    const o = await org();
+    // A member limited to the branch, made admin, then given an org-wide role (allowed for an admin).
+    await o.assign(asMfa(o.owner), o.member, 'external_accountant', o.branch);
+    expect(await scopeOf(o.member, o.orgId)).toEqual([o.branch]);
+    await o.exec(asMfa(o.owner), 'kernel.member.change_role', { userId: o.member, role: 'admin' });
+    await o.exec(asMfa(o.member), 'kernel.member.invite.create', { email: `pending-${randomUUID().slice(0, 8)}@roles.test`, role: 'member' });
+    const orgWide = await o.assign(asMfa(o.owner), o.member, 'finance.viewer');
+    // Back to member or viewer, they would read every entity with their branch role still showing: refused, unchanged.
+    for (const role of ['member', 'viewer']) {
+      await expect(o.exec(asMfa(o.owner), 'kernel.member.change_role', { userId: o.member, role })).rejects.toMatchObject({
+        code: 'ROLE_DEMOTION_MIXES_SCOPE',
+        status: 409,
+      });
+    }
+    const roleOf = async () =>
+      (await withAdmin((c) => c.query<{ role: string }>('SELECT role FROM crove_kernel.tenant_member WHERE org_id = $1 AND user_id = $2', [o.orgId, o.member]))).rows[0]?.role;
+    expect(await roleOf()).toBe('admin');
+    // Nothing else of the demotion happened either: the admin invites they sent are still pending.
+    expect(
+      (
+        await withAdmin((c) =>
+          c.query(`SELECT 1 FROM crove_kernel.member_invite WHERE org_id = $1 AND invited_by = $2 AND status = 'pending'`, [o.orgId, o.member]),
+        )
+      ).rowCount,
+    ).toBe(1);
+    // The first refusal is audited with the roles it would have changed (a refusal of a command is not a 403: failed).
+    const refused = await withAdmin(
+      async (c) =>
+        (
+          await c.query<{ detail: Record<string, unknown> }>(
+            `SELECT detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'kernel.member.change_role' AND outcome = 'failed' AND target_id = $2 AND detail->>'role' = 'member'`,
+            [o.orgId, o.member],
+          )
+        ).rows[0]?.detail,
+    );
+    expect(refused).toMatchObject({ code: 'ROLE_DEMOTION_MIXES_SCOPE', target_user: o.member, role: 'member', previous_role: 'admin' });
+    // Once one side goes, the demotion goes through: without the org-wide role, back to the branch alone.
+    await o.revoke(asMfa(o.owner), orgWide.assignmentId);
+    await o.exec(asMfa(o.owner), 'kernel.member.change_role', { userId: o.member, role: 'member' });
+    expect(await roleOf()).toBe('member');
+    expect(await scopeOf(o.member, o.orgId)).toEqual([o.branch]);
+    // The same holds for an owner: made owner, given an org-wide role, then refused as member until one side goes.
+    await o.exec(asMfa(o.owner), 'kernel.member.change_role', { userId: o.member, role: 'owner' });
+    const again = await o.assign(asMfa(o.owner), o.member, 'finance.viewer');
+    await expect(o.exec(asMfa(o.owner), 'kernel.member.change_role', { userId: o.member, role: 'member' })).rejects.toMatchObject({
+      code: 'ROLE_DEMOTION_MIXES_SCOPE',
+    });
+    expect(await roleOf()).toBe('owner');
+    await o.revoke(asMfa(o.owner), again.assignmentId);
+    await o.exec(asMfa(o.owner), 'kernel.member.change_role', { userId: o.member, role: 'member' });
+    expect(await scopeOf(o.member, o.orgId)).toEqual([o.branch]);
+    // An admin holding org-wide roles only is demoted as before.
+    await o.assign(asMfa(o.owner), o.admin, 'finance.viewer');
+    await o.exec(asMfa(o.owner), 'kernel.member.change_role', { userId: o.admin, role: 'viewer' });
+    expect(await scopeOf(o.admin, o.orgId)).toEqual(['*']);
   });
 
   it('makes a chief accountant an eligible approver (P12), counted for four-eyes (P10), until the next command after a revoke', async () => {

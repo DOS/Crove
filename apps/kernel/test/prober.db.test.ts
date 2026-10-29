@@ -201,8 +201,9 @@ suite('prober on PostgreSQL', () => {
   });
 
   // #1877: a module left out (CROVE_MODULES) has its queues worked by nobody; its queued jobs stay for when it is
-  // installed again, and the prober does not read them as stuck workers.
-  it('ages only the queues of the modules a worker that beat in the last hour works', async () => {
+  // installed again, and the prober does not read them as stuck workers. #1887: a worker that died without a clean
+  // stop keeps its modules counted for 7 days, whatever the other workers work.
+  it('ages only the queues of the modules a worker of the last 7 days works, until it stops cleanly', async () => {
     const queued = async () => {
       const h = await readHealth(proberUrl, 3600);
       return { jobs: h.jobs_queued, aged: h.job_oldest_queued_age_seconds !== null && h.job_oldest_queued_age_seconds >= 1200 };
@@ -213,6 +214,31 @@ suite('prober on PostgreSQL', () => {
     // A second worker that works finance counts them again.
     await beat(workerDb, 'worker-b', ['kernel', 'finance']);
     expect(await queued()).toEqual({ jobs: 2, aged: true });
+    // It dies (no clean stop) while worker-a keeps beating: its finance queues still count, for 7 days (#1887).
+    await admin((c) => c.query(`UPDATE crove_kernel.worker_heartbeat SET beat_at = now() - interval '6 days' WHERE instance = 'worker-b'`));
+    expect(await queued()).toEqual({ jobs: 2, aged: true });
+    expect((await readHealth(proberUrl, 3600)).worker_heartbeat_age_seconds).toBeLessThan(60);
+    await admin((c) => c.query(`UPDATE crove_kernel.worker_heartbeat SET beat_at = now() - interval '8 days' WHERE instance = 'worker-b'`));
+    expect(await queued()).toEqual({ jobs: 0, aged: false });
+    // A clean stop (the worker's last beat records no modules) drops them out at once.
+    await beat(workerDb, 'worker-b', ['kernel', 'finance']);
+    expect(await queued()).toEqual({ jobs: 2, aged: true });
+    await beat(workerDb, 'worker-b', []);
+    expect(await queued()).toEqual({ jobs: 0, aged: false });
+    // #1894: worker-b was the only finance replica and its replacement never beats, while worker-a (kernel only) keeps
+    // the heartbeat fresh. The prober names the modules the deployment runs, so finance counts whatever the workers
+    // record; a name the setting adds that no queue has, or a deployment without finance, changes nothing.
+    const expecting = async (modules: string[]) => {
+      const h = await readHealth(proberUrl, 3600, modules);
+      return { jobs: h.jobs_queued, aged: h.job_oldest_queued_age_seconds !== null && h.job_oldest_queued_age_seconds >= 1200 };
+    };
+    expect(await expecting(['kernel', 'finance'])).toEqual({ jobs: 2, aged: true });
+    expect(await expecting(['kernel', 'social', 'bogus', ''])).toEqual({ jobs: 0, aged: false });
+    expect(await expecting([])).toEqual({ jobs: 0, aged: false });
+    // Every worker stopped cleanly: no module is recorded, so every queue counts (the heartbeat alert fires too).
+    await beat(workerDb, 'worker-a', []);
+    expect(await queued()).toEqual({ jobs: 2, aged: true });
+    await beat(workerDb, 'worker-a', ['kernel']);
     await admin((c) => c.query(`DELETE FROM crove_kernel.worker_heartbeat WHERE instance = 'worker-b'`));
     expect(await queued()).toEqual({ jobs: 0, aged: false });
     // A live worker of an older release, which records no modules: every queue counts, as before.

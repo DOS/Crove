@@ -506,4 +506,30 @@ suite('finance books per legal entity, part 2b (#1280)', () => {
     expect((await download(`/api/export/ledger.xlsx?period=2026-10&legalEntityId=${randomUUID()}`)).status).toBe(403);
     expect((await download('/api/export/fixed-assets.xlsx')).status).toBe(200);
   });
+
+  it('shows a proposal under the same legal entity in the Inbox list and on its own screen, read from the same kinds (#1625)', async () => {
+    // Proposals written by the database owner, each kept in the default entity, whose payloads name another entity.
+    const insert = (kind: string, command: string, named: unknown) =>
+      admin(async (c) =>
+        (
+          await c.query<{ id: string }>(
+            `INSERT INTO crove_kernel.proposal (org_id, kind, command, title, payload, eligible_approvers, authors, legal_entity_id)
+             VALUES ($1, $2, $3, 'Đề xuất', $4::jsonb, ARRAY[$5::uuid], '[]', $6) RETURNING id`,
+            [org.orgId, kind, command, JSON.stringify({ legalEntityId: named }), owner.userId, defaultEntity],
+          )
+        ).rows[0]?.id as string,
+      );
+    const shown = async (id: string) => ({
+      list: await listedEntityOf(id),
+      get: (await runtime.query<{ legalEntityId: string | null }>('kernel.inbox.get', { id }, as(owner))).legalEntityId,
+    });
+    // A kind whose revision names no entity: its payload's key is not read, by either.
+    const reversal = await insert('finance.journal_reversal', 'finance.journal.reverse', branch);
+    expect(await shown(reversal)).toEqual({ list: defaultEntity, get: defaultEntity });
+    // A kind that names one: the revision's entity, by both; a value that is no id falls back to the proposal's own.
+    const voucher = await insert('finance.cash_voucher', 'finance.voucher.record', hue.toUpperCase());
+    expect(await shown(voucher)).toEqual({ list: hue, get: hue });
+    const malformed = await insert('finance.cash_voucher', 'finance.voucher.record', 'không phải mã');
+    expect(await shown(malformed)).toEqual({ list: defaultEntity, get: defaultEntity });
+  });
 });

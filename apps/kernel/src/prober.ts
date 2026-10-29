@@ -14,6 +14,7 @@
 // the alert path is broken.
 import pg from 'pg';
 import { z } from 'zod';
+import { modulesSetting } from './config.ts';
 import { probeStatus, writeStatusFile } from './status-page.ts';
 import { effectiveRepeatSeconds, memoryAlertGate, pgAlertGate, problemKey, type AlertGate, type GateResult } from './alert-gate.ts';
 import {
@@ -65,6 +66,10 @@ const schema = z.object({
   // once, or twice when it lands in the overlap, never zero times), 3600 otherwise. With cron, set it to the
   // cron interval plus 60.
   PROBER_DEAD_LETTER_WINDOW_SECONDS: optional.pipe(z.coerce.number<string | undefined>().int().min(60).max(604_800).optional()),
+  // The modules the deployment runs, the API's and the worker's value (#1894): their queued jobs count in job_age
+  // even when no worker records the module, so a module whose workers all stopped still alerts. Unset or empty: every
+  // module, as for the API.
+  CROVE_MODULES: modulesSetting,
 });
 
 export interface ProberConfig {
@@ -83,6 +88,9 @@ export interface ProberConfig {
   backupHeartbeatUrl?: string | undefined;
   // The status page's file; unset: none is written.
   statusFile?: string | undefined;
+  // The modules the deployment runs (CROVE_MODULES; loadProberConfig reads unset as every module). Left out of a
+  // config built by hand: only the modules the workers record count.
+  modules?: readonly string[] | undefined;
 }
 
 export interface Thresholds {
@@ -120,6 +128,7 @@ export function loadProberConfig(env: NodeJS.ProcessEnv = process.env, everySeco
     heartbeatUrl: raw.PROBER_HEARTBEAT_URL,
     backupHeartbeatUrl: raw.BACKUP_HEARTBEAT_URL,
     statusFile: raw.PROBER_STATUS_FILE,
+    modules: raw.CROVE_MODULES,
   };
 }
 
@@ -205,8 +214,12 @@ export function evaluateHealth(h: HealthSnapshot, t: Thresholds, deadLetterWindo
   return findings;
 }
 
-/** Reads crove_kernel.health() over its own short-lived connection. Refuses a privileged login. */
-export async function readHealth(databaseUrl: string, deadLetterWindowSeconds: number): Promise<HealthSnapshot> {
+/**
+ * Reads crove_kernel.health() over its own short-lived connection. Refuses a privileged login. `modules`, the modules
+ * the deployment runs, reach health() as the session setting crove.prober_modules: their queues count in the job age
+ * whatever the workers record (#1894).
+ */
+export async function readHealth(databaseUrl: string, deadLetterWindowSeconds: number, modules: readonly string[] = []): Promise<HealthSnapshot> {
   const client = new pg.Client({
     connectionString: databaseUrl,
     application_name: 'crove-prober',
@@ -222,6 +235,10 @@ export async function readHealth(databaseUrl: string, deadLetterWindowSeconds: n
     if (who[0]?.privileged) {
       throw new Error(`refusing to probe as ${who[0].rolname}, a superuser or BYPASSRLS role: connect PROBER_DATABASE_URL as crove_prober`);
     }
+    // One read-only transaction with the setting local to it: a transaction-mode pooler (PgBouncer, Supavisor) keeps
+    // both statements on one server connection and leaves nothing set on it (#1894 review).
+    await client.query('BEGIN READ ONLY');
+    await client.query(`SELECT pg_catalog.set_config('crove.prober_modules', $1, true)`, [modules.join(',')]);
     const { rows } = await client.query<HealthSnapshot>(
       `SELECT checked_at::text AS checked_at, outbox_pending, outbox_oldest_age_seconds, inbound_pending, inbound_oldest_age_seconds,
               jobs_schema_present, jobs_queued, job_oldest_queued_age_seconds, dead_letter_count, worker_heartbeat_age_seconds
@@ -231,6 +248,7 @@ export async function readHealth(databaseUrl: string, deadLetterWindowSeconds: n
     const row = rows[0];
     if (!row) throw new Error('crove_kernel.health() returned no row');
     const { rows: queue } = await client.query<{ usage: number }>('SELECT pg_catalog.pg_notification_queue_usage() AS usage');
+    await client.query('COMMIT');
     return { ...row, notify_queue_usage: Number(queue[0]?.usage ?? 0) };
   } finally {
     await client.end().catch(() => {});
@@ -391,7 +409,7 @@ async function probe(config: ProberConfig, deps: ProbeDeps): Promise<{ code: num
   }
   let health: HealthSnapshot;
   try {
-    health = await (deps.readHealth ?? readHealth)(config.databaseUrl, config.deadLetterWindowSeconds);
+    health = await (deps.readHealth ?? readHealth)(config.databaseUrl, config.deadLetterWindowSeconds, config.modules);
   } catch (e) {
     // The database itself is unreachable or health() is refused: that is an outage too, so it alerts. Its state
     // cannot be kept in the database, so the in-process gate de-duplicates it.

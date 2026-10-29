@@ -83,7 +83,12 @@ suite('prober privileges', () => {
 
   it('lets only crove_prober execute health() and prober_alert_gate(), and only crove_worker execute worker_beat() (EXECUTE matrix)', async () => {
     const admin = await connect(adminUrl);
-    const functions = ['crove_kernel.health(integer)', 'crove_kernel.prober_alert_gate(text,integer)', 'crove_kernel.worker_beat(text)'];
+    const functions = [
+      'crove_kernel.health(integer)',
+      'crove_kernel.prober_alert_gate(text,integer)',
+      'crove_kernel.worker_beat(text)',
+      'crove_kernel.worker_beat(text,text[])',
+    ];
     const roles = ['crove_app', 'crove_worker', 'crove_tenant', 'crove_definer_tenant', 'crove_auth_reader', 'crove_prober', 'crove_reporter'];
     const { rows } = await admin.query<{ fn: string; role: string }>(
       `SELECT f AS fn, r AS role FROM unnest($1::text[]) f CROSS JOIN unnest($2::text[]) r
@@ -94,16 +99,18 @@ suite('prober privileges', () => {
       { fn: 'crove_kernel.health(integer)', role: 'crove_prober' },
       { fn: 'crove_kernel.prober_alert_gate(text,integer)', role: 'crove_prober' },
       { fn: 'crove_kernel.worker_beat(text)', role: 'crove_worker' },
+      { fn: 'crove_kernel.worker_beat(text,text[])', role: 'crove_worker' },
     ]);
     const defs = await admin.query(
       `SELECT p.oid::regprocedure::text AS fn, p.prosecdef, p.proconfig FROM pg_proc p
        WHERE p.oid IN ('crove_kernel.health(integer)'::regprocedure, 'crove_kernel.prober_alert_gate(text,integer)'::regprocedure,
-                       'crove_kernel.worker_beat(text)'::regprocedure) ORDER BY 1`,
+                       'crove_kernel.worker_beat(text)'::regprocedure, 'crove_kernel.worker_beat(text,text[])'::regprocedure) ORDER BY 1`,
     );
     expect(defs.rows).toEqual([
       { fn: 'crove_kernel.health(integer)', prosecdef: true, proconfig: PINNED },
       { fn: 'crove_kernel.prober_alert_gate(text,integer)', prosecdef: true, proconfig: PINNED },
       { fn: 'crove_kernel.worker_beat(text)', prosecdef: true, proconfig: PINNED },
+      { fn: 'crove_kernel.worker_beat(text,text[])', prosecdef: true, proconfig: PINNED },
     ]);
     // crove_prober executes no other Crove function.
     const others = await admin.query<{ fn: string }>(
@@ -158,6 +165,7 @@ suite('prober privileges', () => {
       "UPDATE crove_kernel.prober_alert_state SET problem = 'probe'",
       'DELETE FROM crove_kernel.prober_alert_state',
       "SELECT crove_kernel.worker_beat('prober')",
+      "SELECT crove_kernel.worker_beat('prober', ARRAY['kernel'])",
       'SELECT * FROM crove_kernel.outbox_claim(1)',
       "SELECT crove_kernel.enter_system_context('00000000-0000-0000-0000-000000000000')",
       'CREATE TEMP TABLE t (x int)',
@@ -205,8 +213,12 @@ suite('prober privileges', () => {
     await admin.query('BEGIN');
     try {
       await admin.query('GRANT EXECUTE ON FUNCTION crove_kernel.worker_beat(text) TO crove_app');
+      await admin.query('GRANT EXECUTE ON FUNCTION crove_kernel.worker_beat(text, text[]) TO crove_app');
       await admin.query('SET SESSION AUTHORIZATION crove_app');
+      await admin.query('SAVEPOINT beat');
       await expect(admin.query("SELECT crove_kernel.worker_beat('fake')")).rejects.toMatchObject({ code: '42501', message: 'WORKER_ONLY' });
+      await admin.query('ROLLBACK TO SAVEPOINT beat');
+      await expect(admin.query("SELECT crove_kernel.worker_beat('fake', ARRAY['kernel'])")).rejects.toMatchObject({ code: '42501', message: 'WORKER_ONLY' });
     } finally {
       await admin.query('ROLLBACK');
     }

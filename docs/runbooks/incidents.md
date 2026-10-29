@@ -38,7 +38,7 @@ The page does not cover sign-in: when it loads, the API is up, and Supabase Auth
 **Alert.** From the prober, one or both of:
 
 - `heartbeat`: `last worker heartbeat was N s ago (limit 120 s): the worker is down`, or `no worker heartbeat recorded: the worker has never started`. The worker records a heartbeat every 30 s (`crove_kernel.worker_heartbeat`); the limit is `PROBER_MAX_HEARTBEAT_AGE_SECONDS`.
-- `job_age`: `oldest queued job has waited N s (limit 900 s, M queued): workers are stuck or too few`. The limit is `PROBER_MAX_JOB_AGE_SECONDS`. Only the queues of the modules a worker that beat in the last hour works count (#1877): a module the deployment leaves out (`CROVE_MODULES`) keeps its queued jobs for when it is installed again, and they do not raise this alert; while a worker of an older release is running, every queue counts.
+- `job_age`: `oldest queued job has waited N s (limit 900 s, M queued): workers are stuck or too few`. The limit is `PROBER_MAX_JOB_AGE_SECONDS`. The queues of the modules the deployment runs always count: the prober's `CROVE_MODULES`, which must be the API's and the worker's value (compose passes the same one; unset means every module) (#1894). A module the deployment leaves out counts only while a worker of the last 7 days works it (#1877, #1887): it keeps its queued jobs for when it is installed again, and they do not raise this alert once the workers that ran it have stopped cleanly (a stopping worker records no modules). A worker that died without a clean stop keeps its modules counted for 7 days, so a dead replica's queues still raise this alert while other replicas keep beating. If such a worker is gone for good and its module was left out on purpose, the alert clears once its heartbeat row is 7 days old, or at once when the database owner deletes the row (`crove_kernel.worker_heartbeat`, by `instance`). So when the only replica that runs a module stops cleanly and its replacement never beats (it fails on start), that module's queued jobs still raise this alert, as long as the module is in the prober's `CROVE_MODULES`. While a worker of an older release is running, every queue counts.
 
 When the database cannot be read, the prober alerts `probe: the prober could not read crove_kernel.health(): ...` instead, and the heartbeat monitor pages once the pings stop: go to "The database" below.
 
@@ -284,7 +284,7 @@ Every deployment switch is released after each test and after the file, pass or 
 | To stop | Setting |
 |---|---|
 | All AI calls | empty `AI_BASE_URL` and `AI_API_KEY` |
-| A module (for example Social) | `CROVE_MODULES` without it (the same value for the API and the worker) |
+| A module (for example Social) | `CROVE_MODULES` without it (the same value for the API, the worker and the prober) |
 | New accounts | `AUTH_DISABLE_SIGNUP=true` |
 | Posting to one platform | empty its `CHANNEL_*` credentials |
 | All background work | `docker compose stop crove` stops the whole app; in the split layout `docker compose stop worker` stops background work only |
