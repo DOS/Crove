@@ -225,6 +225,16 @@ suite('prober on PostgreSQL', () => {
     expect(await queued()).toEqual({ jobs: 2, aged: true });
     await beat(workerDb, 'worker-b', []);
     expect(await queued()).toEqual({ jobs: 0, aged: false });
+    // #1894: worker-b was the only finance replica and its replacement never beats, while worker-a (kernel only) keeps
+    // the heartbeat fresh. The prober names the modules the deployment runs, so finance counts whatever the workers
+    // record; a name the setting adds that no queue has, or a deployment without finance, changes nothing.
+    const expecting = async (modules: string[]) => {
+      const h = await readHealth(proberUrl, 3600, modules);
+      return { jobs: h.jobs_queued, aged: h.job_oldest_queued_age_seconds !== null && h.job_oldest_queued_age_seconds >= 1200 };
+    };
+    expect(await expecting(['kernel', 'finance'])).toEqual({ jobs: 2, aged: true });
+    expect(await expecting(['kernel', 'social', 'bogus', ''])).toEqual({ jobs: 0, aged: false });
+    expect(await expecting([])).toEqual({ jobs: 0, aged: false });
     // Every worker stopped cleanly: no module is recorded, so every queue counts (the heartbeat alert fires too).
     await beat(workerDb, 'worker-a', []);
     expect(await queued()).toEqual({ jobs: 2, aged: true });
