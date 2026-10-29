@@ -239,9 +239,12 @@ suite('social monthly goals on PostgreSQL (#1056)', () => {
 
   it('puts the goals in a client report of exactly one month, for the channels it covers', async () => {
     const { o, fb, zalo } = await agency();
-    // Another org with goals of its own: none of them in this org's report.
+    // Another org with goals of its own: none of them in this org's report. Its target is nine digits in a row, which
+    // no ISO timestamp of the page (expiresAt carries the clock's milliseconds) can contain, so the search below
+    // finds only a leak (#1911).
     const other = await org();
-    await setGoal(other, null, { posts: 777 });
+    const leaked = 987_654_321;
+    await setGoal(other, null, { posts: leaked });
 
     const page = await view((await link(o, SEP)).token);
     expect(page?.goals).toEqual({
@@ -277,7 +280,7 @@ suite('social monthly goals on PostgreSQL (#1056)', () => {
         },
       ],
     });
-    expect(JSON.stringify(page)).not.toContain('777');
+    expect(JSON.stringify(page)).not.toContain(String(leaked));
 
     // A report of one channel: that channel's goals only, never the org's.
     const zaloOnly = await view((await link(o, SEP, { connectionIds: [zalo] })).token);
