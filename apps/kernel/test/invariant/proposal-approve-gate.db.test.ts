@@ -16,6 +16,7 @@ import { sql } from 'kysely';
 import { approvalPolicies, createOrg, decideApproval, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime, defineCommand, type AgentActor, type CommandDef } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
+import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -30,6 +31,7 @@ const prepare1793 = defineCommand({
   input: z.object({}),
   risk: 'R0',
   access: ['owner', 'admin', 'member'],
+  sideEffect: 'none',
   agent: { roles: 'any' },
   writes: [],
   handler: async () => ({ kind: 't1793', command: 't1793.prop', title: 'T1793', payload: { n: 1 } }),
@@ -38,6 +40,7 @@ const proposal1793 = defineCommand({
   name: 't1793.prop',
   input: z.object({ payload: z.unknown(), acceptFailedChecks: z.boolean().optional() }),
   risk: 'R1',
+  sideEffect: 'none',
   access: 'proposal',
   agentApprovers: { roles: [TEMPLATE] },
   writes: [],
@@ -132,7 +135,7 @@ suite('the approval gate in the database (#1793)', () => {
     const runtimeFor = (url: string) => {
       const pool = createPool({ connectionString: url, max: 4 });
       pools.push(pool);
-      return new Runtime(createDb(pool)).register({
+      return new Runtime(createDb(pool), { manifests: TEST_MANIFESTS }).register({
         commands: [...kernelCommands, ...financeCommands, prepare1793, proposal1793],
         queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries],
       });
