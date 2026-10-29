@@ -51,7 +51,7 @@ describe('exports-rebind on a store from another provider', () => {
   it('treats a version id the store cannot parse (400 InvalidArgument) as stale and re-records', async () => {
     const { runtime, store, recorded } = setup(Object.assign(new Error('Invalid version id specified'), { name: 'InvalidArgument' }));
     expect(await rebindExport({ runtime, store }, orgId)).toBe('rebound');
-    expect(recorded).toEqual([{ ...record, manifestGeneration: 's3:minio-version' }]);
+    expect(recorded).toEqual([{ ...record, manifestGeneration: 's3:minio-version', rebind: true }]);
   });
 
   it('never papers over an access refusal: the org is reported and the others go on', async () => {
