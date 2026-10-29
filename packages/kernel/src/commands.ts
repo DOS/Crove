@@ -66,7 +66,7 @@ import { PROPOSAL_PREPARERS, REQUESTABLE, preparedEntity, resubmitProposal, zPre
 import { usageCommands } from './usage-limits.ts';
 import { userStatusCommands } from './user-status.ts';
 import { taxCalendarCommands } from './tax-calendar.ts';
-import { positionsHeldBy, rerouteStrandedTasks } from './task-reroute.ts';
+import { lockChartChanges, positionsHeldBy, rerouteStrandedTasks } from './task-reroute.ts';
 
 const MEMBERS = ['owner', 'admin', 'member'] as const;
 // The command that records an invoice proposal (a purchase or a sale).
@@ -131,6 +131,8 @@ async function lockMembers(ctx: CommandContext, actorId: string, targetId: strin
 // the context was entered is re-checked under the lock, so an owner demoted by a concurrent command is refused.
 async function lockForMemberChange(ctx: CommandContext, targetId: string) {
   if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới quản lý được thành viên');
+  // Before the members' locks: both callers re-route (#1858).
+  await lockChartChanges(ctx);
   const locked = await lockMembers(ctx, ctx.actor.userId, targetId);
   if (locked.actorRole !== 'owner') {
     throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu mới đổi được vai trò hoặc xóa thành viên');

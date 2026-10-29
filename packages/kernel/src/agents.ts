@@ -29,7 +29,7 @@ import { refuseWhileReextracting } from './extraction.ts';
 import { kernelManifest } from './manifest.ts';
 import { preparedEntity } from './proposal-resubmit.ts';
 import { memberProfiles } from './profiles.ts';
-import { rerouteStrandedTasks } from './task-reroute.ts';
+import { lockChartChanges, rerouteStrandedTasks } from './task-reroute.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
@@ -257,6 +257,8 @@ export const updatePosition = defineCommand({
   target: (input) => ({ type: 'kernel.position', id: input.id }),
   handler: async (ctx, input) => {
     requireUser(ctx);
+    // Before the seat's lock: a change of le_scope re-routes (#1858).
+    await lockChartChanges(ctx);
     const before = await lockPosition(ctx.trx, ctx.orgId, input.id);
     const set: Record<string, unknown> = {};
     if (input.title !== undefined) set.title = input.title;
@@ -294,6 +296,8 @@ export const assignPosition = defineCommand({
   target: (input) => ({ type: 'kernel.position', id: input.id }),
   handler: async (ctx, input) => {
     requireUser(ctx);
+    // Before the seat's lock: the new holder's tasks re-route (#1858).
+    await lockChartChanges(ctx);
     const position = await lockPosition(ctx.trx, ctx.orgId, input.id);
     let holderUser: string | null = null;
     let holderAgent: string | null = null;
