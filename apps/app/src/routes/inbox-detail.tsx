@@ -24,7 +24,6 @@ import { isZeroAmount, linesBalance, previewPurchaseJournal, previewSalesJournal
 import { nextDay, postingDateAllowed } from '../lib/period-lock.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { invoiceCheckMessage } from '../lib/invoice-checks.ts';
-import { proposalEntity } from '../lib/legal-entity-choice.ts';
 import { parseExchangeRate } from '../lib/exchange-rate.ts';
 import { reversalErrorMessage } from '../lib/reversal.ts';
 import { journalVoucherProblem } from '../lib/journal-voucher.ts';
@@ -390,11 +389,10 @@ function InboxDetail({ slug, id, split }: { slug: string; id: string; split: boo
   );
   // A sale (issue #313): the org issued the invoice, the buyer is the customer, and the lines go to revenue.
   const sale = payload?.direction === 'sale';
-  // The legal entity whose books the invoice goes to (#1542): the one a revision named, else the approver's default;
-  // the shell's choice is offered for a proposal that names none. Its own months are the ones that may be locked.
+  // The legal entity whose books the invoice goes to (#1542): the proposal's own, which an edit never changes (#1764).
+  // Its own months are the ones that may be locked.
   const books = useLegalEntity(slug);
-  const entity = payload ? proposalEntity(books.entities, payload.legalEntityId ?? null, books.entityId) : { effective: null, suggest: null };
-  const suggested = entity.suggest;
+  const entity = { effective: payload ? (detail.data?.legalEntityId ?? null) : null };
   const entityName = (entityId: string | null) => books.entities.find((e) => e.id === entityId)?.name ?? '';
   const lockState = useQuery({
     ...orpc.periodLock.state.queryOptions({ input: { legalEntityId: entity.effective ?? undefined } }),
@@ -469,17 +467,6 @@ function InboxDetail({ slug, id, split }: { slug: string; id: string; split: boo
     }),
   );
   const dirty = (payload?.lines ?? []).some((l) => (lineAccounts[l.lineNo] ?? l.debitAccount) !== l.debitAccount);
-  // Moving the invoice to another entity is a revision too; account changes not saved yet go with it.
-  const moveTo = (legalEntityId: string) => {
-    if (!detail.data) return;
-    edit.mutate({
-      id,
-      revision: detail.data.revision,
-      idempotencyKey: crypto.randomUUID(),
-      legalEntityId,
-      ...(dirty ? { lineAccounts: lines.map((l) => ({ lineNo: l.lineNo, debitAccount: l.debitAccount })) } : {}),
-    });
-  };
   const busy = approve.isPending || reject.isPending || edit.isPending || reextract.isPending || resubmit.isPending;
 
   const item = detail.data;
@@ -936,34 +923,12 @@ function InboxDetail({ slug, id, split }: { slug: string; id: string; split: boo
                   </Link>
                 )}
               </div>
-              {/* With several legal entities, whose books the invoice goes to (#1542); one entity shows nothing. */}
+              {/* With several legal entities, whose books the invoice goes to (#1542): the proposal's own, never moved (#1764);
+                  one entity shows nothing. */}
               {books.entities.length > 1 && entity.effective && (
                 <div className="sm:col-span-2">
-                  {pending && item.canEdit ? (
-                    <Label className="flex-col items-stretch gap-1 font-normal">
-                      <span className="text-xs text-subtle-foreground">{t('entity')}</span>
-                      <NativeSelect className="w-full sm:w-72" value={entity.effective} disabled={busy} onChange={(e) => moveTo(e.target.value)}>
-                        {books.entities.map((e) => (
-                          <NativeSelectOption key={e.id} value={e.id}>
-                            {e.name}
-                          </NativeSelectOption>
-                        ))}
-                      </NativeSelect>
-                    </Label>
-                  ) : (
-                    <>
-                      <p className="text-xs text-subtle-foreground">{t('entity')}</p>
-                      <p className="mt-1 text-sm text-foreground">{entityName(entity.effective)}</p>
-                    </>
-                  )}
-                  {pending && item.canEdit && suggested && (
-                    <p className="mt-2 text-xs text-muted-foreground">
-                      {t('entitySuggest', { chosen: entityName(suggested) })}{' '}
-                      <button type="button" className="text-link hover:underline disabled:opacity-50" disabled={busy} onClick={() => moveTo(suggested)}>
-                        {t('entityMove', { chosen: entityName(suggested) })}
-                      </button>
-                    </p>
-                  )}
+                  <p className="text-xs text-subtle-foreground">{t('entity')}</p>
+                  <p className="mt-1 text-sm text-foreground">{entityName(entity.effective)}</p>
                 </div>
               )}
               <div className="grid grid-cols-3 gap-2 sm:col-span-2">
