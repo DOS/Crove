@@ -190,19 +190,51 @@ export function sqlPermissionUses(by: string, text: string): { uses: PermissionU
     const before = vars.get(name);
     vars.set(name, before === null || literals === null ? null : [...(before ?? []), ...literals]);
   }
+  // Any other write makes a variable unknown: SELECT or FETCH ... INTO, FOR v IN, GET DIAGNOSTICS, and v = ... (PL/pgSQL
+  // takes = as an assignment too).
+  const unknown = [
+    ...[...text.matchAll(/\bINTO\s+(?:STRICT\s+)?([a-z_][a-z0-9_$]*(?:\s*,\s*[a-z_][a-z0-9_$]*)*)/gi)].flatMap((m) => (m[1] as string).split(',')),
+    ...[...text.matchAll(/\bFOR\s+([a-z_][a-z0-9_$]*)\s+IN\b/gi)].map((m) => m[1] as string),
+    ...[...text.matchAll(/\bGET\s+(?:STACKED\s+)?DIAGNOSTICS\s+([a-z_][a-z0-9_$]*)/gi)].map((m) => m[1] as string),
+    ...[...text.matchAll(/(?:^|[;\n]|\bTHEN\b|\bELSE\b|\bLOOP\b|\bBEGIN\b)\s*([a-z_][a-z0-9_$]*)\s*=(?!=)/gim)].map((m) => m[1] as string),
+  ];
+  for (const name of unknown) vars.set(name.trim().toLowerCase(), null);
+
+  // The items of a SQL list at its top level: commas inside quotes or parentheses do not split.
+  const items = (list: string): string[] => {
+    const out: string[] = [];
+    let depth = 0;
+    let quoted = false;
+    let item = '';
+    for (const ch of list) {
+      if (ch === "'") quoted = !quoted;
+      else if (!quoted && ch === '(') depth++;
+      else if (!quoted && ch === ')') depth--;
+      if (!quoted && depth === 0 && ch === ',') {
+        out.push(item);
+        item = '';
+      } else item += ch;
+    }
+    return [...out, item].map((i) => i.trim()).filter((i) => i !== '');
+  };
+  // Every item must be a literal (casts aside) or a variable the body assigns only literals; one that is not makes the
+  // whole value unattributable, whatever literals sit beside it.
   const resolve = (what: string, value: string) => {
-    const literals = sqlLiterals(value);
-    if (literals.length > 0) {
-      for (const key of literals) uses.push({ permission: key, by });
-      return;
+    const keys: string[] = [];
+    for (const raw of items(value)) {
+      const item = raw.replace(/^\(+|\)+$/g, '').replace(/(?:\)?::[a-z_ [\]]+)+$/i, '').replace(/^\(+|\)+$/g, '').trim();
+      if (/^'(?:[^']|'')*'$/.test(item)) {
+        keys.push(...sqlLiterals(item));
+        continue;
+      }
+      const known = SQL_IDENT.test(item) ? vars.get(item.toLowerCase()) : null;
+      if (!known) {
+        if (!PERMISSION_CHECKERS.has(by)) problems.push(`${by} names a permission through ${what} ${value.trim()}, which this check cannot attribute to a key: write the key as a literal`);
+        return;
+      }
+      keys.push(...known);
     }
-    const name = value.replace(/::[a-z_ [\]]+$/i, '').trim().toLowerCase();
-    const known = SQL_IDENT.test(name) ? vars.get(name) : null;
-    if (known) {
-      for (const key of known) uses.push({ permission: key, by });
-      return;
-    }
-    if (!PERMISSION_CHECKERS.has(by)) problems.push(`${by} names a permission through ${what} ${value.trim()}, which this check cannot attribute to a key: write the key as a literal`);
+    for (const key of keys) uses.push({ permission: key, by });
   };
 
   for (const m of text.matchAll(/ctx_has_permission\s*\(\s*([^()]*(?:\([^()]*\)[^()]*)*)\)/g)) resolve('ctx_has_permission(...)', m[1] as string);
@@ -212,6 +244,7 @@ export function sqlPermissionUses(by: string, text: string): { uses: PermissionU
   for (const m of text.matchAll(new RegExp(`${column}\\s*(?:=|<>|!=)\\s*ANY\\s*\\(\\s*\\(?\\s*(ARRAY\\s*\\[[^\\]]*\\]|'[^']*'|[a-z_][a-z0-9_$]*)`, 'gi'))) {
     const list = m[1] as string;
     if (list.startsWith("'")) for (const key of (sqlLiterals(list)[0] ?? '').replace(/^\{|\}$/g, '').split(',').map((k) => k.trim().replace(/^"|"$/g, '')).filter(Boolean)) uses.push({ permission: key, by });
+    else if (/^ARRAY/i.test(list)) resolve('= ANY (ARRAY[...])', list.replace(/^ARRAY\s*\[|\]$/gi, ''));
     else resolve('= ANY (...)', list);
   }
   for (const m of text.matchAll(new RegExp(`${column}\\s*(?:=|<>|!=)\\s*(?!\\s*ANY\\b)('(?:[^']|'')*'|[a-z_][a-z0-9_$.]*)`, 'gi'))) resolve('a comparison with', m[1] as string);
@@ -225,17 +258,31 @@ export function sqlPermissionUses(by: string, text: string): { uses: PermissionU
 // What the app's screens gate on (#1641): every check of a member's permissions in apps/app/src
 // (`permissions.includes(...)`, `.indexOf`, `.some`) must pass a permission constant @crove/kernel-contract exports, so a
 // renamed or retired key fails here or at typecheck. Like the screens' route permissions they are display gates, not
-// checks (the server decides), so they are kept apart from staticPermissionUses(). `contract` is the module the
+// checks (the server decides), so they are kept apart from staticPermissionUses(). The name must be imported from
+// @crove/kernel-contract in that file (an alias is followed) and not declared there again; `contract` is the module the
 // constants are read from.
 export function appPermissionUses(files: ReadonlyArray<{ file: string; source: string }>, contract: Record<string, unknown>): { uses: PermissionUse[]; problems: string[] } {
   const uses: PermissionUse[] = [];
   const problems: string[] = [];
   for (const { file, source } of files) {
-    for (const m of stripComments(source).matchAll(/\bpermissions\??\.(?:includes|indexOf|some)\(\s*([^),]*)/g)) {
+    const code = stripComments(source);
+    // The names this file imports from the contract, each to the name the contract exports it under.
+    const imported = new Map<string, string>();
+    for (const m of code.matchAll(/\bimport\s+(?:type\s+)?\{([^}]*)\}\s*from\s*['"]@crove\/kernel-contract['"]/g)) {
+      for (const spec of (m[1] as string).split(',')) {
+        const parts = spec.trim().replace(/^type\s+/, '').split(/\s+as\s+/);
+        const exported = parts[0]?.trim();
+        const local = (parts[1] ?? parts[0])?.trim();
+        if (exported && local) imported.set(local, exported);
+      }
+    }
+    for (const m of code.matchAll(/\bpermissions\??\.(?:includes|indexOf|some)\(\s*([^),]*)/g)) {
       const arg = (m[1] as string).trim();
-      const value = /^[A-Z][A-Z0-9_]*$/.test(arg) ? contract[arg] : undefined;
+      const exported = /^[A-Z][A-Z0-9_]*$/.test(arg) ? imported.get(arg) : undefined;
+      const shadowed = new RegExp(`\\b(?:const|let|var|function|class)\\s+${arg.replace(/[^A-Za-z0-9_]/g, '')}\\b`).test(code);
+      const value = exported && !shadowed ? contract[exported] : undefined;
       if (typeof value !== 'string') {
-        problems.push(`${file}: a permission check passes ${arg}; pass a permission constant @crove/kernel-contract exports`);
+        problems.push(`${file}: a permission check passes ${arg}; pass a permission constant imported from @crove/kernel-contract`);
         continue;
       }
       uses.push({ permission: value, by: `${file} (${arg})` });

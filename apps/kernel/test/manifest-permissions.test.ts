@@ -154,6 +154,14 @@ describe('permissionProblems() on planted mismatches', () => {
       'policy crove_finance.t.p matches a permission column by pattern (permission LIKE), which this check cannot attribute to a key: compare with literals',
     ]);
     expect(problems('function crove_kernel.f', 'p.permission IN (SELECT k FROM t)')).toHaveLength(1);
+    // A literal beside something else does not make the rest attributable.
+    expect(problems('function crove_kernel.f', "p.permission IN ('finance.period.unlock', p_key)")).toHaveLength(1);
+    expect(problems('function crove_kernel.f', "crove_kernel.ctx_has_permission(COALESCE(p_key, 'finance.period.unlock'))")).toHaveLength(1);
+    expect(problems('function crove_kernel.f', "p.permission = ANY (ARRAY['finance.period.unlock', p_key])")).toHaveLength(1);
+    // A variable assigned a literal, then written by a query, a loop or a plain = assignment, is no longer known.
+    for (const write of ['SELECT k INTO v FROM t;', 'FOR v IN SELECT k FROM t LOOP NULL; END LOOP;', 'v = lower(k);']) {
+      expect(problems('function crove_kernel.f', `DECLARE v text := 'finance.period.unlock'; BEGIN ${write} PERFORM crove_kernel.ctx_has_permission(v); END`), write).toHaveLength(1);
+    }
     // The checker itself compares with its parameter, by design.
     expect(problems('function crove_kernel.ctx_has_permission', 'p.permission = p_permission')).toEqual([]);
   });
@@ -169,9 +177,19 @@ describe("the app's permission checks (#1641)", () => {
 
   it('fails on a key written in the app, and on a constant of an undeclared key', () => {
     const literal = appPermissionUses([{ file: 'apps/app/src/lib/x.ts', source: "permissions.includes('finance.invoice.post')" }], contract);
-    expect(literal.problems).toEqual(["apps/app/src/lib/x.ts: a permission check passes 'finance.invoice.post'; pass a permission constant @crove/kernel-contract exports"]);
+    expect(literal.problems).toEqual(["apps/app/src/lib/x.ts: a permission check passes 'finance.invoice.post'; pass a permission constant imported from @crove/kernel-contract"]);
+    // A name the file does not import from the contract, or declares again over the import, is no constant of it.
+    const local = "const PERIOD_UNLOCK_PERMISSION = 'finance.ledger.erase';\npermissions.includes(PERIOD_UNLOCK_PERMISSION);";
+    expect(appPermissionUses([{ file: 'a.ts', source: local }], contract).problems).toHaveLength(1);
+    expect(appPermissionUses([{ file: 'b.ts', source: `import { PERIOD_UNLOCK_PERMISSION } from '@crove/kernel-contract';\n${local}` }], contract).problems).toHaveLength(1);
+    // An alias resolves to the constant it names.
+    const aliased = appPermissionUses([{ file: 'c.ts', source: "import { PERIOD_UNLOCK_PERMISSION as UNLOCK } from '@crove/kernel-contract';\npermissions.includes(UNLOCK);" }], contract);
+    expect(aliased).toEqual({ uses: [{ permission: 'finance.period.unlock', by: 'c.ts (UNLOCK)' }], problems: [] });
     // A constant with a key no manifest declares (a stand-in for the contract module).
-    const planted = appPermissionUses([{ file: 'apps/app/src/lib/y.ts', source: 'org.permissions?.includes(INVOICE_POST_PERMISSION)' }], { INVOICE_POST_PERMISSION: 'finance.invoice.post' });
+    const planted = appPermissionUses(
+      [{ file: 'apps/app/src/lib/y.ts', source: "import { INVOICE_POST_PERMISSION } from '@crove/kernel-contract';\norg.permissions?.includes(INVOICE_POST_PERMISSION)" }],
+      { INVOICE_POST_PERMISSION: 'finance.invoice.post' },
+    );
     expect(planted.problems).toEqual([]);
     expect(permissionProblems(MODULE_MANIFESTS, { uses: [...staticPermissionUses().uses, ...planted.uses] })).toEqual([
       'apps/app/src/lib/y.ts (INVOICE_POST_PERMISSION) names finance.invoice.post, which no manifest declares: declare it in modules/finance/src/manifest.ts',
