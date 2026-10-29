@@ -443,6 +443,77 @@ suite('org offboarding on PostgreSQL (#38)', () => {
     // An org without an export.
     const quiet = await orgWithMember('Công ty Chưa xuất');
     expect(await rebindExport({ runtime: workerRuntime, store: restored }, quiet.org.orgId)).toBe('none');
+
+    // An export made before a table was added to EXPORT_TABLES (#1726): its record lacks that table. A new record that
+    // lacks a table is refused, but the restore re-records the older export as it was, with the restored versions.
+    const added = EXPORT_TABLE_NAMES.at(-1)!;
+    const older = { ...record, parts: record.parts.filter((p) => p.table !== added) };
+    await expect(workerRuntime.execute('kernel.org.export.record', older, system)).rejects.toMatchObject({ code: 'VALIDATION' });
+    await withAdmin((admin) =>
+      admin.query(
+        `INSERT INTO crove_kernel.audit_event (org_id, actor_type, command, command_id, outcome, input_sha256, detail)
+         VALUES ($1, 'system', 'kernel.org.export.record', gen_random_uuid(), 'ok', repeat('0', 64), $2::jsonb)`,
+        [
+          org.orgId,
+          JSON.stringify({
+            format: older.format,
+            manifest_key: older.manifestKey,
+            manifest_sha256: older.manifestSha256,
+            manifest_generation: older.manifestGeneration,
+            file_count: older.fileCount,
+            encryption: older.encryption,
+            expires_at: older.expiresAt,
+            parts: older.parts,
+          }),
+        ],
+      ),
+    );
+    expect(await workerRuntime.query('kernel.org.export.current', {}, system)).toEqual(older);
+    expect(await rebindExport({ runtime: workerRuntime, store: original.restoredCopy('older') }, org.orgId)).toBe('rebound');
+    expect(await workerRuntime.query<ExportRecord>('kernel.org.export.current', {}, system)).toEqual({
+      ...older,
+      manifestGeneration: expect.stringMatching(/^s3:older-/),
+      parts: older.parts.map((p) => ({ ...p, generation: expect.stringMatching(/^s3:older-/) })),
+    });
+    // The owner's view lists the tables that export holds, not the one added since.
+    const view = await runtime.query<OrgExportView>('kernel.org.export.get', {}, { actor: asUser(owner.id), orgId: org.orgId });
+    expect(view.export?.tables.map((t) => t.table)).toEqual(EXPORT_TABLE_NAMES.filter((t) => t !== added));
+    // A rebind is that export, but for its versions: other rows, another part or no export at all are refused.
+    const current = (await workerRuntime.query<ExportRecord>('kernel.org.export.current', {}, system))!;
+    const changed = { ...current, rebind: true as const, parts: current.parts.map((p, i) => (i === 0 ? { ...p, rows: p.rows + 1 } : p)) };
+    await expect(workerRuntime.execute('kernel.org.export.record', changed, system)).rejects.toMatchObject({ code: 'EXPORT_REBIND_MISMATCH' });
+    await expect(workerRuntime.execute('kernel.org.export.record', { ...record, rebind: true }, system)).rejects.toMatchObject({ code: 'EXPORT_REBIND_MISMATCH' });
+    const elsewhere = {
+      ...record,
+      rebind: true as const,
+      manifestKey: exportKey(quiet.org.orgId, record.manifestSha256),
+      parts: record.parts.map((p) => ({ ...p, key: exportKey(quiet.org.orgId, p.sha256) })),
+    };
+    await expect(workerRuntime.execute('kernel.org.export.record', elsewhere, { ...system, orgId: quiet.org.orgId })).rejects.toMatchObject({
+      code: 'EXPORT_REBIND_MISMATCH',
+    });
+
+    // The purge takes an export's own record as its date, never a restore's re-record (#1726, review of #1864): the
+    // owner asks for a fresh export, a restore then re-records the old one, and the fresh export never comes. The purge
+    // still waits for it.
+    const purgeState = () =>
+      withAdmin(async (admin) => {
+        const refusal = (await admin.query<{ r: string | null }>('SELECT crove_kernel.org_purge_refusal($1, 30) AS r', [org.orgId])).rows[0]?.r;
+        const check = (await admin.query<{ exported_at: Date }>('SELECT exported_at FROM crove_kernel.org_purge_check($1)', [org.orgId])).rows[0];
+        const own = (
+          await admin.query<{ at: Date }>(
+            `SELECT max(occurred_at) AS at FROM crove_kernel.audit_event
+             WHERE org_id = $1 AND command = 'kernel.org.export.record' AND outcome = 'ok' AND NOT detail ? 'rebind'`,
+            [org.orgId],
+          )
+        ).rows[0]?.at;
+        return { refusal, exportedAt: check?.exported_at.toISOString(), own: own?.toISOString() };
+      });
+    await runtime.execute('kernel.org.offboard', { confirmSlug: org.slug }, { actor: asMfa(owner.id), orgId: org.orgId });
+    expect(await rebindExport({ runtime: workerRuntime, store: original.restoredCopy('again') }, org.orgId)).toBe('rebound');
+    const state = await purgeState();
+    expect(state.refusal).toBe('export_pending');
+    expect(state.exportedAt).toBe(state.own);
   });
 
   it('runs a streamed query in one REPEATABLE READ, READ ONLY transaction that may idle while the sink works', async () => {
