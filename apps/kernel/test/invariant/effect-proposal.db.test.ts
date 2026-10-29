@@ -174,9 +174,10 @@ suite('ledger rows naming a proposal on PostgreSQL (#1853)', () => {
       const id = await proposal(command, 'approved');
       await expect(as('owner', journalVoucher(id)), command).resolves.toMatchObject({ ok: true });
     }
-    // A replacement invoice reverses its original's entry in the name of the purchase's proposal (#916).
-    const replacement = await proposal('finance.purchase.record', 'approved');
-    await expect(as('owner', reversal(replacement)), 'replacement invoice reversal').resolves.toMatchObject({ ok: true });
+    // A reversal entry may name an approved finance.purchase.record proposal: the shape of a replacement invoice's
+    // reversal of its original (#916, postReversal). The replacement flow itself runs in finance-invoice-corrections.
+    const purchase = await proposal('finance.purchase.record', 'approved');
+    await expect(as('owner', reversal(purchase)), "a reversal entry naming a purchase's proposal").resolves.toMatchObject({ ok: true });
   });
 
   it('refuses a row naming a pending, executed or rejected proposal, another command, another org or no proposal', async () => {
