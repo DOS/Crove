@@ -3,7 +3,8 @@
 // journal entry of source kernel.proposal, are what #1842 counts as a ledger proposal's effect; each must name a
 // proposal of the writer's org, 'approved', for the command that writes that row. A row naming a pending, executed,
 // rejected proposal, another command's, another org's or none at all is refused (EFFECT_PROPOSAL_MISMATCH), for the
-// owner's and the worker's system context alike, and a proposal outside the writer's legal entities is refused too;
+// owner's and the worker's system context alike, and a proposal outside the writer's legal entities is refused too,
+// for a row the writer inserts and for a reversal entry the definer post_journal_entry writes for it (#1871);
 // the tables are append-only, so a written proposal_id never changes; a replacement invoice's reversal of its original
 // names the purchase's proposal; staff are not checked. Part of the invariant suite: keep it self-contained (package code under test, no helpers from outside
 // test/invariant/). Set CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
@@ -261,5 +262,23 @@ suite('ledger rows naming a proposal on PostgreSQL (#1853)', () => {
       ]);
     await expect(as(limited, write(ofBranch))).resolves.toMatchObject({ ok: true });
     await expect(as(limited, write(ofDefault))).resolves.toMatchObject({ ok: false, ...REFUSED });
+    // The reversal path (#1871): post_journal_entry writes as crove_definer_tenant, whose read of the proposal is held to
+    // the writer's legal entities by the same row policy. An entry of the branch, then its reversal ordered by the
+    // proposal, as the member limited to the branch posts them.
+    const reverseInBranch = (proposalId: string) => async (c: pg.Client) => {
+      const { rows } = await c.query<{ id: string }>(
+        `SELECT crove_finance.post_journal_entry('2026-10-15'::date, 'gốc', 'test.original', $1::uuid, $2::jsonb, NULL, NULL, $3::uuid) AS id`,
+        [randomUUID(), LINES, branch],
+      );
+      return c.query(`SELECT crove_finance.post_journal_entry('2026-10-15'::date, 'đảo', 'kernel.proposal', $1::uuid, $2::jsonb, $3::uuid, 1)`, [
+        proposalId,
+        MIRRORED,
+        rows[0]?.id,
+      ]);
+    };
+    const reverseOfBranch = await proposal('finance.journal.reverse', 'approved', orgId, branch);
+    const reverseOfDefault = await proposal('finance.journal.reverse', 'approved');
+    await expect(as(limited, reverseInBranch(reverseOfBranch)), 'a reversal naming the branch proposal').resolves.toMatchObject({ ok: true });
+    await expect(as(limited, reverseInBranch(reverseOfDefault)), "a reversal naming the default entity's proposal").resolves.toMatchObject({ ok: false, ...REFUSED });
   });
 });
