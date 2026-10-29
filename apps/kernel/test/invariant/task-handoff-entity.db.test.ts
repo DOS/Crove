@@ -407,8 +407,8 @@ suite('delegation and escalation within the task legal entity on PostgreSQL (#17
   // is a member of another org only, assignments a member holds in another org, and an org being offboarded, where
   // only owners still count. Asked in the system context of each org (the worker's, every entity in scope).
   it('answers only for members and assignments of the org in context, and only owners while it is offboarded (#1898)', async () => {
-    const person = (name: string) =>
-      upsertIdentity(createDb(pools[0] as pg.Pool), { issuer: 't1898', subject: randomUUID(), email: `${name}-${randomUUID().slice(0, 8)}@t1898.test`, name: null });
+    const db = createDb(pools[0] as pg.Pool);
+    const person = (name: string) => upsertIdentity(db, { issuer: 't1898', subject: randomUUID(), email: `${name}-${randomUUID().slice(0, 8)}@t1898.test`, name: null });
     const [ownerB, limitedHere, plainHere, memberB] = [await person('owner-b'), await person('limited-here'), await person('plain-here'), await person('member-b')];
     const { orgId: orgB, slug: slugB } = await createOrg(app, asUser(ownerB), 'T1898');
     const defaultOfB = await admin(
