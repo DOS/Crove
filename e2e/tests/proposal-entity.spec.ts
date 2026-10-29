@@ -1,7 +1,7 @@
 // A proposal's legal entity in the Inbox (issue #1542, the books per entity of #1280), end to end: with two entities,
-// an e-invoice's proposal shows the entity whose books it goes to (the default one until a revision names another),
-// offers the entity chosen in the sidebar, moves there in one click, and once approved its entry is in that entity's
-// journal only. The Inbox list names the entity beside the proposal (#1543).
+// an e-invoice uploaded with the branch chosen beside the upload button is read into the branch (#1764), its proposal
+// shows that entity with no way to move it, and once approved its entry is in that entity's journal only. The Inbox
+// list names the entity beside the proposal (#1543).
 import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
 import { sql } from '../lib/db.ts';
@@ -14,7 +14,7 @@ const SELLER = 'CÔNG TY TNHH DỊCH VỤ MẪU';
 const ORG = 'Công ty Đề xuất hai pháp nhân';
 const BRANCH = 'Chi nhánh Cần Thơ';
 
-test('an invoice proposal moves to the entity chosen in the sidebar and posts in its books', async ({ page }) => {
+test('an invoice uploaded in an entity stays there and posts in its books', async ({ page }) => {
   await signInNewUser(page, newEmail('proposal-entity'));
   const slug = await createOrg(page, ORG);
   const nav = page.getByRole('navigation');
@@ -31,26 +31,21 @@ test('an invoice proposal moves to the entity chosen in the sidebar and posts in
     await switcher.selectOption({ label: BRANCH });
   });
 
-  await test.step('the proposal goes to the default entity until it is moved', async () => {
+  await test.step('upload it in the branch, chosen beside the upload button', async () => {
     await nav.getByRole('link', { name: 'Trang chủ', exact: true }).click();
     await nav.getByRole('link', { name: 'Hộp thư chứng từ' }).click();
+    // The sidebar's choice carries over; the Inbox shows it where documents are uploaded.
+    await expect(page.getByRole('main').getByLabel('Ghi sổ vào').locator('option:checked')).toHaveText(BRANCH);
     await page.locator('input[type=file]').setInputFiles(INVOICE);
     await expect(page.getByRole('link', { name: SELLER })).toBeVisible({ timeout: 60_000 });
-    await expect(row.getByRole('cell', { name: ORG, exact: true })).toBeVisible();
-    await page.getByRole('link', { name: SELLER }).click();
-    const field = page.getByLabel('Ghi vào sổ của pháp nhân');
-    await expect(field.locator('option:checked')).toHaveText(ORG);
-    // The sidebar's choice is offered, not applied: nothing changes without a click.
-    await expect(page.getByText(`Bạn đang làm việc với ${BRANCH}.`)).toBeVisible();
-    await page.getByRole('button', { name: `Chuyển hóa đơn sang ${BRANCH}` }).click();
-    await expect(field.locator('option:checked')).toHaveText(BRANCH);
-    await expect(page.getByText(`Bạn đang làm việc với ${BRANCH}.`)).toHaveCount(0);
+    await expect(row.getByRole('cell', { name: BRANCH, exact: true })).toBeVisible();
   });
 
-  await test.step('the Inbox list names the entity it moved to', async () => {
-    await nav.getByRole('link', { name: 'Hộp thư chứng từ' }).click();
-    await expect(row.getByRole('cell', { name: BRANCH, exact: true })).toBeVisible();
+  await test.step('the proposal shows its entity, with no way to move it', async () => {
     await page.getByRole('link', { name: SELLER }).click();
+    const shown = page.locator('p', { hasText: 'Ghi vào sổ của pháp nhân' });
+    await expect(shown.locator('xpath=following-sibling::p[1]')).toHaveText(BRANCH);
+    await expect(page.getByLabel('Ghi vào sổ của pháp nhân')).toHaveCount(0);
   });
 
   await test.step('approve it', async () => {

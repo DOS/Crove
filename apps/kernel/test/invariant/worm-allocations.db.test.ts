@@ -229,8 +229,13 @@ suite('WORM fact stream: number allocations and voids on PostgreSQL (#1594, #159
     const batches = await readBatches(keys);
     const [first, second] = batches;
     expect(first?.version).toBe(3);
-    expect(second).toMatchObject({ version: 4, numbersFrom: second?.window.from, entitiesFrom: second?.window.from, allocationsFrom: EPOCH });
-    batches.slice(2).forEach((b) => expect(b).toMatchObject({ version: 4, allocationsFrom: b.window.from }));
+    // Version 4, or a later version that keeps the allocation rows (version 5 adds the number series, #1623).
+    expect(second?.version).toBeGreaterThanOrEqual(4);
+    expect(second).toMatchObject({ numbersFrom: second?.window.from, entitiesFrom: second?.window.from, allocationsFrom: EPOCH });
+    batches.slice(2).forEach((b) => {
+      expect(b.version).toBeGreaterThanOrEqual(4);
+      expect(b).toMatchObject({ allocationsFrom: b.window.from });
+    });
     const refs = batches.flatMap((b) => b.rows.map(([ref]) => ref));
     // Each allocation, void and voucher number once, those made before the switch included.
     for (const [voucher, allocation] of vouchers) {
@@ -254,7 +259,10 @@ suite('WORM fact stream: number allocations and voids on PostgreSQL (#1594, #159
     await age(30);
     expect(await writeArchive(worker, store, { lagSeconds: 600 })).toBeGreaterThan(0);
     const after = await readBatches((await store.list('chain/v1/')).slice(keys.length));
-    for (const b of after) expect(b).toMatchObject({ version: 4, allocationsFrom: b.window.from });
+    for (const b of after) {
+      expect(b.version).toBeGreaterThanOrEqual(4);
+      expect(b).toMatchObject({ allocationsFrom: b.window.from });
+    }
     expect(after.flatMap((b) => b.rows.map(([ref]) => ref))).toContain(`voucher_number:journal_voucher:${orgId}:${vouchers.at(-1)![0]}`);
 
     expect(await verifyArchive(worker, store)).toMatchObject({ ok: true, problems: [] });
