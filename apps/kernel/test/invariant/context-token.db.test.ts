@@ -183,8 +183,13 @@ suite('context tokens: enter_user_context on PostgreSQL (#1822, ADR-0028 section
     await expect(enter(app, orgA, token(users.owner, orgA, { sessionId: revoked }))).rejects.toMatchObject({ code: '28000', message: 'SESSION_REVOKED' });
     await expect(enter(app, orgA, token(users.owner, orgA, { sessionId: revokedInA }))).rejects.toMatchObject({ code: '28000', message: 'SESSION_REVOKED_IN_ORG' });
     expect(await enter(app, orgA, token(users.owner, orgA, { sessionId: live }))).toBe(users.owner);
-    // A session the database has not seen yet (the kernel records it on first use) is not refused here.
-    expect(await enter(app, orgA, token(users.owner, orgA, { sessionId: randomUUID() }))).toBe(users.owner);
+    // A session the database has not recorded: let in until #1822 step 2, which requires an active session row for a
+    // session a token names (the kernel's session check records it in the same transaction), refused after it.
+    const unseen = await enter(app, orgA, token(users.owner, orgA, { sessionId: randomUUID() })).then(
+      (user) => user,
+      (error: { code?: string; message?: string }) => `${error.code}:${error.message}`,
+    );
+    expect([users.owner, '28000:SESSION_INVALID']).toContain(unseen);
   });
 
   it('keeps the key out of reach of every login role', async () => {
@@ -245,7 +250,8 @@ suite('context tokens: enter_user_context on PostgreSQL (#1822, ADR-0028 section
     const bytes = contextTokenKeyBytes(KEY);
     expect(tok).not.toContain(KEY);
     expect(tok).not.toContain(bytes.toString('hex'));
-    expect(tok.split('.')).toHaveLength(8);
+    // v1 has 8 fields; #1822 step 2's v2 adds the session check the kernel ran.
+    expect([8, 9]).toContain(tok.split('.').length);
     // A key of the wrong length is refused by both readers without echoing it.
     const short = Buffer.from('a short secret value').toString('base64');
     for (const read of [contextTokenKeyBytes, runnerKeyBytes]) {
