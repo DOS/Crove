@@ -6,8 +6,8 @@
   "ignoreExportsUsedInFile": true,
   "workspaces": {
     ".": {
-      // tools/*.mjs and tools/ci/*.mjs are scripts the package.json scripts and the workflows run by path.
-      "entry": ["tools/**/*.{mjs,ts}"],
+      // No entry for tools/ (#1650): knip's package.json, GitHub Actions and Vitest plugins find the scripts run by path
+      // and the tests in tools/test, and follow their imports, so a tools file that nothing runs or imports is reported.
       // tools/ui-colors.mjs resolves tailwindcss/theme.css from packages/ui (createRequire), which lists it.
       "ignoreDependencies": ["tailwindcss"]
     },
