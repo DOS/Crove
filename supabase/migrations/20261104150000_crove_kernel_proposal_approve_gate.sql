@@ -16,7 +16,9 @@
 --     - P12: the user is in the snapshot taken at creation and still holds an approving base role or the command's
 --       approval permission through an org-wide assignment (a viewer holds none), under the org's preset now (P09: a
 --       preset that reserves the ledger to the chief accountant leaves only the permission); the snapshot members'
---       rows are locked FOR SHARE in user_id order first, as approval.ts does (NOT_ELIGIBLE);
+--       rows are locked FOR SHARE in user_id order first, as approval.ts does (NOT_ELIGIBLE). The permission is written
+--       as its literal key, as the manifest check reads it (#1641): a policy naming another permission makes nobody
+--       eligible through it (fail closed), and the parity test fails until this follows;
 --     - P10: an author approves only as the sole eligible approver (self_approved), or as an owner when every eligible
 --       approver is an author (owner_override); never a ledger proposal under such a preset (FOUR_EYES_REQUIRED);
 --     - authors and snapshot recorded and well formed, else NOT_ELIGIBLE (fail closed).
@@ -113,9 +115,9 @@ BEGIN
     SELECT m.user_id FROM crove_kernel.tenant_member m
     WHERE m.org_id = p_org AND m.user_id = ANY (p_snapshot)
       AND (m.role = ANY (v_roles)
-           OR (v_policy.permission IS NOT NULL AND m.role <> 'viewer' AND EXISTS (
+           OR (v_policy.permission = 'finance.proposal.approve' AND m.role <> 'viewer' AND EXISTS (
                  SELECT 1 FROM crove_kernel.role_assignment a JOIN crove_kernel.role_permission rp ON rp.role_key = a.role_key
-                 WHERE a.org_id = m.org_id AND a.user_id = m.user_id AND a.legal_entity_id IS NULL AND rp.permission = v_policy.permission)))
+                 WHERE a.org_id = m.org_id AND a.user_id = m.user_id AND a.legal_entity_id IS NULL AND rp.permission = 'finance.proposal.approve')))
     ORDER BY m.user_id);
   IF NOT (p_user = ANY (v_eligible)) THEN
     RETURN pg_catalog.jsonb_build_object('reason', 'not_eligible', 'eligibleCount', pg_catalog.cardinality(v_eligible), 'selfApproved', false, 'fourEyes', 'pass', 'preset', v_preset, 'version', v_version);
@@ -163,9 +165,9 @@ BEGIN
     SELECT m.user_id FROM crove_kernel.tenant_member m
     WHERE m.org_id = p_org
       AND (m.role = ANY (v_roles)
-           OR (v_policy.permission IS NOT NULL AND m.role <> 'viewer' AND EXISTS (
+           OR (v_policy.permission = 'finance.proposal.approve' AND m.role <> 'viewer' AND EXISTS (
                  SELECT 1 FROM crove_kernel.role_assignment a JOIN crove_kernel.role_permission rp ON rp.role_key = a.role_key
-                 WHERE a.org_id = m.org_id AND a.user_id = m.user_id AND a.legal_entity_id IS NULL AND rp.permission = v_policy.permission)))
+                 WHERE a.org_id = m.org_id AND a.user_id = m.user_id AND a.legal_entity_id IS NULL AND rp.permission = 'finance.proposal.approve')))
     ORDER BY m.user_id);
 END $$;
 REVOKE ALL ON FUNCTION crove_kernel.approval_eligible_now(uuid, text) FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant;
