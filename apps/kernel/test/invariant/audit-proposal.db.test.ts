@@ -4,13 +4,16 @@
 //   another org gets that same refusal whatever the org holds;
 // - a row for the proposal's own command needs the proposal 'approved' (a state only the approving transaction sees),
 //   so a pending, executed, rejected, failed or expired proposal is refused for it;
-// - a row for another command needs 'approved' (a command the execution runs) or 'pending' (an edit's reviser), so an
-//   executed, rejected, failed or expired proposal is refused for it too; a pending one passes for it (the gap left
-//   for option B, #1706, written down here so a change to it is seen);
+// - a row for another command naming an executed, rejected, failed or expired proposal is refused too; one naming a
+//   pending or approved proposal is written while option A stands (an edit's reviser, a command the execution runs)
+//   and refused once option B lands (#1706), so both answers pass here until then;
 // - the runtime's own flows still pass: uploading, editing (the reviser's row names the pending proposal) and
 //   approving a purchase invoice (the record's row names it approved, and so does the row of
-//   kernel.party.link_for_tax_code, which the record runs for a supplier the org does not know yet);
+//   kernel.party.link_for_tax_code, which the record runs for a supplier the org does not know yet). A row names the
+//   proposal in its proposal_id or, once option B lands, a command it runs names it in detail.under_proposal;
 // - staff writes are not checked, as audit_event_stamp.
+// #1706 lands in two steps (AGENTS.md, protected paths): this copy accepts both behaviors, so the change itself runs
+// against it, and the next one asks for option B alone.
 // Set CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
 // Part of the invariant suite: CI runs this file from the base branch on protected-path PRs (AGENTS.md).
 import { randomUUID } from 'node:crypto';
@@ -180,11 +183,13 @@ suite('audit rows naming a proposal on PostgreSQL (#1695)', () => {
         return e.code === REFUSED.code && e.message === REFUSED.message && e.detail === undefined ? 'refused' : `other: ${e.code} ${e.message}`;
       },
     );
+  // The rows that name the proposal: in proposal_id, or (option B, #1706) in detail.under_proposal.
   const rowsNaming = (proposalId: string) =>
     admin(async (c) =>
       (
         await c.query<{ command: string; outcome: string }>(
-          'SELECT command, outcome FROM crove_kernel.audit_event WHERE proposal_id = $1 ORDER BY command, occurred_at, id',
+          `SELECT command, outcome FROM crove_kernel.audit_event
+           WHERE proposal_id = $1 OR detail ->> 'under_proposal' = $1::text ORDER BY command, occurred_at, id`,
           [proposalId],
         )
       ).rows,
@@ -250,7 +255,7 @@ suite('audit rows naming a proposal on PostgreSQL (#1695)', () => {
     expect(await rowsNaming(foreignPending)).toEqual([]);
   });
 
-  it("needs the proposal approved for its own command's row, and approved or pending for another command's", async () => {
+  it("needs the proposal approved for its own command's row, and refuses another command's row naming a decided one", async () => {
     const o = await org();
     const seen: Record<string, Record<string, string>> = {};
     for (const status of STATUSES) {
@@ -260,9 +265,11 @@ suite('audit rows naming a proposal on PostgreSQL (#1695)', () => {
         other: await outcome(write(appUrl, userContext(o.admin, o.orgId), o.orgId, OTHER, id)),
       };
     }
+    // Another command's row naming a pending or approved proposal: written under option A, refused under option B (#1706).
+    const either = expect.stringMatching(/^(written|refused)$/);
     expect(seen).toEqual({
-      pending: { own: 'refused', other: 'written' },
-      approved: { own: 'written', other: 'written' },
+      pending: { own: 'refused', other: either },
+      approved: { own: 'written', other: either },
       executed: { own: 'refused', other: 'refused' },
       rejected: { own: 'refused', other: 'refused' },
       failed: { own: 'refused', other: 'refused' },
