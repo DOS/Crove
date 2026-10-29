@@ -29,7 +29,7 @@ import {
   type PortalListResult,
   type PortalXmlResult,
 } from '@crove/kernel-contract';
-import { PORTAL_SYNC_CONTENT_TYPE, PortalListTooLarge, checkPortalList, normalizePortalInvoices, vatPeriod, type PortalCallError, type PortalXmlPlan } from '@crove/mod-finance';
+import { PORTAL_SYNC_CONTENT_TYPE, PortalListTooLarge, checkPortalList, normalizePortalInvoices, vatPeriod, type PortalAnswer, type PortalCallError, type PortalXmlPlan } from '@crove/mod-finance';
 import { ConcurrencyLimiter } from './concurrency.ts';
 import { RateLimiter } from './rate-limit.ts';
 import { safeFilename, sniffType } from './sniff.ts';
@@ -91,9 +91,9 @@ function portalError(kind: PortalCallError): DomainError {
 
 // The portal's answers as a list, or the finance domain's refusal of a list too large as the API's answer: 422
 // PORTAL_LIST_TOO_LARGE with the domain's message (#1680).
-function normalizeAnswers(...args: Parameters<typeof normalizePortalInvoices>): ReturnType<typeof normalizePortalInvoices> {
+function normalizeAnswers(answers: PortalAnswer[], range: { from: string; to: string }) {
   try {
-    return normalizePortalInvoices(...args);
+    return normalizePortalInvoices(answers, range);
   } catch (error) {
     if (error instanceof PortalListTooLarge) throw new DomainError(error.code, 422, error.message);
     throw error;

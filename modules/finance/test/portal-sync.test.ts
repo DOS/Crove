@@ -115,13 +115,6 @@ describe('normalizePortalInvoices', () => {
     expect(refused).toMatchObject({ code: 'PORTAL_LIST_TOO_LARGE', message: TOO_LARGE });
   });
 
-  it('records the same refusal as the failure of a stored list too large (#1680)', () => {
-    // Two queries of 10001 rows each: each answer within its cap, the list over it.
-    const half = (query: 'purchase_5' | 'purchase_6', offset: number) => ({ query, rows: Array.from({ length: 10_001 }, (_, i) => row({ shdon: String(offset + i + 1) })) });
-    const evidence = { period: '2026-09', from: PERIOD.from, to: PERIOD.to, answers: [half('purchase_5', 0), half('purchase_6', 10_001)] };
-    expect(readSyncedList(new TextEncoder().encode(JSON.stringify(evidence)), PERIOD)).toEqual({ ok: false, error: TOO_LARGE });
-  });
-
   it('feeds the same checks as an uploaded list: the org must be the buyer', () => {
     const { list } = normalizePortalInvoices([{ query: 'purchase_5', rows: [row(), row({ shdon: '2', nbmst: BUYER, nmmst: SELLER })] }], PERIOD);
     const own = checkPortalList(list, BUYER);
@@ -129,6 +122,15 @@ describe('normalizePortalInvoices', () => {
     expect(own.ok && own.ownSales).toBe(1);
     const other = checkPortalList(list, '0302712572');
     expect(other.ok).toBe(false);
+  });
+});
+
+describe('readSyncedList', () => {
+  it('records the refusal of a list too large as the stored list\'s failure (#1680)', () => {
+    // Two queries of 10001 rows each: each answer within its cap, the list over it.
+    const half = (query: 'purchase_5' | 'purchase_6', offset: number) => ({ query, rows: Array.from({ length: 10_001 }, (_, i) => row({ shdon: String(offset + i + 1) })) });
+    const evidence = { period: '2026-09', from: PERIOD.from, to: PERIOD.to, answers: [half('purchase_5', 0), half('purchase_6', 10_001)] };
+    expect(readSyncedList(new TextEncoder().encode(JSON.stringify(evidence)), PERIOD)).toEqual({ ok: false, error: TOO_LARGE });
   });
 });
 
