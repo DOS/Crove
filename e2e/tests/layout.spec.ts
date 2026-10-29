@@ -133,6 +133,7 @@ test('every sidebar screen and the detail pages pass the 360px and axe walk on a
   await signInNewUser(page, newEmail('layout-a11y-data'));
   const slug = await createOrg(page, 'Công ty Có dữ liệu');
   const details: string[] = [];
+  const problems: string[] = [];
 
   await test.step('make the org the invoice seller, so the invoice is a sale and its buyer a customer', async () => {
     await page.getByRole('navigation').getByRole('link', { name: 'Cài đặt' }).click();
@@ -143,13 +144,18 @@ test('every sidebar screen and the detail pages pass the 360px and axe walk on a
     await expect(page.getByRole('definition').getByText(SELLER_TAX_CODE, { exact: true })).toBeVisible();
   });
 
-  await test.step('upload the e-invoice and approve it with a second factor', async () => {
+  await test.step('upload the e-invoice, walk the Inbox and the proposal while it waits, and approve it with a second factor', async () => {
     await page.goto(`/o/${slug}/inbox`);
     await page.locator('input[type=file]').setInputFiles(INVOICE);
     const proposal = page.getByRole('row').filter({ has: page.getByRole('link', { name: BUYER }) });
     await expect(proposal).toBeVisible({ timeout: 60_000 });
     await proposal.getByRole('link', { name: BUYER }).click();
-    details.push(new URL(page.url()).pathname);
+    const detail = new URL(page.url()).pathname;
+    details.push(detail);
+    // Pending, the list has its row and the detail its checks and approve controls: walked now, before approving.
+    problems.push(...(await phoneWidthProblems(page, [`/o/${slug}/inbox`, detail])));
+    await page.setViewportSize({ width: 1280, height: 600 });
+    await page.goto(detail);
     await confirmUnverifiedSignature(page);
     await page.getByRole('button', { name: 'Duyệt và ghi sổ' }).click();
     await page.getByRole('button', { name: 'Bật xác thực hai lớp' }).click();
@@ -158,6 +164,7 @@ test('every sidebar screen and the detail pages pass the 360px and axe walk on a
     await page.getByRole('button', { name: 'Xác nhận' }).click();
     await expect(page).toHaveURL(new RegExp(`/o/${slug}/inbox$`));
     await expect(page.getByText('Không có đề xuất nào chờ duyệt')).toBeVisible();
+    // Its buyer is now a customer.
     await page.goto(`/o/${slug}/customers`);
     await expect(page.getByRole('row').filter({ hasText: BUYER })).toBeVisible();
   });
@@ -177,8 +184,17 @@ test('every sidebar screen and the detail pages pass the 360px and axe walk on a
     details.push(new URL(page.url()).pathname);
   });
 
+  // The approved proposal's tab, and the ledger and VAT screens on the invoice's month (September 2026): they open on
+  // the month before today by default, which holds the invoice only while that is September.
+  details.push(
+    `/o/${slug}/inbox?status=executed`,
+    `/o/${slug}/ledger?period=2026-09`,
+    `/o/${slug}/ledger?period=2026-09&report=parties`,
+    `/o/${slug}/vat?period=2026-09`,
+  );
   await page.goto(`/o/${slug}/inbox`);
-  expect(await phoneWidthProblems(page, [...(await appScreens(page)), ...details])).toEqual([]);
+  problems.push(...(await phoneWidthProblems(page, [...(await appScreens(page)), ...details])));
+  expect(problems).toEqual([]);
 });
 
 // The Social home's nine tabs at phone width (#1043): they wrap inside the screen, and the page never scrolls sideways.
