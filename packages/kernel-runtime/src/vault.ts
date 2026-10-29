@@ -111,6 +111,11 @@ export class CredentialVault implements CredentialBroker {
     return this.current.id;
   }
 
+  // The ids of every key this vault opens, the current one first: an envelope under any other id does not open (#1888).
+  get keyIds(): readonly string[] {
+    return [...this.keys.keys()];
+  }
+
   seal(secret: string, binding: CredentialBinding): SealedCredential {
     const plaintext = Buffer.from(secret, 'utf8');
     if (plaintext.length === 0 || plaintext.length > MAX_SECRET_BYTES) throw new CredentialError('a credential must be 1 byte to 32 KiB');

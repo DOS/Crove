@@ -51,6 +51,20 @@ describe('LocalDiskStore', () => {
     await expect(readVerified(store, { key, generation: null, sha256 }, -1)).rejects.toThrow(/invalid read cap/);
   });
 
+  // #1189: every one of these compares false against the file's size, so a store that took it would read the file whole.
+  it('refuses a read cap that is not a whole number of bytes, before reading (#1189)', async () => {
+    const bytes = encode(`<HDon>${randomUUID()}</HDon>`);
+    const key = fileKey(orgId, sha256Hex(bytes));
+    await store.put(key, bytes);
+    for (const cap of [Number.NaN, -1, 1.5, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 2 ** 53]) {
+      await expect(store.get(key, null, cap), String(cap)).rejects.toThrow(new RangeError('invalid read cap'));
+    }
+    // Even for a key with nothing under it: the cap is checked first.
+    await expect(store.get(fileKey(orgId, sha256Hex('missing')), null, Number.NaN)).rejects.toThrow(/invalid read cap/);
+    expect(await store.get(key, null, 0).catch((error: unknown) => error)).toBeInstanceOf(BlobTooLargeError);
+    expect(await store.get(key)).toEqual(bytes);
+  });
+
   it('never overwrites: the same bytes dedupe, different bytes conflict and the original stays', async () => {
     const bytes = encode(`<HDon>${randomUUID()}</HDon>`);
     const key = fileKey(orgId, sha256Hex(bytes));

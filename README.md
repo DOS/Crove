@@ -1,6 +1,6 @@
 # Ludy
 
-**The open-source, AI-native Business OS for solo founders and SMEs.** Vietnam first.
+**The open-source, AI-native Business OS for OPC, solo founders and SMEs.**
 
 Forward or upload your purchase invoices. Ludy reads them (Vietnamese e-invoice XML deterministically, PDFs and photos with any OpenAI-compatible model), checks every number, and puts a proposed TT133 journal entry in your AI Inbox. You review, adjust accounts if needed, and approve. Approved invoices become vendors, purchase documents and balanced journal entries you can export to Excel for your accountant.
 

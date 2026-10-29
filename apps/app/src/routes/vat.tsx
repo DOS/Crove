@@ -234,7 +234,8 @@ function CarryForward({ data, text, onChange }: { data: VatReport; text: string;
   );
 }
 
-// The period's return as filed (#1400): owners and admins mark it filed with [22], [25] and [43] as on the return, which
+// The period's return as filed (#1400): owners, admins and the entity's chief accountant (#1508) mark it filed with [22],
+// [25] and [43] as on the return, which
 // the next period's [22] starts from, and the tax calendar marks it done; or take both marks back.
 function FiledReturn({
   data,
@@ -510,7 +511,7 @@ export function VatPage() {
             legalEntityId={entity.legalEntityId}
             carried={carried}
             deduct25={deductAmount(deduct, data.indicators.find((i) => i.code === '24')?.amount ?? '0', data.paymentChecks.suggested25)}
-            canFile={canMarkFiled(org.data?.role)}
+            canFile={data.filable ?? canMarkFiled(org.data?.role)}
           />
 
           <PaymentChecks data={data} canMark={canMarkPayment(org.data?.role)} legalEntityId={entity.legalEntityId} />

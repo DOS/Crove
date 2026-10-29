@@ -958,14 +958,16 @@ export const zVatReport = z.object({
   carryForward: zVatCarryForward,
   // This period's return as marked filed, or null.
   filed: zVatFiledReturn.nullable(),
+  // Whether the signed-in member may mark this entity's return filed (#1508): an owner or an admin, or a chief
+  // accountant for the entity. Answered by finance.vat.period; the server checks again.
+  filable: z.boolean().optional(),
 });
 // Marks the period's VAT return filed (done) with its figures, or takes the mark back (#1400).
 export const zVatReturnMark = z.strictObject({
   period: zVatPeriod,
   done: z.boolean(),
   figures: z.strictObject({ carriedIn: zVatWholeDong, deductible: zVatWholeDong, carriedOut: zVatWholeDong }).optional(),
-  // The legal entity whose return it is (#1280), as in zLegalEntityChoice. Only the default entity's return carries
-  // the tax calendar's done mark for now; another entity's is recorded in vat_return_filed alone.
+  // The legal entity whose return it is (#1280), as in zLegalEntityChoice; its tax calendar done mark comes with it.
   legalEntityId: zId.optional(),
 });
 
