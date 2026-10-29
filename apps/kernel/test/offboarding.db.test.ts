@@ -569,7 +569,7 @@ suite('org offboarding on PostgreSQL (#38)', () => {
     // it (occurred_at is its transaction's start): it is refused, and recording in a new transaction comes after it.
     // A row dated after this transaction's start stands for that other record. Only the rows that stand for an export
     // count, those the purge check reads (system, crove.org-export.v2; #1883): a future-dated row of another format or
-    // none refuses nothing. These rows stay in this case's own org, which no later case uses (each makes its own).
+    // none refuses nothing and hides nothing. These rows stay in this case's own org, which no later case uses (each makes its own).
     const latest = (await workerRuntime.query<ExportRecord>('kernel.org.export.current', {}, system))!;
     const plant = (detail: Record<string, unknown>) =>
       withAdmin((admin) =>
@@ -582,6 +582,10 @@ suite('org offboarding on PostgreSQL (#38)', () => {
     await plant({});
     await plant({ format: 'crove.org-export.v1' });
     await expect(workerRuntime.execute('kernel.org.export.record', record, system)).resolves.toEqual({ ok: true });
+    // Nor do they hide the export: the current export and the owner's view read the same rows.
+    expect(await workerRuntime.query('kernel.org.export.current', {}, system)).toEqual(record);
+    const shown = await runtime.query<OrgExportView>('kernel.org.export.get', {}, { actor: asUser(owner.id), orgId: org.orgId });
+    expect(shown.export?.manifestGeneration).toBe(record.manifestGeneration);
     await plant({ format: 'crove.org-export.v2' });
     await expect(workerRuntime.execute('kernel.org.export.record', record, system)).rejects.toMatchObject({ code: 'EXPORT_RECORD_STALE' });
     await expect(workerRuntime.execute('kernel.org.export.record', { ...latest, rebind: true }, system)).rejects.toMatchObject({ code: 'EXPORT_RECORD_STALE' });
