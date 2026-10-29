@@ -88,7 +88,8 @@ export interface ProberConfig {
   backupHeartbeatUrl?: string | undefined;
   // The status page's file; unset: none is written.
   statusFile?: string | undefined;
-  // The modules the deployment runs (CROVE_MODULES); unset: only the modules the workers record count.
+  // The modules the deployment runs (CROVE_MODULES; loadProberConfig reads unset as every module). Left out of a
+  // config built by hand: only the modules the workers record count.
   modules?: readonly string[] | undefined;
 }
 
@@ -234,7 +235,10 @@ export async function readHealth(databaseUrl: string, deadLetterWindowSeconds: n
     if (who[0]?.privileged) {
       throw new Error(`refusing to probe as ${who[0].rolname}, a superuser or BYPASSRLS role: connect PROBER_DATABASE_URL as crove_prober`);
     }
-    await client.query(`SELECT pg_catalog.set_config('crove.prober_modules', $1, false)`, [modules.join(',')]);
+    // One read-only transaction with the setting local to it: a transaction-mode pooler (PgBouncer, Supavisor) keeps
+    // both statements on one server connection and leaves nothing set on it (#1894 review).
+    await client.query('BEGIN READ ONLY');
+    await client.query(`SELECT pg_catalog.set_config('crove.prober_modules', $1, true)`, [modules.join(',')]);
     const { rows } = await client.query<HealthSnapshot>(
       `SELECT checked_at::text AS checked_at, outbox_pending, outbox_oldest_age_seconds, inbound_pending, inbound_oldest_age_seconds,
               jobs_schema_present, jobs_queued, job_oldest_queued_age_seconds, dead_letter_count, worker_heartbeat_age_seconds
@@ -244,6 +248,7 @@ export async function readHealth(databaseUrl: string, deadLetterWindowSeconds: n
     const row = rows[0];
     if (!row) throw new Error('crove_kernel.health() returned no row');
     const { rows: queue } = await client.query<{ usage: number }>('SELECT pg_catalog.pg_notification_queue_usage() AS usage');
+    await client.query('COMMIT');
     return { ...row, notify_queue_usage: Number(queue[0]?.usage ?? 0) };
   } finally {
     await client.end().catch(() => {});
