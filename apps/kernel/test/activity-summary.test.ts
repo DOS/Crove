@@ -81,7 +81,9 @@ function valuePart(summary: string): { at: number; text: string } {
 function scan(file: string, text: string, classified: Set<string>, allowed: Record<string, string> = ALLOWED[file] ?? {}): Finding[] {
   const code = blank(text);
   const findings: Finding[] = [];
-  const isClassified = (name: string) => classified.has(name) || classified.has(snake(name)) || FREE_TEXT.has(name);
+  // A free-text word anywhere in the name counts: statusReason, decision_note.
+  const isFreeText = (name: string) => snake(name).split('_').some((word) => FREE_TEXT.has(word));
+  const isClassified = (name: string) => classified.has(name) || classified.has(snake(name)) || isFreeText(name);
   const lineOf = (at: number) => code.slice(0, at).split('\n').length;
   for (const m of code.matchAll(/\bctx\s*\.\s*activity\s*\(/g)) {
     const open = m.index + m[0].length - 1;
@@ -130,6 +132,7 @@ describe('activity summaries and classified columns (#1634)', () => {
     // Free text a member typed, whatever its column's class (#1825).
     expect(check("await ctx.activity('finance.period', id, 'period.unlocked', `Mở khóa sổ (lý do: ${input.reason})`, { legalEntityId: e });")).toEqual(['input.reason']);
     expect(check("await ctx.activity('kernel.file', id, 'x', `Ghi chú: ${note}`);")).toEqual(['note']);
+    expect(check("await ctx.activity('kernel.agent', id, 'x', `Dừng: ${input.statusReason} ${row.decision_note}`);")).toEqual(['input.statusReason', 'row.decision_note']);
     // Outside a template too: a concatenation, a fallback, a branch.
     expect(check("await ctx.activity('kernel.party', id, 'x', 'Thêm ' + party.name);")).toEqual(['party.name']);
     expect(check("await ctx.activity('kernel.party', id, 'x', input.name ?? 'Không tên');")).toEqual(['input.name']);
