@@ -17,6 +17,7 @@ const base = {
   PUBLIC_URL: 'https://books.example.com',
   AUTH_UPSTREAM_URL: 'http://auth:9999',
 };
+const LOCAL = 'http://localhost:8080';
 const TEST_KEY = Buffer.from('test-only-context-token-key-0123456789').toString('base64');
 const USER = '0190a5b2-0000-7000-8000-00000000000a';
 const ORG = '0190a5b2-0000-7000-8000-0000000000b0';
@@ -116,21 +117,34 @@ describe('resolveContextTokenKey', () => {
     try {
       const file = join(dir, 'keys', 'context-token.key');
       const key = randomBytes(32).toString('base64');
-      expect(resolveContextTokenKey({ CROVE_CONTEXT_TOKEN_KEY: key, CROVE_CONTEXT_TOKEN_KEY_FILE: file }, { create: true })).toBe(key);
+      expect(resolveContextTokenKey({ CROVE_CONTEXT_TOKEN_KEY: key, CROVE_CONTEXT_TOKEN_KEY_FILE: file, PUBLIC_URL: LOCAL }, { create: true })).toBe(key);
       expect(existsSync(file)).toBe(false);
       // The API before migrate made the file: no key (and the API then refuses to start), no file made.
-      expect(resolveContextTokenKey({ CROVE_CONTEXT_TOKEN_KEY: undefined, CROVE_CONTEXT_TOKEN_KEY_FILE: file }, { create: false })).toBeUndefined();
+      expect(resolveContextTokenKey({ CROVE_CONTEXT_TOKEN_KEY: undefined, CROVE_CONTEXT_TOKEN_KEY_FILE: file, PUBLIC_URL: LOCAL }, { create: false })).toBeUndefined();
       expect(existsSync(file)).toBe(false);
-      const made = resolveContextTokenKey({ CROVE_CONTEXT_TOKEN_KEY: undefined, CROVE_CONTEXT_TOKEN_KEY_FILE: file }, { create: true });
+      const made = resolveContextTokenKey({ CROVE_CONTEXT_TOKEN_KEY: undefined, CROVE_CONTEXT_TOKEN_KEY_FILE: file, PUBLIC_URL: LOCAL }, { create: true });
       expect(made && contextTokenKeyBytes(made).length).toBe(32);
-      expect(resolveContextTokenKey({ CROVE_CONTEXT_TOKEN_KEY: undefined, CROVE_CONTEXT_TOKEN_KEY_FILE: file }, { create: false })).toBe(made);
-      expect(resolveContextTokenKey({ CROVE_CONTEXT_TOKEN_KEY: undefined, CROVE_CONTEXT_TOKEN_KEY_FILE: undefined }, { create: true })).toBeUndefined();
+      expect(resolveContextTokenKey({ CROVE_CONTEXT_TOKEN_KEY: undefined, CROVE_CONTEXT_TOKEN_KEY_FILE: file, PUBLIC_URL: LOCAL }, { create: false })).toBe(made);
+      expect(resolveContextTokenKey({ CROVE_CONTEXT_TOKEN_KEY: undefined, CROVE_CONTEXT_TOKEN_KEY_FILE: undefined, PUBLIC_URL: LOCAL }, { create: true })).toBeUndefined();
       // A file that holds no usable key fails without showing what it holds.
       const bad = join(dir, 'bad.key');
       writeFileSync(bad, 'not a key at all\n');
-      expect(() => resolveContextTokenKey({ CROVE_CONTEXT_TOKEN_KEY: undefined, CROVE_CONTEXT_TOKEN_KEY_FILE: bad }, { create: false })).toThrow(
+      expect(() => resolveContextTokenKey({ CROVE_CONTEXT_TOKEN_KEY: undefined, CROVE_CONTEXT_TOKEN_KEY_FILE: bad, PUBLIC_URL: LOCAL }, { create: false })).toThrow(
         /^CROVE_CONTEXT_TOKEN_KEY must be base64 of 32 to 64 random bytes$/,
       );
+      // On a public URL the file gets the setting's checks: not the test suites' key, not a passphrase.
+      const sample = join(dir, 'sample.key');
+      writeFileSync(sample, `${TEST_KEY}
+`);
+      const fromFile = (path: string, url: string) =>
+        resolveContextTokenKey({ CROVE_CONTEXT_TOKEN_KEY: undefined, CROVE_CONTEXT_TOKEN_KEY_FILE: path, PUBLIC_URL: url }, { create: false });
+      expect(fromFile(sample, LOCAL)).toBe(TEST_KEY);
+      expect(() => fromFile(sample, 'https://books.example.com')).toThrow(/test suite key.*\(in CROVE_CONTEXT_TOKEN_KEY_FILE\)$/);
+      const phrase = join(dir, 'phrase.key');
+      writeFileSync(phrase, `${Buffer.from('correct horse battery staple, our shared key!').toString('base64')}
+`);
+      expect(() => fromFile(phrase, 'https://books.example.com')).toThrow(/printable text/);
+      expect(fromFile(file, 'https://books.example.com')).toBe(made);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
