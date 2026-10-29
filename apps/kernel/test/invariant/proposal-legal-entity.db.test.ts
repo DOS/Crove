@@ -392,10 +392,8 @@ suite('proposals per legal entity and agent position scopes on PostgreSQL (#1538
     // branch's.
     const as = { actor: approver.actor, orgId };
     const outside = await reviewTaskFor(approver.positionId, ofDefault.proposalId as string);
-    const leased = await worker.execute<{ fence: string }>('kernel.task.checkout', { id: outside }, as);
-    await expect(worker.execute('kernel.task.approve_proposal', { id: outside, fence: leased.fence, proposalId: ofDefault.proposalId, revision: 1 }, as)).rejects.toMatchObject({
-      code: 'NOT_FOUND',
-    });
+    // The task takes its proposal's entity (#1762), so the agent cannot even check it out.
+    await expect(worker.execute('kernel.task.checkout', { id: outside }, as)).rejects.toMatchObject({ code: 'TASK_NOT_FOUND' });
     const inside = await reviewTaskFor(approver.positionId, ofBranch.proposalId as string);
     const lease = await worker.execute<{ fence: string }>('kernel.task.checkout', { id: inside }, as);
     await worker.execute('kernel.task.approve_proposal', { id: inside, fence: lease.fence, proposalId: ofBranch.proposalId, revision: 1 }, as);

@@ -411,14 +411,15 @@ suite('invite mail on PostgreSQL', () => {
     const owner = await signIn('owner');
     const org = await orgOf(owner);
     const ownerMfa = await tokenFor(owner, { mfa: true });
-    const local = `ab${randomUUID().slice(0, 6)}`;
+    // Synthetic: Gmail issues no username with an underscore (#1640).
+    const local = `test_${randomUUID().slice(0, 6)}`;
     const before = await rpc('org/invite', ownerMfa, { email: `${local}@gmail.com`, role: 'member' }, org.slug);
     expect(sent).toHaveLength(1);
     sent.length = 0;
     expect(await runtime.execute('kernel.mail.suppression.add', { email: `${local}@gmail.com`, scope: 'all' }, { actor: { type: 'user', userId: owner.userId, aal: 'aal1', sessionId: owner.session }, orgId: org.orgId })).toEqual({ added: true });
 
     // A spelling of the same inbox (case, dots, +tag at Gmail) is stopped too.
-    const variant = `${local.slice(0, 1).toUpperCase()}.${local.slice(1)}+crove@GMAIL.com`;
+    const variant = `${local.slice(0, 1).toUpperCase()}.${local.slice(1)}+test_tag@GMAIL.com`;
     const invited = await rpc('org/invite', ownerMfa, { email: variant, role: 'member' }, org.slug);
     // The answer is the same as for any other address.
     expect(invited.status).toBe(200);

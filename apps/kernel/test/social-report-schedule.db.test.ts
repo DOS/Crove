@@ -174,17 +174,17 @@ suite('scheduled client report mail on PostgreSQL (#704)', () => {
         c.query(
           `INSERT INTO crove_kernel.mail_message (org_id, stream, source, template_key, to_address, to_hash, message_id_header, status)
            VALUES ($1, 'transactional', 'social.report_schedule.run', 'social.report', $2, $3, $4, 'queued')`,
-          [other.orgId, i % 2 ? 'chi.lan+bao.cao@gmail.com' : 'chilan@gmail.com', 'a'.repeat(63) + String(i), `<cap-${i}-${randomUUID()}@test>`],
+          [other.orgId, i % 2 ? 're.port_user+bao.cao@gmail.com' : 'report_user@gmail.com', 'a'.repeat(63) + String(i), `<cap-${i}-${randomUUID()}@test>`],
         ),
       );
     }
-    const { scheduleId } = await exec<{ scheduleId: string }>(o, o.owner, 'social.report_schedule.save', { ...weekly, recipients: ['chi.lan@gmail.com', 'cap-other@example.vn'] });
+    const { scheduleId } = await exec<{ scheduleId: string }>(o, o.owner, 'social.report_schedule.save', { ...weekly, recipients: ['re.port_user@gmail.com', 'cap-other@example.vn'] });
     await admin((c) => c.query("UPDATE crove_social.report_schedule SET next_run_at = now() - interval '1 hour' WHERE id = $1", [scheduleId]));
     expect(await sweepReportSchedules({ runtime: worker, workerDb })).toBe(1);
     const mails = await admin(async (c) => (await c.query<{ to_address: string; status: string; error_code: string | null; payload: { orgName?: string } }>("SELECT to_address, status, error_code, payload FROM crove_kernel.mail_message WHERE org_id = $1 AND source = 'social.report_schedule.run' ORDER BY to_address", [o.orgId])).rows);
     expect(mails.map((m) => [m.to_address, m.status, m.error_code])).toEqual([
       ['cap-other@example.vn', 'queued', null],
-      ['chi.lan@gmail.com', 'suppressed', 'recipient_daily_cap'],
+      ['re.port_user@gmail.com', 'suppressed', 'recipient_daily_cap'],
     ]);
     expect(mails[0]?.payload.orgName).toBeTruthy();
 
