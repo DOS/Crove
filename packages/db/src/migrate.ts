@@ -177,6 +177,7 @@ async function lockHolders(client: pg.ClientBase): Promise<string> {
       `SELECT format('pid %s (%s, %s)', l.pid, coalesce(nullif(a.application_name, ''), 'no application name'), coalesce(a.state, 'state hidden')) AS holder
        FROM pg_catalog.pg_locks l LEFT JOIN pg_catalog.pg_stat_activity a ON a.pid = l.pid
        WHERE l.locktype = 'advisory' AND l.granted AND l.objsubid = 1
+         AND l.database = (SELECT oid FROM pg_catalog.pg_database WHERE datname = pg_catalog.current_database())
          AND l.classid::bigint = (hashtext('crove_migrate')::bigint >> 32) & 4294967295
          AND l.objid::bigint = hashtext('crove_migrate')::bigint & 4294967295`,
     );
@@ -192,8 +193,8 @@ async function lockHolders(client: pg.ClientBase): Promise<string> {
 // one, and may hold nothing but `CREATE [UNIQUE] INDEX CONCURRENTLY IF NOT EXISTS <name> ON <schema>.<table> ...;`
 // statements, one per index, with no comment, dollar quote, quoted identifier or backslash among them: a file applied
 // statement by statement must not do anything that would leave the database half changed. For the same reason an index
-// uses a built-in access method and names nothing of a schema other than pg_catalog, so no user code runs during a
-// build (#1803). The migration lint checks the same shape (tools/ci/migration-lint.mjs). Each build first drops an
+// uses a built-in access method, names nothing of a schema other than pg_catalog, and depends on nothing outside it on
+// a probe build in a transaction rolled back first (INDEX_USER_CODE), so no user code runs during a build (#1803). The migration lint checks the same shape (tools/ci/migration-lint.mjs). Each build first drops an
 // INVALID index of the same name, which an earlier build left when it failed (a unique violation, a cancel), and drops
 // what it leaves INVALID itself when it fails; an index already there under the name must have the definition the
 // statement asks for, or IF NOT EXISTS would keep another index in its place (#1803).
@@ -223,7 +224,8 @@ export const BUILT_IN_INDEX_METHODS: readonly string[] = ['btree', 'hash', 'gist
 export function qualifiedOutsideCatalog(definition: string): string | null {
   const code = definition.replace(/'(?:[^']|'')*'/g, "''");
   // The name after the dot is only looked at, not consumed, so `pg_catalog.text::public.t` reaches public too.
-  for (const match of code.matchAll(/([a-z_][a-z0-9_]*)\s*\.(?=\s*([^\s(),:]*))/gi)) {
+  // A whole word, letters beyond ASCII included, as PostgreSQL reads one: `äpg_catalog.f` names the schema äpg_catalog.
+  for (const match of code.matchAll(/(?<![\p{L}\p{N}_$])([\p{L}_][\p{L}\p{N}_$]*)\s*\.(?=\s*([^\s(),:]*))/giu)) {
     if ((match[1] ?? '').toLowerCase() !== 'pg_catalog') return `${match[1]}.${match[2]}`;
   }
   return null;
@@ -359,7 +361,7 @@ async function buildConcurrentIndex(client: pg.ClientBase, file: string, index: 
   if (temp[0]?.found) throw new Error(`migration ${file}: this session has temporary types, which an index expression could resolve to; run it in a new session`);
   // The definition the statement asks for, as PostgreSQL prints it (#1803), taken before the build so that an index
   // already there under the name, which IF NOT EXISTS keeps, can be compared with it.
-  const wanted = await intendedDefinition(client, index);
+  const wanted = await intendedDefinition(client, file, index);
   await dropInvalid();
   try {
     await client.query(index.sql);
@@ -389,22 +391,56 @@ function definitionOf(indexdef: string): string {
   return match ? `${match[1] ?? ''}${match[2]}` : indexdef;
 }
 
+// What an index depends on outside pg_catalog, which the build would call (#1803): a function (a cast's function too,
+// which PostgreSQL finds by the types, not by a name in the statement), an operator, an operator class, a collation or
+// a type; and a column of a range, multirange or composite type (through a domain too) outside pg_catalog, whose
+// comparisons call that type's own functions (a range's subtype_diff).
+const INDEX_USER_CODE = `
+  SELECT pg_catalog.pg_describe_object(d.refclassid, d.refobjid, 0) AS what
+  FROM pg_catalog.pg_depend d
+  WHERE d.classid = 'pg_catalog.pg_class'::pg_catalog.regclass AND d.objid = $1::pg_catalog.regclass
+    AND CASE d.refclassid
+      WHEN 'pg_catalog.pg_proc'::pg_catalog.regclass THEN (SELECT pronamespace FROM pg_catalog.pg_proc WHERE oid = d.refobjid)
+      WHEN 'pg_catalog.pg_operator'::pg_catalog.regclass THEN (SELECT oprnamespace FROM pg_catalog.pg_operator WHERE oid = d.refobjid)
+      WHEN 'pg_catalog.pg_opclass'::pg_catalog.regclass THEN (SELECT opcnamespace FROM pg_catalog.pg_opclass WHERE oid = d.refobjid)
+      WHEN 'pg_catalog.pg_collation'::pg_catalog.regclass THEN (SELECT collnamespace FROM pg_catalog.pg_collation WHERE oid = d.refobjid)
+      WHEN 'pg_catalog.pg_type'::pg_catalog.regclass THEN (SELECT typnamespace FROM pg_catalog.pg_type WHERE oid = d.refobjid)
+    END <> 'pg_catalog'::pg_catalog.regnamespace
+  UNION ALL
+  SELECT pg_catalog.format('column %s of type %s', a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod))
+  FROM pg_catalog.pg_depend d
+  JOIN pg_catalog.pg_attribute a ON a.attrelid = d.refobjid AND a.attnum = d.refobjsubid
+  JOIN pg_catalog.pg_type t ON t.oid = a.atttypid
+  JOIN pg_catalog.pg_type b ON b.oid = CASE WHEN t.typtype = 'd' THEN t.typbasetype ELSE t.oid END
+  WHERE d.classid = 'pg_catalog.pg_class'::pg_catalog.regclass AND d.objid = $1::pg_catalog.regclass
+    AND d.refclassid = 'pg_catalog.pg_class'::pg_catalog.regclass AND d.refobjsubid > 0
+    AND b.typtype IN ('r', 'm', 'c') AND b.typnamespace <> 'pg_catalog'::pg_catalog.regnamespace`;
+
 // The definition PostgreSQL prints for the statement's index, built on an empty copy of the table's columns in a
 // transaction that is rolled back: a plain build on no rows, which leaves nothing behind and locks the table only
-// against DDL while it runs.
-async function intendedDefinition(client: pg.ClientBase, index: ConcurrentIndex): Promise<string> {
+// against DDL while it runs. Throws when the index would call user code (INDEX_USER_CODE), before the real build does.
+async function intendedDefinition(client: pg.ClientBase, file: string, index: ConcurrentIndex): Promise<string> {
   const table = `${client.escapeIdentifier(index.schema)}.${client.escapeIdentifier(index.table)}`;
   await client.query('BEGIN');
+  let userCode: string[];
+  let def: string;
   try {
     await client.query(`CREATE TABLE crove_meta.concurrent_index_probe (LIKE ${table})`);
     await client.query(`CREATE ${index.unique ? 'UNIQUE ' : ''}INDEX concurrent_index_probe_idx ON crove_meta.concurrent_index_probe ${index.definition}`);
     const { rows } = await client.query<{ def: string }>(
       "SELECT pg_catalog.pg_get_indexdef('crove_meta.concurrent_index_probe_idx'::pg_catalog.regclass) AS def",
     );
-    return definitionOf(rows[0]?.def ?? '');
+    def = definitionOf(rows[0]?.def ?? '');
+    userCode = (await client.query<{ what: string }>(INDEX_USER_CODE, ['crove_meta.concurrent_index_probe_idx'])).rows.map((r) => r.what);
+  } catch (error) {
+    throw new Error(`migration ${file}: could not check the definition of ${index.schema}.${index.name}: ${(error as Error).message}`, { cause: error });
   } finally {
     await client.query('ROLLBACK');
   }
+  if (userCode.length > 0) {
+    throw new Error(`migration ${file}: ${index.schema}.${index.name} would run code outside pg_catalog while it builds outside a transaction: ${userCode.join(', ')}`);
+  }
+  return def;
 }
 
 // The DDL watch (issue #1202): crove_kernel.ddl_watch() records DDL from every session except the pipeline's own,

@@ -764,6 +764,44 @@ suite('migrations with a runner that is not a superuser', () => {
     expect(probe).toBeNull();
   });
 
+  // #1803 review: a cast is found by its types, not by a name in the statement, so `s::text` on a column of a user type
+  // runs the cast's function; and a range column's comparisons run the range type's functions. The probe's pg_depend
+  // shows both, and the runner refuses before the build outside a transaction.
+  it('refuses an index that would run user code through a cast or a range type, before it builds (#1803)', async () => {
+    await withClient(runnerUrl, async (runner) => {
+      await runner.query(`
+        CREATE TYPE crove_kernel.t1803_state AS ENUM ('a', 'b');
+        CREATE FUNCTION crove_kernel.t1803_cast(crove_kernel.t1803_state) RETURNS text IMMUTABLE LANGUAGE sql
+          SET search_path = pg_catalog, pg_temp AS 'SELECT $1::text';
+        CREATE CAST (crove_kernel.t1803_state AS text) WITH FUNCTION crove_kernel.t1803_cast(crove_kernel.t1803_state);
+        CREATE TYPE crove_kernel.t1803_range AS RANGE (subtype = int4);
+        CREATE TABLE crove_kernel.t1803_user (s crove_kernel.t1803_state, r crove_kernel.t1803_range)`);
+    });
+    try {
+      for (const [file, statement, why] of [
+        ['29990106000000_crove_kernel_concurrent_index_cast.sql', 't1803_cast_idx ON crove_kernel.t1803_user ((s::text))', /function crove_kernel\.t1803_cast\(crove_kernel\.t1803_state\)/],
+        ['29990107000000_crove_kernel_concurrent_index_range.sql', 't1803_range_idx ON crove_kernel.t1803_user USING gist (r)', /column r of type crove_kernel\.t1803_range/],
+      ] as const) {
+        const dir = await withExtraMigrations({ [file]: `${CONCURRENT_INDEX_MARKER}\nCREATE INDEX CONCURRENTLY IF NOT EXISTS ${statement};\n` });
+        const failure = migrate({ adminUrl: runnerUrl, dir });
+        await expect(failure).rejects.toThrow(/would run code outside pg_catalog while it builds outside a transaction/);
+        await expect(failure).rejects.toThrow(why);
+      }
+      const left = await withClient(runnerUrl, async (runner) =>
+        (await runner.query("SELECT to_regclass('crove_kernel.t1803_cast_idx') AS a, to_regclass('crove_kernel.t1803_range_idx') AS b")).rows[0],
+      );
+      expect(left).toEqual({ a: null, b: null });
+    } finally {
+      await withClient(runnerUrl, (runner) =>
+        runner.query(`
+          DROP TABLE crove_kernel.t1803_user;
+          DROP CAST (crove_kernel.t1803_state AS text);
+          DROP FUNCTION crove_kernel.t1803_cast(crove_kernel.t1803_state);
+          DROP TYPE crove_kernel.t1803_state, crove_kernel.t1803_range`),
+      );
+    }
+  });
+
   it('refuses to build while the session has temporary types an expression could resolve to (#1803)', async () => {
     await withClient(runnerUrl, async (runner) => {
       await runner.query('CREATE TABLE IF NOT EXISTS crove_kernel.t1803_temp (a int)');
