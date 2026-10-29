@@ -13,7 +13,7 @@ import { sql } from 'kysely';
 import { z } from 'zod';
 import type { MemberRole } from '@crove/db';
 import { zArchiveYear, type YearArchive, type YearArchives } from '@crove/kernel-contract';
-import { DomainError, archiveKey, defineCommand, defineQuery, type QueryContext } from '@crove/kernel-runtime';
+import { DomainError, archiveKey, defineCommand, defineQuery, type CommandContext, type QueryContext } from '@crove/kernel-runtime';
 
 const OWNERS: readonly MemberRole[] = ['owner'];
 // A request the worker has not recorded within this long is shown as failed and may be asked again.
@@ -81,6 +81,42 @@ async function lockedThrough(ctx: QueryContext): Promise<string | null> {
   return rows.map((r) => r.locked_through as string).sort()[0] ?? null;
 }
 
+// The legal entities whose books go in a year's package (#1280): the default entity, then every other entity with an
+// entry dated up to the year's end, as the caller reads them.
+async function archiveEntities(ctx: QueryContext, year: number): Promise<Array<{ id: string; isDefault: boolean }>> {
+  const rows = await ctx.trx
+    .selectFrom('crove_kernel.legal_entity as e')
+    .select(['e.id', 'e.is_default'])
+    .where('e.org_id', '=', ctx.orgId)
+    .where((eb) =>
+      eb.or([
+        eb('e.is_default', '=', true),
+        eb.exists(
+          eb
+            .selectFrom('crove_finance.journal_entry as j')
+            .select('j.id')
+            .whereRef('j.org_id', '=', 'e.org_id')
+            .whereRef('j.legal_entity_id', '=', 'e.id')
+            .where('j.entry_date', '<=', `${year}-12-31`),
+        ),
+      ]),
+    )
+    .orderBy('e.is_default', 'desc')
+    .orderBy('e.id')
+    .execute();
+  return rows.map((e) => ({ id: e.id, isDefault: e.is_default }));
+}
+
+// A package holds the books of several legal entities, so its timeline rows go one per entity, each read only where
+// that entity is (#1725): a member limited to one entity sees that its year was archived and nothing of another's.
+// detail is shown only when the package is one entity's (a count over every entity would tell of the others).
+async function archiveActivity(ctx: CommandContext, year: number, kind: string, summary: string, detail: string): Promise<void> {
+  const entities = await archiveEntities(ctx, year);
+  for (const entity of entities) {
+    await ctx.activity('finance.archive', ctx.orgId, kind, entities.length === 1 ? `${summary}${detail}` : summary, { legalEntityId: entity.id });
+  }
+}
+
 async function archiveOf(ctx: QueryContext, year: number): Promise<YearArchive | null> {
   const built = (await auditRows(ctx, 'finance.archive.record', year)).map(recorded).find((r) => r !== null);
   if (built) {
@@ -114,7 +150,7 @@ export const yearArchiveBuild = defineCommand({
       throw new DomainError('ARCHIVE_PENDING', 409, `Gói lưu trữ năm ${input.year} đang được tạo; hãy đợi xong rồi xem lại`);
     }
     ctx.audit({ year: input.year, locked_through: through });
-    await ctx.activity('finance.archive', ctx.orgId, 'archive.requested', `Yêu cầu đóng gói lưu trữ năm ${input.year}`);
+    await archiveActivity(ctx, input.year, 'archive.requested', `Yêu cầu đóng gói lưu trữ năm ${input.year}`, '');
     await ctx.emit('finance.archive_requested', { year: input.year, requestCommandId: ctx.commandId });
     return { year: input.year, state: 'requested', requestedAt: ctx.now.toISOString(), builtAt: null, manifestSha256: null, parts: null, documents: null };
   },
@@ -165,26 +201,7 @@ export const yearArchiveSource = defineQuery({
       .where('j.entry_date', '<=', `${input.year}-12-31`)
       .orderBy('f.id')
       .execute();
-    const legalEntities = await ctx.trx
-      .selectFrom('crove_kernel.legal_entity as e')
-      .select(['e.id', 'e.is_default'])
-      .where('e.org_id', '=', ctx.orgId)
-      .where((eb) =>
-        eb.or([
-          eb('e.is_default', '=', true),
-          eb.exists(
-            eb
-              .selectFrom('crove_finance.journal_entry as j')
-              .select('j.id')
-              .whereRef('j.org_id', '=', 'e.org_id')
-              .whereRef('j.legal_entity_id', '=', 'e.id')
-              .where('j.entry_date', '<=', `${input.year}-12-31`),
-          ),
-        ]),
-      )
-      .orderBy('e.is_default', 'desc')
-      .orderBy('e.id')
-      .execute();
+    const legalEntities = await archiveEntities(ctx, input.year);
     return {
       orgSlug: tenant.slug,
       vatFilingPeriod: tenant.vat_filing_period,
@@ -192,7 +209,7 @@ export const yearArchiveSource = defineQuery({
       lockedThrough: await lockedThrough(ctx),
       recorded: (await auditRows(ctx, 'finance.archive.record', input.year)).map(recorded).find((r) => r !== null) ?? null,
       files: files.map((f) => ({ id: f.id, filename: f.filename, contentType: f.content_type, key: f.storage_key, generation: f.generation, sha256: f.sha256 })),
-      legalEntities: legalEntities.map((e) => ({ id: e.id, isDefault: e.is_default })),
+      legalEntities,
     };
   },
 });
@@ -233,7 +250,7 @@ export const yearArchiveRecord = defineCommand({
       parts: input.parts,
       documents: input.documents,
     });
-    await ctx.activity('finance.archive', ctx.orgId, 'archive.built', `Đã đóng gói lưu trữ năm ${input.year} (${input.documents} chứng từ gốc)`);
+    await archiveActivity(ctx, input.year, 'archive.built', `Đã đóng gói lưu trữ năm ${input.year}`, ` (${input.documents} chứng từ gốc)`);
     return { recorded: true };
   },
 });
