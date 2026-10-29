@@ -26,6 +26,7 @@ const suite = ADMIN ? describe : describe.skip;
 suite('activity entity backfill on PostgreSQL (#1805)', () => {
   const dbName = `crove_test_activity_backfill_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
   let adminUrl = '';
+  let appUrl = '';
   let before = '';
   let pool: pg.Pool;
   let orgId = '';
@@ -33,6 +34,10 @@ suite('activity entity backfill on PostgreSQL (#1805)', () => {
   let defaultEntity = '';
   let branch = '';
   let branch2 = '';
+  // Limited to the branch by an external_accountant assignment.
+  let member = '';
+  // The default entity of another org.
+  let foreignEntity = '';
   // Activity row ids by what they stand for.
   const rows: Record<string, string> = {};
 
@@ -100,18 +105,31 @@ suite('activity entity backfill on PostgreSQL (#1805)', () => {
     const app = new URL(adminUrl);
     app.username = 'crove_app';
     app.password = 'test-app-pw';
-    pool = createPool({ connectionString: app.toString(), max: 2 });
+    appUrl = app.toString();
+    pool = createPool({ connectionString: appUrl, max: 2 });
     const db = createDb(pool);
     const rt = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
     owner = await upsertIdentity(db, { issuer: 'test', subject: randomUUID(), email: 'owner@activity-backfill.test', name: null });
     ({ orgId } = await createOrg(rt, { type: 'user', userId: owner, aal: 'aal1' }, 'Hai pháp nhân cũ'));
+    member = await upsertIdentity(db, { issuer: 'test', subject: randomUUID(), email: 'member@activity-backfill.test', name: null });
+    const { orgId: otherOrg } = await createOrg(rt, { type: 'user', userId: owner, aal: 'aal1' }, 'Tổ chức khác');
+    const defaultOf = async (c: pg.Client, org: string) =>
+      (await c.query<{ id: string }>('SELECT id FROM crove_kernel.legal_entity WHERE org_id = $1 AND is_default', [org])).rows[0]?.id as string;
     await admin(async (c) => {
-      defaultEntity = (await c.query<{ id: string }>('SELECT id FROM crove_kernel.legal_entity WHERE org_id = $1 AND is_default', [orgId])).rows[0]?.id as string;
+      defaultEntity = await defaultOf(c, orgId);
+      foreignEntity = await defaultOf(c, otherOrg);
       const add = async (name: string) =>
         (await c.query<{ id: string }>(`INSERT INTO crove_kernel.legal_entity (org_id, name, kind, created_by) VALUES ($1, $2, 'branch', $3) RETURNING id`, [orgId, name, owner]))
           .rows[0]?.id as string;
       branch = await add('Chi nhánh Huế');
       branch2 = await add('Chi nhánh Đà Nẵng');
+      await c.query(`INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member')`, [orgId, member]);
+      await c.query(`INSERT INTO crove_kernel.role_assignment (org_id, user_id, role_key, legal_entity_id, granted_by) VALUES ($1, $2, 'external_accountant', $3, $4)`, [
+        orgId,
+        member,
+        branch,
+        owner,
+      ]);
     });
 
     await oldRow('lockAudited', 'finance.period', orgId, 'period.locked', '2026-10-01T01:00:00Z', [['finance.period.lock', { month: '2026-09', legalEntityId: branch }]]);
@@ -127,6 +145,10 @@ suite('activity entity backfill on PostgreSQL (#1805)', () => {
     await oldRow('requestAudited', 'kernel.mail_message', await mail({ kind: 'request' }), 'missing_invoices.requested', '2026-10-01T05:00:00Z', [
       ['finance.missing_invoices.request', { period: '2026-09', legal_entity_id: branch }],
     ]);
+    // A payload or an audit event naming another org's entity, or no uuid at all, counts for nothing (#1835).
+    await oldRow('requestForeign', 'kernel.mail_message', await mail({ kind: 'request', legalEntityId: foreignEntity }), 'missing_invoices.requested', '2026-10-01T05:10:00Z');
+    await oldRow('requestJunk', 'kernel.mail_message', await mail({ kind: 'request', legalEntityId: 'junk' }), 'missing_invoices.requested', '2026-10-01T05:20:00Z');
+    await oldRow('lockForeign', 'finance.period', orgId, 'period.locked', '2026-10-01T05:30:00Z', [['finance.period.lock', { legalEntityId: foreignEntity }]]);
     await oldRow('reminder', 'kernel.mail_message', await mail({ kind: 'reminder' }), 'missing_invoices.reminded', '2026-10-01T06:00:00Z');
     await oldRow('archive', 'finance.archive', orgId, 'archive.requested', '2026-10-01T07:00:00Z', [['finance.archive.build', { year: 2025 }]]);
     await oldRow('taxMark', 'kernel.tenant', orgId, 'org.tax_obligation_done', '2026-10-01T08:00:00Z', [
@@ -157,9 +179,31 @@ suite('activity entity backfill on PostgreSQL (#1805)', () => {
     expect(await entityOf('taxMark')).toBe(branch);
     expect(await entityOf('partyLink')).toBe(branch);
     // Nothing recorded one entity: the default entity.
-    for (const name of ['lockUnaudited', 'lockAmbiguous', 'lockBeside', 'reminder', 'archive', 'taxUnmark']) expect(await entityOf(name), name).toBe(defaultEntity);
+    for (const name of ['lockUnaudited', 'lockAmbiguous', 'lockBeside', 'requestForeign', 'requestJunk', 'lockForeign', 'reminder', 'archive', 'taxUnmark']) {
+      expect(await entityOf(name), name).toBe(defaultEntity);
+    }
     // Other org-level rows stay org-level.
     expect(await entityOf('orgLevel')).toBeNull();
+  });
+
+  it("shows a member limited to the branch the old rows backfilled to it and the org-level ones, and none of the default entity's (#1835)", async () => {
+    // A connection of its own: the pool's were opened before the migration.
+    const c = new pg.Client({ connectionString: appUrl });
+    await c.connect();
+    let seen: string[];
+    try {
+      await c.query('BEGIN');
+      await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [member, orgId]);
+      const ids = (await c.query<{ id: string }>('SELECT id FROM crove_kernel.activity WHERE id = ANY($1::uuid[])', [Object.values(rows)])).rows.map((r) => r.id);
+      seen = Object.entries(rows)
+        .filter(([, id]) => ids.includes(id))
+        .map(([name]) => name)
+        .sort();
+    } finally {
+      await c.query('ROLLBACK');
+      await c.end();
+    }
+    expect(seen).toEqual(['lockAudited', 'orgLevel', 'partyLink', 'request', 'requestAudited', 'taxMark']);
   });
 
   it('validates the constraint, so an old row can be updated and a new one must name its entity', async () => {
