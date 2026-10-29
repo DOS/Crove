@@ -10,7 +10,7 @@ import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
 import { DomainError, defineCommand } from '@crove/kernel-runtime';
 import { actorRef, addAuthor, eligibleApprovers, parseAuthors } from './approval.ts';
-import { refuseWhileReextracting } from './extraction.ts';
+import { legalEntityMoveRefused, refuseWhileReextracting } from './extraction.ts';
 
 // Proposals a user may ask for (kernel.proposal.request), and the module command that checks the request and builds
 // the proposal from the database; it writes nothing. The title and payload come from it, never from the requester.
@@ -167,6 +167,10 @@ export const resubmitProposal = defineCommand({
         throw new DomainError('PROPOSAL_SUPERSEDED', 409, 'Chứng từ này đã có đề xuất mới hơn; hãy mở đề xuất đó', { proposalId: newest?.id ?? null });
       }
       await refuseWhileReextracting(ctx, old.source_file_id);
+      // A proposal moved to another entity before #1764 (its payload naming another entity than its own) is not asked
+      // for again as it is: read the document again in the entity to book it in.
+      const named = zId.safeParse((old.payload as { legalEntityId?: unknown } | null)?.legalEntityId);
+      if (named.success && named.data.toLowerCase() !== old.legal_entity_id) throw legalEntityMoveRefused();
       content = {
         kind: old.kind,
         command: old.command,

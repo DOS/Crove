@@ -333,8 +333,23 @@ suite('finance books per legal entity, part 2b (#1280)', () => {
     }
     // The owner uploads the invoice in the branch (#1764): its reading and its proposal are the branch's.
     const { fileId } = await ingest(branch);
-    const proposal = await extractAndPropose({ runtime: workerRuntime, store, extractor: null, extract, today: () => '2026-10-13' }, org.orgId, fileId);
-    const proposalId = String(proposal.proposalId);
+    const read = (version?: number) => extractAndPropose({ runtime: workerRuntime, store, extractor: null, extract, today: () => '2026-10-13' }, org.orgId, fileId, version);
+    const versionOf = async () =>
+      (await admin((c) => c.query<{ v: number }>('SELECT max(version)::int AS v FROM crove_kernel.extraction WHERE org_id = $1 AND file_id = $2', [org.orgId, fileId]))).rows[0]?.v as number;
+    const first = String((await read()).proposalId);
+    expect(await entityOf('crove_kernel.proposal', first)).toBe(branch);
+    // Uploaded again in another entity while its proposal waits: refused with the reason.
+    await expect(ingest(defaultEntity)).rejects.toMatchObject({ code: 'LEGAL_ENTITY_MOVE_REFUSED', status: 409 });
+    // Once rejected, uploading it again in another entity reads it again there: a new proposal in that entity.
+    await runtime.execute('kernel.proposal.reject', { id: first, reason: 'nhầm pháp nhân' }, as(owner));
+    await expect(ingest(defaultEntity)).resolves.toMatchObject({ fileId, duplicate: true });
+    const inDefault = String((await read(await versionOf())).proposalId);
+    expect(inDefault).not.toBe(first);
+    expect(await entityOf('crove_kernel.proposal', inDefault)).toBe(defaultEntity);
+    // And back to the branch the same way, where it is booked below.
+    await runtime.execute('kernel.proposal.reject', { id: inDefault, reason: 'nhầm lần nữa' }, as(owner));
+    await ingest(branch);
+    const proposalId = String((await read(await versionOf())).proposalId);
     expect(await entityOf('crove_kernel.proposal', proposalId)).toBe(branch);
     // The Inbox list (#1543) names the proposal's own entity.
     expect(await listedEntityOf(proposalId)).toBe(branch);

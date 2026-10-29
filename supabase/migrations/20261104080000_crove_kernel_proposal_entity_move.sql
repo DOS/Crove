@@ -49,6 +49,20 @@ END $$;
 -- A trigger function only; nobody calls it directly.
 REVOKE ALL ON FUNCTION crove_kernel.proposal_entity_payload() FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant;
 
+-- The proposals moved before this file: decided ones stay as they were (approval of a pending one books it where its
+-- payload says); counted for the deploy log, never changed here.
+DO $$
+DECLARE
+  v_moved bigint;
+BEGIN
+  SELECT pg_catalog.count(*) INTO v_moved FROM crove_kernel.proposal p
+  WHERE pg_catalog.jsonb_typeof(p.payload) = 'object' AND p.payload ? 'legalEntityId'
+    AND pg_catalog.lower(p.payload ->> 'legalEntityId') IS DISTINCT FROM p.legal_entity_id::text;
+  IF v_moved > 0 THEN
+    RAISE NOTICE 'crove_kernel.proposal: % proposal(s) name another legal entity in their payload than their own (#1764)', v_moved;
+  END IF;
+END $$;
+
 DROP TRIGGER IF EXISTS proposal_entity_payload ON crove_kernel.proposal;
 CREATE TRIGGER proposal_entity_payload BEFORE INSERT OR UPDATE OF payload, legal_entity_id ON crove_kernel.proposal
   FOR EACH ROW EXECUTE FUNCTION crove_kernel.proposal_entity_payload();

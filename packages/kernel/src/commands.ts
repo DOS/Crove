@@ -41,7 +41,7 @@ import {
 import { archiveCommands } from './archives.ts';
 import { imageSizeCommands } from './image-sizes.ts';
 import { fileHoldCommands } from './evidence-holds.ts';
-import { extractionCommands, refuseWhileReextracting } from './extraction.ts';
+import { extractionCommands, legalEntityMoveRefused, readAgainIn, refuseWhileReextracting } from './extraction.ts';
 import { ingestFileRow, zIngestFile } from './files.ts';
 import { createOrgCommand, myOrgs, orgCreateCommand, type OrgCreateLimits, type OrgSummary } from './identity.ts';
 import { acceptInvite, createInvite, inviteCreateCommand, revokeInvite, type InviteLimits } from './invites.ts';
@@ -234,7 +234,14 @@ export const ingestFile = defineCommand({
   risk: 'R2',
   sideEffect: 'external',
   access: MEMBERS,
-  handler: (ctx, input) => ingestFileRow(ctx, input, ctx.actor.type === 'user' ? ctx.actor.userId : null),
+  handler: async (ctx, input) => {
+    const filed = await ingestFileRow(ctx, input, ctx.actor.type === 'user' ? ctx.actor.userId : null);
+    // The same document uploaded again in another entity (#1764): read again there when it may be.
+    if (filed.duplicate && input.legalEntityId !== undefined && input.source === 'upload' && ctx.actor.type === 'user') {
+      await readAgainIn(ctx, filed.fileId, input.legalEntityId);
+    }
+    return filed;
+  },
 });
 
 // Staged uploads (plan §7.6, ADR-0013). At most this many open (unused, unexpired) grants per user and org.
@@ -507,13 +514,6 @@ function changesContent(payload: unknown, lineAccounts: z.infer<typeof zLineAcco
   const stored = new Map(parsed.data.lines.map((l) => [l.lineNo, l.debitAccount]));
   return lineAccounts.some((l) => stored.get(l.lineNo) !== l.debitAccount);
 }
-
-const legalEntityMoveRefused = () =>
-  new DomainError(
-    'LEGAL_ENTITY_MOVE_REFUSED',
-    409,
-    'Đề xuất này thuộc một pháp nhân khác; không chuyển sang pháp nhân khác được. Hãy từ chối đề xuất rồi tải chứng từ lên lại ở pháp nhân cần ghi sổ',
-  );
 
 // Edits a pending proposal: the new content becomes a new revision authored by the editor (plan §8.3), and
 // the approval policy runs again on it. An edit never approves; kernel.proposal.approve does, separately.

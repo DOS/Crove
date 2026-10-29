@@ -79,6 +79,7 @@ export const vi = {
   },
   nav: {
     legalEntity: 'Pháp nhân',
+    uploadEntity: 'Ghi sổ vào',
     org: 'Tổ chức',
     allClients: 'Tất cả doanh nghiệp',
     addOrg: '+ Thêm tổ chức',

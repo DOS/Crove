@@ -154,12 +154,22 @@ async function lockFileProposal(ctx: CommandContext, fileId: string) {
     .executeTakeFirst();
 }
 
+// A proposal stays in its legal entity (#1764): its entity never changes (ADR-0021, b_legal_entity).
+export const legalEntityMoveRefused = () =>
+  new DomainError(
+    'LEGAL_ENTITY_MOVE_REFUSED',
+    409,
+    'Đề xuất này thuộc một pháp nhân khác; không chuyển sang pháp nhân khác được. Hãy từ chối đề xuất rồi tải chứng từ lên lại ở pháp nhân cần ghi sổ',
+  );
+
 // Asks for the file to be read again. The API never parses: this records a pending run and emits
 // kernel.file.reextract_requested, which the worker relays to the extraction job, as for an upload.
 // R1: internal and it decides nothing (the result is a new revision that still needs an approval).
 export const reextractFile = defineCommand({
   name: 'kernel.file.reextract',
-  input: z.object({ fileId: zId }),
+  // legalEntityId (#1764): read it again in another entity, which the caller sees, once no proposal of the file waits
+  // for a decision (a pending one stays in its entity); omitted, the previous reading's entity.
+  input: z.object({ fileId: zId, legalEntityId: zId.optional() }),
   // It queues the extraction job again, which sends the file to the AI endpoint (plan §4.7: a job with egress
   // derives R2; #1662).
   risk: 'R2',
@@ -183,6 +193,13 @@ export const reextractFile = defineCommand({
     if (proposal?.status === 'executed' && !(await executedButVoided(ctx, proposal))) {
       throw new DomainError('PROPOSAL_DECIDED', 409, 'Hóa đơn này đã được ghi sổ nên không đọc lại được');
     }
+    let entity = latest.legalEntityId;
+    if (input.legalEntityId !== undefined && input.legalEntityId.toLowerCase() !== latest.legalEntityId) {
+      if (proposal?.status === 'pending' || proposal?.status === 'approved') throw legalEntityMoveRefused();
+      const seen = await ctx.trx.selectFrom('crove_kernel.legal_entity').select('id').where('org_id', '=', ctx.orgId).where('id', '=', input.legalEntityId).executeTakeFirst();
+      if (!seen) throw new DomainError('LEGAL_ENTITY_NOT_ALLOWED', 403, 'Bạn không có quyền với sổ sách của pháp nhân này');
+      entity = seen.id;
+    }
     let superseded: number | null = null;
     if (latest.status === 'pending') {
       // A stale run (presumed lost) is closed as failed; if its job still finishes, it finds no pending run.
@@ -200,7 +217,7 @@ export const reextractFile = defineCommand({
       .values({
         org_id: ctx.orgId,
         file_id: input.fileId,
-        legal_entity_id: latest.legalEntityId,
+        legal_entity_id: entity,
         method: null,
         status: 'pending',
         result: null,
@@ -217,12 +234,28 @@ export const reextractFile = defineCommand({
       superseded_version: superseded,
       proposal_id: proposal?.id ?? null,
       proposal_revision: proposal?.revision ?? null,
+      ...(entity !== latest.legalEntityId ? { legal_entity_id: entity, previous_legal_entity_id: latest.legalEntityId } : {}),
     });
     await ctx.activity('kernel.file', input.fileId, 'extraction.requested', `Yêu cầu đọc lại ${file.filename} (lần đọc ${run.version})`);
     await ctx.emit('kernel.file.reextract_requested', { fileId: input.fileId, version: run.version });
     return { fileId: input.fileId, version: run.version };
   },
 });
+
+// The same document uploaded again naming another entity (#1764), the way to book it there after its proposal was
+// rejected: it is read again in that entity, when the caller sees its last reading, none is in flight and nothing of it
+// waits for a decision or is booked; a proposal still pending is refused with the reason, and any other case stays a
+// plain duplicate.
+export async function readAgainIn(ctx: CommandContext, fileId: string, legalEntityId: string): Promise<void> {
+  const file = await ctx.trx.selectFrom('crove_kernel.file').select('content_type').where('org_id', '=', ctx.orgId).where('id', '=', fileId).executeTakeFirst();
+  if (!file || isArchiveType(file.content_type)) return;
+  const latest = await latestExtraction(ctx, fileId);
+  if (!latest || latest.inFlight || latest.legalEntityId === legalEntityId.toLowerCase()) return;
+  const proposal = await lockFileProposal(ctx, fileId);
+  if (proposal?.status === 'pending' || proposal?.status === 'approved') throw legalEntityMoveRefused();
+  if (proposal?.status === 'executed' && !(await executedButVoided(ctx, proposal))) return;
+  await ctx.run('kernel.file.reextract', { fileId, legalEntityId });
+}
 
 // Records the result of an extraction run (worker only). Without `version` it is the first extraction of a new
 // file (a no-op once the file has any run). With `version` it finishes that pending re-extraction (a no-op if the

@@ -57,17 +57,19 @@ export function useIntake(): Intake {
   // The list as last rendered, for the size check in start (the updates below are functional).
   const current = useRef<IntakeItem[]>(items);
   current.current = items;
-  // The entity the shell works in when the batch starts: its documents are booked there (#1764).
+  // The entity the shell works in when a batch starts: all its documents are booked there (#1764). A batch started
+  // before the entities are known waits for them, so it never splits between the default entity and the chosen one.
   const chosen = useChosenEntity();
-  const entity = useRef<string | undefined>(chosen.legalEntityId);
-  entity.current = chosen.legalEntityId;
+  const entity = useRef(chosen);
+  entity.current = chosen;
+  const waiting = useRef<File[]>([]);
 
   const update = useCallback((key: string, change: (item: IntakeItem) => IntakeItem) => {
     setItems((current) => current.map((item) => (item.key === key ? change(item) : item)));
   }, []);
 
-  const start = useCallback(
-    (files: File[]) => {
+  const run = useCallback(
+    (files: File[], legalEntityId: string | undefined) => {
       if (files.length === 0) return;
       // With the files still in flight, so files.batch never has to answer for more than it takes.
       if (!fitsBatch(current.current, files.length)) {
@@ -95,7 +97,7 @@ export function useIntake(): Intake {
         async ({ file, item }) => {
           update(item.key, (i) => ({ ...i, state: 'uploading' }));
           try {
-            const result = await uploadWithRetry(file, entity.current);
+            const result = await uploadWithRetry(file, legalEntityId);
             update(item.key, (i) => uploaded(i, result));
           } catch (error) {
             update(item.key, (i) => ({ ...i, state: 'upload_failed', uploadError: error }));
@@ -108,6 +110,20 @@ export function useIntake(): Intake {
     },
     [update],
   );
+
+  const start = useCallback(
+    (files: File[]) => {
+      if (entity.current.ready) run(files, entity.current.legalEntityId);
+      else waiting.current = [...waiting.current, ...files];
+    },
+    [run],
+  );
+  useEffect(() => {
+    if (!chosen.ready || waiting.current.length === 0) return;
+    const files = waiting.current;
+    waiting.current = [];
+    run(files, chosen.legalEntityId);
+  }, [chosen.ready, chosen.legalEntityId, run]);
 
   // One call per group, so an answer never has to cut an archive's entries short.
   const polls = useQueries({

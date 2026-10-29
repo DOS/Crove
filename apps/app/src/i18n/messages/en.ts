@@ -81,6 +81,7 @@ export const en = {
   },
   nav: {
     legalEntity: 'Legal entity',
+    uploadEntity: 'Book into',
     org: 'Organization',
     allClients: 'All companies',
     addOrg: '+ Add organization',
