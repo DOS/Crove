@@ -440,9 +440,9 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
       const key = (m[1] as string).replace(/^['"]|['"]$/g, '');
       checkFact(key, valueAt(obj, (m.index ?? 0) + m[0].length), start + (m.index ?? 0) + m[0].length, depth);
     }
-    // A getter runs when the facts are serialized, so what it returns cannot be read here.
-    for (const m of obj.matchAll(/[{,]\s*get\s+([A-Za-z_$][\w$]*)\s*\(/g)) {
-      reporter(start + (m.index ?? 0), m[1] as string)('a getter computes the fact when it is written; write the value out');
+    // A getter or a method (toJSON) runs when the facts are serialized, so what it returns cannot be read here.
+    for (const m of obj.matchAll(/[{,]\s*(?:async\s+)?(?:get\s+|set\s+)?\*?\s*([A-Za-z_$][\w$]*|\[[^\]]*\])\s*\([^()]*\)\s*(?::[^{};]*)?\{/g)) {
+      reporter(start + (m.index ?? 0), m[1] as string)('a getter or method computes the fact when it is written; write the value out');
     }
     // A computed key (`{ [field]: value }`): its value is read like any other.
     for (const m of obj.matchAll(/[{,]\s*\[/g)) {
@@ -736,7 +736,13 @@ describe('audit facts and classified columns (#1626, #1632)', () => {
     expect(check("const maskedFact = (code: string) => ({ code: auditValue(PARTY, 'tax_code', code) });\nctx.audit({ ...maskedFact(party.tax_code) });")).toEqual([]);
     expect(check('function idOf(p: P) { return { id: p.id }; }\nctx.audit({ ...idOf(party) });')).toEqual([]);
     expect(check('ctx.audit({ previous: { get code() { return party.tax_code; } } });')).toEqual([
-      'code: a getter computes the fact when it is written; write the value out',
+      'code: a getter or method computes the fact when it is written; write the value out',
+    ]);
+    expect(check('ctx.audit({ previous: { toJSON() { return party.tax_code; } } });')).toEqual([
+      'toJSON: a getter or method computes the fact when it is written; write the value out',
+    ]);
+    expect(check('ctx.audit({ previous: { get [key]() { return party.tax_code; } } });')).toEqual([
+      '[key]: a getter or method computes the fact when it is written; write the value out',
     ]);
     // An array of the names that changed holds the names, not the values its conditions compare.
     expect(check("const changed = [...(before.title !== input.title ? ['title'] : []), ...(before.tax_code !== code ? ['tax_code'] : [])];\nctx.audit({ changed });")).toEqual([]);
