@@ -410,7 +410,7 @@ suite('delegation and escalation within the task legal entity on PostgreSQL (#17
     const person = (name: string) =>
       upsertIdentity(createDb(pools[0] as pg.Pool), { issuer: 't1898', subject: randomUUID(), email: `${name}-${randomUUID().slice(0, 8)}@t1898.test`, name: null });
     const [ownerB, limitedHere, plainHere, memberB] = [await person('owner-b'), await person('limited-here'), await person('plain-here'), await person('member-b')];
-    const { orgId: orgB } = await createOrg(app, asUser(ownerB), 'T1898');
+    const { orgId: orgB, slug: slugB } = await createOrg(app, asUser(ownerB), 'T1898');
     const defaultOfB = await admin(
       async (c) => (await c.query<{ id: string }>('SELECT id FROM crove_kernel.legal_entity WHERE org_id = $1 AND is_default', [orgB])).rows[0]?.id as string,
     );
@@ -470,8 +470,9 @@ suite('delegation and escalation within the task legal entity on PostgreSQL (#17
         expect(await covers(memberB, defaultOfB)).toBe(true);
         expect(await covers(owner, defaultOfB)).toBe(false);
       });
-      // B being offboarded: only its owners still count, members cover nothing, org-level or not.
-      await admin((a) => a.query("UPDATE crove_kernel.tenant SET status = 'offboarding' WHERE org_id = $1", [orgB]));
+      // B being offboarded (through its command, which the audit trigger requires): only its owners still count, members
+      // cover nothing, org-level or not.
+      await app.execute('kernel.org.offboard', { confirmSlug: slugB }, { actor: asMfa(ownerB), orgId: orgB });
       await inSystem(orgB, async (covers) => {
         expect(await covers(ownerB, defaultOfB)).toBe(true);
         expect(await covers(ownerB, null)).toBe(true);
