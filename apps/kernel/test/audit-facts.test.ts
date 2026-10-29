@@ -207,7 +207,7 @@ const PASS_THROUGH =
 // Words an expression may hold that are not variables.
 const KEYWORDS = new Set(['true', 'false', 'null', 'undefined', 'await', 'new', 'typeof', 'void', 'as', 'in', 'of', 'instanceof', 'satisfies', 'const', 'this']);
 
-const escape = (name: string) => name.replace(/\$/g, '\\$');
+const escape = (name: string) => name.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
 
 // The part of a name's initializer whose values the name holds: the branches of a choice, the whole of a path, a
 // literal or a pass-through call, and null for a value computed from what it reads (`a !== b`, `count + 1`, `f(x)`).
@@ -339,6 +339,8 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
   };
   // Declarations already traced, so a name met again (or a chain of names) is read once.
   const traced = new Set<string>();
+  // Functions whose returns a spread of their call reads as facts.
+  const spreadRead = new Set<Fn>();
   // The declaration of `name` in scope at `at`: where its initializer starts, and the initializer.
   const declaration = (name: string, at: number) => {
     const decl = [...code.slice(0, at).matchAll(new RegExp(`\\b(?:const|let|var)\\s+${escape(name)}\\s*(?::[^=;]+)?=(?![=>])\\s*`, 'g'))]
@@ -415,7 +417,8 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
   const checkName = (name: string, at: number, flag: (problem: string) => void, depth: number, whole = true): boolean => {
     const owner = enclosingAll(at).find((f) => f.params.includes(name));
     if (owner) {
-      if (whole && !wrappers.some((w) => w.fn === owner && owner.params[w.param] === name)) {
+      // A function whose returns a spread reads has its parameters bound to the call's arguments, read at the call.
+      if (whole && !spreadRead.has(owner) && !wrappers.some((w) => w.fn === owner && owner.params[w.param] === name)) {
         flag(`the value is the parameter ${name}, which the scan cannot trace; write the facts out`);
       }
       return true;
@@ -508,7 +511,11 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
       const open = (m.index ?? 0) + m[0].length - 1;
       const after = open + balanced(obj, open).length;
       const colon = /^\s*:/.exec(obj.slice(after));
-      if (colon) checkFact(`[${obj.slice(open + 1, after - 1).trim()}]`, valueAt(obj, after + colon[0].length), start + after + colon[0].length, depth);
+      if (!colon) continue;
+      // The key is stored too: `{ [party.email]: true }` carries the address.
+      const key = obj.slice(open + 1, after - 1).trim();
+      checkValue(key, start + open + 1, reporter(start + open, `[${key}]`), depth);
+      checkFact(`[${key}]`, valueAt(obj, after + colon[0].length), start + after + colon[0].length, depth);
     }
     for (const m of obj.matchAll(/[{,]\s*\.\.\.\s*/g)) {
       const at = start + (m.index ?? 0) + m[0].length;
@@ -529,6 +536,7 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
     for (const arg of splitTop(balanced(spread, open).slice(1, -1))) checkValue(arg.trim(), at, flag, depth);
     const bodies: Array<{ text: string; at: number }> = [];
     const fn = functions.find((f) => f.name === name);
+    if (fn) spreadRead.add(fn);
     if (fn) {
       for (const r of code.slice(fn.start, fn.end).matchAll(/\breturn\s+/g)) {
         const from = fn.start + (r.index ?? 0) + r[0].length;
@@ -689,6 +697,12 @@ describe('audit facts and classified columns (#1626, #1632)', () => {
     expect(check('const facts = [];\nfacts.push({ email: value });\nctx.audit({ facts });')).toEqual(['email: the key names a classified column and its value is not auditValue(...)']);
     expect(check("const m = new Map<string, string>();\nm.set('tax_code', before.code);\nctx.audit({ m });")).toEqual(['m: m.tax_code is a classified column and its value is not auditValue(...)']);
     expect(check('ctx.audit({ previous: { [field]: before.tax_code } });')).toEqual(['[field]: the value reads the classified column tax_code outside auditValue(...)']);
+    expect(check('ctx.audit({ previous: { [party.email]: true } });')).toEqual(['[party.email]: the value reads the classified column email outside auditValue(...)']);
+    // A function whose returns a spread reads takes its parameters from the call, whose arguments are read there.
+    expect(check('function targetFact(targetId: string) { return { targetId }; }\nctx.audit({ ...targetFact(input.targetId) });')).toEqual([]);
+    expect(check('function targetFact(targetId: string) { return { targetId }; }\nctx.audit({ ...targetFact(party.email) });')).toEqual([
+      '...targetFact(...): the value reads the classified column email outside auditValue(...)',
+    ]);
     expect(check('const facts = {};\nfunction unrelated() { const facts = {}; facts.email = party.email; }\nctx.audit({ facts });')).toEqual([]);
     expect(check("const m = new Map<string, number>();\nm.set(column, rows);\nctx.audit({ erased: Object.fromEntries(m) });")).toEqual([]);
     expect(check(loop('before.tax_code'))).toEqual(['previous: the value reads the classified column tax_code outside auditValue(...)']);
