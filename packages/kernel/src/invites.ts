@@ -70,6 +70,12 @@ const INVITE_ERRORS: Record<string, DomainError> = {
   INVITE_EXPIRED: new DomainError('INVITE_EXPIRED', 409, 'Lời mời này đã hết hạn, hãy nhờ người mời gửi lại'),
   // A scoped invite (#1281) whose inviter is no longer an owner, or one of whose legal entities was removed.
   INVITE_SCOPE_STALE: new DomainError('INVITE_SCOPE_STALE', 409, 'Lời mời này không còn dùng được vì phạm vi pháp nhân đã thay đổi; hãy nhờ chủ sở hữu mời lại'),
+  // A scoped invite never changes an existing member's access (#1459): refused rather than accepted with its scope ignored.
+  INVITE_SCOPE_ALREADY_MEMBER: new DomainError(
+    'INVITE_SCOPE_ALREADY_MEMBER',
+    409,
+    'Bạn đã là thành viên của tổ chức này; lời mời giới hạn theo pháp nhân không đổi được quyền của bạn, hãy nhờ chủ sở hữu điều chỉnh',
+  ),
 };
 
 // The JSON DETAIL of INVITE_RATE_LIMITED (crove_kernel.invite_mail_gate, #185): which limit refused. The refusal for
@@ -444,7 +450,8 @@ export const acceptInvite = defineCommand({
       role: membership.role,
       previous_role: alreadyMember ? membership.role : null,
       already_member: alreadyMember,
-      // A scoped invite (#1281): the entities, and whether the definer granted them (never to an existing member).
+      // A scoped invite (#1281): the entities, and whether the definer granted them. An existing member's acceptance of
+      // a scoped invite is refused (#1459), so scope_applied is false only for an unscoped invite.
       legal_entity_ids: invite.legal_entity_ids,
       scope_applied: invite.legal_entity_ids !== null && !alreadyMember,
     });

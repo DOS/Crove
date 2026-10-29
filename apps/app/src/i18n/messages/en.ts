@@ -5219,6 +5219,7 @@ export const en = {
       INVITE_REVOKED: 'This invite was revoked.',
       INVITE_SCOPE_OWNER_ONLY: 'Only an owner can invite someone to work with some legal entities only.',
       INVITE_SCOPE_STALE: 'This invite can no longer be used because its legal entities changed. Ask an owner to invite you again.',
+      INVITE_SCOPE_ALREADY_MEMBER: 'You are already a member of this organization. An invite limited to some legal entities cannot change your access; ask an owner to adjust it.',
       INVITE_USED: 'This invite was already used.',
       INVITE_RATE_LIMITED: 'Too many invites were sent. Try again later.',
       TOO_MANY_INVITES: 'The organization has too many pending invites. Revoke some first.',
