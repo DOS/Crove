@@ -352,7 +352,14 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
       const open = from + (call.index ?? 0) + call[0].length - 1;
       splitTop(balanced(code, open).slice(1, -1)).forEach((arg, i) => {
         const param = fn.params[i];
-        if (arg.trim() === name && param !== undefined && /^[A-Za-z_$][\w$]*$/.test(param)) readWrites(param, fn.start, fn.end, () => true, flag, depth);
+        if (arg.trim() !== name || param === undefined || !/^[A-Za-z_$][\w$]*$/.test(param)) return;
+        // Only the helper's own parameter: not a same-named parameter or variable of a function or block inside it.
+        const own = (offset: number) => {
+          const pos = fn.start + offset;
+          const inner = declaration(param, pos);
+          return enclosingAll(pos).find((f) => f.params.includes(param)) === fn && (!inner || inner.index < fn.start);
+        };
+        readWrites(param, fn.start, fn.end, own, flag, depth);
       });
     }
     // A later assignment replaces what the name holds; Object.assign(name, ...) adds to it.
@@ -613,7 +620,8 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
     const opener = openerOf(at);
     if (opener === -1 || code[opener] !== '{') return false;
     const before = code.slice(Math.max(0, opener - 300), opener);
-    if (/(?:\btype\s+[\w$]+(?:<[^>]*>)?\s*=|\binterface\s+[\w$]+(?:<[^>]*>)?(?:\s+extends\s+[^{]+)?|[<|&]|\b(?:const|let|var)\s+[\w$]+\s*:)\s*$/.test(before)) return true;
+    // A union or intersection (`| {`, `& {`), not a logical operator (`&& {`, `|| {`).
+    if (/(?:\btype\s+[\w$]+(?:<[^>]*>)?\s*=|\binterface\s+[\w$]+(?:<[^>]*>)?(?:\s+extends\s+[^{]+)?|<|(?<![&|])[|&]|\b(?:const|let|var)\s+[\w$]+\s*:)\s*$/.test(before)) return true;
     // A parameter's annotation: `name:` (or `name?:`) inside a parameter list, not a property inside an object.
     return /[(,]\s*[\w$]+\??\s*:\s*$/.test(before) && code[openerOf(opener - 1)] === '(';
   };
@@ -967,6 +975,12 @@ describe('audit facts and classified columns (#1626, #1632)', () => {
       expect(check(type), type).toEqual([]);
     }
     expect(check('const options = { retry: 1, nested: { audit: facts } };')).toEqual([untracedFacts]);
+    expect(check('const options = { ...(enabled && { audit: { email: input.email } }) };')).toEqual([
+      'email: the key names a classified column and its value is not auditValue(...)',
+    ]);
+    // A helper's nested function with a same-named parameter writes its own object.
+    const helper = 'function fill(facts: F) {\n  facts.id = 1;\n  function other(facts: F) { facts.code = party.tax_code; }\n}';
+    expect(check(`${helper}\nconst facts = {};\nfill(facts);\nctx.audit(facts);`)).toEqual([]);
     // A function's own definition is no call, and a same-named parameter's loop is no write to the fact's variable.
     expect(check('const facts = { id: 1 };\nfunction fill(facts: F) { facts.code = party.tax_code; }\nctx.audit(facts);')).toEqual([]);
     expect(check('const facts = {};\nfunction other(facts: F[]) { for (facts of list) {} }\nctx.audit(facts);')).toEqual([]);
