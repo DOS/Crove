@@ -269,7 +269,6 @@ suite('proposal gate follow-ups on PostgreSQL (#161)', () => {
     const realEdit: CommandDef<any, any> | undefined = kernelCommands.find((c) => c.name === EDIT);
     if (!realEdit) throw new Error(`${EDIT} is not a kernel command`);
     const editor = defineCommand({
-      sideEffect: 'none',
       ...realEdit,
       input: z.object({ proposalId: z.uuid(), reviser: z.string() }),
       target: () => null,
@@ -339,7 +338,6 @@ suite('proposal gate follow-ups on PostgreSQL (#161)', () => {
     });
     // The declaration under another name. It writes nothing.
     const renamed = defineCommand({
-      sideEffect: 'none',
       ...realEdit,
       name: 'kernel.test_renamed_editor',
       input,

@@ -32,7 +32,7 @@ const refuse = defineCommand({
     throw new DomainError(input.code, input.status, 'refused');
   },
 });
-const refuseOther = defineCommand({ sideEffect: 'none', ...refuse, name: 'test.refuse_other' });
+const refuseOther = defineCommand({ ...refuse, name: 'test.refuse_other' });
 
 const suite = ADMIN ? describe : describe.skip;
 
