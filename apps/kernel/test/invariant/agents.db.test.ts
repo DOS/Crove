@@ -1665,6 +1665,169 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
     expect(kept).toEqual([]);
   });
 
+  it('lets no row of a refused nested command land after its rollback, even one its handler did not await (#1831)', async () => {
+    const suffix = randomUUID().slice(0, 8);
+    const eventType = `t1831.late_${suffix}`;
+    // A nested command that declares its writes, emits an event without awaiting it, and is refused.
+    const leavesEvent = defineCommand({
+      sideEffect: 'none',
+      name: `t1831.leaves_${suffix}`,
+      input: z.object({}),
+      risk: 'R1',
+      access: 'system',
+      writes: [],
+      handler: async (ctx) => {
+        void ctx.emit(eventType, { n: 1 });
+        throw new DomainError('CONFLICT', 409, 't1831 refused');
+      },
+    }) as CommandDef<unknown, unknown>;
+    const caller = defineCommand({
+      sideEffect: 'none',
+      name: `t1831.caller_${suffix}`,
+      input: z.object({}),
+      risk: 'R1',
+      access: 'system',
+      writes: [],
+      handler: async (ctx) => ctx.tryRun(leavesEvent.name, {}, { recover: () => true }),
+    }) as CommandDef<unknown, unknown>;
+    worker.register({ commands: [leavesEvent, caller] });
+    await expect(worker.execute(caller.name, {}, { actor: SYSTEM, orgId: orgA })).resolves.toMatchObject({ status: 'refused' });
+    // The event was written before the savepoint rolled back, so it went with it.
+    const events = await withAdmin(async (c) => (await c.query('SELECT count(*)::int AS n FROM crove_kernel.outbox_event WHERE org_id = $1 AND type = $2', [orgA, eventType])).rows[0]?.n);
+    expect(events).toBe(0);
+  });
+
+  it("refuses a handler's statement that takes control of the transaction, checked or not (#1831)", async () => {
+    const suffix = randomUUID().slice(0, 8);
+    const statements = {
+      commit: sql`COMMIT`,
+      tail: sql`SELECT 1; COMMIT`,
+      rollback: sql`ROLLBACK`,
+      begin: sql`BEGIN`,
+      runtimeSavepoint: sql`SAVEPOINT ${sql.raw('crove_try_run_1')}`,
+      runtimeRollback: sql`ROLLBACK TO SAVEPOINT ${sql.id('crove_try_run_1')}`,
+      unicodeName: sql.raw('SAVEPOINT U&"\\0063rove_try_run_1"'),
+      // The query is read as it runs: compiled, then split as PostgreSQL's lexer splits it (#1831 review).
+      aliased: sql`SELECT 1; ${sql.raw('COMMIT; SELECT 1').as('x')}`,
+      splitKeyword: sql`SELECT 1; COMM${sql.raw('IT; SELECT 1').as('x')}`,
+      lineCommentInString: sql.raw(`SELECT '--'; COMMIT`),
+      blockCommentInString: sql.raw(`SELECT '/*'; COMMIT; SELECT '*/'`),
+      dollarInString: sql.raw(`SELECT '$a$'; COMMIT; SELECT '$a$'`),
+      dollarInComment: sql.raw('SELECT 1 -- $$\n; COMMIT; SELECT $$x$$'),
+      commentedDollars: sql.raw('-- $a$\nCOMMIT -- $a$'),
+      nestedComment: sql.raw('/* a /* b */ c */ COMMIT'),
+      lineCommentInBlock: sql.raw('/* -- */ COMMIT'),
+      carriageReturn: sql.raw('-- a line comment\rCOMMIT'),
+      dollarInIdentifier: sql.raw('SELECT 1 AS x$q$; COMMIT; SELECT 1 AS y$q$'),
+      nestedAlias: sql`${sql`SELECT 1; COMMIT; SELECT 1`.as('a')}`,
+      // Several statements in one query, none of them control: refused as well, fail closed.
+      twoSelects: sql`SELECT 1; SELECT 2`,
+      // An identifier goes on over non-ASCII characters and $, and a backslash escapes once standard strings are off.
+      nonAsciiIdentifier: sql.raw('SELECT 1 AS é$x$; COMMIT; SELECT 1 AS é$x$'),
+      backslashQuote: sql.raw("SELECT set_config('standard_conforming_strings', 'off', true); SELECT 'x\\''; COMMIT; SELECT '1'"),
+    };
+    const probes = Object.entries(statements).flatMap(([key, statement]) =>
+      [undefined, []].map(
+        (writes) =>
+          defineCommand({
+            sideEffect: 'none',
+            name: `t1831.${key}_${writes ? 'checked' : 'unchecked'}_${suffix}`,
+            input: z.object({}),
+            risk: 'R1',
+            access: 'system',
+            ...(writes ? { writes } : {}),
+            handler: async (ctx) => {
+              await statement.execute(ctx.trx);
+              return { ok: true };
+            },
+          }) as CommandDef<unknown, unknown>,
+      ),
+    );
+    // A savepoint of the handler's own, as Social's digest sets around one mail, stays allowed.
+    const own = defineCommand({
+      sideEffect: 'none',
+      name: `t1831.own_savepoint_${suffix}`,
+      input: z.object({}),
+      risk: 'R1',
+      access: 'system',
+      writes: [],
+      handler: async (ctx) => {
+        await sql`SAVEPOINT t1831_mine`.execute(ctx.trx);
+        await sql`ROLLBACK TO SAVEPOINT t1831_mine`.execute(ctx.trx);
+        await sql`RELEASE SAVEPOINT t1831_mine`.execute(ctx.trx);
+        // Keywords inside a CASE, a string, a quoted name or a dollar-quoted body are not statements.
+        await sql`SELECT CASE WHEN true THEN 1 END AS one, 'x; COMMIT' AS text, $$; ROLLBACK$$ AS body, 1 AS "; commit"`.execute(ctx.trx);
+        return { ok: true };
+      },
+    }) as CommandDef<unknown, unknown>;
+    worker.register({ commands: [...probes, own] });
+    const as = { actor: SYSTEM, orgId: orgA };
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      for (const probe of probes) {
+        await expect(worker.execute(probe.name, {}, as), probe.name).rejects.toMatchObject({ code: 'INTERNAL' });
+        expect(logged.mock.calls.flat().map(String).join('\n'), probe.name).toContain(`command ${probe.name}: `);
+        expect(logged.mock.calls.flat().map(String).join('\n'), probe.name).toMatch(/controls the transaction, which is the runtime's|holds several statements/);
+      }
+    } finally {
+      logged.mockRestore();
+    }
+    await expect(worker.execute(own.name, {}, as)).resolves.toEqual({ ok: true });
+  });
+
+  it('refuses a statement a refused nested command starts after its handler settled, checked or not (#1831)', async () => {
+    const suffix = randomUUID().slice(0, 8);
+    const late: Array<Promise<unknown>> = [];
+    const probes = [undefined, []].map((writes) => {
+      const tag = writes ? 'checked' : 'unchecked';
+      const leaves = defineCommand({
+        sideEffect: 'none',
+        name: `t1831.late_${tag}_${suffix}`,
+        input: z.object({}),
+        risk: 'R1',
+        access: 'system',
+        ...(writes ? { writes } : {}),
+        handler: async (ctx) => {
+          // A write started on a timer, after the handler threw and its savepoint is rolled back.
+          late.push(
+            new Promise((resolve) => {
+              setTimeout(() => {
+                ctx.trx
+                  .insertInto('crove_kernel.inbox_item')
+                  .values({ org_id: ctx.orgId, kind: 'kernel.job.dead_lettered', dedupe_key: `t1831:late-${tag}-${suffix}`, detail: JSON.stringify({ queue: 't1831', jobId: randomUUID(), retries: 0 }), raised_at: ctx.now })
+                  .execute()
+                  .then(
+                    () => resolve('written'),
+                    (error: unknown) => resolve(String(error)),
+                  );
+              }, 0);
+            }),
+          );
+          throw new DomainError('CONFLICT', 409, 't1831 refused');
+        },
+      }) as CommandDef<unknown, unknown>;
+      const caller = defineCommand({
+        sideEffect: 'none',
+        name: `t1831.late_caller_${tag}_${suffix}`,
+        input: z.object({}),
+        risk: 'R1',
+        access: 'system',
+        ...(writes ? { writes } : {}),
+        handler: async (ctx) => ctx.tryRun(leaves.name, {}, { recover: () => true }),
+      }) as CommandDef<unknown, unknown>;
+      return { leaves, caller };
+    });
+    worker.register({ commands: probes.flatMap((p) => [p.leaves, p.caller]) });
+    for (const { caller } of probes) {
+      await expect(worker.execute(caller.name, {}, { actor: SYSTEM, orgId: orgA })).resolves.toMatchObject({ status: 'refused' });
+    }
+    const outcomes = await Promise.all(late);
+    expect(outcomes).toHaveLength(2);
+    for (const outcome of outcomes) expect(outcome).toMatch(/after the handler returned/);
+    const kept = await withAdmin(async (c) => (await c.query(`SELECT count(*)::int AS n FROM crove_kernel.inbox_item WHERE org_id = $1 AND dedupe_key LIKE $2`, [orgA, `t1831:late-%${suffix}`])).rows[0]?.n);
+    expect(kept).toBe(0);
+  });
+
   it('runs a command as it registered: agent access set on its definition afterwards grants an agent nothing (#1766)', async () => {
     const contactWriter = defineCommand({
       sideEffect: 'none',
