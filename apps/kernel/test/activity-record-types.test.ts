@@ -119,16 +119,18 @@ function calls(file: string, text: string): Call[] {
 }
 
 // An activity function taken out of its context: destructured from it, assigned or bound. Calls through such a name
-// would not be found above. Comments are left out first, so prose naming ctx.activity is not taken for code.
+// would not be found above. Comments are left out first, then the text of strings (but for a call by computed name,
+// whose name is a string), so prose naming ctx.activity is not taken for code.
 function aliases(source: string): string[] {
-  const text = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+  const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+  const text = code.replace(/'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"|`(?:\\.|[^`\\])*`/g, "''");
   return [
     ...text.matchAll(/\{[^{}]*\bactivity\b[^{}]*\}\s*=\s*[A-Za-z_$][\w$.]*/g),
     ...text.matchAll(/[=:,(]\s*[A-Za-z_$][\w$]*\.activity\b(?!\s*\()(?!\s*:)/g),
     ...text.matchAll(/\.activity\.(?:bind|call|apply)\b/g),
     // A parameter destructured as ({ activity }: CommandContext), and a call by computed name (ctx['activity']).
     ...text.matchAll(/\(\s*\{[^{}]*\bactivity\b[^{}]*\}\s*:/g),
-    ...text.matchAll(/\[\s*['"`]activity['"`]\s*\]/g),
+    ...code.matchAll(/\[\s*['"`]activity['"`]\s*\]/g),
   ].map((m) => m[0].replace(/\s+/g, ' ').trim());
 }
 
@@ -177,6 +179,8 @@ describe('activity record types (#1716, #1725, #1728)', () => {
       "await ctx['activity']('kernel.tenant', id, 'k', s);",
       "await ctx.activity('finance.period', id, 'k', `${legalEntityId}`);",
       "await ctx.activity('finance.period', id, 'k', s, { legalEntityId: undefined });",
+      // Prose in a string is no alias.
+      'throw new Error(`run ctx.emit, ctx.activity and ctx.numbering one at a time`);',
     ].join('\n');
     expect(calls('sample.ts', sample).map((c) => [c.type, c.expression, c.namesEntity])).toEqual([
       ['finance.period', 'finance.period', true],
