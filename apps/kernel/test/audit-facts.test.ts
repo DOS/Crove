@@ -106,8 +106,7 @@ const escape = (name: string) => name.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
 // literal or a pass-through call, and null for a value computed from what it reads (`a !== b`, `count + 1`, `f(x)`).
 function heldPart(init: string): string | null {
   // A non-null assertion (`before!.tax_code`) is not a negation: it goes before the operators are read.
-  const expr = init
-    .replace(/^await\s+/, '')
+  const expr = unwrap(init.replace(/^await\s+/, ''))
     .replace(/\s+(?:as|satisfies)\s+[^]*$/, '')
     .replace(/([\w$)\]])!(?!=)/g, '$1');
   let depth = 0;
@@ -470,19 +469,22 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
   const checkSpreadCall = (name: string, spread: string, at: number, depth: number) => {
     const flag = reporter(at, `...${name}(...)`);
     const open = spread.indexOf('(');
-    for (const arg of splitTop(balanced(spread, open).slice(1, -1))) checkValue(arg.trim(), at, flag, depth);
     const bodies: Array<{ text: string; at: number }> = [];
+    let fnParams: string[] = [];
     const fn = functions.find((f) => f.name === name);
-    if (fn) spreadRead.add(fn);
     if (fn) {
+      spreadRead.add(fn);
+      fnParams = fn.params;
       for (const r of code.slice(fn.start, fn.end).matchAll(/\breturn\s+/g)) {
         const from = fn.start + (r.index ?? 0) + r[0].length;
         bodies.push({ text: valueAt(code, from).trim(), at: from });
       }
     } else {
-      const decl = new RegExp(`\\bconst\\s+${escape(name)}\\s*(?::[^=]*)?=`).exec(code);
+      const decl = new RegExp(`\\bconst\\s+${escape(name)}\\s*(?::[^=]*)?=\\s*(?:async\\s*)?`).exec(code);
       const arrow = decl ? code.indexOf('=>', decl.index) : -1;
-      if (arrow !== -1) {
+      if (decl && arrow !== -1) {
+        const head = decl.index + decl[0].length;
+        if (code[head] === '(') fnParams = params(balanced(code, head));
         const from = arrow + 2 + (/^\s*/.exec(code.slice(arrow + 2))?.[0].length ?? 0);
         bodies.push({ text: valueAt(code, from).trim(), at: from });
       }
@@ -491,6 +493,13 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
       flag(`the facts spread ${name}(...), whose result the scan cannot read; write them out`);
       return;
     }
+    // An argument is read as a value only when its parameter reaches a return whole, outside auditValue: a parameter
+    // masked there, or read for a column (`p.id`, read in the body), does not carry the argument.
+    const returned = new Set(bodies.flatMap((b) => variables(withoutAuditValue(b.text))));
+    splitTop(balanced(spread, open).slice(1, -1)).forEach((arg, i) => {
+      const param = fnParams[i];
+      if (param === undefined || !/^[A-Za-z_$][\w$]*$/.test(param) || returned.has(param)) checkValue(arg.trim(), at, flag, depth);
+    });
     for (const body of bodies) {
       if (objectish(body.text)) checkObject(body.text, body.at, depth + 1);
       else checkFact(`...${name}(...)`, body.text, body.at, depth + 1);
@@ -719,6 +728,10 @@ describe('audit facts and classified columns (#1626, #1632)', () => {
       'previous: the value reads the classified column tax_code outside auditValue(...)',
     ]);
     expect(check('const previous = {};\nprevious[party.email] = true;\nctx.audit({ previous });')).toEqual(['previous: the value reads the classified column email outside auditValue(...)']);
+    // A parenthesized comparison holds a boolean; a helper that masks or projects its argument does not carry it.
+    expect(check('const changed = (before.tax_code !== input.taxCode);\nctx.audit({ changed });')).toEqual([]);
+    expect(check("const maskedFact = (code: string) => ({ code: auditValue(PARTY, 'tax_code', code) });\nctx.audit({ ...maskedFact(party.tax_code) });")).toEqual([]);
+    expect(check('function idOf(p: P) { return { id: p.id }; }\nctx.audit({ ...idOf(party) });')).toEqual([]);
     expect(check('ctx.audit({ previous: { get code() { return party.tax_code; } } });')).toEqual([
       'code: a getter computes the fact when it is written; write the value out',
     ]);
