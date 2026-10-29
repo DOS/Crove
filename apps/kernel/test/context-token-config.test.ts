@@ -1,7 +1,7 @@
 // CROVE_CONTEXT_TOKEN_KEY (#1822, ADR-0028 section 9): the setting, the token the runtime signs with it, and the
 // migration runner's reading of it. The database side is apps/kernel/test/invariant/context-token.db.test.ts.
 import { createHmac, randomBytes } from 'node:crypto';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { contextTokenKeyBytes as runnerKeyBytes } from '@crove/db/migrate';
 import { CONTEXT_TOKEN_TTL_S, contextTokenKeyBytes, mintContextToken } from '@crove/kernel-runtime';
 import { loadConfig } from '../src/config.ts';
@@ -67,6 +67,18 @@ describe('mintContextToken', () => {
   it('writes - for no session and no MFA time, and aal1 for anything but aal2', () => {
     const token = mintContextToken(TEST_KEY, { userId: USER, sessionId: null, orgId: ORG, aal: 'aal1', mfaAt: null }, 0);
     expect(token.split('.').slice(0, 7)).toEqual(['v1', USER, '-', ORG, 'aal1', '-', String(CONTEXT_TOKEN_TTL_S)]);
+  });
+
+  it('signs with the real clock while a test mocks Date for business time', () => {
+    const real = Math.floor(performance.timeOrigin + performance.now());
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(real - 8 * 24 * 60 * 60 * 1000);
+      const exp = Number(mintContextToken(TEST_KEY, { userId: USER, sessionId: null, orgId: ORG, aal: 'aal1', mfaAt: null }).split('.')[6]);
+      expect(Math.abs(exp - (Math.floor(real / 1000) + CONTEXT_TOKEN_TTL_S))).toBeLessThanOrEqual(5);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('refuses claims that are not UUIDs, so nothing else can reach the token', () => {

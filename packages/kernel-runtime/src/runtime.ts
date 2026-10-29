@@ -1031,6 +1031,10 @@ const validAccess = (access: unknown, kinds: readonly string[]): boolean =>
 // between its clock and the kernel's (crove_kernel.enter_user_context).
 export const CONTEXT_TOKEN_TTL_S = 60;
 
+// The wall clock as this module loaded it: a test that mocks Date (vi.useFakeTimers({ toFake: ['Date'] }), a spy on
+// Date.now) to move business time still signs tokens against the real time the database checks them with.
+const wallClock: () => number = Date.now;
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 // Decodes a context token key (base64, 32 to 64 bytes). The error never shows the value.
@@ -1053,7 +1057,7 @@ export interface ContextTokenClaims {
 // A context token (#1822, ADR-0028 section 9), signed with the deployment's key:
 //   v1.<user>.<session|->.<org>.<aal1|aal2>.<mfa epoch|->.<exp epoch>.<hmac-sha256 hex of everything before it>
 // crove_kernel.enter_user_context verifies it and enters that user's context in that org, nothing else.
-export function mintContextToken(key: Uint8Array | string, claims: ContextTokenClaims, nowMs: number = Date.now()): string {
+export function mintContextToken(key: Uint8Array | string, claims: ContextTokenClaims, nowMs: number = wallClock()): string {
   const bytes = typeof key === 'string' ? contextTokenKeyBytes(key) : Buffer.from(key);
   const user = claims.userId.toLowerCase();
   const org = claims.orgId.toLowerCase();

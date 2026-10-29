@@ -15,7 +15,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove
 import type { TaxDueView } from '@crove/kernel-contract';
 import { Runtime, type InputHashMode } from '@crove/kernel-runtime';
 import { TEST_MANIFESTS } from './manifests.ts';
-import { contextToken } from './context-token.ts';
+import { enterUser } from './context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -53,7 +53,8 @@ suite('tax obligations done per legal entity on PostgreSQL (#1496)', () => {
   function connect(inputHash: InputHashMode = 'keyed') {
     pool = createPool({ connectionString: appUrl, max: 4 });
     db = createDb(pool);
-    rt = new Runtime(db, { manifests: TEST_MANIFESTS, inputHash }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
+    // No context token key: the database starts at a version before enter_user_context (#1822).
+    rt = new Runtime(db, { manifests: TEST_MANIFESTS, contextTokenKey: null, inputHash }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
   }
 
   const exec = <T>(user: string, command: string, input: unknown) => rt.execute<T>(command, input, { actor: asUser(user), orgId });
@@ -203,7 +204,7 @@ suite('tax obligations done per legal entity on PostgreSQL (#1496)', () => {
     const asAccountant = async (sql: string, params: unknown[] = []) => {
       await client.query('BEGIN');
       try {
-        await client.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgId, contextToken(accountant, orgId)]);
+        await enterUser(client, accountant, orgId);
         return await client.query(sql, params);
       } finally {
         await client.query('ROLLBACK');

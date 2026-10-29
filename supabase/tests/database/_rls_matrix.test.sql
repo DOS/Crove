@@ -21,7 +21,7 @@ INSERT INTO crove_kernel.party (org_id, id, name) VALUES
 SELECT set_config('test.token_a', (
   SELECT m.msg || '.' || pg_catalog.encode(pg_catalog.sha256(k.k_opad || pg_catalog.sha256(k.k_ipad || pg_catalog.convert_to(m.msg, 'UTF8'))), 'hex')
   FROM (SELECT 'v1.' || current_setting('test.user_a') || '.-.' || current_setting('test.org_a') || '.aal1.-.'
-               || (pg_catalog.floor(pg_catalog.extract(epoch FROM pg_catalog.clock_timestamp()))::bigint + 60)::text AS msg) m,
+               || (pg_catalog.floor(pg_catalog.date_part('epoch', pg_catalog.clock_timestamp()))::bigint + 60)::text AS msg) m,
        crove_kernel.context_token_key k
   WHERE k.slot = 'current'), true);
 

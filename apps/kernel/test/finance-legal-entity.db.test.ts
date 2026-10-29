@@ -20,7 +20,7 @@ import { Runtime } from '@crove/kernel-runtime';
 import { findPeriodBalanceDifferences } from '../src/period-balance.ts';
 import { GENESIS_SHA256, LocalArchiveStore, archiveKey, batchSha256, chainSha256, verifyArchive, type ArchiveBatch } from '../src/worm.ts';
 import { TEST_MANIFESTS } from './manifests.ts';
-import { contextToken } from './context-token.ts';
+import { enterUser } from './context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -89,7 +89,7 @@ suite('finance books per legal entity (#1280)', () => {
     const c = await pool.connect();
     try {
       await c.query('BEGIN');
-      await c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgId, contextToken(userId, orgId)]);
+      await enterUser(c, userId, orgId);
       const result = await fn(c);
       await c.query(commit ? 'COMMIT' : 'ROLLBACK');
       return result;
@@ -153,7 +153,8 @@ suite('finance books per legal entity (#1280)', () => {
     worker = createDb(workerPool);
     // The database is still before the keyed input hash's migration (20261103180000_crove_kernel_input_hash.sql), where
     // crove_kernel.command_input_hash does not exist yet: this runtime writes the plain hash (#1741).
-    const runtime = new Runtime(db, { manifests: TEST_MANIFESTS, inputHash: 'sha256' }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
+    // No context token key: the database starts at a version before enter_user_context (#1822).
+    const runtime = new Runtime(db, { manifests: TEST_MANIFESTS, contextTokenKey: null, inputHash: 'sha256' }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
     owner = await upsertIdentity(db, { issuer: 'test', subject: randomUUID(), email: 'owner@le-books.test', name: null });
     member = await upsertIdentity(db, { issuer: 'test', subject: randomUUID(), email: 'member@le-books.test', name: null });
     ({ orgId } = await createOrg(runtime, { type: 'user', userId: owner, aal: 'aal1' }, 'Sổ theo pháp nhân'));
