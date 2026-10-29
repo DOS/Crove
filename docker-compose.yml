@@ -345,6 +345,8 @@ services:
       PROBER_MAX_DEAD_LETTERS: ${PROBER_MAX_DEAD_LETTERS:-0}
       # Unset: the probe interval plus 60 s, so each dead letter alerts once (twice at most).
       PROBER_DEAD_LETTER_WINDOW_SECONDS: ${PROBER_DEAD_LETTER_WINDOW_SECONDS:-}
+      # The modules the deployment runs, as for the API and the worker: their queued jobs count in job_age (#1894).
+      CROVE_MODULES: ${CROVE_MODULES:-}
     volumes:
       - status:/data/status
     depends_on:

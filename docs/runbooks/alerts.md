@@ -41,7 +41,7 @@ Pick outside services that run on infrastructure other than the server: a monito
    The phone shows `[Crove] Test alert from <instance>: alert delivery works.` Exit code 3 means the alert was not delivered; the output names the reason (for example `Bad Request: chat not found`).
 6. Turn on notifications for the chat on the phone, and check that a muted group or the phone's focus mode does not hide them.
 
-Without the Compose profile, run the prober from cron instead (README, "Monitoring and alerts"). Either way, `pnpm pilot:check` fails while `ALERT_WEBHOOK_URL` is unset or not https.
+Without the Compose profile, run the prober from cron instead (README, "Monitoring and alerts"), with `CROVE_MODULES` set to the API's and the worker's value. Either way, `pnpm pilot:check` fails while `ALERT_WEBHOOK_URL` is unset or not https.
 
 ## 2. The outside uptime check on `/healthz`
 
