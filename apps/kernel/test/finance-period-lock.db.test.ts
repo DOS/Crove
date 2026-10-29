@@ -2,7 +2,7 @@
 // reversing into it are refused with PERIOD_LOCKED; months lock in order and unlock newest first; unlock is the
 // owner's alone, R3 with a reason on the audit row; the database guard holds for the database owner too; a lock
 // and a posting in flight wait for each other (ADR-0021 cases A and B); and a lock or unlock and a change of the
-// caller's role or permission wait for each other (#1348).
+// caller's role or permission wait for each other (#1348), without a deadlock under the accountant preset (#1922).
 // Set CROVE_TEST_ADMIN_URL to a superuser URL; each run creates and drops its own database.
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -536,6 +536,75 @@ suite('period lock (#329)', () => {
           org.orgId,
           adminUser.userId,
         ]);
+      });
+    }
+    expect(await state()).toMatchObject({ status: 200, body: { lockedThrough: '2025-11-30' } });
+  });
+
+  // In an org on the accountant preset, a revoke of a chief accountant runs the keep guard, which serializes on the
+  // org's tenant row (#1922). It used to take that row FOR UPDATE, which waits for every command of the org in flight
+  // (their idempotency rows hold it FOR KEY SHARE): an owner's unlock in flight, which then locks its member row, which
+  // the revoke holds, was a deadlock. The guard now takes FOR NO KEY UPDATE: the revoke does not wait for the unlock,
+  // and the unlock goes through after it. The owner unlocks in a session that holds the row FOR KEY SHARE, as the
+  // command's idempotency row does, while the owner revokes the admin's role through the command.
+  it('lets a revoke under the accountant preset and an unlock in flight both finish (#1922)', async () => {
+    const grant = (who: Account) =>
+      admin(
+        async (c) =>
+          (
+            await c.query<{ id: string }>(
+              `INSERT INTO crove_kernel.role_assignment (org_id, user_id, role_key, legal_entity_id, granted_by)
+               VALUES ($1, $2, 'finance.chief_accountant', NULL, $3) RETURNING id`,
+              [org.orgId, who.userId, owner.userId],
+            )
+          ).rows[0]?.id as string,
+      );
+    // Two chief accountants, so that the revoke of one keeps the preset's rule.
+    await grant(owner);
+    const revoked = await grant(adminUser);
+    await admin((c) => c.query(`UPDATE crove_kernel.tenant SET approval_preset = 'accountant' WHERE org_id = $1`, [org.orgId]));
+    const unlocker = new pg.Client({ connectionString: adminUrl });
+    await unlocker.connect();
+    try {
+      await unlocker.query('BEGIN');
+      await enterUser(unlocker, owner.userId, org.orgId);
+      await unlocker.query('SELECT 1 FROM crove_kernel.tenant WHERE org_id = $1 FOR KEY SHARE', [org.orgId]);
+      const fresh = { type: 'user' as const, userId: owner.userId, aal: 'aal2' as const, sessionId: owner.session, mfaAt: Math.floor(Date.now() / 1000) };
+      let settled = false;
+      const revoking = runtime.execute('kernel.member.role.revoke', { assignmentId: revoked }, { actor: fresh, orgId: org.orgId }).then(
+        (value) => {
+          settled = true;
+          return value;
+        },
+        (error: { code?: string }) => {
+          settled = true;
+          return error.code;
+        },
+      );
+      // The revoke finishes, or (the old guard) waits for the unlocker's row lock; then the unlocker locks its member row.
+      for (let tries = 0; !settled; tries++) {
+        const { rows } = await admin((c) =>
+          c.query(
+            `SELECT 1 FROM pg_catalog.pg_locks l JOIN pg_catalog.pg_stat_activity a ON a.pid = l.pid
+             WHERE NOT l.granted AND a.usename = 'crove_app' AND a.datname = pg_catalog.current_database()`,
+          ),
+        );
+        if (rows.length > 0) break;
+        if (tries > 400) throw new Error('the revoke neither finished nor waited');
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      const unlocking = unlocker.query<{ through: string | null }>(`SELECT crove_finance.unlock_period('2025-11-01'::date, NULL::uuid)::text AS through`).then(
+        (r) => r.rows[0]?.through,
+        (error: Error) => error.message,
+      );
+      expect(await revoking).toEqual({ assignmentId: revoked });
+      expect(await unlocking).toBe('2025-10-31');
+    } finally {
+      await unlocker.query('ROLLBACK').catch(() => {});
+      await unlocker.end();
+      await admin(async (c) => {
+        await c.query(`UPDATE crove_kernel.tenant SET approval_preset = 'founder' WHERE org_id = $1`, [org.orgId]);
+        await c.query(`DELETE FROM crove_kernel.role_assignment WHERE org_id = $1 AND role_key = 'finance.chief_accountant'`, [org.orgId]);
       });
     }
     expect(await state()).toMatchObject({ status: 200, body: { lockedThrough: '2025-11-30' } });
