@@ -94,6 +94,31 @@ suite('delegation and escalation within the task legal entity on PostgreSQL (#17
           .rows[0],
     );
 
+  // A child task written straight in SQL as the worker in the agent's context, past the command's own checks: the task
+  // trigger alone decides. Always rolled back.
+  async function rawChild(actor: AgentActor, parentId: string, kind: 'delegation' | 'escalation', assignee: string | null) {
+    const url = new URL(adminUrl);
+    url.username = 'crove_worker';
+    url.password = 'test-worker-pw';
+    const c = new pg.Client({ connectionString: url.toString() });
+    await c.connect();
+    try {
+      await c.query('BEGIN');
+      await c.query('SELECT crove_kernel.enter_agent_context($1::uuid, $2::uuid, $3::uuid)', [orgId, actor.agentId, actor.runId]);
+      await c.query(
+        `INSERT INTO crove_kernel.task (org_id, title, kind, assignee_position_id, parent_task_id, source, created_by_type)
+         VALUES ($1, 'Thẳng', $2, $3, $4, 'human', 'agent')`,
+        [orgId, kind, assignee, parentId],
+      );
+      return 'inserted';
+    } catch (e) {
+      return (e as Error).message;
+    } finally {
+      await c.query('ROLLBACK').catch(() => {});
+      await c.end();
+    }
+  }
+
   const listed = async (userId: string) =>
     (await app.query<{ tasks: Array<{ id: string }> }>('kernel.task.list', {}, { actor: asUser(userId), orgId })).tasks.map((t) => t.id);
 
@@ -183,7 +208,10 @@ suite('delegation and escalation within the task legal entity on PostgreSQL (#17
         code: 'OUTSIDE_LEGAL_ENTITY',
         details: { rule: 'delegation_legal_entity' },
       });
+      // The database refuses it on its own.
+      expect(await rawChild(lead.actor, branchTask, 'delegation', target)).toBe('AGENT_DELEGATION_SUBTREE');
     }
+    expect(await rawChild(lead.actor, branchTask, 'delegation', personOfBranch)).toBe('inserted');
     const delegated: Record<string, string> = {};
     for (const target of [agentOfBranch.positionId, personOfBranch, personOfAll]) {
       const { taskId } = await worker.execute<{ taskId: string }>('kernel.task.delegate', { id: branchTask, fence, assigneePositionId: target, title: 'Giao' }, as);
@@ -213,6 +241,9 @@ suite('delegation and escalation within the task legal entity on PostgreSQL (#17
 
     const branchTask = await entityTask(branch, agent.positionId);
     const { fence } = await worker.execute<{ fence: string }>('kernel.task.checkout', { id: branchTask }, as);
+    // The database takes only the entity-aware target: not the nearest person, who cannot read the task.
+    expect(await rawChild(agent.actor, branchTask, 'escalation', middle)).toBe('AGENT_ESCALATION_TARGET');
+    expect(await rawChild(agent.actor, branchTask, 'escalation', top)).toBe('inserted');
     const up = await worker.execute<{ taskId: string; assigneePositionId: string | null }>('kernel.task.escalate', { id: branchTask, fence, title: 'Cần duyệt', reason: 'Vượt quyền' }, as);
     // The default entity's manager is skipped: the task lands with the branch's.
     expect(up.assigneePositionId).toBe(top);
@@ -240,15 +271,26 @@ suite('delegation and escalation within the task legal entity on PostgreSQL (#17
   });
 
   it('answers a person scope only to the worker, and only for an entity the caller reads', async () => {
-    const callers = await admin(async (c) =>
+    const functions = [
+      'crove_kernel.member_covers_legal_entity(uuid,uuid)',
+      'crove_kernel.position_reads_legal_entity(uuid,uuid,uuid)',
+      'crove_kernel.task_escalation_target(uuid,uuid,uuid)',
+    ];
+    const matrix = await admin(async (c) =>
       (
-        await c.query<{ r: string }>(
-          `SELECT r FROM unnest(ARRAY['crove_app', 'crove_worker', 'crove_tenant', 'crove_definer_tenant']) r
-           WHERE has_function_privilege(r, 'crove_kernel.member_covers_legal_entity(uuid,uuid)', 'EXECUTE')`,
+        await c.query<{ fn: string; callers: string[]; definer: boolean; config: string[] }>(
+          `SELECT f AS fn, p.prosecdef AS definer, p.proconfig AS config,
+                  ARRAY(SELECT r FROM unnest(ARRAY['PUBLIC', 'crove_app', 'crove_worker', 'crove_tenant', 'crove_definer_tenant']) r
+                        WHERE CASE r WHEN 'PUBLIC' THEN EXISTS (SELECT 1 FROM aclexplode(p.proacl) a WHERE a.grantee = 0)
+                                     ELSE has_function_privilege(r, p.oid, 'EXECUTE') END) AS callers
+           FROM unnest($1::text[]) f JOIN pg_proc p ON p.oid = f::regprocedure ORDER BY 1`,
+          [functions],
         )
-      ).rows.map((row) => row.r),
+      ).rows,
     );
-    expect(callers).toEqual(['crove_worker']);
+    expect(matrix).toEqual(
+      functions.map((fn) => ({ fn, definer: fn.includes('member_covers'), config: ['search_path=pg_catalog, pg_temp'], callers: ['crove_worker'] })),
+    );
 
     const agent = await liveAgent([branch], null);
     const url = new URL(adminUrl);
