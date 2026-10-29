@@ -563,6 +563,103 @@ suite('tasks a chart or role change would strand (#1799)', () => {
     expect(await taskRow(ofBranch)).toEqual({ assignee: null, status: 'todo' });
   });
 
+  // A round can move a task to a seat that is itself among the given seats; a concurrent change that strands it there
+  // before the round ends makes a later round move it again. It is answered once (#1907), from the seat it was first
+  // stranded on to its last target, so the command's audit and events count it once; the activity rows keep both moves.
+  // A lock on one task's row holds the first round's UPDATE after its snapshot while the middle seat's holder loses
+  // the entity.
+  it('answers a task moved by two rounds once, from its first seat to its last target (#1907)', async () => {
+    const workshop = await admin(
+      async (c) =>
+        (
+          await c.query<{ id: string }>(`INSERT INTO crove_kernel.legal_entity (org_id, name, kind, created_by) VALUES ($1, 'Xưởng', 'branch', $2) RETURNING id`, [
+            orgId,
+            owner,
+          ])
+        ).rows[0]?.id as string,
+    );
+    const lead = await member('twice-lead', 'member', defaultEntity);
+    const middle = await member('twice-middle', 'member', workshop);
+    const holder = await member('twice-holder', 'member', workshop);
+    // The middle seat's holder reads the default entity too, until the change below.
+    const ofDefaultGrant = await admin(
+      async (c) =>
+        (
+          await c.query<{ id: string }>(
+            `INSERT INTO crove_kernel.role_assignment (org_id, user_id, role_key, legal_entity_id, granted_by) VALUES ($1, $2, 'external_accountant', $3, $4) RETURNING id`,
+            [orgId, middle, defaultEntity, owner],
+          )
+        ).rows[0]?.id as string,
+    );
+    const leadSeat = await seat('Quản đốc', lead, null);
+    const middleSeat = await seat('Tổ trưởng', middle, leadSeat);
+    const own = await seat('Công nhân', holder, middleSeat);
+    const first = await task(defaultEntity, own);
+    const second = await task(defaultEntity, own);
+    const rowLock = new pg.Client({ connectionString: adminUrl });
+    const rerouter = new pg.Client({ connectionString: appUrl() });
+    for (const c of [rowLock, rerouter]) await c.connect();
+    try {
+      await rowLock.query('BEGIN');
+      await rowLock.query('SELECT 1 FROM crove_kernel.task WHERE org_id = $1 AND id = $2 FOR UPDATE', [orgId, second]);
+
+      await rerouter.query('BEGIN');
+      await enterUser(rerouter, owner, orgId);
+      const pid = (await rerouter.query<{ pid: number }>('SELECT pg_catalog.pg_backend_pid() AS pid')).rows[0]?.pid as number;
+      const rerouted = rerouter.query<{ task_id: string; from_position_id: string; to_position_id: string | null }>(
+        'SELECT task_id, from_position_id, to_position_id FROM crove_kernel.task_reroute($1::uuid[])',
+        [[own, middleSeat]],
+      );
+      rerouted.catch(() => {});
+      // The first round moves both tasks to the middle seat; its UPDATE waits for the locked one.
+      await untilWaiting("the first round's UPDATE", { pid, row: true });
+      // The middle seat's holder no longer reads the default entity: once there, the tasks are stranded again.
+      await admin((c) => c.query('DELETE FROM crove_kernel.role_assignment WHERE org_id = $1 AND id = $2', [orgId, ofDefaultGrant]));
+      await rowLock.query('ROLLBACK');
+      const expected = [first, second]
+        .sort((a, b) => (a < b ? -1 : 1))
+        .map((id) => ({ task_id: id, from_position_id: own, to_position_id: leadSeat }));
+      expect((await rerouted).rows).toEqual(expected);
+      await rerouter.query('COMMIT');
+    } finally {
+      for (const c of [rowLock, rerouter]) {
+        await c.query('ROLLBACK').catch(() => {});
+        await c.end();
+      }
+    }
+    expect(await taskRow(first)).toEqual({ assignee: leadSeat, status: 'todo' });
+    expect(await taskRow(second)).toEqual({ assignee: leadSeat, status: 'todo' });
+    expect((await trail(first)).activity).toEqual([
+      { kind: 'task.rerouted', entity: defaultEntity },
+      { kind: 'task.rerouted', entity: defaultEntity },
+    ]);
+  });
+
+  // The rounds end only when no task of the seats is stranded, so a task's target must never be a seat that would
+  // strand it again: the escalation target and the stranded test read coverage the same way (the #1904 review). Every
+  // seat and entity of the org, after the cases above built its chart, in the owner's context the commands run in.
+  it("never targets a seat that does not read the task's entity, nor the task's own seat (#1904 review)", async () => {
+    const c = new pg.Client({ connectionString: adminUrl });
+    await c.connect();
+    try {
+      await c.query('BEGIN');
+      await enterUser(c, owner, orgId);
+      const { rows } = await c.query<{ seat: string; entity: string; target: string; reads: boolean }>(
+        `SELECT x.seat, x.entity, x.target, crove_kernel.position_reads_legal_entity($1, x.target, x.entity) AS reads
+         FROM (SELECT p.id AS seat, e.id AS entity, crove_kernel.task_escalation_target($1, p.id, e.id) AS target
+               FROM crove_kernel.position p CROSS JOIN crove_kernel.legal_entity e
+               WHERE p.org_id = $1 AND e.org_id = $1) x
+         WHERE x.target IS NOT NULL`,
+        [orgId],
+      );
+      expect(rows.length).toBeGreaterThan(10);
+      expect(rows.filter((r) => r.target === r.seat || !r.reads)).toEqual([]);
+    } finally {
+      await c.query('ROLLBACK').catch(() => {});
+      await c.end();
+    }
+  });
+
   it('answers which tasks only in an owner context', async () => {
     const someone = await member('someone', 'member', null);
     const url = (user: string, password: string) => {
