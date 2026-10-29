@@ -2,7 +2,7 @@
 // or an org's name, tax code or address into audit_event.detail now write a marker naming the column's class, and the
 // row still says which fields changed. A cleared value stays null. tenant_tax_code_requires_audit (20261103070000)
 // accepts the marker for a tax code that is set and still refuses a row naming another value, or a marker for a code
-// that is cleared. Set CROVE_TEST_ADMIN_URL to a superuser URL; each run makes its own database. The tax codes are made
+// that is cleared. Their activity summaries name what happened and none of those values either (#1634). Set CROVE_TEST_ADMIN_URL to a superuser URL; each run makes its own database. The tax codes are made
 // up and fail the MST checksum (#157).
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -141,6 +141,10 @@ suite('audit facts keep no classified value (#1626)', () => {
     const all = await admin(async (c) => (await c.query<{ detail: unknown }>('SELECT detail FROM crove_kernel.audit_event WHERE org_id = $1', [o.orgId])).rows);
     const text = JSON.stringify(all);
     for (const value of RAW_VALUES) expect(text, value).not.toContain(value);
+    // Nor in any activity summary of the org (#1634): the timeline names what happened, the record shows the values.
+    const summaries = await admin(async (c) => (await c.query<{ summary: string }>('SELECT summary FROM crove_kernel.activity WHERE org_id = $1', [o.orgId])).rows);
+    expect(summaries.length).toBeGreaterThan(0);
+    for (const value of RAW_VALUES) expect(JSON.stringify(summaries), value).not.toContain(value);
     // The values themselves were stored where they belong.
     const stored = await admin(async (c) => (await c.query('SELECT tax_code, address FROM crove_kernel.tenant WHERE org_id = $1', [o.orgId])).rows[0]);
     expect(stored).toEqual({ tax_code: ORG_TAX_CODE_2, address: null });

@@ -32,7 +32,7 @@ export const setTaxCode = defineCommand({
       // refuses a code another entity took after the check above.
       await ctx.trx.updateTable('crove_kernel.tenant').set({ tax_code: taxCode }).where('org_id', '=', ctx.orgId).execute().catch(onWrite(taxCode));
       // Members see the change in the activity feed: it decides which invoices are read as sales from now on.
-      await ctx.activity('kernel.tenant', ctx.orgId, 'org.tax_code_changed', taxCode ? `Đặt mã số thuế của tổ chức là ${taxCode}` : 'Xóa mã số thuế của tổ chức');
+      await ctx.activity('kernel.tenant', ctx.orgId, 'org.tax_code_changed', taxCode ? 'Đặt mã số thuế của tổ chức' : 'Xóa mã số thuế của tổ chức');
     }
     // After the tenant row, as kernel.legal_entity.update takes them. A no-op unless the default entity was left on an
     // old code before #1316.

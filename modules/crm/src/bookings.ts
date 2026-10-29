@@ -65,7 +65,7 @@ async function partyFor(ctx: CommandContext, name: string, email: string, phone:
   // The id is given here and the row inserted without RETURNING (see crove_kernel.party_link_new, #1280).
   const created = { id: randomUUID() };
   await ctx.trx.insertInto('crove_kernel.party').values({ id: created.id, org_id: ctx.orgId, kind: 'person', name, email, phone, source_trust: 'external' }).execute();
-  await ctx.activity('kernel.party', created.id, 'party.created', `Thêm khách hàng ${name} từ trang đặt lịch`);
+  await ctx.activity('kernel.party', created.id, 'party.created', 'Thêm khách hàng từ trang đặt lịch');
   return created.id;
 }
 

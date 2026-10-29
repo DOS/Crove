@@ -136,7 +136,7 @@ suite('duplicate parties (#887)', () => {
     );
     expect(audit).toEqual([{ actor_id: o.admin, detail: expect.objectContaining({ partyId: duplicate, keepId: kept, name: { redacted: 'pii' }, keepName: { redacted: 'pii' } }) }]);
     const activity = await admin(async (c) => (await c.query(`SELECT summary FROM crove_kernel.activity WHERE org_id = $1 AND record_id = $2 AND kind = 'party.marked_duplicate'`, [o.orgId, duplicate])).rows);
-    expect(activity).toEqual([{ summary: 'Gộp CONG TY TNHH DICH VU MAU vào Công ty TNHH Dịch vụ Mẫu' }]);
+    expect(activity).toEqual([{ summary: 'Gộp vào một bên khác (trùng)' }]);
     // Marking the same pair again changes nothing.
     expect(await execute('kernel.party.mark_duplicate', { partyId: duplicate, keepId: kept })).toEqual({ partyId: duplicate, keepId: kept });
   });
@@ -164,7 +164,7 @@ suite('duplicate parties (#887)', () => {
       [other, '10000000'],
     ]);
     const activity = await admin(async (c) => (await c.query(`SELECT summary FROM crove_kernel.activity WHERE org_id = $1 AND record_id = $2 AND kind = 'party.unmarked_duplicate'`, [o.orgId, duplicate])).rows);
-    expect(activity).toEqual([{ summary: 'Tách CONG TY TNHH DICH VU MAU khỏi Công ty TNHH Dịch vụ Mẫu' }]);
+    expect(activity).toEqual([{ summary: 'Tách khỏi bên đã gộp vào' }]);
     // Unmarking a party that is not a duplicate changes nothing.
     expect(await execute('kernel.party.unmark_duplicate', { partyId: duplicate })).toEqual({ partyId: duplicate });
   });

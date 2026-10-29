@@ -183,7 +183,7 @@ export const changeMemberRole = defineCommand({
             .returning('id')
             .execute();
     ctx.audit({ revoked_invites: revokedInvites.map((r) => r.id) });
-    await ctx.activity('kernel.member', input.userId, 'member.role_changed', `Đổi vai trò ${target.email} từ ${previousRole} thành ${input.role}`);
+    await ctx.activity('kernel.member', input.userId, 'member.role_changed', `Đổi vai trò thành viên từ ${previousRole} thành ${input.role}`);
     await ctx.emit('kernel.member.role_changed', { userId: input.userId, oldRole: previousRole, newRole: input.role });
     return { userId: input.userId, role: input.role, previousRole };
   },
@@ -218,7 +218,7 @@ export const removeMember = defineCommand({
       .returning('id')
       .execute();
     ctx.audit({ target_user: input.userId, role: null, previous_role: target.role, revoked_invites: revokedInvites.map((r) => r.id) });
-    await ctx.activity('kernel.member', input.userId, 'member.removed', `Xóa thành viên ${target.email} (${target.role})`);
+    await ctx.activity('kernel.member', input.userId, 'member.removed', `Xóa thành viên (${target.role})`);
     await ctx.emit('kernel.member.removed', { userId: input.userId, oldRole: target.role });
     return { userId: input.userId, previousRole: target.role };
   },

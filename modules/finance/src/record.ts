@@ -87,7 +87,7 @@ export async function upsertParty(ctx: CommandContext, ref: PurchaseProposal['se
       verified_by: ctx.actor.type === 'user' ? ctx.actor.userId : null,
     })
     .execute();
-  await ctx.activity('kernel.party', created.id, 'party.created', direction === 'sale' ? `Thêm khách hàng ${name}` : `Thêm nhà cung cấp ${name}`);
+  await ctx.activity('kernel.party', created.id, 'party.created', direction === 'sale' ? 'Thêm khách hàng' : 'Thêm nhà cung cấp');
   return created.id;
 }
 
