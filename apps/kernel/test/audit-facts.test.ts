@@ -134,7 +134,9 @@ function heldPart(init: string): string | null {
 // Whether an expression is an object written out, or a choice between objects written out (`x ? { a } : { b }`).
 // A choice with any other branch (`x ? { a } : before`) is a value, so each branch is traced.
 function objectish(expr: string): boolean {
-  if (/^\(?\s*\{/.test(expr)) return true;
+  // Only an object that is the whole expression: `{ code: null }.code ?? party.tax_code` is a value.
+  const bare = unwrap(expr);
+  if (bare.startsWith('{')) return balanced(bare, 0) === bare;
   const held = heldPart(expr);
   if (held === null || held === expr.replace(/^await\s+/, '')) return false;
   const branches: string[] = [];
@@ -274,7 +276,7 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
       return;
     }
     // An object written out has each of its keys read as a fact of its own.
-    if (trimmed.startsWith('{')) return;
+    if (trimmed.startsWith('{') && balanced(trimmed, 0) === trimmed) return;
     checkValue(trimmed, at, flag, depth);
   };
 
@@ -728,6 +730,7 @@ describe('audit facts and classified columns (#1626, #1632)', () => {
       'previous: the value reads the classified column tax_code outside auditValue(...)',
     ]);
     expect(check('const previous = {};\nprevious[party.email] = true;\nctx.audit({ previous });')).toEqual(['previous: the value reads the classified column email outside auditValue(...)']);
+    expect(check('ctx.audit({ previous: { code: null }.code ?? party.tax_code });')).toEqual(['previous: the value reads the classified column tax_code outside auditValue(...)']);
     // A parenthesized comparison holds a boolean; a helper that masks or projects its argument does not carry it.
     expect(check('const changed = (before.tax_code !== input.taxCode);\nctx.audit({ changed });')).toEqual([]);
     expect(check("const maskedFact = (code: string) => ({ code: auditValue(PARTY, 'tax_code', code) });\nctx.audit({ ...maskedFact(party.tax_code) });")).toEqual([]);
