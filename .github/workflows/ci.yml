@@ -480,16 +480,17 @@ jobs:
         with:
           node-version: '26'
 
-      - name: Build the images
-        run: $COMPOSE build
-
       # #1822: this stack takes its context token key from the environment, generated for the run, as a deployment
-      # sets it (the e2e job's default stack uses the key file migrate creates). Masked in the log.
+      # sets it (its api and worker mount no volume, T7; the e2e job's default stack uses the key file migrate
+      # creates). Masked in the log. First: docker-compose.split.yml refuses to load without it.
       - name: Generate the context token key
         run: |
           key="$(openssl rand -base64 32)"
           echo "::add-mask::$key"
           echo "CROVE_CONTEXT_TOKEN_KEY=$key" >> "$GITHUB_ENV"
+
+      - name: Build the images
+        run: $COMPOSE build
 
       # The one-shot migrate and auth-grants services must exit 0 before api and worker start.
       - name: Start the split stack (applies the migrations)

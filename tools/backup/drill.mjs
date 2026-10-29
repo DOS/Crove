@@ -101,7 +101,10 @@ function stack(name, port, storage, scratch) {
   const storageEnv = split
     ? { STORAGE: 's3', S3_ENDPOINT: 'http://minio:9000', S3_BUCKET: 'crove-files', S3_ACCESS_KEY_ID: 'crove-split', S3_SECRET_ACCESS_KEY: 'crove-split-minio-secret', S3_FORCE_PATH_STYLE: 'true', S3_VERSIONING: 'required' }
     : { STORAGE: 'local' };
-  return { project: `${PREFIX}-${name}`, port, storage, files, storageEnv };
+  // Its own context token key (#1822), which migrate installs: the split stack's api and worker take it from the
+  // environment, and the restore stack replaces the restored database's key with its own.
+  const contextTokenKey = randomBytes(32).toString('base64');
+  return { project: `${PREFIX}-${name}`, port, storage, files, storageEnv, contextTokenKey };
 }
 const SRC = stack('src', process.env.DRILL_SRC_PORT ?? '18181', STORAGE, false);
 const DST = stack('restore', process.env.DRILL_RESTORE_PORT ?? '18182', RESTORE_STORAGE, true);
@@ -116,6 +119,7 @@ function stackEnv(stack) {
     PUBLIC_URL: `http://localhost:${stack.port}`,
     // The seed approves a proposal and offboards an org without enrolling MFA; off is accepted on localhost only.
     AUTH_STEP_UP: 'off',
+    CROVE_CONTEXT_TOKEN_KEY: stack.contextTokenKey,
     ...stack.storageEnv,
   };
 }
