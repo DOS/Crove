@@ -86,7 +86,7 @@ export const MAIL_QUEUES: readonly string[] = ['kernel-mail-send', 'kernel-mail-
 //   of @crove/channel, the mail provider, the chat platforms of team alerts.
 // - 'tenant_url': a URL a tenant or a browser supplied, only through the egress guard of @crove/kernel-runtime
 //   (guardedFetch, guardedRequest, egressFetch).
-// A queue that reaches several lists each. apps/kernel/test/job-egress.test.ts checks each declaration against what
+// A queue that reaches several lists each. apps/kernel/test/invariant/job-egress.test.ts checks each declaration against what
 // the queue's worker handler reaches, and that a command whose events feed a queue with egress declares an external
 // effect (R2, plan §4.7 "Derived risk").
 export type EgressTarget = 'tenant_url' | `provider:${string}`;

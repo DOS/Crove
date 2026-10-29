@@ -91,7 +91,6 @@ const NULLABLE_ENTITY_SCOPED = new Map<string, (o: OrgFixture) => Values>([
 // column exists the table is left out of the nullable list check and its le_scope case does not run; once it exists,
 // every case runs as for any other entry. Remove an entry once its column is on main. Sorted, one table per line.
 const NULLABLE_ENTITY_SCOPE_PENDING = new Set<string>([
-  'crove_kernel.task',
 ]);
 // Tables with a nullable legal_entity_id that is not such a scope, and why. Sorted, one table per line.
 const NULLABLE_ENTITY_UNSCOPED = new Map<string, string>([
