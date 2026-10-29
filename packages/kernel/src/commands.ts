@@ -479,6 +479,24 @@ export const requestProposal = defineCommand({
   },
 });
 
+// The database's approval gate (#1793), its refusals as the approval's own (the checks above make them rare).
+async function approveInDatabase(ctx: CommandContext, id: string, revision: number): Promise<void> {
+  try {
+    await sql`SELECT crove_kernel.proposal_approve(${id}::uuid, ${revision}::int, ${ctx.commandId}::uuid)`.execute(ctx.trx);
+  } catch (error) {
+    const pg = error as { code?: string; message?: string };
+    if (pg?.code !== '42501') throw error;
+    if (pg.message === 'NOT_FOUND') throw new DomainError('NOT_FOUND', 404, 'Không tìm thấy đề xuất');
+    if (pg.message === 'PROPOSAL_DECIDED') throw new DomainError('PROPOSAL_DECIDED', 409, 'Đề xuất này đã được xử lý');
+    if (pg.message === 'STALE_REVISION') throw new DomainError('STALE_REVISION', 409, 'Đề xuất đã thay đổi, hãy tải lại');
+    if (pg.message === 'FOUR_EYES_REQUIRED') {
+      throw new DomainError('FOUR_EYES_REQUIRED', 403, 'Cần một người khác duyệt (bạn đã tải lên hoặc chỉnh sửa đề xuất này)', { rule: 'P10' });
+    }
+    if (pg.message === 'NOT_ELIGIBLE') throw new DomainError('NOT_ELIGIBLE', 403, 'Bạn không có quyền duyệt đề xuất này', { rule: 'P12' });
+    throw error;
+  }
+}
+
 async function lockPendingProposal(ctx: CommandContext, id: string, revision?: number) {
   const proposal = await ctx.trx
     .selectFrom('crove_kernel.proposal')
@@ -645,13 +663,10 @@ export const approveProposal = defineCommand({
       ...(input.postingDate !== undefined ? { posting_date: input.postingDate } : {}),
     });
     // Approved for its command by this command: the runtime's proposal state gate lets the command run only now.
-    // The same transaction ends 'executed', or rolls back to 'pending' if the command fails.
-    await ctx.trx
-      .updateTable('crove_kernel.proposal')
-      .set({ status: 'approved', decided_by: ctx.actor.userId, decided_at: ctx.now, executed_command_id: ctx.commandId })
-      .where('org_id', '=', ctx.orgId)
-      .where('id', '=', proposal.id)
-      .execute();
+    // The same transaction ends 'executed', or rolls back to 'pending' if the command fails. The database decides P09,
+    // P10 and P12 again and writes the approval (crove_kernel.proposal_approve, #1793): a user's session reaches
+    // 'approved' no other way.
+    await approveInDatabase(ctx, proposal.id, proposal.revision);
     const result = await ctx.run<Record<string, unknown>>(
       proposal.command,
       {

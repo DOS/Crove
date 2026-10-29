@@ -269,7 +269,8 @@ suite('audit rows naming a proposal on PostgreSQL (#1695)', () => {
           await c.query('BEGIN');
           try {
             await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [o.owner, o.orgId]);
-            await c.query(`UPDATE crove_kernel.proposal SET status = 'approved', executed_command_id = gen_random_uuid() WHERE org_id = $1 AND id = $2`, [o.orgId, pending]);
+            // A user's context approves only through the gate (#1793).
+            await c.query('SELECT crove_kernel.proposal_approve($1::uuid, 1, gen_random_uuid())', [pending]);
             await c.query(
               `INSERT INTO crove_kernel.audit_event (org_id, actor_type, command, command_id, outcome, input_sha256, proposal_id)
                VALUES ($1, 'user', $2, gen_random_uuid(), 'ok', repeat('0', 64), $3)`,
