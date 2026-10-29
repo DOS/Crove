@@ -1,7 +1,8 @@
 // Period lock (issue #329), on a real PostgreSQL 17, through the HTTP API: lock a month, then posting, approving and
 // reversing into it are refused with PERIOD_LOCKED; months lock in order and unlock newest first; unlock is the
-// owner's alone, R3 with a reason on the audit row; the database guard holds for the database owner too; and a lock
-// and a posting in flight wait for each other (ADR-0021 cases A and B).
+// owner's alone, R3 with a reason on the audit row; the database guard holds for the database owner too; a lock
+// and a posting in flight wait for each other (ADR-0021 cases A and B); and a lock or unlock and a change of the
+// caller's role or permission wait for each other (#1348).
 // Set CROVE_TEST_ADMIN_URL to a superuser URL; each run creates and drops its own database.
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -24,6 +25,7 @@ import { createSessionStatusSource } from '../src/sessions.ts';
 import { z } from 'zod';
 import { inProcessExtract } from './extract-service.ts';
 import { TEST_MANIFESTS } from './manifests.ts';
+import { enterUser } from './context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -445,6 +447,98 @@ suite('period lock (#329)', () => {
     const current = runtime.execute('test.period.lock_raw', { month: vietnamMonth(new Date()) }, { actor: asUser(outsider), orgId: otherOrg.orgId });
     await expect(current).rejects.toMatchObject({ status: 500 });
     expect(await state(outsider, otherOrg)).toMatchObject({ status: 200, body: { lockedThrough: null } });
+  });
+
+  // The lock functions lock the caller's membership before their role and permission checks (#1348), as the role and
+  // permission commands lock the member rows before they change them. A revoke or demotion in flight (its member row
+  // locked FOR UPDATE, its change not committed) makes the lock or unlock wait, which then reads the change and is
+  // refused; one that starts after the unlock waits for it. Raw calls in the admin's context, as the commands make them.
+  it("serializes the lock and unlock with a change of the caller's role or permission (#1348)", async () => {
+    const appLogin = new URL(adminUrl);
+    appLogin.username = 'crove_app';
+    appLogin.password = 'test-app-pw';
+    const grant = () =>
+      admin(
+        async (c) =>
+          (
+            await c.query<{ id: string }>(
+              `INSERT INTO crove_kernel.role_assignment (org_id, user_id, role_key, legal_entity_id, granted_by)
+               VALUES ($1, $2, 'finance.chief_accountant', NULL, $3) RETURNING id`,
+              [org.orgId, adminUser.userId, owner.userId],
+            )
+          ).rows[0]?.id as string,
+      );
+    // A change of the admin's member row held open by the database owner, as the commands hold it.
+    const held = async (change: (c: pg.Client) => Promise<unknown>) => {
+      const c = new pg.Client({ connectionString: adminUrl });
+      await c.connect();
+      await c.query('BEGIN');
+      await c.query('SELECT 1 FROM crove_kernel.tenant_member WHERE org_id = $1 AND user_id = $2 FOR UPDATE', [org.orgId, adminUser.userId]);
+      await change(c);
+      return c;
+    };
+    // The admin's own transaction, in its context; the call is left in flight.
+    const asAdmin = async () => {
+      const c = new pg.Client({ connectionString: appLogin.toString() });
+      await c.connect();
+      await c.query('BEGIN');
+      await enterUser(c, adminUser.userId, org.orgId);
+      return c;
+    };
+    const refusal = (call: Promise<unknown>) => call.then(() => 'done', (error: Error) => error.message);
+    const clients: pg.Client[] = [];
+    try {
+      // The chief accountant role is revoked while the admin unlocks November 2025: the unlock waits, then is refused.
+      const first = await grant();
+      const revoking = await held((c) => c.query('DELETE FROM crove_kernel.role_assignment WHERE org_id = $1 AND id = $2', [org.orgId, first]));
+      clients.push(revoking);
+      const unlocker = await asAdmin();
+      clients.push(unlocker);
+      const unlocking = refusal(unlocker.query(`SELECT crove_finance.unlock_period('2025-11-01'::date, NULL::uuid)`));
+      expect(await settledWithin(unlocking, 500)).toBe('pending');
+      await revoking.query('COMMIT');
+      expect(await unlocking).toBe('PERIOD_LOCK_FORBIDDEN');
+      await unlocker.query('ROLLBACK');
+
+      // With the role again, the unlock goes first: a revoke that starts then waits for it.
+      await grant();
+      const second = await asAdmin();
+      clients.push(second);
+      await expect(second.query(`SELECT crove_finance.unlock_period('2025-11-01'::date, NULL::uuid)`)).resolves.toBeDefined();
+      const later = new pg.Client({ connectionString: adminUrl });
+      await later.connect();
+      clients.push(later);
+      await later.query('BEGIN');
+      const locking = later.query('SELECT 1 FROM crove_kernel.tenant_member WHERE org_id = $1 AND user_id = $2 FOR UPDATE', [org.orgId, adminUser.userId]);
+      expect(await settledWithin(locking, 500)).toBe('pending');
+      await second.query('ROLLBACK');
+      await locking;
+      await later.query('ROLLBACK');
+
+      // The admin is made a member while locking December 2025: the lock waits, then is refused.
+      const demoting = await held((c) => c.query(`UPDATE crove_kernel.tenant_member SET role = 'member' WHERE org_id = $1 AND user_id = $2`, [org.orgId, adminUser.userId]));
+      clients.push(demoting);
+      const locker = await asAdmin();
+      clients.push(locker);
+      const lockingMonth = refusal(locker.query(`SELECT crove_finance.lock_period('2025-12-01'::date, NULL::uuid)`));
+      expect(await settledWithin(lockingMonth, 500)).toBe('pending');
+      await demoting.query('COMMIT');
+      expect(await lockingMonth).toBe('PERIOD_LOCK_FORBIDDEN');
+      await locker.query('ROLLBACK');
+    } finally {
+      for (const c of clients) {
+        await c.query('ROLLBACK').catch(() => {});
+        await c.end().catch(() => {});
+      }
+      await admin(async (c) => {
+        await c.query(`UPDATE crove_kernel.tenant_member SET role = 'admin' WHERE org_id = $1 AND user_id = $2`, [org.orgId, adminUser.userId]);
+        await c.query(`DELETE FROM crove_kernel.role_assignment WHERE org_id = $1 AND user_id = $2 AND role_key = 'finance.chief_accountant'`, [
+          org.orgId,
+          adminUser.userId,
+        ]);
+      });
+    }
+    expect(await state()).toMatchObject({ status: 200, body: { lockedThrough: '2025-11-30' } });
   });
 
   it('refuses a non-member', async () => {
