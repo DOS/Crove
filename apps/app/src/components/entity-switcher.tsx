@@ -40,6 +40,29 @@ export function useChosenEntity(): { ready: boolean; legalEntityId: string | und
   return { ready: settled, legalEntityId: entityId ?? undefined };
 }
 
+// Where uploaded documents are booked (#1764), on the Inbox, with several entities: the shell's choice, the same one
+// the entity switcher keeps. A document's entity never changes once it is read.
+export function UploadEntityPicker({ slug }: { slug: string }) {
+  const t = useTranslations('nav');
+  const id = useId();
+  const { entities, entityId } = useLegalEntity(slug);
+  if (entities.length < 2) return null;
+  return (
+    <div className="flex items-center gap-2">
+      <Label htmlFor={id} className="text-xs font-normal whitespace-nowrap text-subtle-foreground">
+        {t('uploadEntity')}
+      </Label>
+      <NativeSelect id={id} className="w-44" value={entityId ?? ''} onChange={(e) => keepEntity(slug, e.target.value)}>
+        {entities.map((e) => (
+          <NativeSelectOption key={e.id} value={e.id}>
+            {e.name}
+          </NativeSelectOption>
+        ))}
+      </NativeSelect>
+    </div>
+  );
+}
+
 export function EntitySwitcher({ slug }: { slug: string }) {
   const t = useTranslations('nav');
   const id = useId();
