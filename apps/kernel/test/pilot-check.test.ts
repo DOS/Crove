@@ -57,6 +57,13 @@ describe('pilot-check settings', () => {
     expect(line({ ...READY, CREDENTIAL_KEY: current.toString('base64'), CREDENTIAL_KEY_PREVIOUS: previous.toString('hex') })?.message).toContain(
       `the worker opens tokens sealed under CREDENTIAL_KEY (${vaultKeyId(current)}) and CREDENTIAL_KEY_PREVIOUS (${vaultKeyId(previous)}); `,
     );
+    // With the key in its file, the previous key from the environment is opened too, and named.
+    expect(line({ ...READY, CREDENTIAL_KEY_PREVIOUS: previous.toString('hex') })?.message).toContain(
+      `the worker opens tokens sealed under the key in CREDENTIAL_KEY_FILE (docker compose: /data/keys/credential.key on the keys volume) and CREDENTIAL_KEY_PREVIOUS (${vaultKeyId(previous)}); `,
+    );
+    expect(line(READY)?.message).toContain('docker compose logs crove | grep "cannot open"');
+    // A sample value fails as for every optional secret (Codex review): the worker would refuse it at start.
+    expect(failing({ ...READY, CREDENTIAL_KEY_PREVIOUS: 'change-me' })).toEqual(['Secrets: CREDENTIAL_KEY_PREVIOUS still has a sample value']);
     expect(failing({ ...READY, CREDENTIAL_KEY: 'not-a-key', CREDENTIAL_KEY_PREVIOUS: previous.toString('hex').slice(2) })).toEqual([
       'Secrets: CREDENTIAL_KEY is not a 32-byte key as base64 or 64 hex characters (openssl rand -base64 32)',
       'Secrets: CREDENTIAL_KEY_PREVIOUS is not a 32-byte key as base64 or 64 hex characters (openssl rand -base64 32)',

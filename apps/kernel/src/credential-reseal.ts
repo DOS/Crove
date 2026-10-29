@@ -137,15 +137,34 @@ export async function resealCredentials(deps: ResealDeps): Promise<ResealOutcome
   });
 }
 
-// The error a pass logs when usable envelopes sit under a key the broker cannot open: CREDENTIAL_KEY_PREVIOUS was
-// removed before they were resealed (#1888). Key ids and counts only.
-export function unopenableKeysLine(keys: readonly UnopenableKey[]): string {
-  const parts = keys.map((k) => `${k.keyId} (${k.active} active${k.waiting > 0 ? `, ${k.waiting} team chat alerts waiting for the Social module` : ''})`);
-  return (
-    `[credential-reseal] ERROR sealed under a key this worker cannot open: ${parts.join('; ')}. CREDENTIAL_KEY_PREVIOUS was removed ` +
-    'before they were resealed: set that key again as CREDENTIAL_KEY_PREVIOUS on the API and the worker, or reconnect those channels ' +
-    'and save those team chats again (docs/runbooks/credential-key.md)'
-  );
+// What a pass logs when envelopes sit under a key the broker cannot open (#1888): the key was lost, or
+// CREDENTIAL_KEY_PREVIOUS removed before they were resealed. Key ids and counts only. Envelopes in use make an error;
+// team chat alert targets waiting for the Social module alone make a warning, since nothing clears them before Social
+// is on again (a second rotation that could not wait loses them on purpose, credential-key.md).
+export function unopenableKeysLog(keys: readonly UnopenableKey[]): Array<{ level: 'error' | 'warn'; line: string }> {
+  const log: Array<{ level: 'error' | 'warn'; line: string }> = [];
+  const inUse = keys.filter((k) => k.active > 0);
+  if (inUse.length > 0) {
+    const parts = inUse.map((k) => `${k.keyId} (${k.active} active${k.waiting > 0 ? `, ${k.waiting} team chat alerts waiting for the Social module` : ''})`);
+    log.push({
+      level: 'error',
+      line:
+        `[credential-reseal] ERROR sealed under a key this worker cannot open: ${parts.join('; ')}. The key was lost, or CREDENTIAL_KEY_PREVIOUS ` +
+        'removed before they were resealed: set that key again as CREDENTIAL_KEY_PREVIOUS on the API and the worker, or reconnect those ' +
+        'channels and save those team chats again (docs/runbooks/credential-key.md)',
+    });
+  }
+  const waiting = keys.filter((k) => k.active === 0);
+  if (waiting.length > 0) {
+    log.push({
+      level: 'warn',
+      line:
+        `[credential-reseal] team chat alerts waiting for the Social module are sealed under a key this worker cannot open: ` +
+        `${waiting.map((k) => `${k.keyId} (${k.waiting})`).join('; ')}. Set that key again as CREDENTIAL_KEY_PREVIOUS, or save each team chat ` +
+        'again once Social is on (docs/runbooks/credential-key.md)',
+    });
+  }
+  return log;
 }
 
 async function resealOne(deps: ResealDeps, row: { org_id: string; connection_id: string; key_id: string }): Promise<boolean> {

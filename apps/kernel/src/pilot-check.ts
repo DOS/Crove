@@ -171,16 +171,18 @@ export function checkEnv(env: Env): CheckResult[] {
   }
   if (value(env, 'INBOUND_DOMAIN')) secrets.push(secretProblem('INBOUND_SECRET', value(env, 'INBOUND_SECRET'), MIN_TOKEN_SECRET_LENGTH));
   // Optional secrets: only a shipped sample value is wrong.
-  for (const name of ['INBOUND_SECRET', 'S3_SECRET_ACCESS_KEY', 'SMTP_PASS', 'AI_API_KEY', 'CREDENTIAL_KEY', 'CHANNEL_META_APP_SECRET', 'CHANNEL_ZALO_APP_SECRET', 'CHANNEL_THREADS_APP_SECRET', 'CHANNEL_LINKEDIN_CLIENT_SECRET', 'CHANNEL_LINKEDIN_PAGE_CLIENT_SECRET', 'CHANNEL_GOOGLE_CLIENT_SECRET', 'CHANNEL_TIKTOK_CLIENT_SECRET', 'CHANNEL_X_CLIENT_SECRET', 'CHANNEL_PINTEREST_APP_SECRET', 'MEDIA_PEXELS_API_KEY', 'VAPID_PRIVATE_KEY']) {
+  for (const name of ['INBOUND_SECRET', 'S3_SECRET_ACCESS_KEY', 'SMTP_PASS', 'AI_API_KEY', 'CREDENTIAL_KEY', 'CREDENTIAL_KEY_PREVIOUS', 'CHANNEL_META_APP_SECRET', 'CHANNEL_ZALO_APP_SECRET', 'CHANNEL_THREADS_APP_SECRET', 'CHANNEL_LINKEDIN_CLIENT_SECRET', 'CHANNEL_LINKEDIN_PAGE_CLIENT_SECRET', 'CHANNEL_GOOGLE_CLIENT_SECRET', 'CHANNEL_TIKTOK_CLIENT_SECRET', 'CHANNEL_X_CLIENT_SECRET', 'CHANNEL_PINTEREST_APP_SECRET', 'MEDIA_PEXELS_API_KEY', 'VAPID_PRIVATE_KEY']) {
     if (name === 'INBOUND_SECRET' && value(env, 'INBOUND_DOMAIN')) continue;
     const secret = value(env, name);
     if (secret && (KNOWN_DEFAULTS.has(secret) || /change-?me/i.test(secret))) secrets.push(`${name} still has a sample value`);
   }
   // The credential keys (ADR-0025): a key that does not parse stops the API and the worker; the ids of those that do
   // name what the worker opens, for the manual line below (#1888).
-  const credentialKeys: string[] = [];
+  // Without CREDENTIAL_KEY the current key is the key file's, which the preflight does not read.
+  const credentialKeys: string[] = value(env, 'CREDENTIAL_KEY') ? [] : ['the key in CREDENTIAL_KEY_FILE (docker compose: /data/keys/credential.key on the keys volume)'];
   for (const name of ['CREDENTIAL_KEY', 'CREDENTIAL_KEY_PREVIOUS']) {
     const key = value(env, name);
+    // A sample value is failed above, as for every optional secret.
     if (!key || KNOWN_DEFAULTS.has(key) || /change-?me/i.test(key)) continue;
     try {
       credentialKeys.push(`${name} (${parseVaultKey(key).id})`);
@@ -311,8 +313,9 @@ export function checkEnv(env: Env): CheckResult[] {
       item: 'Credential key',
       status: 'manual',
       message:
-        `the worker opens tokens sealed under ${credentialKeys.length > 0 && value(env, 'CREDENTIAL_KEY') ? credentialKeys.join(' and ') : 'the key in CREDENTIAL_KEY_FILE (docker compose: /data/keys/credential.key on the keys volume)'}; ` +
-        'confirm its log has no "[credential-reseal] ERROR sealed under a key this worker cannot open" line: CREDENTIAL_KEY_PREVIOUS was removed before every channel token and team chat target was resealed (docs/runbooks/credential-key.md)',
+        `the worker opens tokens sealed under ${credentialKeys.length > 0 ? credentialKeys.join(' and ') : 'no valid key (see Secrets)'}; ` +
+        'confirm its log since its last start has no "[credential-reseal] ERROR sealed under a key this worker cannot open" line (docker compose logs crove | grep "cannot open"; ' +
+        'the worker service with docker-compose.split.yml): the key was lost, or CREDENTIAL_KEY_PREVIOUS removed before every channel token and team chat target was resealed (docs/runbooks/credential-key.md)',
     },
     {
       item: 'Extraction sandbox',

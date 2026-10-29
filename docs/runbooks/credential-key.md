@@ -48,13 +48,19 @@ Rotate when someone who could read the key loses that access, when the key may h
 
 The passes reseal the envelopes of orgs being offboarded as well (#1889): staff can reopen such an org before its purge (`org-offboarding.md`), so its tokens must outlive the previous key. A closed org has none left: its purge deletes its credentials and chat alert targets. An org closed by hand without the purge keeps them, and they stay counted as active until it is purged.
 
-If the previous key was removed too early, every pass logs an error naming the key ids the worker cannot open and how many envelopes still need them (key ids and counts only, never a token or an envelope; #1888):
+If the previous key was removed too early, or a key was lost, every pass logs an error naming the key ids the worker cannot open and how many envelopes still need them (key ids and counts only, never a token or an envelope; #1888):
 
 ```text
-[credential-reseal] ERROR sealed under a key this worker cannot open: k1-0123456789abcdef (3 active, 2 team chat alerts waiting for the Social module). CREDENTIAL_KEY_PREVIOUS was removed before they were resealed: set that key again as CREDENTIAL_KEY_PREVIOUS on the API and the worker, or reconnect those channels and save those team chats again (docs/runbooks/credential-key.md)
+[credential-reseal] ERROR sealed under a key this worker cannot open: k1-0123456789abcdef (3 active, 2 team chat alerts waiting for the Social module). The key was lost, or CREDENTIAL_KEY_PREVIOUS removed before they were resealed: set that key again as CREDENTIAL_KEY_PREVIOUS on the API and the worker, or reconnect those channels and save those team chats again (docs/runbooks/credential-key.md)
 ```
 
 "Active" counts credentials of active connections, and team chat alert targets while Social is on; "waiting" counts the targets waiting for the Social module. Envelopes left to reconnect anyway are not counted here. If the removed key is still at hand (its id is the one named), set it again as `CREDENTIAL_KEY_PREVIOUS` on both and restart: the next passes reseal them and the error stops. Otherwise follow "Losing the key" for those channels and team chats. The worker keeps running either way: everything else works. `pnpm pilot:check` lists the key ids the deployment's `.env` gives the worker and asks you to confirm this error is absent from its log.
+
+When only team chat alert targets waiting for the Social module are left under such a key, the line is a warning instead: nothing clears it before Social is on again and each team chat is saved (or the key is set again), and a second rotation that could not wait loses them on purpose (below). It does not block the pilot preflight.
+
+```text
+[credential-reseal] team chat alerts waiting for the Social module are sealed under a key this worker cannot open: k1-0123456789abcdef (2). Set that key again as CREDENTIAL_KEY_PREVIOUS, or save each team chat again once Social is on (docs/runbooks/credential-key.md)
+```
 
 Only one previous key is kept: finish one rotation (step 4) before starting the next, or envelopes sealed with the oldest key stop opening. A second rotation that cannot wait (a leak) while team chat alerts still wait for the Social module loses them: an owner or admin saves each team chat again once Social is on.
 

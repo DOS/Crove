@@ -11,7 +11,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { CredentialVault, Runtime, parseVaultKey } from '@crove/kernel-runtime';
 import { CHAT_ALERT_PROVIDER, socialCommands, socialQueries, type SealedChatAlert } from '@crove/mod-social';
-import { resealCredentials } from '../src/credential-reseal.ts';
+import { resealCredentials, unopenableKeysLog } from '../src/credential-reseal.ts';
 import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
@@ -151,8 +151,22 @@ suite('team chat alert targets resealed after a key rotation on PostgreSQL (#863
       skipped: false,
     });
     expect(await keyOf(waiting)).toBe(keyA.id);
-    // The previous key retired too early (#1888): the waiting target is reported under its key id, as waiting.
-    expect((await resealCredentials({ runtime: kernelOnly, broker: onlyB, workerDb })).unopenable).toEqual([{ keyId: keyA.id, active: 0, waiting: 1 }]);
+    // The previous key retired too early (#1888): the waiting target is reported under its key id, as waiting, and logs
+    // a warning (nothing clears it before Social is on again); with Social on it is in use, and logs an error.
+    const waitingOnly = (await resealCredentials({ runtime: kernelOnly, broker: onlyB, workerDb })).unopenable;
+    expect(waitingOnly).toEqual([{ keyId: keyA.id, active: 0, waiting: 1 }]);
+    expect(unopenableKeysLog(waitingOnly)).toEqual([
+      {
+        level: 'warn',
+        line:
+          `[credential-reseal] team chat alerts waiting for the Social module are sealed under a key this worker cannot open: ${keyA.id} (1). ` +
+          'Set that key again as CREDENTIAL_KEY_PREVIOUS, or save each team chat again once Social is on (docs/runbooks/credential-key.md)',
+      },
+    ]);
+    const inUse = await resealCredentials({ runtime: worker, broker: onlyB, workerDb });
+    expect(inUse).toMatchObject({ resealed: 0, failed: 1, unopenable: [{ keyId: keyA.id, active: 1, waiting: 0 }] });
+    expect(unopenableKeysLog(inUse.unopenable).map((l) => l.level)).toEqual(['error']);
+    expect(await keyOf(waiting)).toBe(keyA.id);
     // Social on again: the next pass reseals it, and nothing is left.
     expect(await resealCredentials({ runtime: worker, broker: rotated, workerDb })).toEqual({
       resealed: 1,
