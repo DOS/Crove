@@ -108,6 +108,9 @@ export const EXPORT_RETENTION_MIN_DAYS = 35;
 export const EXPORT_RETENTION_MAX_DAYS = 90;
 // A new export request while the last one is younger than this and has not finished is refused.
 export const EXPORT_REQUEST_COOLDOWN_MINUTES = 15;
+// The refusal of an export record whose transaction began before another record of the org that took the lock first
+// (#1867): recording again in a new transaction succeeds.
+export const EXPORT_RECORD_STALE = 'EXPORT_RECORD_STALE';
 
 const zSha256 = z.string().regex(/^[0-9a-f]{64}$/);
 const zGeneration = z.string().regex(GENERATION_PATTERN);
@@ -287,9 +290,20 @@ export const recordExport = defineCommand({
       throw new DomainError('INVALID_STORAGE_KEY', 400, 'Khóa lưu trữ không hợp lệ');
     }
     // One record of the org's export at a time, new or rebound (#1867): a rebind reads the newest export only after a
-    // record in flight has committed (each statement reads what is committed then), so it never re-records an older
-    // export over one that was just recorded.
+    // record in flight has committed (each statement reads what is committed then). The newest record is the one with the
+    // latest occurred_at, the start of its transaction, so a record whose transaction began before one that took the
+    // lock first would sort under it: it is refused instead, and its writer records again in a new transaction.
     await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`crove_kernel.org_export:${ctx.orgId}`}, 0))`.execute(ctx.trx);
+    const later = await ctx.trx
+      .selectFrom('crove_kernel.audit_event')
+      .select('id')
+      .where('org_id', '=', ctx.orgId)
+      .where('command', '=', 'kernel.org.export.record')
+      .where('outcome', '=', 'ok')
+      .where('occurred_at', '>', sql<Date>`pg_catalog.now()`)
+      .limit(1)
+      .executeTakeFirst();
+    if (later) throw new DomainError('EXPORT_RECORD_STALE', 409, 'Một bản ghi xuất dữ liệu khác vừa được ghi; hãy ghi lại');
     if (input.rebind) {
       const current = await currentExport(ctx.trx, ctx.orgId);
       if (!current || withoutGenerations(current) !== withoutGenerations(input)) {

@@ -548,7 +548,12 @@ suite('org offboarding on PostgreSQL (#38)', () => {
       // The rebind is waiting on the lock.
       for (let tries = 0; ; tries++) {
         const waiting = await withAdmin(
-          async (admin) => (await admin.query<{ n: string }>(`SELECT count(*) AS n FROM pg_catalog.pg_locks WHERE locktype = 'advisory' AND NOT granted`)).rows[0]?.n,
+          async (admin) => (
+            await admin.query<{ n: string }>(
+              `SELECT count(*) AS n FROM pg_catalog.pg_locks
+               WHERE locktype = 'advisory' AND NOT granted AND database = (SELECT oid FROM pg_catalog.pg_database WHERE datname = pg_catalog.current_database())`,
+            )
+          ).rows[0]?.n,
         );
         if (Number(waiting) > 0) break;
         if (tries > 100) throw new Error('the rebind never waited for the export lock');
@@ -559,6 +564,20 @@ suite('org offboarding on PostgreSQL (#38)', () => {
     } finally {
       await job.end();
     }
+
+    // A record whose transaction began before another of the org's records that took the lock first would sort under
+    // it (occurred_at is its transaction's start): it is refused, and recording in a new transaction comes after it.
+    // A row dated after this transaction's start stands for that other record.
+    const latest = (await workerRuntime.query<ExportRecord>('kernel.org.export.current', {}, system))!;
+    await withAdmin((admin) =>
+      admin.query(
+        `INSERT INTO crove_kernel.audit_event (org_id, occurred_at, actor_type, command, command_id, outcome, input_sha256, detail)
+         VALUES ($1, now() + interval '1 hour', 'system', 'kernel.org.export.record', gen_random_uuid(), 'ok', repeat('0', 64), '{}'::jsonb)`,
+        [org.orgId],
+      ),
+    );
+    await expect(workerRuntime.execute('kernel.org.export.record', record, system)).rejects.toMatchObject({ code: 'EXPORT_RECORD_STALE' });
+    await expect(workerRuntime.execute('kernel.org.export.record', { ...latest, rebind: true }, system)).rejects.toMatchObject({ code: 'EXPORT_RECORD_STALE' });
   });
 
   it('runs a streamed query in one REPEATABLE READ, READ ONLY transaction that may idle while the sink works', async () => {

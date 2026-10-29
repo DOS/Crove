@@ -65,6 +65,8 @@ const NOT_SHOWN: Record<string, string> = {
   INVALID_GENERATION: 'bug',
   // A restore re-recording an export that is not the org's newest one (#1726): only the worker's restore receives it.
   EXPORT_REBIND_MISMATCH: 'bug',
+  // An export record racing another of the org (#1867): the worker records again.
+  EXPORT_RECORD_STALE: 'bug',
   // Bulk intake (#314): only the worker records an opened archive.
   NOT_ARCHIVE: 'bug',
 };
