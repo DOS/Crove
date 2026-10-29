@@ -43,6 +43,9 @@ export const financeManifest = defineModule({
     // P12 (#1279): a chief accountant approves the ledger's proposals (kernel.proposal.approve and its bulk form, the
     // approval policy's LEDGER_APPROVE_PERMISSION, and the accountant preset's guard on the last chief accountant).
     { key: 'finance.proposal.approve', risk: 'R3', defaultRoles: ['finance.chief_accountant'] },
+    // #1508: a chief accountant marks the VAT return filed (finance.vat.return_mark), every entity's for the org-wide
+    // role, its own entities' for the entity role (#1507); vat_return_filed_guard checks the same again.
+    { key: 'finance.vat.file', risk: 'R1', defaultRoles: ['finance.chief_accountant', 'finance.entity_chief_accountant'] },
   ],
   // Its entities (#1656), each with its table: every type its commands name as their audit target, the records the
   // kernel numbers, and the records other code names by type; apps/kernel/test/manifest.db.test.ts checks them.

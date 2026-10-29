@@ -17,6 +17,7 @@
 // 181/2025/ND-CP, Article 23(5) and (6)); one that raises it needs a supplementary return for its own period. Treating
 // a late-received invoice as such an omission is an inference for the partner's accountant to confirm (#61). An output
 // invoice always stays in its invoice period: a sale is never posted late (record.ts).
+import { sql } from 'kysely';
 import { z } from 'zod';
 import type { MemberRole } from '@crove/db';
 import { INPUT_VAT_CHECK_OUTCOMES, VAT_WARNINGS, zId, zVatPeriod, zVatReturnMark, type DocumentDirection } from '@crove/kernel-contract';
@@ -121,6 +122,8 @@ export interface VatReport {
   paymentChecks: VatPaymentChecks;
   carryForward: VatCarryForward;
   filed: VatFiledReturn | null;
+  // Whether the signed-in member may mark this entity's return filed (#1508); answered by finance.vat.period only.
+  filable?: boolean;
 }
 
 function invoiceView(
@@ -399,8 +402,21 @@ export const vatPeriodQuery = defineQuery({
   name: 'finance.vat.period',
   input: zVatPeriodInput,
   access: ALL,
-  handler: async (ctx, input): Promise<VatReport> => loadVatReport(ctx, input.period, await resolveLegalEntity(ctx, input.legalEntityId)),
+  handler: async (ctx, input): Promise<VatReport> => {
+    const legalEntityId = await resolveLegalEntity(ctx, input.legalEntityId);
+    return { ...(await loadVatReport(ctx, input.period, legalEntityId)), filable: await mayFileVat(ctx, legalEntityId) };
+  },
 });
+
+// Whether the signed-in member may mark this entity's VAT return filed (#1508): an owner or an admin, or finance.vat.file
+// org-wide or for the entity. finance.vat.return_mark and vat_return_filed_guard decide again.
+async function mayFileVat(ctx: QueryContext, legalEntityId: string): Promise<boolean> {
+  if (ctx.actor.type !== 'user') return false;
+  if (ctx.role === 'owner' || ctx.role === 'admin') return true;
+  const { rows } = await sql<{ entities: string[] }>`SELECT crove_kernel.ctx_permission_entities('finance.vat.file') AS entities`.execute(ctx.trx);
+  const entities = rows[0]?.entities ?? [];
+  return entities.includes('*') || entities.includes(legalEntityId);
+}
 
 // The taxpayer block of the HTKK return (issue #332): the org's tax code (#313), name and address (#324, #692).
 export interface VatTaxpayer {
@@ -554,13 +570,19 @@ export const vatReturnMark = defineCommand({
   input: zVatReturnMark,
   risk: 'R1',
   sideEffect: 'internal',
-  // Owners and admins only: the record feeds the next return. The database holds an insert to this command
-  // (vat_return_filed_guard and vat_return_filed_requires_audit, 20261102070000_crove_finance_vat_return_filed.sql).
+  // Owners and admins, and a chief accountant for the return's legal entity (finance.vat.file: org-wide for
+  // finance.chief_accountant, per entity for finance.entity_chief_accountant; #1508): the record feeds the next return.
+  // The database holds an insert to this command (vat_return_filed_guard, which checks the same, and
+  // vat_return_filed_requires_audit).
   access: FILERS,
+  permission: 'finance.vat.file',
+  permissionScope: 'legal_entity',
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
     const period = vatPeriod(input.period);
     const legalEntityId = await resolveLegalEntity(ctx, input.legalEntityId);
+    // A chief accountant of some entities marks only their returns (#1508).
+    ctx.permissionEntity(legalEntityId);
     const current = (await filedReturns(ctx, legalEntityId, [period.period])).get(period.period) ?? null;
     const mark = { obligation: 'vat_return' as const, period: period.period, legalEntityId };
     if (!input.done) {

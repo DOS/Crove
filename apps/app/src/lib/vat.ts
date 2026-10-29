@@ -98,7 +98,8 @@ export function deductAmount(choice: DeductChoice, vat24: string, suggested25: s
   return choice === 'all' ? roundDong(vat24) : choice === 'suggested' ? roundDong(suggested25) : '0';
 }
 
-// Only owners and admins mark a VAT return filed or take the mark back (finance.vat.return_mark, #1400).
+// Owners and admins mark a VAT return filed or take the mark back (finance.vat.return_mark, #1400); so does a chief
+// accountant for the entity, which the report says (filable, #1508). This is the fallback without it.
 export function canMarkFiled(role: string | null | undefined): boolean {
   return role === 'owner' || role === 'admin';
 }
