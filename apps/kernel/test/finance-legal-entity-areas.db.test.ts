@@ -14,7 +14,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
 import type { ExtractClient } from '@crove/extract-contract';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
-import { kernelCommands, kernelQueries } from '@crove/kernel';
+import { kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import type { BankStatementRow, CashVoucherPage, FixedAsset, JournalVoucherRequest, CashVoucherRequest } from '@crove/kernel-contract';
 import { Runtime, fileKey, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
 import { extractAndPropose, financeCommands, financeQueries, type JournalEntryView, type VatReport } from '@crove/mod-finance';
@@ -63,6 +63,7 @@ const suite = ADMIN ? describe : describe.skip;
 suite('finance books per legal entity, part 2b (#1280)', () => {
   const dbName = `crove_test_le_areas_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
   let adminUrl = '';
+  let appUrl = '';
   let pool: pg.Pool;
   let workerPool: pg.Pool;
   let runtime: Runtime;
@@ -168,7 +169,7 @@ suite('finance books per legal entity, part 2b (#1280)', () => {
       url.password = password;
       return url.toString();
     };
-    const appUrl = login('crove_app', 'test-app-pw');
+    appUrl = login('crove_app', 'test-app-pw');
     pool = createPool({ connectionString: appUrl, max: 4 });
     const db = createDb(pool);
     workerPool = createPool({ connectionString: login('crove_worker', 'test-worker-pw'), max: 2 });
@@ -315,27 +316,126 @@ suite('finance books per legal entity, part 2b (#1280)', () => {
     expect(await entityOf('crove_finance.cash_voucher', settled.voucherId as string)).toBe(branch);
   });
 
-  it('records a purchase invoice in the entity a revision chose, with its VAT working and rules per entity', async () => {
+  it('records a purchase invoice in the entity it was uploaded in, never moved by a revision, with its VAT working and rules per entity', async () => {
     const bytes = new Uint8Array(FIXTURE);
     const sha256 = sha256Hex(bytes);
     const storageKey = fileKey(org.orgId, sha256);
     const generation = await store.put(storageKey, bytes);
-    const { fileId } = await runtime.execute<{ fileId: string }>(
-      'kernel.file.ingest',
-      { filename: 'hd.xml', contentType: 'application/xml', sizeBytes: bytes.byteLength, sha256, storageKey, generation, source: 'upload' },
-      as(owner),
-    );
-    const proposal = await extractAndPropose({ runtime: workerRuntime, store, extractor: null, extract, today: () => '2026-10-13' }, org.orgId, fileId);
-    const proposalId = String(proposal.proposalId);
-    // The Inbox list (#1543): no entity until a revision names one; approval would then use the approver's default.
-    expect(await listedEntityOf(proposalId)).toBeNull();
-    // The editor names the branch: a new revision whose payload carries it.
+    const ingest = (legalEntityId: string) =>
+      runtime.execute<{ fileId: string }>(
+        'kernel.file.ingest',
+        { filename: 'hd.xml', contentType: 'application/xml', sizeBytes: bytes.byteLength, sha256, storageKey, generation, source: 'upload', legalEntityId },
+        as(owner),
+      );
+    // An entity that does not exist and one of another org answer the same, and store nothing (#1764).
+    const elsewhere = await admin(async (c) => (await c.query<{ id: string }>('SELECT id FROM crove_kernel.legal_entity WHERE org_id <> $1 LIMIT 1', [org.orgId])).rows[0]?.id);
+    for (const hidden of [randomUUID(), ...(elsewhere ? [elsewhere] : [])]) {
+      await expect(ingest(hidden)).rejects.toMatchObject({ code: 'LEGAL_ENTITY_NOT_ALLOWED', status: 403 });
+    }
+    // The owner uploads the invoice in the branch (#1764): its reading and its proposal are the branch's.
+    const { fileId } = await ingest(branch);
+    const read = (version?: number) => extractAndPropose({ runtime: workerRuntime, store, extractor: null, extract, today: () => '2026-10-13' }, org.orgId, fileId, version);
+    const versionOf = async () =>
+      (await admin((c) => c.query<{ v: number }>('SELECT max(version)::int AS v FROM crove_kernel.extraction WHERE org_id = $1 AND file_id = $2', [org.orgId, fileId]))).rows[0]?.v as number;
+    const first = String((await read()).proposalId);
+    expect(await entityOf('crove_kernel.proposal', first)).toBe(branch);
+    // Uploaded again in another entity while its proposal waits: refused with the reason.
+    await expect(ingest(defaultEntity)).rejects.toMatchObject({ code: 'LEGAL_ENTITY_MOVE_REFUSED', status: 409 });
+    // Once rejected, uploading it again in another entity reads it again there: a new proposal in that entity.
+    await runtime.execute('kernel.proposal.reject', { id: first, reason: 'nhầm pháp nhân' }, as(owner));
+    await expect(ingest(defaultEntity)).resolves.toMatchObject({ fileId, duplicate: true });
+    const inDefault = String((await read(await versionOf())).proposalId);
+    expect(inDefault).not.toBe(first);
+    expect(await entityOf('crove_kernel.proposal', inDefault)).toBe(defaultEntity);
+    // And back to the branch the same way, where it is booked below.
+    await runtime.execute('kernel.proposal.reject', { id: inDefault, reason: 'nhầm lần nữa' }, as(owner));
+    await ingest(branch);
+    const proposalId = String((await read(await versionOf())).proposalId);
+    expect(await entityOf('crove_kernel.proposal', proposalId)).toBe(branch);
+
+    // A member limited to the default entity (an external accountant's assignment) reaches the branch no way.
+    const scopedId = await upsertIdentity(createDb(pool), { issuer: 'le-areas', subject: randomUUID(), email: 'scoped@le-areas.test', name: null });
+    await admin(async (c) => {
+      await c.query(`INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member')`, [org.orgId, scopedId]);
+      await c.query(`INSERT INTO crove_kernel.role_assignment (org_id, user_id, role_key, legal_entity_id, granted_by) VALUES ($1, $2, 'external_accountant', $3, $4)`, [
+        org.orgId,
+        scopedId,
+        defaultEntity,
+        owner.userId,
+      ]);
+    });
+    const scoped = { actor: asUser(scopedId), orgId: org.orgId };
+    const readings = async () => Number((await admin((c) => c.query<{ n: string }>('SELECT count(*) AS n FROM crove_kernel.extraction WHERE org_id = $1 AND file_id = $2', [org.orgId, fileId]))).rows[0]?.n);
+    const before = await readings();
+    // Uploading in the branch: refused, the same way as an entity that does not exist.
+    await expect(
+      runtime.execute(
+        'kernel.file.ingest',
+        { filename: 'hd.xml', contentType: 'application/xml', sizeBytes: bytes.byteLength, sha256, storageKey, generation, source: 'upload', legalEntityId: branch },
+        scoped,
+      ),
+    ).rejects.toMatchObject({ code: 'LEGAL_ENTITY_NOT_ALLOWED', status: 403 });
+    // Nor by writing the file row itself.
+    const rawFile = await (async () => {
+      const c = new pg.Client({ connectionString: appUrl });
+      await c.connect();
+      try {
+        await c.query('BEGIN');
+        await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [scopedId, org.orgId]);
+        const sha = randomUUID().replaceAll('-', '').padEnd(64, '0');
+        await c.query(
+          `INSERT INTO crove_kernel.file (org_id, sha256, storage_key, filename, content_type, size_bytes, source, upload_entity_id)
+           VALUES ($1, $2, $3, 'x.xml', 'application/xml', 1, 'upload', $4)`,
+          [org.orgId, sha, fileKey(org.orgId, sha), branch],
+        );
+        return null;
+      } catch (error) {
+        return error as { code?: string; message?: string };
+      } finally {
+        await c.query('ROLLBACK').catch(() => {});
+        await c.end();
+      }
+    })();
+    expect(rawFile).toMatchObject({ code: '42501', message: 'LEGAL_ENTITY_NOT_ALLOWED' });
+    // Reading the branch's document again: refused, in its own entity or naming the branch, and naming nothing of the
+    // branch's reading.
+    await expect(runtime.execute('kernel.file.reextract', { fileId }, scoped)).rejects.toMatchObject({ code: 'NOT_FOUND', status: 404 });
+    await expect(runtime.execute('kernel.file.reextract', { fileId, legalEntityId: branch }, scoped)).rejects.toMatchObject({ code: 'LEGAL_ENTITY_NOT_ALLOWED' });
+    // Uploading the branch's bytes again in its own entity starts no reading there.
+    await expect(
+      runtime.execute(
+        'kernel.file.ingest',
+        { filename: 'hd.xml', contentType: 'application/xml', sizeBytes: bytes.byteLength, sha256, storageKey, generation, source: 'upload', legalEntityId: defaultEntity },
+        scoped,
+      ),
+    ).resolves.toMatchObject({ fileId, duplicate: true });
+    expect(await readings()).toBe(before);
+    // The Inbox list (#1543) names the proposal's own entity.
+    expect(await listedEntityOf(proposalId)).toBe(branch);
+    // A revision may name its own entity, but never move it to another (#1764): the command and the database refuse.
     const edited = await rpc('inbox/edit', owner, { id: proposalId, revision: 1, legalEntityId: branch, idempotencyKey: randomUUID() });
     expect(edited).toMatchObject({ status: 200, body: { changed: true, revision: 2 } });
-    expect(await listedEntityOf(proposalId)).toBe(branch);
-    expect((await rpc('inbox/edit', owner, { id: proposalId, revision: 2, legalEntityId: randomUUID(), idempotencyKey: randomUUID() })).body).toMatchObject({
-      code: 'LEGAL_ENTITY_NOT_ALLOWED',
-    });
+    const moved = await rpc('inbox/edit', owner, { id: proposalId, revision: 2, legalEntityId: defaultEntity, idempotencyKey: randomUUID() });
+    expect(moved).toMatchObject({ status: 409, body: { code: 'LEGAL_ENTITY_MOVE_REFUSED' } });
+    // In SQL too, as the owner on the API's login role.
+    const rawMove = await (async () => {
+      const c = new pg.Client({ connectionString: appUrl });
+      await c.connect();
+      try {
+        await c.query('BEGIN');
+        await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [owner.userId, org.orgId]);
+        await c.query(`UPDATE crove_kernel.proposal SET payload = jsonb_set(payload, '{legalEntityId}', to_jsonb($2::text)) WHERE id = $1`, [proposalId, defaultEntity]);
+        return null;
+      } catch (error) {
+        return error as { code?: string; message?: string };
+      } finally {
+        await c.query('ROLLBACK').catch(() => {});
+        await c.end();
+      }
+    })();
+    expect(rawMove).toMatchObject({ code: '23514', message: 'LEGAL_ENTITY_MOVE_REFUSED' });
+    // The file keeps the entity it was uploaded in.
+    await expect(admin((c) => c.query('UPDATE crove_kernel.file SET upload_entity_id = $2 WHERE id = $1', [fileId, defaultEntity]))).rejects.toThrow(/LEGAL_ENTITY_IMMUTABLE/);
     const recorded = await approve(proposalId);
     expect(await entityOf('crove_finance.purchase_document', recorded.documentId as string)).toBe(branch);
     expect(await entityOf('crove_finance.journal_entry', recorded.journalEntryId)).toBe(branch);
