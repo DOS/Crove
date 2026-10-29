@@ -16,6 +16,7 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { sql } from 'kysely';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -93,7 +94,11 @@ suite('audit rows naming a proposal on PostgreSQL (#1695)', () => {
           .where('org_id', '=', ctx.orgId)
           .where('id', '=', input.proposalId)
           .execute();
-      if (input.approve) await mark('approved');
+      // Since #1793 a user's context approves only through the database's gate; until it lands, by the update itself
+      // (two-step rule: the gate is used once it exists).
+      const gate = (await sql<{ f: string | null }>`SELECT pg_catalog.to_regprocedure('crove_kernel.proposal_approve(uuid,integer,uuid)')::text AS f`.execute(ctx.trx)).rows[0]?.f;
+      if (input.approve && gate) await sql`SELECT crove_kernel.proposal_approve(${input.proposalId}::uuid, 1, ${ctx.commandId}::uuid)`.execute(ctx.trx);
+      else if (input.approve) await mark('approved');
       await ctx.run(OTHER, { taxCode: '0101234567' }, { proposalId: input.proposalId });
       if (input.approve) await mark('executed');
       return {};
@@ -271,7 +276,17 @@ suite('audit rows naming a proposal on PostgreSQL (#1695)', () => {
           await c.query('BEGIN');
           try {
             await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [o.owner, o.orgId]);
-            await c.query(`UPDATE crove_kernel.proposal SET status = 'approved', executed_command_id = gen_random_uuid() WHERE org_id = $1 AND id = $2`, [o.orgId, pending]);
+            // Since #1793 a user context approves only through the gate's definer; until it lands, by the update itself
+            // (two-step rule: either is accepted).
+            await c.query('SAVEPOINT approve');
+            try {
+              await c.query(`UPDATE crove_kernel.proposal SET status = 'approved', executed_command_id = gen_random_uuid() WHERE org_id = $1 AND id = $2`, [o.orgId, pending]);
+            } catch (error) {
+              const refused = error as { code?: string; message?: string };
+              if (refused.code !== '23514' || refused.message !== 'PROPOSAL_STATUS_TRANSITION') throw error;
+              await c.query('ROLLBACK TO SAVEPOINT approve');
+              await c.query('SELECT crove_kernel.proposal_approve($1::uuid, 1, gen_random_uuid())', [pending]);
+            }
             await c.query(
               `INSERT INTO crove_kernel.audit_event (org_id, actor_type, command, command_id, outcome, input_sha256, proposal_id)
                VALUES ($1, 'user', $2, gen_random_uuid(), 'ok', repeat('0', 64), $3)`,
