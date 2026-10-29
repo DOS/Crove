@@ -11,6 +11,7 @@ import { Button } from '@crove/ui/components/button';
 import { Input } from '@crove/ui/components/input';
 import { TableCell, TableRow } from '@crove/ui/components/table';
 import { RecordNotesPanel, notesInstalled } from '../components/notes-panel.tsx';
+import { useChosenEntity } from '../components/entity-switcher.tsx';
 import { EditParty, MergeParty, PartyDuplicates } from '../components/party-edit.tsx';
 import { DataTable, Empty, ErrorText, PageHeader, TableSkeleton } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
@@ -104,15 +105,18 @@ export function CustomersPage() {
   const org = useQuery(orpc.org.get.queryOptions());
   const canManage = org.data?.role === 'owner' || org.data?.role === 'admin';
   const canEdit = canManage || org.data?.role === 'member';
+  // The customers of the entity chosen in the shell, with its own receivable (#1534).
+  const entity = useChosenEntity();
   // A page at a time (the server sends at most CUSTOMER_PAGE_SIZE); Load more asks for the customers after the last.
-  const customers = useInfiniteQuery(
-    orpc.parties.customers.infiniteOptions({
-      input: (after: CustomerCursor | undefined) => ({ ...(term ? { q: term } : {}), ...(after ? { after } : {}) }),
+  const customers = useInfiniteQuery({
+    ...orpc.parties.customers.infiniteOptions({
+      input: (after: CustomerCursor | undefined) => ({ ...(term ? { q: term } : {}), ...(after ? { after } : {}), legalEntityId: entity.legalEntityId }),
       initialPageParam: undefined as CustomerCursor | undefined,
       getNextPageParam: nextCustomerCursor,
       placeholderData: keepPreviousData,
     }),
-  );
+    enabled: entity.ready,
+  });
   const rows = customers.data?.pages.flatMap((p) => p.items) ?? [];
   const head = [t('columns.name'), t('columns.taxCode'), t('columns.invoices'), t('columns.lastInvoice'), t('columns.receivable'), ...(canEdit ? [''] : [])];
 
@@ -122,7 +126,7 @@ export function CustomersPage() {
       <div className="mb-4 max-w-sm">
         <Input type="search" placeholder={t('search')} aria-label={t('search')} maxLength={100} value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
-      {customers.isLoading ? (
+      {customers.isPending ? (
         <TableSkeleton columns={4} />
       ) : customers.error && rows.length === 0 ? (
         <ErrorText>{errorMessage(customers.error)}</ErrorText>
