@@ -458,7 +458,8 @@ export type ManifestTables = Readonly<Record<string, Readonly<Record<string, Rea
 export const INPUT_HASH_MODES = ['keyed', 'sha256'] as const;
 export type InputHashMode = (typeof INPUT_HASH_MODES)[number];
 // The prefix of a keyed input hash. A row without it was written with the plain SHA-256 (before #1732, or by a
-// runtime in 'sha256' mode).
+// runtime in 'sha256' mode). The runtime no longer reads it (#1750); it stays exported as the marker readers of the
+// audit export and tools tell the two schemes by.
 export const KEYED_INPUT_HASH_PREFIX = 'k1:';
 
 // Policy P11 (ADR-0028 section 5): a second factor used within the last 5 minutes.

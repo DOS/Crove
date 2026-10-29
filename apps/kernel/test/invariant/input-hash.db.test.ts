@@ -3,7 +3,7 @@
 // deployment's hash key, which no runtime role can read, bound to the org of the sealed context, the actor and the
 // command. Whoever holds the row and a guess of a private note (ADR-0037) cannot confirm it, as they could with the
 // plain SHA-256; the same input hashes differently in two orgs, for two actors and in two deployments; a retry still
-// replays, and one against a row claimed before the switch never runs the command again (#1750); the WORM verifier
+// replays, and one against a row claimed before the switch is refused, never run again (#1750); the WORM verifier
 // passes over plain and keyed rows alike; the runtime the server builds (createKernel) and a runtime built without
 // the option (the default, #1741) write keyed rows; and an agent run and the system hash under their own keys.
 // Part of the invariant suite; it imports package code under test, never helpers from outside test/invariant/. Set
