@@ -1,7 +1,7 @@
-// Activity summaries keep no classified value (#1634, after #1626): crove_kernel.activity.summary is text a member reads
-// in a record's timeline, kept with the record and out of reach of the PDPL erasure (#923), so it names what happened,
-// never a person's or an org's name, tax code, address, email or other classified value. The record's page shows its
-// current values beside the timeline.
+// Activity summaries keep no classified value and no free text (#1634, #1825, after #1626): crove_kernel.activity.summary
+// is text a member reads in a record's timeline, kept with the record and out of reach of the PDPL erasure (#923), so it
+// names what happened, never a person's or an org's name, tax code, address, email or other classified value, nor a
+// reason or note a member typed. The record's page shows its current values beside the timeline.
 // A source scan of the summary (the fourth argument) of every ctx.activity(...) call. It fails when the summary reads a
 // column some manifest classifies (anything but internal), in snake_case or camelCase, anywhere its value can reach the
 // text: in a template's ${...} (`${party.name}`), a concatenation (`'Thêm ' + name`), a branch or the whole summary
@@ -14,6 +14,11 @@ import { readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ROOT, SCANNED, balanced, blank, classifiedColumns, snake, sources } from './source-scan.ts';
+
+// Free text a member types (a void's or an unlock's reason, a note, a description) may name anyone, whatever the class
+// of the column that keeps it (#1825): it stays on its record, read under that record's access, and out of the timeline.
+// A summary read of one of these names fails like a classified column's.
+const FREE_TEXT = new Set(['body', 'comment', 'description', 'memo', 'message', 'note', 'notes', 'reason', 'remark', 'text']);
 
 // Summary reads of a classified column name that hold internal data, per file, with the reason. An entry is the read as
 // written (`asset.name`, `name`) and covers it in its file.
@@ -76,7 +81,7 @@ function valuePart(summary: string): { at: number; text: string } {
 function scan(file: string, text: string, classified: Set<string>, allowed: Record<string, string> = ALLOWED[file] ?? {}): Finding[] {
   const code = blank(text);
   const findings: Finding[] = [];
-  const isClassified = (name: string) => classified.has(name) || classified.has(snake(name));
+  const isClassified = (name: string) => classified.has(name) || classified.has(snake(name)) || FREE_TEXT.has(name);
   const lineOf = (at: number) => code.slice(0, at).split('\n').length;
   for (const m of code.matchAll(/\bctx\s*\.\s*activity\s*\(/g)) {
     const open = m.index + m[0].length - 1;
@@ -122,6 +127,9 @@ describe('activity summaries and classified columns (#1634)', () => {
     expect(check("await ctx.activity('kernel.tenant', ctx.orgId, 'org.tax_code_changed', taxCode ? `Đặt mã số thuế là ${taxCode}` : 'Xóa');")).toEqual(['taxCode']);
     expect(check("await ctx.activity('kernel.member', id, 'invite.revoked', invite.email);")).toEqual(['invite.email']);
     expect(check("await ctx.activity('kernel.party', id, 'x', `Gộp ${`(${keep?.name})`}`, { legalEntityId: entity.id });")).toEqual(['keep?.name']);
+    // Free text a member typed, whatever its column's class (#1825).
+    expect(check("await ctx.activity('finance.period', id, 'period.unlocked', `Mở khóa sổ (lý do: ${input.reason})`, { legalEntityId: e });")).toEqual(['input.reason']);
+    expect(check("await ctx.activity('kernel.file', id, 'x', `Ghi chú: ${note}`);")).toEqual(['note']);
     // Outside a template too: a concatenation, a fallback, a branch.
     expect(check("await ctx.activity('kernel.party', id, 'x', 'Thêm ' + party.name);")).toEqual(['party.name']);
     expect(check("await ctx.activity('kernel.party', id, 'x', input.name ?? 'Không tên');")).toEqual(['input.name']);
