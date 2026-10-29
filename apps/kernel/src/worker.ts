@@ -1660,7 +1660,10 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   void relay();
   const instance = deps.instance ?? hostname();
   const worked = AVAILABLE_MODULES.filter((module) => module === 'kernel' || deps.runtime.installed(module));
-  const heartbeat = () => beat(deps.workerDb, instance, worked).catch((error) => console.error('[heartbeat]', error));
+  // One beat at a time, in order: the stop's beat below lands after any beat still in flight, never before it (#1887).
+  let beats: Promise<void> = Promise.resolve();
+  const heartbeat = (modules: readonly string[] = worked) =>
+    (beats = beats.then(() => beat(deps.workerDb, instance, modules)).catch((error) => console.error('[heartbeat]', error)));
   const heartbeatTimer = setInterval(() => void heartbeat(), HEARTBEAT_INTERVAL_MS);
   await heartbeat();
   // Back-pressure (#894): checked every 10 s; one check at a time, none after stop. Its start and end go to the alert
@@ -1724,7 +1727,8 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     await listener.end().catch(() => {});
     await boss.stop({ graceful: true, timeout: 10_000 }).catch(() => {});
     // A clean stop works no module any more, so a module a redeploy leaves out drops out of the prober's job age at
-    // once; a worker that dies without this beat keeps its modules counted for 7 days (#1887).
-    await beat(deps.workerDb, instance, []).catch((error) => console.error('[heartbeat] stop', error));
+    // once; a worker that dies without this beat keeps its modules counted for 7 days (#1887). Waited for 5 s at most:
+    // a stop that cannot reach the database leaves the modules counted, as a death does.
+    await Promise.race([heartbeat([]), new Promise((resolve) => setTimeout(resolve, 5000).unref())]);
   };
 }
