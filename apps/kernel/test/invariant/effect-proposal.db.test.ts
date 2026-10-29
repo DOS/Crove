@@ -3,8 +3,9 @@
 // journal entry of source kernel.proposal, are what #1842 counts as a ledger proposal's effect; each must name a
 // proposal of the writer's org, 'approved', for the command that writes that row. A row naming a pending, executed,
 // rejected proposal, another command's, another org's or none at all is refused (EFFECT_PROPOSAL_MISMATCH), for the
-// owner's and the worker's system context alike; the tables are append-only, so a written proposal_id never changes;
-// a replacement invoice's reversal of its original names the purchase's proposal; staff are not checked. Part of the invariant suite: keep it self-contained (package code under test, no helpers from outside
+// owner's and the worker's system context alike, and a proposal outside the writer's legal entities is refused too;
+// the tables are append-only, so a written proposal_id never changes; a replacement invoice's reversal of its original
+// names the purchase's proposal; staff are not checked. Part of the invariant suite: keep it self-contained (package code under test, no helpers from outside
 // test/invariant/). Set CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -52,14 +53,15 @@ suite('ledger rows naming a proposal on PostgreSQL (#1853)', () => {
     }
   }
 
-  // One transaction as the given writer, always rolled back.
-  async function as(writer: 'owner' | 'system', fn: (c: pg.Client) => Promise<unknown>): Promise<Outcome> {
-    const c = new pg.Client({ connectionString: writer === 'owner' ? appUrl : workerUrl });
+  // One transaction as the given writer (the owner, the worker's system context, or another member), always rolled
+  // back.
+  async function as(writer: string, fn: (c: pg.Client) => Promise<unknown>): Promise<Outcome> {
+    const c = new pg.Client({ connectionString: writer === 'system' ? workerUrl : appUrl });
     await c.connect();
     try {
       await c.query('BEGIN');
-      if (writer === 'owner') await enterUser(c, owner, orgId);
-      else await c.query('SELECT crove_kernel.enter_system_context($1::uuid)', [orgId]);
+      if (writer === 'system') await c.query('SELECT crove_kernel.enter_system_context($1::uuid)', [orgId]);
+      else await enterUser(c, writer === 'owner' ? owner : writer, orgId);
       return { ok: true, value: await fn(c) };
     } catch (error) {
       const e = error as { code?: string; message: string };
@@ -71,16 +73,19 @@ suite('ledger rows naming a proposal on PostgreSQL (#1853)', () => {
   }
 
   // A proposal of the command in the given state and org, written by the database owner (staff are not checked).
-  const proposal = (command: string, status: 'pending' | 'approved' | 'executed' | 'rejected', org = orgId) =>
+  // NULL entity: the org's default one.
+  const proposal = (command: string, status: 'pending' | 'approved' | 'executed' | 'rejected', org = orgId, entity: string | null = null) =>
     admin(
       async (c) =>
         (
           await c.query<{ id: string }>(
-            `INSERT INTO crove_kernel.proposal (org_id, kind, command, status, title, payload, eligible_approvers, authors, decided_by, decided_at, executed_command_id)
+            `INSERT INTO crove_kernel.proposal (org_id, kind, command, status, title, payload, eligible_approvers, authors, decided_by, decided_at, executed_command_id,
+                                                legal_entity_id)
              VALUES ($1, 'test.effect', $2, $3, 'T1853', '{"n": 1}', ARRAY[$4::uuid], '[]',
                      CASE WHEN $3 = 'pending' THEN NULL ELSE $4::uuid END, CASE WHEN $3 = 'pending' THEN NULL ELSE now() END,
-                     CASE WHEN $3 IN ('approved', 'executed') THEN gen_random_uuid() END) RETURNING id`,
-            [org, command, status, owner],
+                     CASE WHEN $3 IN ('approved', 'executed') THEN gen_random_uuid() END,
+                     coalesce($5::uuid, (SELECT e.id FROM crove_kernel.legal_entity e WHERE e.org_id = $1 AND e.is_default))) RETURNING id`,
+            [org, command, status, owner, entity],
           )
         ).rows[0]?.id as string,
     );
@@ -196,23 +201,13 @@ suite('ledger rows naming a proposal on PostgreSQL (#1853)', () => {
 
   it('never lets a written proposal_id change, and leaves rows with none and staff writes alone', async () => {
     const pending = await proposal('finance.purchase.record', 'pending');
-    const approved = await proposal('finance.purchase.record', 'approved');
-    // A document with no proposal, written by staff.
-    const documentId = await admin(
-      async (c) =>
-        (
-          await c.query<{ id: string }>(
-            `INSERT INTO crove_finance.purchase_document (org_id, party_id, invoice_number, invoice_date, subtotal, vat_amount, total)
-             SELECT $1::uuid, p.id, 'T-none', '2026-10-15', 100000, 0, 100000 FROM crove_kernel.party p WHERE p.org_id = $1::uuid ORDER BY p.id LIMIT 1 RETURNING id`,
-            [orgId],
-          )
-        ).rows[0]?.id as string,
-    );
-    const relink = (proposalId: string) => (c: pg.Client) =>
-      c.query('UPDATE crove_finance.purchase_document SET proposal_id = $2 WHERE org_id = $1 AND id = $3', [orgId, proposalId, documentId]);
-    // The tables are append-only: no tenant writer changes a row, so the insert is the only check needed.
-    for (const id of [pending, approved]) {
-      await expect(as('owner', relink(id))).resolves.toMatchObject({ ok: false, code: '42501' });
+    // The tables are append-only: no tenant writer updates a row (refused before any row is read), so the insert is
+    // the only check needed.
+    for (const table of ['purchase_document', 'cash_voucher', 'journal_voucher']) {
+      await expect(
+        as('owner', (c) => c.query(`UPDATE crove_finance.${table} SET proposal_id = $2 WHERE org_id = $1 AND id = $3`, [orgId, pending, randomUUID()])),
+        table,
+      ).resolves.toMatchObject({ ok: false, code: '42501' });
     }
     // A row naming no proposal, from a tenant writer.
     await expect(
@@ -224,14 +219,46 @@ suite('ledger rows naming a proposal on PostgreSQL (#1853)', () => {
         ),
       ),
     ).resolves.toMatchObject({ ok: true });
-    // Staff (the database owner) may write history as it was.
-    await expect(
-      admin((c) =>
-        c.query(
-          `INSERT INTO crove_finance.journal_voucher (org_id, voucher_date, description, proposal_id) VALUES ($1, '2026-10-15', 'sửa', $2) RETURNING id`,
-          [orgId, pending],
-        ),
-      ),
-    ).resolves.toMatchObject({ rowCount: 1 });
+    // Staff (the database owner) may write history as it was; rolled back, since a voucher commits only with its entry.
+    const staff = await admin(async (c) => {
+      await c.query('BEGIN');
+      try {
+        return (await c.query(`INSERT INTO crove_finance.journal_voucher (org_id, voucher_date, description, proposal_id) VALUES ($1, '2026-10-15', 'sửa', $2)`, [orgId, pending]))
+          .rowCount;
+      } finally {
+        await c.query('ROLLBACK');
+      }
+    });
+    expect(staff).toBe(1);
+  });
+
+  it("refuses a proposal the writer's legal entities do not include, as the writer cannot read it", async () => {
+    const branch = await admin(
+      async (c) =>
+        (await c.query<{ id: string }>(`INSERT INTO crove_kernel.legal_entity (org_id, name, kind, created_by) VALUES ($1, 'Chi nhánh', 'branch', $2) RETURNING id`, [orgId, owner]))
+          .rows[0]?.id as string,
+    );
+    const user = await upsertIdentity(createDb(pool as pg.Pool), { issuer: 'test', subject: randomUUID(), email: 'limited@effect-proposal.test', name: null });
+    const limited = await admin(async (c) => {
+      await c.query(`INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member')`, [orgId, user]);
+      await c.query(`INSERT INTO crove_kernel.role_assignment (org_id, user_id, role_key, legal_entity_id, granted_by) VALUES ($1, $2, 'external_accountant', $3, $4)`, [
+        orgId,
+        user,
+        branch,
+        owner,
+      ]);
+      return user;
+    });
+    const ofBranch = await proposal('finance.journal_voucher.record', 'approved', orgId, branch);
+    const ofDefault = await proposal('finance.journal_voucher.record', 'approved');
+    // The branch's voucher, as the member limited to the branch writes it.
+    const write = (proposalId: string) => (c: pg.Client) =>
+      c.query(`INSERT INTO crove_finance.journal_voucher (org_id, voucher_date, description, proposal_id, legal_entity_id) VALUES ($1, '2026-10-15', 'chi nhánh', $2, $3)`, [
+        orgId,
+        proposalId,
+        branch,
+      ]);
+    await expect(as(limited, write(ofBranch))).resolves.toMatchObject({ ok: true });
+    await expect(as(limited, write(ofDefault))).resolves.toMatchObject({ ok: false, ...REFUSED });
   });
 });

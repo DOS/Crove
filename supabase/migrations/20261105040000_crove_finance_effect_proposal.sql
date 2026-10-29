@@ -22,7 +22,8 @@
 -- crove_finance.effect_proposal_entry_check()  BEFORE INSERT on journal_entry, the same for an entry of source
 --     kernel.proposal, with the two commands above. Entries are inserted by the posting definer
 --     (post_journal_entry), so the check reads the context, and staff is the session user, never CURRENT_USER.
--- Refusals are 23514 EFFECT_PROPOSAL_MISMATCH. Staff (a superuser or a member of the table owner's role as the
+-- The triggers are named a_effect_proposal, so they run first among the BEFORE INSERT triggers (by name): a refused row
+-- takes no voucher number. Refusals are 23514 EFFECT_PROPOSAL_MISMATCH. Staff (a superuser or a member of the table owner's role as the
 -- session user, the support and migration paths) are not checked; a definer's CURRENT_USER is never taken for staff.
 --
 -- What stays: a raw session of an eligible approver can approve through the gate (#1793) and then write the effect
@@ -72,17 +73,17 @@ BEGIN
   RETURN NEW;
 END $$;
 
-DROP TRIGGER IF EXISTS effect_proposal ON crove_finance.purchase_document;
-CREATE TRIGGER effect_proposal BEFORE INSERT ON crove_finance.purchase_document
+DROP TRIGGER IF EXISTS a_effect_proposal ON crove_finance.purchase_document;
+CREATE TRIGGER a_effect_proposal BEFORE INSERT ON crove_finance.purchase_document
   FOR EACH ROW EXECUTE FUNCTION crove_finance.effect_proposal_check('finance.purchase.record');
-DROP TRIGGER IF EXISTS effect_proposal ON crove_finance.cash_voucher;
-CREATE TRIGGER effect_proposal BEFORE INSERT ON crove_finance.cash_voucher
+DROP TRIGGER IF EXISTS a_effect_proposal ON crove_finance.cash_voucher;
+CREATE TRIGGER a_effect_proposal BEFORE INSERT ON crove_finance.cash_voucher
   FOR EACH ROW EXECUTE FUNCTION crove_finance.effect_proposal_check('finance.voucher.record');
-DROP TRIGGER IF EXISTS effect_proposal ON crove_finance.journal_voucher;
-CREATE TRIGGER effect_proposal BEFORE INSERT ON crove_finance.journal_voucher
+DROP TRIGGER IF EXISTS a_effect_proposal ON crove_finance.journal_voucher;
+CREATE TRIGGER a_effect_proposal BEFORE INSERT ON crove_finance.journal_voucher
   FOR EACH ROW EXECUTE FUNCTION crove_finance.effect_proposal_check('finance.journal_voucher.record', 'finance.closing.record', 'finance.depreciation.record');
-DROP TRIGGER IF EXISTS effect_proposal ON crove_finance.journal_entry;
-CREATE TRIGGER effect_proposal BEFORE INSERT ON crove_finance.journal_entry
+DROP TRIGGER IF EXISTS a_effect_proposal ON crove_finance.journal_entry;
+CREATE TRIGGER a_effect_proposal BEFORE INSERT ON crove_finance.journal_entry
   FOR EACH ROW EXECUTE FUNCTION crove_finance.effect_proposal_entry_check();
 
 -- EXECUTE matrix: the triggers run them as the writer; nobody calls them directly but through the tables.
