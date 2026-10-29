@@ -162,6 +162,18 @@ describe('permissionProblems() on planted mismatches', () => {
     for (const write of ['SELECT k INTO v FROM t;', 'FOR v IN SELECT k FROM t LOOP NULL; END LOOP;', 'v = lower(k);']) {
       expect(problems('function crove_kernel.f', `DECLARE v text := 'finance.period.unlock'; BEGIN ${write} PERFORM crove_kernel.ctx_has_permission(v); END`), write).toHaveLength(1);
     }
+    // Comparisons no form above reads: positional parameters, a subquery, IS DISTINCT FROM, CASE ... WHEN.
+    for (const text of ['p.permission = $1', 'p.permission = ANY ($1)', 'p.permission = (SELECT k FROM t)', "p.permission IS DISTINCT FROM 'a.b.c'", "CASE p.permission WHEN 'a.b.c' THEN 1 END"]) {
+      expect(problems('function crove_kernel.f', text), text).toHaveLength(1);
+    }
+    // The other way round, a literal is read and a parameter is not.
+    expect(sqlPermissionUses('f', "'a.b.c' = p.permission")).toEqual({ uses: [{ permission: 'a.b.c', by: 'f' }], problems: [] });
+    expect(problems('function crove_kernel.f', 'p_key = p.permission')).toHaveLength(1);
+    // A comment in a function body names nothing.
+    expect(sqlPermissionUses('f', "-- crove_kernel.ctx_has_permission (the runtime gate) and a permission in (its org)\n/* p.permission = 'x.y.z' */ SELECT 1")).toEqual({
+      uses: [],
+      problems: [],
+    });
     // The checker itself compares with its parameter, by design.
     expect(problems('function crove_kernel.ctx_has_permission', 'p.permission = p_permission')).toEqual([]);
   });
