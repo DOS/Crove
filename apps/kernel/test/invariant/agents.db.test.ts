@@ -1706,6 +1706,16 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
       begin: sql`BEGIN`,
       runtimeSavepoint: sql`SAVEPOINT ${sql.raw('crove_try_run_1')}`,
       runtimeRollback: sql`ROLLBACK TO SAVEPOINT ${sql.id('crove_try_run_1')}`,
+      unicodeName: sql.raw('SAVEPOINT U&"\\0063rove_try_run_1"'),
+      // The query is read as it runs: compiled, then split as PostgreSQL's lexer splits it (#1831 review).
+      aliased: sql`SELECT 1; ${sql.raw('COMMIT; SELECT 1').as('x')}`,
+      splitKeyword: sql`SELECT 1; COMM${sql.raw('IT; SELECT 1').as('x')}`,
+      lineCommentInString: sql.raw(`SELECT '--'; COMMIT`),
+      blockCommentInString: sql.raw(`SELECT '/*'; COMMIT; SELECT '*/'`),
+      dollarInString: sql.raw(`SELECT '$a$'; COMMIT; SELECT '$a$'`),
+      dollarInComment: sql.raw('SELECT 1 -- $$\n; COMMIT; SELECT $$x$$'),
+      commentedDollars: sql.raw('-- $a$\nCOMMIT -- $a$'),
+      nestedComment: sql.raw('/* a /* b */ c */ COMMIT'),
     };
     const probes = Object.entries(statements).flatMap(([key, statement]) =>
       [undefined, []].map(
@@ -1736,6 +1746,8 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
         await sql`SAVEPOINT t1831_mine`.execute(ctx.trx);
         await sql`ROLLBACK TO SAVEPOINT t1831_mine`.execute(ctx.trx);
         await sql`RELEASE SAVEPOINT t1831_mine`.execute(ctx.trx);
+        // Keywords inside a CASE, a string, a quoted name or a dollar-quoted body are not statements.
+        await sql`SELECT CASE WHEN true THEN 1 END AS one, 'x; COMMIT' AS text, $$; ROLLBACK$$ AS body, 1 AS "; commit"`.execute(ctx.trx);
         return { ok: true };
       },
     }) as CommandDef<unknown, unknown>;

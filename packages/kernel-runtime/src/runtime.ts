@@ -1,6 +1,6 @@
 // The single write path. Every state change is a typed command executed through Runtime.execute(),
 // inside one transaction that enters the tenant context checked by RLS, and writes audit + outbox.
-import { sql, type KyselyPlugin, type RawBuilder, type Transaction } from 'kysely';
+import { PostgresQueryCompiler, sql, type KyselyPlugin, type RawBuilder, type Transaction } from 'kysely';
 import { randomUUID } from 'node:crypto';
 import { v7 as uuidv7 } from 'uuid';
 import type { z } from 'zod';
@@ -865,7 +865,7 @@ function countWrites(counters: readonly { n: number }[], closed: () => boolean, 
   const count = () => {
     for (const counter of counters) counter.n += 1;
   };
-  return {
+  return Object.freeze({
     transformQuery: ({ node }) => {
       if (closed()) throw new Error(`command ${command}: a statement on ctx.trx after the handler returned (#1710)`);
       count();
@@ -875,7 +875,73 @@ function countWrites(counters: readonly { n: number }[], closed: () => boolean, 
       count();
       return result;
     },
-  };
+  } satisfies KyselyPlugin);
+}
+
+// The statements of a SQL text as PostgreSQL's lexer splits them: each with its comments taken out and its literals
+// kept, split at the semicolons outside a string ('...', E'...' with backslash escapes, U&'...'), a quoted identifier
+// ("..."), a dollar-quoted body ($tag$...$tag$), a line comment (--) or a block comment (/* */, nested).
+function sqlStatements(text: string): string[] {
+  const statements: string[] = [];
+  let current = '';
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i] as string;
+    const next = text[i + 1];
+    if (ch === '-' && next === '-') {
+      while (i < text.length && text[i] !== '\n') i += 1;
+      current += ' ';
+      continue;
+    }
+    if (ch === '/' && next === '*') {
+      let depth = 1;
+      i += 2;
+      while (i < text.length && depth > 0) {
+        if (text[i] === '/' && text[i + 1] === '*') {
+          depth += 1;
+          i += 2;
+        } else if (text[i] === '*' && text[i + 1] === '/') {
+          depth -= 1;
+          i += 2;
+        } else i += 1;
+      }
+      current += ' ';
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      const escapes = ch === "'" && /[eE]$/.test(current) && !/[\w$]$/.test(current.slice(0, -1));
+      let j = i + 1;
+      while (j < text.length) {
+        if (escapes && text[j] === '\\') j += 2;
+        else if (text[j] === ch && text[j + 1] === ch) j += 2;
+        else if (text[j] === ch) break;
+        else j += 1;
+      }
+      current += text.slice(i, j + 1);
+      i = j + 1;
+      continue;
+    }
+    if (ch === '$' && !/[\w$]$/.test(current)) {
+      const tag = /^\$([A-Za-z_\u0080-￿][\w\u0080-￿]*)?\$/.exec(text.slice(i));
+      if (tag) {
+        const close = text.indexOf(tag[0], i + tag[0].length);
+        const stop = close === -1 ? text.length : close + tag[0].length;
+        current += text.slice(i, stop);
+        i = stop;
+        continue;
+      }
+    }
+    if (ch === ';') {
+      statements.push(current);
+      current = '';
+      i += 1;
+      continue;
+    }
+    current += ch;
+    i += 1;
+  }
+  statements.push(current);
+  return statements;
 }
 
 // Why a statement would take control of the transaction from the runtime, or null. The runtime opens, commits and
@@ -883,67 +949,34 @@ function countWrites(counters: readonly { n: number }[], closed: () => boolean, 
 // back to savepoints of its own (Social's digest does, around one mail), which cannot reach past the runtime's: a
 // ROLLBACK TO a savepoint set before a tryRun's removes the runtime's savepoint too, and its own rollback then fails.
 function transactionControl(statement: string): string | null {
-  const text = statement.trim().replace(/^\(+\s*/, '').toUpperCase();
+  const text = statement.trim().replace(/^[(\s]+/, '').toUpperCase();
   if (/^(?:BEGIN|START|COMMIT|END|ABORT|PREPARE)\b/.test(text)) return text.split(/\s+/)[0] ?? text;
-  const savepoint = /^(?:SAVEPOINT|RELEASE(?:\s+SAVEPOINT)?|ROLLBACK(?:\s+(?:WORK|TRANSACTION))?\s+TO(?:\s+SAVEPOINT)?)\s+"?([^\s";]+)/.exec(text);
-  if (savepoint) return savepoint[1]?.startsWith('CROVE_') ? `a savepoint of the runtime (${savepoint[1].toLowerCase()})` : null;
+  const savepoint = /^(?:SAVEPOINT|RELEASE(?:\s+SAVEPOINT)?|ROLLBACK(?:\s+(?:WORK|TRANSACTION))?\s+TO(?:\s+SAVEPOINT)?)\s+(\S+)/.exec(text);
+  if (savepoint) {
+    const name = (savepoint[1] ?? '').replace(/^"|"$/g, '');
+    // A name spelled with Unicode escapes (U&"...") is refused rather than decoded.
+    return name.startsWith('CROVE_') || name.startsWith('U&') ? `a savepoint of the runtime (${name.toLowerCase()})` : null;
+  }
   if (/^(?:SAVEPOINT|RELEASE|ROLLBACK)\b/.test(text)) return text.split(/\s+/)[0] ?? text;
   return null;
 }
 
-// The SQL text of a raw fragment (sql`...`, sql.raw), with what is spliced into it as text (a nested raw fragment, an
-// identifier) put back in place and every value as a placeholder.
-function rawText(node: { sqlFragments?: unknown; parameters?: unknown }): string {
-  const fragments = Array.isArray(node.sqlFragments) ? (node.sqlFragments as unknown[]) : [];
-  const parameters = Array.isArray(node.parameters) ? (node.parameters as unknown[]) : [];
-  return fragments
-    .map((fragment, i) => {
-      const parameter = parameters[i] as { kind?: unknown; name?: unknown } | undefined;
-      const spliced =
-        parameter === undefined
-          ? ''
-          : parameter.kind === 'RawNode'
-            ? rawText(parameter as { sqlFragments?: unknown; parameters?: unknown })
-            : parameter.kind === 'IdentifierNode' && typeof parameter.name === 'string'
-              ? parameter.name
-              : ' ? ';
-      return `${String(fragment)}${spliced}`;
-    })
-    .join('');
-}
-
-// The SQL text of every raw fragment of a query, however deep in the query it sits.
-function rawFragments(node: unknown, out: string[] = [], seen = new Set<object>()): string[] {
-  if (typeof node !== 'object' || node === null || seen.has(node)) return out;
-  seen.add(node);
-  if ((node as { kind?: unknown }).kind === 'RawNode') {
-    out.push(rawText(node as { sqlFragments?: unknown; parameters?: unknown }));
-    return out;
-  }
-  for (const value of Object.values(node)) rawFragments(value, out, seen);
-  return out;
-}
-
-// Refuses a handler's statement that takes control of the transaction (#1831, transactionControl): in every
-// statement of a raw fragment, after comments and dollar-quoted bodies are taken out and the text is split at
-// semicolons (the simple query protocol runs several).
+// Refuses a statement of a handler (or a query) that takes control of the transaction (#1831, transactionControl).
+// It reads the query as it will run: compiled to SQL, values as placeholders, every statement of it as PostgreSQL's
+// lexer splits them (the simple query protocol runs several). The handler adds no plugin after this one (the
+// invariant suite's scan refuses withPlugin in server sources), so the node it checks is the node that runs.
 function refuseTransactionControl(command: string): KyselyPlugin {
-  return {
-    transformQuery: ({ node }) => {
-      for (const text of rawFragments(node)) {
-        const plain = text
-          .replace(/\$([A-Za-z_][\w]*)?\$[\s\S]*?\$\1\$/g, ' ')
-          .replace(/--[^\n]*/g, ' ')
-          .replace(/\/\*[\s\S]*?\*\//g, ' ');
-        for (const statement of plain.split(';')) {
-          const control = transactionControl(statement);
-          if (control !== null) throw new Error(`command ${command}: ${control} controls the transaction, which is the runtime's (#1831)`);
-        }
+  const compiler = new PostgresQueryCompiler();
+  return Object.freeze({
+    transformQuery: ({ node, queryId }) => {
+      for (const statement of sqlStatements(compiler.compileQuery(node, queryId).sql)) {
+        const control = transactionControl(statement);
+        if (control !== null) throw new Error(`command ${command}: ${control} controls the transaction, which is the runtime's (#1831)`);
       }
       return node;
     },
     transformResult: async ({ result }) => result,
-  };
+  } satisfies KyselyPlugin);
 }
 
 // The rows inserted, updated and deleted so far in this transaction, per crove_* table (#1710). A partition counts
@@ -2141,7 +2174,7 @@ export class Runtime {
         reached = true;
         this.authorizeQuery(def, options.actor, entered);
         refuseStreamed(def);
-        return (await def.handler(this.queryContext(trx, options.orgId, options.actor, entered), input)) as O;
+        return (await def.handler(this.queryContext(trx.withPlugin(refuseTransactionControl(name)), options.orgId, options.actor, entered), input)) as O;
       });
     } catch (error) {
       const domain = toDomainError(error);
@@ -2177,7 +2210,7 @@ export class Runtime {
           const entered = await this.enterContext(trx, options.actor, options.orgId);
           reached = true;
           this.authorizeQuery(def, options.actor, entered);
-          return (await def.handler(this.queryContext(trx, options.orgId, options.actor, entered), input, sink)) as O;
+          return (await def.handler(this.queryContext(trx.withPlugin(refuseTransactionControl(name)), options.orgId, options.actor, entered), input, sink)) as O;
         });
     } catch (error) {
       const domain = toDomainError(error);
