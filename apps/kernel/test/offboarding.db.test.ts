@@ -567,15 +567,22 @@ suite('org offboarding on PostgreSQL (#38)', () => {
 
     // A record whose transaction began before another of the org's records that took the lock first would sort under
     // it (occurred_at is its transaction's start): it is refused, and recording in a new transaction comes after it.
-    // A row dated after this transaction's start stands for that other record.
+    // A row dated after this transaction's start stands for that other record. Only the rows that stand for an export
+    // count, those the purge check reads (system, crove.org-export.v2; #1883): a future-dated row of another format or
+    // none refuses nothing. These rows stay in this case's own org, which no later case uses (each makes its own).
     const latest = (await workerRuntime.query<ExportRecord>('kernel.org.export.current', {}, system))!;
-    await withAdmin((admin) =>
-      admin.query(
-        `INSERT INTO crove_kernel.audit_event (org_id, occurred_at, actor_type, command, command_id, outcome, input_sha256, detail)
-         VALUES ($1, now() + interval '1 hour', 'system', 'kernel.org.export.record', gen_random_uuid(), 'ok', repeat('0', 64), '{}'::jsonb)`,
-        [org.orgId],
-      ),
-    );
+    const plant = (detail: Record<string, unknown>) =>
+      withAdmin((admin) =>
+        admin.query(
+          `INSERT INTO crove_kernel.audit_event (org_id, occurred_at, actor_type, command, command_id, outcome, input_sha256, detail)
+           VALUES ($1, now() + interval '1 hour', 'system', 'kernel.org.export.record', gen_random_uuid(), 'ok', repeat('0', 64), $2::jsonb)`,
+          [org.orgId, JSON.stringify(detail)],
+        ),
+      );
+    await plant({});
+    await plant({ format: 'crove.org-export.v1' });
+    await expect(workerRuntime.execute('kernel.org.export.record', record, system)).resolves.toEqual({ ok: true });
+    await plant({ format: 'crove.org-export.v2' });
     await expect(workerRuntime.execute('kernel.org.export.record', record, system)).rejects.toMatchObject({ code: 'EXPORT_RECORD_STALE' });
     await expect(workerRuntime.execute('kernel.org.export.record', { ...latest, rebind: true }, system)).rejects.toMatchObject({ code: 'EXPORT_RECORD_STALE' });
   });

@@ -300,6 +300,10 @@ export const recordExport = defineCommand({
       .where('org_id', '=', ctx.orgId)
       .where('command', '=', 'kernel.org.export.record')
       .where('outcome', '=', 'ok')
+      // The rows that stand for an export: the system's records of this format, as the purge check reads them (#1883),
+      // rebinds included, since the newest of them decides which export is current.
+      .where('actor_type', '=', 'system')
+      .where(sql<string>`detail ->> 'format'`, '=', EXPORT_FORMAT)
       .where('occurred_at', '>', sql<Date>`pg_catalog.now()`)
       .limit(1)
       .executeTakeFirst();
