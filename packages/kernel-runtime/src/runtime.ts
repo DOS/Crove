@@ -766,6 +766,12 @@ function checkedWrites(command: string, writes: readonly CommandWrite[], manifes
       const cls = classes[column] as string;
       if (P04_DATA_CLASSES.includes(cls)) out.push(`${w.table}.${column} (${cls})`);
     }
+    // The runtime checks what a command writes per table, not per column (#1710): a declared table that holds a
+    // contact or payment column counts as written there too, whichever of its columns the command names.
+    const unnamed = Object.entries(classes).filter(([column, cls]) => P04_DATA_CLASSES.includes(cls) && !seen.has(column));
+    if (unnamed.length > 0 && !out.some((entry) => entry.startsWith(`${w.table}.`))) {
+      out.push(`${w.table} (holds ${unnamed.map(([column, cls]) => `${column} (${cls})`).join(', ')}; writes are checked per table)`);
+    }
   }
   return out;
 }
@@ -836,32 +842,42 @@ function snapshotQuery(def: QueryDef<any, any>): QueryDef<unknown, unknown> {
 interface WriteScope {
   // Runs work whose writes are not the handler's (the runtime's rows, a nested command that declares its own writes)
   // and sets them aside.
-  aside<T>(work: () => Promise<T>): Promise<T>;
-  // The statements the scope's handlers issued through their ctx.trx, but plain SELECTs.
+  // rolledBackOnError: the work undoes its rows when it fails (a tryRun's savepoint).
+  aside<T>(work: () => Promise<T>, rolledBackOnError?: boolean): Promise<T>;
+  // The statements the scope's handlers issued through their ctx.trx.
   readonly statements: { n: number };
 }
 
-// Counts the statements a handler issues through its ctx.trx (raw SQL too), but plain SELECTs, at the time each one
-// is compiled to run (Kysely compiles a query when it executes it).
-function countWrites(statements: { n: number }): KyselyPlugin {
+// Counts the statements a handler issues through its ctx.trx (raw SQL and SELECTs too, since a function a SELECT
+// calls may write): once when each is compiled to run, and again when its result comes back (also for a query the
+// handler compiled itself). A statement after the handler returned is refused: the check has already read the counts.
+function countWrites(statements: { n: number }, closed: () => boolean, command: string): KyselyPlugin {
   return {
     transformQuery: ({ node }) => {
-      // A SELECT with a WITH clause may hold a data-modifying statement, so it counts.
-      if (node.kind !== 'SelectQueryNode' || node.with !== undefined) statements.n += 1;
+      if (closed()) throw new Error(`command ${command}: a statement on ctx.trx after the handler returned (#1710)`);
+      statements.n += 1;
       return node;
     },
-    transformResult: async ({ result }) => result,
+    transformResult: async ({ result }) => {
+      statements.n += 1;
+      return result;
+    },
   };
 }
 
 // The rows inserted, updated and deleted so far in this transaction, per crove_* table (#1710). The counts need
 // track_counts, which is on by default; with it off they would read zero, so the runtime refuses to go on.
 async function tableWriteCounts(trx: Transaction<Database>): Promise<Map<string, number>> {
+  // The counters pg_stat_xact_user_tables reads, for the crove_* tables this transaction changed only.
   const { rows } = await sql<{ counting: boolean; counts: Record<string, string> | null }>`
     SELECT pg_catalog.current_setting('track_counts') = 'on' AS counting,
-      (SELECT pg_catalog.json_object_agg(t.schemaname || '.' || t.relname, (t.n_tup_ins + t.n_tup_upd + t.n_tup_del)::text)
-         FROM pg_catalog.pg_stat_xact_user_tables t
-        WHERE pg_catalog.starts_with(t.schemaname, 'crove_')) AS counts`.execute(trx);
+      (SELECT pg_catalog.json_object_agg(t.name, t.n::text)
+         FROM (SELECT n.nspname || '.' || c.relname AS name,
+                      pg_catalog.pg_stat_get_xact_tuples_inserted(c.oid) + pg_catalog.pg_stat_get_xact_tuples_updated(c.oid)
+                        + pg_catalog.pg_stat_get_xact_tuples_deleted(c.oid) AS n
+                 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                WHERE pg_catalog.starts_with(n.nspname, 'crove_') AND c.relkind = 'r') t
+        WHERE t.n > 0) AS counts`.execute(trx);
   const row = rows[0];
   if (row?.counting !== true) throw new Error('the declared-writes check needs track_counts on (#1710)');
   return new Map(Object.entries(row.counts ?? {}).map(([table, n]) => [table, Number(n)]));
@@ -1376,6 +1392,7 @@ export class Runtime {
     // A nested command that declares none runs in its caller's scope: its handler's writes count as the caller's, its
     // runtime rows (audit row, events) are set aside there. A write through a definer the handler calls, or by a
     // trigger its statements fire, is counted like the statement itself: the command declares that table too.
+    const windows = { open: 0 };
     const writeCheck =
       def.writes === undefined
         ? null
@@ -1388,34 +1405,46 @@ export class Runtime {
             // Runs work whose writes are not this handler's, and sets them aside. The counts are the whole
             // transaction's, so a statement the handler issues meanwhile (beside a ctx.emit in Promise.all) would be set
             // aside with them: the command then cannot be checked, and fails.
-            aside: async <T>(work: () => Promise<T>): Promise<T> => {
+            aside: async <T>(work: () => Promise<T>, rolledBackOnError = false): Promise<T> => {
               const statements = (scope as WriteScope).statements;
+              // One window at a time: two open at once would each set aside the other's rows as well.
+              if (windows.open > 0) writeCheck.unmeasured = true;
+              windows.open += 1;
               // Read before the first await: a statement the handler starts beside this one is counted from here on.
               const issued = statements.n;
-              const before = await tableWriteCounts(trx);
-              const setAside = async () => {
-                const after = await tableWriteCounts(trx);
-                if (statements.n !== issued) writeCheck.unmeasured = true;
-                for (const [table, n] of after) writeCheck.aside.set(table, (writeCheck.aside.get(table) ?? 0) + n - (before.get(table) ?? 0));
-              };
-              let value: T;
               try {
-                value = await work();
-              } catch (error) {
-                // A failed tryRun rolled back to its savepoint, so the counts can still be read; after a failed ctx.run
-                // the transaction is aborted, and the command cannot be checked (it fails at the end if it answers).
-                await setAside().catch(() => {
-                  writeCheck.unmeasured = true;
-                });
-                throw error;
+                const before = await tableWriteCounts(trx);
+                const setAside = async () => {
+                  const after = await tableWriteCounts(trx);
+                  if (statements.n !== issued) writeCheck.unmeasured = true;
+                  for (const [table, n] of after) writeCheck.aside.set(table, (writeCheck.aside.get(table) ?? 0) + n - (before.get(table) ?? 0));
+                };
+                let value: T;
+                try {
+                  value = await work();
+                } catch (error) {
+                  // A failed tryRun rolled back to its savepoint, so its rows are gone and the counts can still be read.
+                  // Any other failure may leave rows that a caller catching the error would keep (a nested command
+                  // refused by its own write check after it wrote), so the command can no longer be checked.
+                  if (rolledBackOnError) {
+                    await setAside().catch(() => {
+                      writeCheck.unmeasured = true;
+                    });
+                  } else {
+                    writeCheck.unmeasured = true;
+                  }
+                  throw error;
+                }
+                await setAside();
+                return value;
+              } finally {
+                windows.open -= 1;
               }
-              await setAside();
-              return value;
             },
           };
-    const aside = <T>(work: () => Promise<T>): Promise<T> => (scope === null ? work() : scope.aside(work));
+    const aside = <T>(work: () => Promise<T>, rolledBackOnError = false): Promise<T> => (scope === null ? work() : scope.aside(work, rolledBackOnError));
     // The handler's own statements, counted for the scope through its ctx.trx.
-    const handlerTrx = scope === null ? trx : trx.withPlugin(countWrites(scope.statements));
+    const handlerTrx = scope === null ? trx : trx.withPlugin(countWrites(scope.statements, () => closed, def.name));
     // Whether the writes of a nested command are its own to declare (it declares writes) or this command's.
     const ownsWrites = (name: string): boolean => this.#commands.get(name)?.writes !== undefined;
     // Set once the handler settled: from then on the runtime writes this command's rows, and nothing the handler
@@ -1473,7 +1502,7 @@ export class Runtime {
       tryRun: <R>(name: string, nestedInput: unknown, options: TryRunOptions): Promise<TryRunResult<R>> => {
         if (closed) return Promise.reject(new Error(`command ${def.name}: ctx.tryRun after the handler returned`));
         if (running.size > 0) return Promise.reject(new Error(`command ${def.name}: ctx.tryRun runs only while no other nested command runs`));
-        return tracked(() => (ownsWrites(name) ? aside(() => tryNested<R>(name, nestedInput, options)) : tryNested<R>(name, nestedInput, options)));
+        return tracked(() => (ownsWrites(name) ? aside(() => tryNested<R>(name, nestedInput, options), true) : tryNested<R>(name, nestedInput, options)));
       },
       numbering: {
         allocate: async (n) => {

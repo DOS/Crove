@@ -1509,7 +1509,21 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
       await Promise.all([ctx.emit('t1710.beside', { n: 1 }), raise(ctx, `beside-${suffix}`)]);
       return { ok: true };
     });
-    worker.register({ commands: [undeclared, empty, declared, delegates, undeclaredNested, viaNested, readOnlyNested, viaReadOnly, beside] });
+    // Two events at once: each window would set aside the other's rows too.
+    const twoEvents = probe('two_events', [], async (ctx) => {
+      await Promise.all([ctx.emit('t1710.first', { n: 1 }), ctx.emit('t1710.second', { n: 2 })]);
+      return { ok: true };
+    });
+    // A nested command refused by its own check after it wrote, its error caught by the caller: its rows would commit.
+    const liar = probe('liar', [INTERNAL_1697], async (ctx) => {
+      await raise(ctx, `liar-${suffix}`);
+      return { ok: true };
+    });
+    const catches = probe('catches', [INTERNAL_1697], async (ctx) => {
+      await ctx.run(liar.name, {}).catch(() => null);
+      return { ok: true };
+    });
+    worker.register({ commands: [undeclared, empty, declared, delegates, undeclaredNested, viaNested, readOnlyNested, viaReadOnly, beside, twoEvents, liar, catches] });
     const as = { actor: SYSTEM, orgId: orgA };
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
@@ -1517,8 +1531,10 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
         await expect(worker.execute(command.name, {}, as), command.name).rejects.toMatchObject({ code: 'INTERNAL' });
         expect(logged.mock.calls.flat().map(String).join('\n')).toContain(`command ${command.name}: wrote crove_kernel.inbox_item, which it does not declare`);
       }
-      await expect(worker.execute(beside.name, {}, as)).rejects.toMatchObject({ code: 'INTERNAL' });
-      expect(logged.mock.calls.flat().map(String).join('\n')).toContain(`command ${beside.name}: its writes cannot be checked`);
+      for (const command of [beside, twoEvents, catches]) {
+        await expect(worker.execute(command.name, {}, as), command.name).rejects.toMatchObject({ code: 'INTERNAL' });
+        expect(logged.mock.calls.flat().map(String).join('\n')).toContain(`command ${command.name}: its writes cannot be checked`);
+      }
     } finally {
       logged.mockRestore();
     }
