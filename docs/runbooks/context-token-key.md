@@ -18,7 +18,7 @@ This is a different key from the context key that seals `crove.ctx` ([context-ke
 ## Before you start
 
 - Work on the server in the stack directory, as in [secret-rotation.md](secret-rotation.md). Service names are those of the all-in-one layout (`crove`); in the split layout `api` and `worker` take the same setting and `docker compose up -d` restarts both after `migrate`.
-- The release that adds the key is deployed: its migration `20261104210000_crove_kernel_context_token.sql` is applied. Check:
+- The release that adds the key is deployed: its migration `20261104230000_crove_kernel_context_token.sql` is applied. Check:
 
   ```bash
   docker compose exec -T db psql -U postgres -tAc "SELECT to_regprocedure('crove_kernel.context_token_key_install(bytea)') IS NOT NULL"
