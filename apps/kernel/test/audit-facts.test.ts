@@ -457,7 +457,10 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
     }
     if (built) {
       const scope = code.slice(from, at);
-      for (const w of scope.matchAll(new RegExp(`\\b${escape(name)}\\s*(\\[[^\\]]*\\]|\\.\\s*[A-Za-z_$][\\w$]*)\\s*=(?![=>])\\s*`, 'g'))) {
+      // A write to another variable of the same name (in a nested function or block) is not a write to this one.
+      const ours = (offset: number) => declaration(name, from + offset)?.index === decl.index;
+      for (const w of scope.matchAll(new RegExp(`(?<![\\w$.])${escape(name)}\\s*(\\[[^\\]]*\\]|\\.\\s*[A-Za-z_$][\\w$]*)\\s*=(?![=>])\\s*`, 'g'))) {
+        if (!ours(w.index ?? 0)) continue;
         const target = w[1] as string;
         const key = target.startsWith('[') ? literalAt(from + (w.index ?? 0) + w[0].indexOf('[') + 1) : target.replace(/^\.\s*/, '');
         const rhs = valueAt(code, from + (w.index ?? 0) + w[0].length).trim();
@@ -465,7 +468,8 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
         if (objectish(rhs)) checkObject(rhs, from + (w.index ?? 0) + w[0].length, depth);
         else checkValue(rhs, from + (w.index ?? 0) + w[0].length, flag, depth);
       }
-      for (const w of scope.matchAll(new RegExp(`\\b${escape(name)}\\s*\\.\\s*(push|set|add|unshift)\\s*\\(`, 'g'))) {
+      for (const w of scope.matchAll(new RegExp(`(?<![\\w$.])${escape(name)}\\s*\\.\\s*(push|set|add|unshift)\\s*\\(`, 'g'))) {
+        if (!ours(w.index ?? 0)) continue;
         const open = from + (w.index ?? 0) + w[0].length - 1;
         const args = splitTop(balanced(code, open).slice(1, -1));
         // A Map's key names the entry, like a bracket write: a classified column's name needs its value through auditValue.
@@ -498,6 +502,13 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
     for (const m of obj.matchAll(/[{,]\s*([A-Za-z_$][\w$]*|'[^']*'|"[^"]*")\s*:/g)) {
       const key = (m[1] as string).replace(/^['"]|['"]$/g, '');
       checkFact(key, valueAt(obj, (m.index ?? 0) + m[0].length), start + (m.index ?? 0) + m[0].length, depth);
+    }
+    // A computed key (`{ [field]: value }`): its value is read like any other.
+    for (const m of obj.matchAll(/[{,]\s*\[/g)) {
+      const open = (m.index ?? 0) + m[0].length - 1;
+      const after = open + balanced(obj, open).length;
+      const colon = /^\s*:/.exec(obj.slice(after));
+      if (colon) checkFact(`[${obj.slice(open + 1, after - 1).trim()}]`, valueAt(obj, after + colon[0].length), start + after + colon[0].length, depth);
     }
     for (const m of obj.matchAll(/[{,]\s*\.\.\.\s*/g)) {
       const at = start + (m.index ?? 0) + m[0].length;
@@ -677,6 +688,8 @@ describe('audit facts and classified columns (#1626, #1632)', () => {
     // Objects pushed or set into a built container are read as facts; a Map's key that names a column needs auditValue.
     expect(check('const facts = [];\nfacts.push({ email: value });\nctx.audit({ facts });')).toEqual(['email: the key names a classified column and its value is not auditValue(...)']);
     expect(check("const m = new Map<string, string>();\nm.set('tax_code', before.code);\nctx.audit({ m });")).toEqual(['m: m.tax_code is a classified column and its value is not auditValue(...)']);
+    expect(check('ctx.audit({ previous: { [field]: before.tax_code } });')).toEqual(['[field]: the value reads the classified column tax_code outside auditValue(...)']);
+    expect(check('const facts = {};\nfunction unrelated() { const facts = {}; facts.email = party.email; }\nctx.audit({ facts });')).toEqual([]);
     expect(check("const m = new Map<string, number>();\nm.set(column, rows);\nctx.audit({ erased: Object.fromEntries(m) });")).toEqual([]);
     expect(check(loop('before.tax_code'))).toEqual(['previous: the value reads the classified column tax_code outside auditValue(...)']);
     expect(check(["const values = [];", 'values.push(party.email);', 'ctx.audit({ values });'].join('\n'))).toEqual(['values: the value reads the classified column email outside auditValue(...)']);
