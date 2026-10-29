@@ -355,7 +355,7 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
     }
     return true;
   };
-  // Declarations already traced, so a name met again (or a chain of names) is read once.
+  // Declarations already traced for the facts being read, so a name met again (or a chain of names) is read once per call.
   const traced = new Set<string>();
   // Functions whose returns a spread of their call reads as facts.
   const spreadRead = new Set<Fn>();
@@ -499,6 +499,8 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
         const key = target.startsWith('[') ? literalAt(from + (w.index ?? 0) + w[0].indexOf('[') + 1) : target.replace(/^\.\s*/, '');
         const rhs = valueAt(code, from + (w.index ?? 0) + w[0].length).trim();
         if (key && isClassified(key) && !/^auditValue\s*\(/.test(rhs)) flag(`${name}.${key} is a classified column and its value is not auditValue(...)`);
+        // A computed key is stored too: `previous[party.email] = true` carries the address.
+        if (target.startsWith('[') && key === undefined) checkValue(target.slice(1, -1).trim(), from + (w.index ?? 0) + w[0].indexOf('[') + 1, flag, depth);
         if (objectish(rhs)) checkObject(rhs, from + (w.index ?? 0) + w[0].length, depth);
         else checkValue(rhs, from + (w.index ?? 0) + w[0].length, flag, depth);
       }
@@ -604,6 +606,7 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
   const wrappers: Wrapper[] = [];
   for (const site of sites) {
     useAt = site.at;
+    traced.clear();
     const inner = unwrap(site.arg.slice(1, -1));
     // A parameter inside auditValue(...) is masked there, so it does not make its function a wrapper.
     const audited = withoutAuditValue(site.arg);
@@ -636,6 +639,7 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
       const arg = splitTop(balanced(code, open).slice(1, -1))[w.param]?.trim() ?? '';
       const at = arg === '' ? open : code.indexOf(arg, open);
       useAt = at;
+      traced.clear();
       const flag = reporter(at, `${w.fn.name}(...)`);
       if (!w.whole) checkValue(arg, at, flag, 0);
       else if (arg.startsWith('{')) checkObject(arg, at);
@@ -806,6 +810,11 @@ describe('audit facts and classified columns (#1626, #1632)', () => {
       'copied: rows holds the classified column tax_code from the database',
     ]);
     expect(check(`${picked.replace('before', 'rows')}\nconst ids = rows.map((r) => r.id);\nctx.audit({ ids });`)).toEqual([]);
+    // Each call is read on its own: a write between two calls counts for the second.
+    expect(check('const previous = {};\nconst facts = { previous };\nctx.audit(facts);\nprevious.code = party.tax_code;\nctx.audit(facts);')).toEqual([
+      'previous: the value reads the classified column tax_code outside auditValue(...)',
+    ]);
+    expect(check('const previous = {};\nprevious[party.email] = true;\nctx.audit({ previous });')).toEqual(['previous: the value reads the classified column email outside auditValue(...)']);
     // The declaration in scope is the one in the fact's block, not one in a block that has closed.
     expect(check('const code = party.tax_code;\nif (ok) { const code = 0; use(code); }\nctx.audit({ code });')).toEqual([
       'code: the value reads the classified column tax_code outside auditValue(...)',
