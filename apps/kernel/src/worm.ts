@@ -1,6 +1,6 @@
 // The WORM fact stream (plan §4.10, issues #891 and #977). The worker anchors every audit event, journal entry, voucher
-// number and void outside the database, so an edit by the database owner (a trigger disabled, a row changed or
-// deleted, a row backdated, a voucher renumbered) shows:
+// number, void and number series outside the database, so an edit by the database owner (a trigger disabled, a row
+// changed or deleted, a row backdated, a voucher renumbered, a reset policy switched) shows:
 //   - writeArchive, every minute: cuts the rows not yet archived into windows whose rows span at most 5 minutes,
 //     stopping ARCHIVE_LAG_SECONDS before now so a transaction still open is not cut off. Each window becomes one
 //     batch: the hash of each row, a batch hash over them and a chain hash that folds in the previous batch. The
@@ -12,8 +12,11 @@
 //     same way from `entitiesFrom`, the legal entity of every entry (and its lines), voucher and void
 //     (crove_kernel.archive_entity_hashes), so moving a row to another entity shows. Version 4 (#1594, #1596) adds,
 //     the same way from `allocationsFrom`, every number allocation and void of the gapless numbering and each
-//     voucher's number, number period and allocation (crove_kernel.archive_allocation_hashes). Each batch verifies
-//     with the version it was written with; a batch of a lower version after a higher one means rows went unanchored.
+//     voucher's number, number period and allocation (crove_kernel.archive_allocation_hashes). Version 5 (#1623) adds,
+//     the same way from `seriesFrom`, every number series with the reset policy in force for its doc type
+//     (crove_kernel.archive_series_hashes), so switching a doc type's reset once it has numbers shows. Each batch
+//     verifies with the version it was written with; a batch of a lower version after a higher one means rows went
+//     unanchored.
 //   - verifyArchive, nightly: reads every batch back from the store, checks the chain, and recomputes every row hash
 //     from the database. A changed, missing or added row, a broken chain, a window gap, or a store and database that
 //     disagree fail the run: the job fails without a retry, and the prober alerts on the dead letter.
@@ -194,15 +197,17 @@ export class S3ArchiveStore implements ArchiveStore {
 
 export interface ArchiveBatch {
   format: 'crove-archive';
-  version: 1 | 2 | 3 | 4;
+  version: 1 | 2 | 3 | 4 | 5;
   seq: number;
   window: { from: string; to: string };
   // Versions 2 and 3: where its voucher numbers and voids start (the epoch, or the window's start).
   numbersFrom?: string;
   // Version 3: where its legal entity rows start (the epoch, or the window's start).
   entitiesFrom?: string;
-  // Version 4: where its number allocations, voids and voucher numbers start (the epoch, or the window's start).
+  // Versions 4 and 5: where its number allocations, voids and voucher numbers start (the epoch, or the window's start).
   allocationsFrom?: string;
+  // Version 5: where its number series and their reset policies start (the epoch, or the window's start).
+  seriesFrom?: string;
   prevChainSha256: string;
   // [ref, row hash], sorted by ref.
   rows: Array<[string, string]>;
@@ -226,10 +231,11 @@ const byRef = (a: [string, string], b: [string, string]) => (a[0] < b[0] ? -1 : 
 
 // The rows of a batch as the database holds them now: version 1 rows of the window, plus from version 2 the numbers and
 // voids from numbersFrom, plus from version 3 the legal entity rows from entitiesFrom, plus from version 4 the number
-// allocations, their voids and the vouchers' number periods from allocationsFrom.
+// allocations, their voids and the vouchers' number periods from allocationsFrom, plus from version 5 the number series
+// with their reset policies from seriesFrom.
 async function rowHashes(
   db: Db,
-  batch: Pick<ArchiveBatch, 'version' | 'window' | 'numbersFrom' | 'entitiesFrom' | 'allocationsFrom'>,
+  batch: Pick<ArchiveBatch, 'version' | 'window' | 'numbersFrom' | 'entitiesFrom' | 'allocationsFrom' | 'seriesFrom'>,
 ): Promise<Array<[string, string]>> {
   const { from, to } = batch.window;
   const { rows } = await sql<{ ref: string; row_sha256: string }>`
@@ -255,7 +261,14 @@ async function rowHashes(
             SELECT ref, row_sha256 FROM crove_kernel.archive_allocation_hashes(${batch.allocationsFrom ?? from}::timestamptz, ${to}::timestamptz)`.execute(db)
         ).rows
       : [];
-  return [...rows, ...numbers, ...entities, ...allocations].map((r): [string, string] => [r.ref, r.row_sha256]).sort(byRef);
+  const series =
+    batch.version >= 5
+      ? (
+          await sql<{ ref: string; row_sha256: string }>`
+            SELECT ref, row_sha256 FROM crove_kernel.archive_series_hashes(${batch.seriesFrom ?? from}::timestamptz, ${to}::timestamptz)`.execute(db)
+        ).rows
+      : [];
+  return [...rows, ...numbers, ...entities, ...allocations, ...series].map((r): [string, string] => [r.ref, r.row_sha256]).sort(byRef);
 }
 
 // Where a batch's numbers start: the epoch when it is the first batch of version 2 or above, its window's start after.
@@ -266,6 +279,8 @@ const entitiesFromAfter = (previous: ArchiveBatch | null, from: string) => ((pre
 // Where a batch's number allocations start: the epoch when it is the first batch of version 4 or above, its window's
 // start after.
 const allocationsFromAfter = (previous: ArchiveBatch | null, from: string) => ((previous?.version ?? 1) >= 4 ? from : EPOCH);
+// Where a batch's number series start: the epoch when it is the first batch of version 5, its window's start after.
+const seriesFromAfter = (previous: ArchiveBatch | null, from: string) => ((previous?.version ?? 1) >= 5 ? from : EPOCH);
 
 function parseBatch(bytes: Uint8Array): ArchiveBatch | null {
   try {
@@ -274,12 +289,9 @@ function parseBatch(bytes: Uint8Array): ArchiveBatch | null {
     if (value.version === 1) return value;
     if (value.version === 2) return typeof value.numbersFrom === 'string' ? value : null;
     if (value.version === 3) return typeof value.numbersFrom === 'string' && typeof value.entitiesFrom === 'string' ? value : null;
-    return value.version === 4 &&
-      typeof value.numbersFrom === 'string' &&
-      typeof value.entitiesFrom === 'string' &&
-      typeof value.allocationsFrom === 'string'
-      ? value
-      : null;
+    const v4 = typeof value.numbersFrom === 'string' && typeof value.entitiesFrom === 'string' && typeof value.allocationsFrom === 'string';
+    if (value.version === 4) return v4 ? value : null;
+    return value.version === 5 && v4 && typeof value.seriesFrom === 'string' ? value : null;
   } catch {
     return null;
   }
@@ -327,17 +339,18 @@ export async function writeArchive(db: Db, store: ArchiveStore, options: { lagSe
     } else {
       const end = Math.min(next.horizon.getTime(), next.first_row_at.getTime() + ARCHIVE_WINDOW_MS);
       const to = new Date(end).toISOString();
-      // The head's batch tells whether this one is the first of version 2, 3 or 4. When it cannot be read (the
-      // verifier reports that), this batch takes the numbers, entities and allocations from the epoch again: anchoring
-      // a row twice loses nothing.
+      // The head's batch tells whether this one is the first of version 2, 3, 4 or 5. When it cannot be read (the
+      // verifier reports that), this batch takes the numbers, entities, allocations and series from the epoch again:
+      // anchoring a row twice loses nothing.
       const previousBytes = head ? await store.get(archiveKey(seq - 1)) : null;
       const previous = previousBytes ? parseBatch(previousBytes) : null;
       const shape = {
-        version: 4 as const,
+        version: 5 as const,
         window: { from, to },
         numbersFrom: numbersFromAfter(previous, from),
         entitiesFrom: entitiesFromAfter(previous, from),
         allocationsFrom: allocationsFromAfter(previous, from),
+        seriesFrom: seriesFromAfter(previous, from),
       };
       const rows = await rowHashes(db, shape);
       const batchHash = batchSha256(rows);
@@ -385,7 +398,8 @@ export interface ArchiveProblem {
     | 'version_regressed'
     | 'numbers_gap'
     | 'entities_gap'
-    | 'allocations_gap';
+    | 'allocations_gap'
+    | 'series_gap';
   seq: number;
   ref?: string;
 }
@@ -430,12 +444,14 @@ export async function verifyArchive(db: Db, store: ArchiveStore): Promise<Archiv
     }
     if (batch.prevChainSha256 !== prev) note({ code: 'chain_broken', seq });
     if (batch.window.from !== prevTo) note({ code: 'window_gap', seq });
-    // Numbers are anchored from the first version 2 batch on, legal entities from the first version 3 batch on and
-    // number allocations from the first version 4 batch on, each from where the last one stopped.
+    // Numbers are anchored from the first version 2 batch on, legal entities from the first version 3 batch on, number
+    // allocations from the first version 4 batch on and number series from the first version 5 batch on, each from
+    // where the last one stopped.
     if (batch.version < (previous?.version ?? 1)) note({ code: 'version_regressed', seq });
     if (batch.version >= 2 && batch.numbersFrom !== numbersFromAfter(previous, batch.window.from)) note({ code: 'numbers_gap', seq });
     if (batch.version >= 3 && batch.entitiesFrom !== entitiesFromAfter(previous, batch.window.from)) note({ code: 'entities_gap', seq });
     if (batch.version >= 4 && batch.allocationsFrom !== allocationsFromAfter(previous, batch.window.from)) note({ code: 'allocations_gap', seq });
+    if (batch.version >= 5 && batch.seriesFrom !== seriesFromAfter(previous, batch.window.from)) note({ code: 'series_gap', seq });
     const batchHash = batchSha256(batch.rows);
     if (batchHash !== batch.batchSha256) note({ code: 'batch_hash_mismatch', seq });
     if (chainSha256(batch.prevChainSha256, seq, batch.window.from, batch.window.to, batch.batchSha256) !== batch.chainSha256) {
