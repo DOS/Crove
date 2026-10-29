@@ -30,7 +30,8 @@ interface TaskDetail {
 }
 
 // The review comment: counts and the messages of failed and warning checks. Deterministic, from the checks only. It
-// leaves out the proposal's title: task comments are read org-wide, and a proposal of one legal entity is not (#1538).
+// leaves out the proposal's title (#1538). The comment is read with its task, which takes the proposal's legal entity
+// (#1762).
 export function reviewText(proposal: TaskDetail['proposal']): string {
   if (!proposal) return 'Không tìm thấy đề xuất cần rà soát.';
   if (!proposal.checks) return 'Không đọc được kết quả kiểm tra của đề xuất; cần người rà soát trực tiếp.';
@@ -62,7 +63,7 @@ export const chiefAccountantReview: AgentProgram = async (agent) => {
       await agent.execute('kernel.task.set_status', { id: task.id, fence, status: 'done' });
       continue;
     }
-    // Not the proposal's title: tasks are read org-wide, and a proposal of one legal entity is not (#1538).
+    // Not the proposal's title (#1538); the escalation takes its parent's legal entity (#1762).
     await agent.execute('kernel.task.escalate', { id: task.id, fence, title: 'Duyệt đề xuất đã rà soát', reason: review });
   }
 };
