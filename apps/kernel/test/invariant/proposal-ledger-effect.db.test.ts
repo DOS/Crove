@@ -24,6 +24,10 @@ const LINES = JSON.stringify([
   { line_no: 1, account_code: '6422', debit: '100000', credit: '0' },
   { line_no: 2, account_code: '331', debit: '0', credit: '100000' },
 ]);
+const MIRRORED = JSON.stringify([
+  { line_no: 1, account_code: '6422', debit: '0', credit: '100000' },
+  { line_no: 2, account_code: '331', debit: '100000', credit: '0' },
+]);
 const suite = ADMIN ? describe : describe.skip;
 
 suite('ledger proposals executed only with their effect (#1842)', () => {
@@ -87,6 +91,19 @@ suite('ledger proposals executed only with their effect (#1842)', () => {
   // A journal entry of the given source, posted in the caller's transaction.
   const post = (sourceType: string, sourceId: string) => (c: pg.Client) =>
     c.query(`SELECT crove_finance.post_journal_entry('2026-10-15'::date, 'ledger effect', $1, $2::uuid, $3::jsonb)`, [sourceType, sourceId, LINES]);
+  // An entry, then its reversal ordered by the proposal: the path of finance.journal.reverse (source kernel.proposal,
+  // reverses_entry_id set, the lines mirrored, as the database checks).
+  const reverse = (proposalId: string) => async (c: pg.Client) => {
+    const { rows } = await c.query<{ id: string }>(
+      `SELECT crove_finance.post_journal_entry('2026-10-15'::date, 'ledger effect', 'test.original', $1::uuid, $2::jsonb) AS id`,
+      [randomUUID(), LINES],
+    );
+    await c.query(`SELECT crove_finance.post_journal_entry('2026-10-15'::date, 'ledger effect', 'kernel.proposal', $1::uuid, $2::jsonb, $3::uuid, 1)`, [
+      proposalId,
+      MIRRORED,
+      rows[0]?.id,
+    ]);
+  };
   // A journal voucher naming the proposal, and its entry: the path of finance.journal_voucher.record.
   const voucher = (proposalId: string) => async (c: pg.Client) => {
     const { rows } = await c.query<{ id: string }>(
@@ -143,7 +160,7 @@ suite('ledger proposals executed only with their effect (#1842)', () => {
   it("passes with the command's own entry posted in the same transaction, on the reversal and the journal voucher paths", async () => {
     const reversal = await approved('finance.journal.reverse');
     const reversed = await asOwner(async (c) => {
-      await post('kernel.proposal', reversal)(c);
+      await reverse(reversal)(c);
       await ran('finance.journal.reverse', reversal)(c);
       return execute(reversal)(c);
     });
@@ -163,9 +180,10 @@ suite('ledger proposals executed only with their effect (#1842)', () => {
     const other = await approved('finance.journal.reverse');
     const nvk = await approved('finance.journal_voucher.record');
     for (const [label, effect, proposalId, command] of [
-      ['an entry for another proposal', post('kernel.proposal', other), id, 'finance.journal.reverse'],
+      ['a reversal for another proposal', reverse(other), id, 'finance.journal.reverse'],
+      ['an entry of source kernel.proposal that reverses nothing', post('kernel.proposal', id), id, 'finance.journal.reverse'],
       ["a journal voucher's entry for a reversal", voucher(id), id, 'finance.journal.reverse'],
-      ["a reversal's entry for a journal voucher", post('kernel.proposal', nvk), nvk, 'finance.journal_voucher.record'],
+      ["a reversal's entry for a journal voucher", reverse(nvk), nvk, 'finance.journal_voucher.record'],
       ['a journal voucher of another proposal', voucher(other), nvk, 'finance.journal_voucher.record'],
     ] as const) {
       const outcome = await asOwner(async (c) => {
@@ -176,7 +194,7 @@ suite('ledger proposals executed only with their effect (#1842)', () => {
       expect(outcome, label).toMatchObject({ ok: false, ...REFUSED });
     }
     // The entry committed by an earlier transaction does not carry a later move.
-    expect(await asOwner(post('kernel.proposal', id), true)).toMatchObject({ ok: true });
+    expect(await asOwner(reverse(id), true)).toMatchObject({ ok: true });
     const later = await asOwner(async (c) => {
       await ran('finance.journal.reverse', id)(c);
       return execute(id)(c);
@@ -189,7 +207,7 @@ suite('ledger proposals executed only with their effect (#1842)', () => {
       const asked = async (org: string, proposalId: string, command: string) =>
         (await c.query<{ v: boolean }>('SELECT crove_finance.ledger_effect_recorded($1::uuid, $2::uuid, $3) AS v', [org, proposalId, command])).rows[0]?.v;
       const reversal = randomUUID();
-      await post('kernel.proposal', reversal)(c);
+      await reverse(reversal)(c);
       return {
         notLedger: await asked(orgId, randomUUID(), 't1842.other'),
         own: await asked(orgId, reversal, 'finance.journal.reverse'),

@@ -7,14 +7,18 @@
 -- itself and mark the proposal executed without running the command (#1840): the proposal reads as done and nothing was
 -- posted. For the money paths the command's effect is state the session cannot fake by that row alone: every ledger
 -- command (crove_kernel.approval_command_policy(...).ledger) posts at least one journal entry for the proposal, in the
--- execution's transaction (journal_entry.created_xact_id, set by the posting trigger, 20261014090100):
+-- execution's transaction (journal_entry.created_xact_id and created_xact_start, set by the posting triggers,
+-- 20261014090100 and 20261015230000; both, since a transaction id can come round again after a restore to another
+-- cluster, as reject_line_on_posted_entry() reads them):
 --   finance.purchase.record                       an entry of source finance.purchase_document whose document names the
 --                                                 proposal (purchase_document.proposal_id), purchases and sales alike
 --   finance.voucher.record                        an entry of source finance.cash_voucher whose voucher names it
 --   finance.journal_voucher.record, finance.closing.record, finance.depreciation.record
 --                                                 an entry of source finance.journal_voucher whose voucher names it (the
 --                                                 closing and the depreciation post through postJournalVoucher)
---   finance.journal.reverse                       the reversal entry itself, source kernel.proposal, source_id the proposal
+--   finance.journal.reverse                       the reversal entry itself: source kernel.proposal, source_id the
+--                                                 proposal, and reverses_entry_id set, so it mirrors an entry the
+--                                                 database checks (one reversal per entry)
 --
 -- crove_finance.ledger_effect_recorded(org, proposal, command)
 --   For the org of the caller's sealed context only (another org, or no context, answers false). True when the command
@@ -37,7 +41,7 @@ CREATE INDEX IF NOT EXISTS journal_voucher_proposal_idx ON crove_finance.journal
 CREATE OR REPLACE FUNCTION crove_finance.ledger_effect_recorded(p_org uuid, p_proposal uuid, p_command text) RETURNS boolean
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
-  v_xact xid8 := pg_catalog.pg_current_xact_id();
+  v_xact xid8;
 BEGIN
   IF p_org IS NULL OR p_org IS DISTINCT FROM crove_kernel.ctx_org_id() THEN
     RETURN false;
@@ -45,22 +49,28 @@ BEGIN
   IF NOT coalesce((crove_kernel.approval_command_policy(p_command)).ledger, false) THEN
     RETURN true;
   END IF;
+  -- Assigned already: the update this answers for has written.
+  v_xact := pg_catalog.pg_current_xact_id_if_assigned();
+  IF v_xact IS NULL THEN
+    RETURN false;
+  END IF;
   RETURN CASE
     WHEN p_command = 'finance.journal.reverse' THEN EXISTS (
       SELECT 1 FROM crove_finance.journal_entry e
-      WHERE e.org_id = p_org AND e.source_type = 'kernel.proposal' AND e.source_id = p_proposal AND e.created_xact_id = v_xact)
+      WHERE e.org_id = p_org AND e.source_type = 'kernel.proposal' AND e.source_id = p_proposal AND e.reverses_entry_id IS NOT NULL
+        AND e.created_xact_id = v_xact AND e.created_xact_start = pg_catalog.now())
     WHEN p_command = 'finance.purchase.record' THEN EXISTS (
       SELECT 1 FROM crove_finance.purchase_document d
       JOIN crove_finance.journal_entry e ON e.org_id = d.org_id AND e.source_type = 'finance.purchase_document' AND e.source_id = d.id
-      WHERE d.org_id = p_org AND d.proposal_id = p_proposal AND e.created_xact_id = v_xact)
+      WHERE d.org_id = p_org AND d.proposal_id = p_proposal AND e.created_xact_id = v_xact AND e.created_xact_start = pg_catalog.now())
     WHEN p_command = 'finance.voucher.record' THEN EXISTS (
       SELECT 1 FROM crove_finance.cash_voucher v
       JOIN crove_finance.journal_entry e ON e.org_id = v.org_id AND e.source_type = 'finance.cash_voucher' AND e.source_id = v.id
-      WHERE v.org_id = p_org AND v.proposal_id = p_proposal AND e.created_xact_id = v_xact)
+      WHERE v.org_id = p_org AND v.proposal_id = p_proposal AND e.created_xact_id = v_xact AND e.created_xact_start = pg_catalog.now())
     WHEN p_command IN ('finance.journal_voucher.record', 'finance.closing.record', 'finance.depreciation.record') THEN EXISTS (
       SELECT 1 FROM crove_finance.journal_voucher v
       JOIN crove_finance.journal_entry e ON e.org_id = v.org_id AND e.source_type = 'finance.journal_voucher' AND e.source_id = v.id
-      WHERE v.org_id = p_org AND v.proposal_id = p_proposal AND e.created_xact_id = v_xact)
+      WHERE v.org_id = p_org AND v.proposal_id = p_proposal AND e.created_xact_id = v_xact AND e.created_xact_start = pg_catalog.now())
     ELSE false
   END;
 END $$;
