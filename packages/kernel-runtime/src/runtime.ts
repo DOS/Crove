@@ -1,6 +1,6 @@
 // The single write path. Every state change is a typed command executed through Runtime.execute(),
 // inside one transaction that enters the tenant context checked by RLS, and writes audit + outbox.
-import { sql, type RawBuilder, type Transaction } from 'kysely';
+import { sql, type KyselyPlugin, type RawBuilder, type Transaction } from 'kysely';
 import { v7 as uuidv7 } from 'uuid';
 import type { z } from 'zod';
 import { contextTaint, singleCell, type CellResolver, type Database, type Db, type MemberRole } from '@crove/db';
@@ -766,6 +766,12 @@ function checkedWrites(command: string, writes: readonly CommandWrite[], manifes
       const cls = classes[column] as string;
       if (P04_DATA_CLASSES.includes(cls)) out.push(`${w.table}.${column} (${cls})`);
     }
+    // The runtime checks what a command writes per table, not per column (#1710): a declared table that holds a
+    // contact or payment column counts as written there too, whichever of its columns the command names.
+    const unnamed = Object.entries(classes).filter(([column, cls]) => P04_DATA_CLASSES.includes(cls) && !seen.has(column));
+    if (unnamed.length > 0 && !out.some((entry) => entry.startsWith(`${w.table}.`))) {
+      out.push(`${w.table} (holds ${unnamed.map(([column, cls]) => `${column} (${cls})`).join(', ')}; writes are checked per table)`);
+    }
   }
   return out;
 }
@@ -830,6 +836,51 @@ function snapshotQuery(def: QueryDef<any, any>): QueryDef<unknown, unknown> {
   if (Object.hasOwn(copy, 'access')) copy.access = frozenList(copy.access);
   if (Object.hasOwn(copy, 'agent')) copy.agent = snapshotAgent(copy.agent, `${label}: agent`);
   return Object.freeze(copy) as unknown as QueryDef<unknown, unknown>;
+}
+
+// The declared-writes check a command runs under (#1710): its own when it declares its writes, otherwise its caller's.
+interface WriteScope {
+  // Runs work whose writes are not the handler's (the runtime's rows, a nested command that declares its own writes)
+  // and sets them aside.
+  // rolledBackOnError: the work undoes its rows when it fails (a tryRun's savepoint).
+  aside<T>(work: () => Promise<T>, rolledBackOnError?: boolean): Promise<T>;
+  // The statements the scope's handlers issued through their ctx.trx.
+  readonly statements: { n: number };
+}
+
+// Counts the statements a handler issues through its ctx.trx (raw SQL and SELECTs too, since a function a SELECT
+// calls may write): once when each is compiled to run, and again when its result comes back (also for a query the
+// handler compiled itself). A statement after the handler returned is refused: the check has already read the counts.
+function countWrites(statements: { n: number }, closed: () => boolean, command: string): KyselyPlugin {
+  return {
+    transformQuery: ({ node }) => {
+      if (closed()) throw new Error(`command ${command}: a statement on ctx.trx after the handler returned (#1710)`);
+      statements.n += 1;
+      return node;
+    },
+    transformResult: async ({ result }) => {
+      statements.n += 1;
+      return result;
+    },
+  };
+}
+
+// The rows inserted, updated and deleted so far in this transaction, per crove_* table (#1710). The counts need
+// track_counts, which is on by default; with it off they would read zero, so the runtime refuses to go on.
+async function tableWriteCounts(trx: Transaction<Database>): Promise<Map<string, number>> {
+  // The counters pg_stat_xact_user_tables reads, for the crove_* tables this transaction changed only.
+  const { rows } = await sql<{ counting: boolean; counts: Record<string, string> | null }>`
+    SELECT pg_catalog.current_setting('track_counts') = 'on' AS counting,
+      (SELECT pg_catalog.json_object_agg(t.name, t.n::text)
+         FROM (SELECT n.nspname || '.' || c.relname AS name,
+                      pg_catalog.pg_stat_get_xact_tuples_inserted(c.oid) + pg_catalog.pg_stat_get_xact_tuples_updated(c.oid)
+                        + pg_catalog.pg_stat_get_xact_tuples_deleted(c.oid) AS n
+                 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                WHERE pg_catalog.starts_with(n.nspname, 'crove_') AND c.relkind = 'r') t
+        WHERE t.n > 0) AS counts`.execute(trx);
+  const row = rows[0];
+  if (row?.counting !== true) throw new Error('the declared-writes check needs track_counts on (#1710)');
+  return new Map(Object.entries(row.counts ?? {}).map(([table, n]) => [table, Number(n)]));
 }
 
 const ACCESS_KINDS: readonly string[] = ['system', 'proposal', 'proposal_revision'];
@@ -1300,7 +1351,8 @@ export class Runtime {
     input: unknown,
     // cleanRoot: the proposal command, declared free of contact and payment writes, this command runs under (as
     // itself or nested at any depth below it), if any (P04, #1697).
-    base: { orgId: string; actor: Actor; entered: Entered; proposalId: string | null; cleanRoot?: string },
+    // writeScope: the declared-writes check of the nearest caller that declares its writes (#1710), if any.
+    base: { orgId: string; actor: Actor; entered: Entered; proposalId: string | null; cleanRoot?: string; writeScope?: WriteScope },
   ): Promise<O> {
     const commandId = uuidv7();
     const cleanRoot = base.cleanRoot ?? (def.access === 'proposal' && this.#contactOrPayment.get(def.name) === false ? def.name : undefined);
@@ -1332,6 +1384,69 @@ export class Runtime {
       while (running.size > 0) await Promise.all(running);
       return any;
     };
+    // What the handler writes, table by table, against what the command declares (#1710): a command that declares its
+    // writes fails when its transaction's row counts (pg_stat_xact_user_tables) show a change in a crove_* table it
+    // does not declare, the rows the runtime writes for it (ctx.emit, ctx.activity, ctx.numbering) and those of nested
+    // commands that declare their own writes aside. A nested command that declares none counts as this command's. The
+    // check is per table: a column left out of a declared table is not seen.
+    // A nested command that declares none runs in its caller's scope: its handler's writes count as the caller's, its
+    // runtime rows (audit row, events) are set aside there. A write through a definer the handler calls, or by a
+    // trigger its statements fire, is counted like the statement itself: the command declares that table too.
+    const windows = { open: 0 };
+    const writeCheck =
+      def.writes === undefined
+        ? null
+        : { declared: new Set(def.writes.map((w) => w.table)), start: await tableWriteCounts(trx), aside: new Map<string, number>(), unmeasured: false };
+    const scope: WriteScope | null =
+      writeCheck === null
+        ? (base.writeScope ?? null)
+        : {
+            statements: { n: 0 },
+            // Runs work whose writes are not this handler's, and sets them aside. The counts are the whole
+            // transaction's, so a statement the handler issues meanwhile (beside a ctx.emit in Promise.all) would be set
+            // aside with them: the command then cannot be checked, and fails.
+            aside: async <T>(work: () => Promise<T>, rolledBackOnError = false): Promise<T> => {
+              const statements = (scope as WriteScope).statements;
+              // One window at a time: two open at once would each set aside the other's rows as well.
+              if (windows.open > 0) writeCheck.unmeasured = true;
+              windows.open += 1;
+              // Read before the first await: a statement the handler starts beside this one is counted from here on.
+              const issued = statements.n;
+              try {
+                const before = await tableWriteCounts(trx);
+                const setAside = async () => {
+                  const after = await tableWriteCounts(trx);
+                  if (statements.n !== issued) writeCheck.unmeasured = true;
+                  for (const [table, n] of after) writeCheck.aside.set(table, (writeCheck.aside.get(table) ?? 0) + n - (before.get(table) ?? 0));
+                };
+                let value: T;
+                try {
+                  value = await work();
+                } catch (error) {
+                  // A failed tryRun rolled back to its savepoint, so its rows are gone and the counts can still be read.
+                  // Any other failure may leave rows that a caller catching the error would keep (a nested command
+                  // refused by its own write check after it wrote), so the command can no longer be checked.
+                  if (rolledBackOnError) {
+                    await setAside().catch(() => {
+                      writeCheck.unmeasured = true;
+                    });
+                  } else {
+                    writeCheck.unmeasured = true;
+                  }
+                  throw error;
+                }
+                await setAside();
+                return value;
+              } finally {
+                windows.open -= 1;
+              }
+            },
+          };
+    const aside = <T>(work: () => Promise<T>, rolledBackOnError = false): Promise<T> => (scope === null ? work() : scope.aside(work, rolledBackOnError));
+    // The handler's own statements, counted for the scope through its ctx.trx.
+    const handlerTrx = scope === null ? trx : trx.withPlugin(countWrites(scope.statements, () => closed, def.name));
+    // Whether the writes of a nested command are its own to declare (it declares writes) or this command's.
+    const ownsWrites = (name: string): boolean => this.#commands.get(name)?.writes !== undefined;
     // Set once the handler settled: from then on the runtime writes this command's rows, and nothing the handler
     // left running may write, run a command or roll back to a savepoint in this transaction.
     let closed = false;
@@ -1340,6 +1455,8 @@ export class Runtime {
     };
     const ctx: CommandContext = {
       ...this.queryContext(trx, base.orgId, base.actor, base.entered),
+      // The handler's statements go through handlerTrx, so the write check can tell them from the runtime's (#1710).
+      trx: handlerTrx,
       commandId,
       proposalId: base.proposalId,
       now: new Date(),
@@ -1347,24 +1464,26 @@ export class Runtime {
       emit: async (type, payload) => {
         refuseClosed('ctx.emit');
         if (!type.startsWith(`${def.name.split('.')[0]}.`)) throw new Error(`command ${def.name} cannot emit ${type}`);
-        const { rows } = await sql<{ id: string }>`SELECT crove_kernel.emit(${type}, ${JSON.stringify(payload)}::jsonb, ${commandId}::uuid) AS id`.execute(trx);
+        const { rows } = await aside(() => sql<{ id: string }>`SELECT crove_kernel.emit(${type}, ${JSON.stringify(payload)}::jsonb, ${commandId}::uuid) AS id`.execute(trx));
         return rows[0]?.id ?? '';
       },
       activity: async (recordType, recordId, kind, summary) => {
         refuseClosed('ctx.activity');
-        await trx
-          .insertInto('crove_kernel.activity')
-          .values({
-            org_id: base.orgId,
-            record_type: recordType,
-            record_id: recordId,
-            kind,
-            summary,
-            actor_id: base.actor.type === 'user' ? base.actor.userId : null,
-            // The database stamps it from the sealed context too (activity_stamp_agent).
-            agent_id: base.actor.type === 'agent' ? base.actor.agentId : null,
-          })
-          .execute();
+        await aside(() =>
+          trx
+            .insertInto('crove_kernel.activity')
+            .values({
+              org_id: base.orgId,
+              record_type: recordType,
+              record_id: recordId,
+              kind,
+              summary,
+              actor_id: base.actor.type === 'user' ? base.actor.userId : null,
+              // The database stamps it from the sealed context too (activity_stamp_agent).
+              agent_id: base.actor.type === 'agent' ? base.actor.agentId : null,
+            })
+            .execute(),
+        );
       },
       audit: (detail) => {
         refuseClosed('ctx.audit');
@@ -1377,19 +1496,20 @@ export class Runtime {
         // One nested command at a time: a sibling running beside a tryRun, also one nested inside this run, could have
         // its writes and ok row undone by that tryRun's rollback while it answers success.
         if (running.size > 0) throw new Error(`command ${def.name}: ctx.run runs only while no other nested command runs`);
-        return tracked(() => runNested<R>(resolveNested(name, nestedInput, options?.proposalId)));
+        const nested = resolveNested(name, nestedInput, options?.proposalId);
+        return tracked(() => (ownsWrites(name) ? aside(() => runNested<R>(nested)) : runNested<R>(nested)));
       },
       tryRun: <R>(name: string, nestedInput: unknown, options: TryRunOptions): Promise<TryRunResult<R>> => {
         if (closed) return Promise.reject(new Error(`command ${def.name}: ctx.tryRun after the handler returned`));
         if (running.size > 0) return Promise.reject(new Error(`command ${def.name}: ctx.tryRun runs only while no other nested command runs`));
-        return tracked(() => tryNested<R>(name, nestedInput, options));
+        return tracked(() => (ownsWrites(name) ? aside(() => tryNested<R>(name, nestedInput, options), true) : tryNested<R>(name, nestedInput, options)));
       },
       numbering: {
         allocate: async (n) => {
           refuseClosed('ctx.numbering.allocate');
-          const { rows } = await sql<{ period_key: string; number: string; allocation_id: string }>`
+          const { rows } = await aside(() => sql<{ period_key: string; number: string; allocation_id: string }>`
             SELECT a.period_key, a.number::text AS number, a.allocation_id
-            FROM crove_kernel.allocate_number(${n.legalEntityId}::uuid, ${n.docType}::text, ${n.documentDate}::date, ${n.targetType}::text, ${n.targetId}::uuid) a`.execute(trx);
+            FROM crove_kernel.allocate_number(${n.legalEntityId}::uuid, ${n.docType}::text, ${n.documentDate}::date, ${n.targetType}::text, ${n.targetId}::uuid) a`.execute(trx));
           const row = rows[0];
           const number = Number(row?.number);
           if (!row || !Number.isSafeInteger(number) || number < 1) throw new Error(`command ${def.name}: allocate_number answered no number`);
@@ -1397,7 +1517,7 @@ export class Runtime {
         },
         void: async (n) => {
           refuseClosed('ctx.numbering.void');
-          const { rows } = await sql<{ id: string }>`SELECT crove_kernel.void_number(${n.allocationId}::uuid, ${n.reason}::text) AS id`.execute(trx);
+          const { rows } = await aside(() => sql<{ id: string }>`SELECT crove_kernel.void_number(${n.allocationId}::uuid, ${n.reason}::text) AS id`.execute(trx));
           const voidId = rows[0]?.id;
           if (!voidId) throw new Error(`command ${def.name}: void_number answered no void`);
           return { voidId };
@@ -1519,7 +1639,12 @@ export class Runtime {
       this.requireStepUp(nested.def, base.actor);
       // An R3 command already confirmed the session live for this execution.
       if (def.risk !== 'R3') await this.requireLiveSession(nested.def, base.actor);
-      return this.runInTx<R>(trx, nested.def, nested.input, { ...base, proposalId, ...(cleanRoot !== undefined ? { cleanRoot } : {}) });
+      return this.runInTx<R>(trx, nested.def, nested.input, {
+        ...base,
+        proposalId,
+        ...(cleanRoot !== undefined ? { cleanRoot } : {}),
+        ...(scope !== null ? { writeScope: scope } : {}),
+      });
     };
     let output: O;
     try {
@@ -1535,12 +1660,26 @@ export class Runtime {
     // Before the runtime writes this command's rows: a nested command still running would share the connection with
     // them, and a tryRun's rollback could undo them, so the command fails instead and commits nothing.
     if (await settleRunning()) throw new Error(`command ${def.name}: the handler returned while a nested command was still running`);
+    if (writeCheck !== null) {
+      if (writeCheck.unmeasured) {
+        throw new Error(
+          `command ${def.name}: its writes cannot be checked (a nested command failed, or the handler wrote while the runtime wrote for it: run ctx.emit, ctx.activity, ctx.numbering and nested commands one at a time) (#1710)`,
+        );
+      }
+      const undeclared = [...(await tableWriteCounts(trx))]
+        .filter(([table, n]) => n - (writeCheck.start.get(table) ?? 0) - (writeCheck.aside.get(table) ?? 0) > 0 && !writeCheck.declared.has(table))
+        .map(([table]) => table)
+        .sort();
+      if (undeclared.length > 0) throw new Error(`command ${def.name}: wrote ${undeclared.join(', ')}, which it does not declare (#1710)`);
+    }
     // Each refusal row first counts the refusal in its refusal_tally row (actor, command, code), which stays locked
     // until commit. Written only now, after every nested command ran, and in (command, code) order, so two commands of
     // one actor never wait on each other's tally rows while either still waits for a lock its nested commands take.
     const byKey = (a: CaughtRefusal, b: CaughtRefusal) => compareText(a.command, b.command) || compareText(a.code, b.code);
+    // In a caller's scope (no declaration of its own), the rows the runtime writes for this command are set aside there.
+    const late = writeCheck === null ? aside : <T>(work: () => Promise<T>) => work();
     for (const refusal of [...caught].sort(byKey)) {
-      await this.writeNestedRefusalAudit(trx, base, refusal);
+      await late(() => this.writeNestedRefusalAudit(trx, base, refusal));
     }
     // R3 rows record the assurance used: aal, session_id and the MFA timestamp (ADR-0028 section 5). The runtime's
     // keys come last, so a command's ctx.audit facts never replace them.
@@ -1549,17 +1688,19 @@ export class Runtime {
       auditDetail || assurance
         ? { ...auditDetail, ...actorDetail(base.actor), ...assurance }
         : undefined;
-    await this.writeAudit(trx, {
-      orgId: base.orgId,
-      actor: base.actor,
-      command: def.name,
-      commandId,
-      outcome: 'ok',
-      input: stableStringify(input),
-      target: def.target?.(input) ?? null,
-      proposalId: base.proposalId,
-      ...(detail ? { detail } : {}),
-    });
+    await late(() =>
+      this.writeAudit(trx, {
+        orgId: base.orgId,
+        actor: base.actor,
+        command: def.name,
+        commandId,
+        outcome: 'ok',
+        input: stableStringify(input),
+        target: def.target?.(input) ?? null,
+        proposalId: base.proposalId,
+        ...(detail ? { detail } : {}),
+      }),
+    );
     return output;
   }
 
