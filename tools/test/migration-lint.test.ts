@@ -332,6 +332,16 @@ describe('migration lint: writes in a CTE, ownership, string mode (#1225)', () =
     expect(rules('WITH d AS (DELETE FROM crove_social.sample RETURNING id) INSERT INTO crove_social.sample_log (id) SELECT id FROM d;')).toEqual([]);
     expect(rules('WITH v AS (SELECT org_id FROM crove_kernel.tenant FOR UPDATE) SELECT * FROM v;')).toEqual([]);
     expect(rules('WITH v AS (SELECT 1 AS id) INSERT INTO crove_social.sample (id) SELECT id FROM v ON CONFLICT (id) DO UPDATE SET id = EXCLUDED.id;')).toEqual([]);
+    // After SEARCH and CYCLE clauses, in CREATE TABLE ... AS WITH, and with a CTE named like a statement word (review).
+    expect(rules('WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM t) SEARCH DEPTH FIRST BY n SET o\nDELETE FROM crove_kernel.tenant;')).toEqual(['2 module-schema']);
+    expect(rules('WITH RECURSIVE t(n) AS (SELECT 1) CYCLE n SET c USING p\nUPDATE crove_kernel.tenant SET x = 1;')).toEqual(['2 module-schema']);
+    expect(rules('CREATE TABLE IF NOT EXISTS crove_social.t AS WITH d AS (DELETE FROM crove_kernel.tenant RETURNING 1) SELECT 1;')).toEqual(['1 module-schema']);
+    expect(rules('WITH update AS (SELECT 1), delete AS (SELECT 2) SELECT * FROM update, delete;')).toEqual([]);
+    // Deeply nested CTEs are read once each, not once per level (Codex): fast.
+    const nested = `${'WITH a AS ('.repeat(40)}DELETE FROM crove_kernel.tenant RETURNING 1${') SELECT 1'.repeat(40)};`;
+    const started = Date.now();
+    expect(rules(nested)).toEqual(['1 module-schema']);
+    expect(Date.now() - started).toBeLessThan(1000);
     // The same waiver as a top-level write covers it.
     const waived = '-- migration-lint: cross-module the numbers are recorded in the kernel series\nWITH v AS (SELECT 1 AS n)\nINSERT INTO crove_kernel.number_series (n) SELECT n FROM v;';
     const waivers: { file: string; line: number; schemas: string[]; reason: string }[] = [];
@@ -358,6 +368,26 @@ describe('migration lint: writes in a CTE, ownership, string mode (#1225)', () =
     expect(rules('ALTER TABLE crove_social.sample RENAME COLUMN owner TO owner_id;')).toEqual([]);
     expect(rules('ALTER TABLE crove_social.sample RENAME owner TO owner_id;')).toEqual([]);
     expect(rules('ALTER TABLE crove_social.sample RENAME CONSTRAINT owner TO owner_key;')).toEqual([]);
+    // From the reviews: a table named like a RENAME keyword, a table or schema for the definer roles (its owner bypasses
+    // RLS), quoted names taken as written, a role the lint cannot read, and a switch of the session's role.
+    for (const sql of [
+      'ALTER TABLE crove_social.value OWNER TO crove_app;',
+      'ALTER TABLE crove_social.attribute OWNER TO crove_app;',
+      'ALTER TABLE crove_social.sample OWNER TO crove_definer_tenant;',
+      'ALTER SCHEMA crove_social OWNER TO crove_auth_reader;',
+      'CREATE SCHEMA IF NOT EXISTS crove_social AUTHORIZATION crove_definer_tenant;',
+      'ALTER FUNCTION crove_social.f(int) OWNER TO "Crove_Definer_Tenant";',
+      'ALTER FUNCTION crove_social.f(int) OWNER TO "current_user";',
+      "DO $$ BEGIN\n  EXECUTE format('ALTER FUNCTION crove_social.f(int) OWNER TO %I', r);\nEND $$;",
+      'SET ROLE crove_app;',
+      'SET LOCAL ROLE crove_app;',
+      'SET SESSION AUTHORIZATION crove_app;',
+      "SELECT set_config('role', 'crove_app', true);",
+    ]) {
+      expect(rules(sql).some((r) => r.endsWith('owner-to')), sql).toBe(true);
+    }
+    expect(rules('ALTER FUNCTION crove_social.f(int) OWNER TO "crove_definer_tenant";')).toEqual([]);
+    expect(rules('ALTER TABLE crove_social.sample OWNER TO CURRENT_USER;')).toEqual([]);
   });
 
   it('refuses a change of standard_conforming_strings in any form', () => {
@@ -368,6 +398,14 @@ describe('migration lint: writes in a CTE, ownership, string mode (#1225)', () =
       "SELECT set_config('standard_conforming_strings', 'off', true);",
       "DO $$ BEGIN\n  PERFORM pg_catalog.set_config('Standard_Conforming_Strings', 'off', true);\nEND $$;",
       'ALTER FUNCTION crove_social.f(int) SET standard_conforming_strings = off;',
+      // From the reviews: a quoted name in any case, escaped names, a name built from pieces, and the client encoding.
+      'SET "standard_conforming_strings" = off;',
+      'SET "Standard_Conforming_Strings" = off;',
+      "SELECT set_config(E'standard\\x5fconforming_strings', 'off', false);",
+      "SELECT set_config(U&'standard\\005fconforming_strings', 'off', false);",
+      "SELECT set_config('standard_' || 'conforming_strings', 'off', false);",
+      "SET client_encoding = 'SJIS';",
+      "SET NAMES 'BIG5';",
     ]) {
       expect(rules(sql).some((r) => r.endsWith('string-mode')), sql).toBe(true);
     }
