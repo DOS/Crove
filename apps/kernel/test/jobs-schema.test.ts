@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getConstructionPlans } from 'pg-boss';
 import { describe, expect, it } from 'vitest';
@@ -50,6 +52,10 @@ describe('vendored pg-boss schema (External-tenant gate T6)', () => {
     for (const queue of [...Object.values(QUEUES), ...SOCIAL_PUBLISH_QUEUES, ...MAIL_QUEUES]) {
       expect(AVAILABLE_MODULES as readonly string[], queue).toContain(queue.split('-')[0]);
     }
+    // health() lists the optional modules, whose queues alone can drop out of its job age: every module but kernel.
+    const sql = readFileSync(join(MIGRATIONS, '20261105120000_crove_kernel_health_installed_queues.sql'), 'utf8');
+    const listed = /<> ALL \(ARRAY\[([^\]]*)\]\)/.exec(sql)?.[1]?.split(',').map((m) => m.trim().replaceAll("'", ''));
+    expect(listed?.sort()).toEqual(AVAILABLE_MODULES.filter((m) => m !== 'kernel').sort());
   });
 
   it('renders an upgrade that refuses any starting version but its own', () => {

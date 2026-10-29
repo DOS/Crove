@@ -9,13 +9,15 @@
 -- After: each worker records, with its heartbeat, the modules it works (worker_heartbeat.modules, through the new
 -- worker_beat(text, text[])). health() leaves out of jobs_queued and job_oldest_queued_age_seconds the jobs of a queue
 -- whose module no worker that beat in the last hour works; a queue's module is its name up to the first '-' (kernel-,
--- finance-, social-, crm-, notes-; apps/kernel/test/jobs-schema.test.ts holds every queue to that). The kernel's
--- queues always count. While any worker that beat in the last hour has not recorded its modules (an older release
+-- finance-, social-, crm-, notes-; apps/kernel/test/jobs-schema.test.ts holds every queue to that). Only the optional
+-- modules' queues (finance, social, crm, notes: the modules CROVE_MODULES may leave out, which the same test keeps in
+-- step) can drop out: the kernel's always count, and so does any other name, pg-boss's own cron queue among them. While any worker that beat in the last hour has not recorded its modules (an older release
 -- during a deploy), every queue counts, as before. Nothing is deleted: the jobs stay queued, and run once the module is
 -- installed again (the notes member purge carries whose notes to purge). The dead letter count is unchanged.
 --
 -- crove_kernel.worker_heartbeat.modules   the modules the worker works, kernel included; NULL for an older worker.
 -- crove_kernel.worker_beat(text, text[])  as worker_beat(text), recording the modules too (crove_worker only).
+-- crove_kernel.worker_beat(text)          as in 20261015234500, clearing the modules a newer release recorded.
 -- crove_kernel.health(int)                as in 20261015234500, leaving out the queues of modules no live worker works.
 SET LOCAL lock_timeout = '2s';
 
@@ -39,6 +41,21 @@ BEGIN
 END $$;
 REVOKE ALL ON FUNCTION crove_kernel.worker_beat(text, text[]) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION crove_kernel.worker_beat(text, text[]) TO crove_worker;
+
+-- An older release's beat (after a rollback on the same host, whose instance row this release already wrote) clears
+-- the modules, so its row reads as a worker that recorded none and every queue counts again (#1877 review).
+CREATE OR REPLACE FUNCTION crove_kernel.worker_beat(p_instance text)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
+BEGIN
+  IF NOT pg_catalog.pg_has_role(SESSION_USER, 'crove_worker', 'MEMBER') THEN
+    RAISE EXCEPTION 'WORKER_ONLY' USING ERRCODE = '42501';
+  END IF;
+  INSERT INTO crove_kernel.worker_heartbeat (instance, beat_at) VALUES (p_instance, pg_catalog.now())
+  ON CONFLICT (instance) DO UPDATE SET beat_at = excluded.beat_at, modules = NULL;
+  DELETE FROM crove_kernel.worker_heartbeat WHERE beat_at < pg_catalog.now() - interval '7 days';
+END $$;
+REVOKE ALL ON FUNCTION crove_kernel.worker_beat(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION crove_kernel.worker_beat(text) TO crove_worker;
 
 CREATE OR REPLACE FUNCTION crove_kernel.health(p_dead_letter_window_seconds int DEFAULT 3600)
 RETURNS TABLE (
@@ -89,7 +106,10 @@ BEGIN
     FROM (
       SELECT j.start_after FROM crove_jobs.job j
       WHERE j.state IN ('created', 'retry') AND j.start_after <= checked_at
-        AND (v_worked IS NULL OR pg_catalog.split_part(j.name, '-', 1) = 'kernel' OR pg_catalog.split_part(j.name, '-', 1) = ANY (v_worked))
+        -- Only the queues of the optional modules can drop out; any other name counts, the kernel's and pg-boss's
+        -- own (__pgboss__send-it, its cron) among them.
+        AND (v_worked IS NULL OR pg_catalog.split_part(j.name, '-', 1) <> ALL (ARRAY['finance', 'social', 'crm', 'notes'])
+             OR pg_catalog.split_part(j.name, '-', 1) = ANY (v_worked))
       ORDER BY j.start_after LIMIT 10000
     ) q;
     SELECT pg_catalog.count(*)::int INTO dead_letter_count

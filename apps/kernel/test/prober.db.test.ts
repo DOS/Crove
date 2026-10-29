@@ -218,6 +218,20 @@ suite('prober on PostgreSQL', () => {
     // A live worker of an older release, which records no modules: every queue counts, as before.
     await admin((c) => c.query(`INSERT INTO crove_kernel.worker_heartbeat (instance, beat_at) VALUES ('worker-legacy', now())`));
     expect(await queued()).toEqual({ jobs: 2, aged: true });
+    // An older release on the same host (a rollback) beats through worker_beat(text): its row loses the modules this
+    // release recorded, so every queue counts (Codex review).
+    await admin((c) => c.query(`DELETE FROM crove_kernel.worker_heartbeat WHERE instance = 'worker-legacy'`));
+    expect(await queued()).toEqual({ jobs: 0, aged: false });
+    const worker = new pg.Client({ connectionString: login('crove_worker', 'test-worker-pw') });
+    await worker.connect();
+    try {
+      await worker.query(`SELECT crove_kernel.worker_beat('worker-a')`);
+    } finally {
+      await worker.end();
+    }
+    expect(await queued()).toEqual({ jobs: 2, aged: true });
+    await beat(workerDb, 'worker-a', ['kernel']);
+    await admin((c) => c.query(`INSERT INTO crove_kernel.worker_heartbeat (instance, beat_at) VALUES ('worker-legacy', now())`));
     // Silent for over an hour, it no longer counts; nor does the day-old 'worker-old' (also without modules).
     await admin((c) => c.query(`UPDATE crove_kernel.worker_heartbeat SET beat_at = now() - interval '2 hours' WHERE instance = 'worker-legacy'`));
     expect(await queued()).toEqual({ jobs: 0, aged: false });
