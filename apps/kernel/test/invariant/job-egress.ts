@@ -18,7 +18,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { parseAst } from 'vitest/node';
 
-const ROOT = resolve(import.meta.dirname, '../../..');
+const ROOT = resolve(import.meta.dirname, '../../../..');
 const KERNEL_SRC = 'apps/kernel/src';
 
 // An ESTree node.
@@ -80,6 +80,27 @@ export const DEPS_REACH: Readonly<Record<string, readonly Reach[]>> = {
   aiPrice: [],
   outboxLagPauseSeconds: [],
 };
+
+// The WorkerDeps fields DEPS_REACH classifies before the field exists, each with the issue that adds it. This
+// directory runs from the base branch on a protected-path PR, so a new field lands in two steps (#1663): its
+// classification here first, which passes both the PR's own copy and the base one, then the field in a later PR, whose
+// base copy already knows it. Remove the entry once the field is on the base branch.
+export const PENDING_DEPS: Readonly<Record<string, string>> = {};
+
+// What the classification of WorkerDeps gets wrong (#1663), given its top-level fields: a field DEPS_REACH does not
+// classify fails (the safety direction: a new dependency is classified before it is used), and so does an entry for a
+// field WorkerDeps does not have, unless PENDING_DEPS names it with an issue.
+export function depsCoverage(fields: readonly string[], reach: Readonly<Record<string, unknown>>, pending: Readonly<Record<string, string>>): string[] {
+  const problems: string[] = [];
+  const classified = new Set(Object.keys(reach).map((k) => k.split('.')[0] as string));
+  for (const field of fields) if (!classified.has(field)) problems.push(`WorkerDeps field ${field} is not classified in DEPS_REACH`);
+  for (const field of classified) {
+    if (fields.includes(field)) continue;
+    if (!(field in pending)) problems.push(`DEPS_REACH classifies ${field}, which WorkerDeps does not have; to land it first, name it in PENDING_DEPS with the issue that adds it`);
+    else if (!/^#\d+$/.test(pending[field] ?? '')) problems.push(`PENDING_DEPS names ${field} without an issue (#<number>)`);
+  }
+  return problems;
+}
 
 interface Site {
   file: string;
@@ -407,7 +428,7 @@ function depsReach(path: readonly string[], node: N): readonly Reach[] {
     const key = path.slice(0, n).join('.');
     if (Object.hasOwn(DEPS_REACH, key)) return DEPS_REACH[key] as readonly Reach[];
   }
-  throw new Error(`WorkerDeps field ${path[0]} is not classified in DEPS_REACH (apps/kernel/test/job-egress.ts)`);
+  throw new Error(`WorkerDeps field ${path[0]} is not classified in DEPS_REACH (apps/kernel/test/invariant/job-egress.ts)`);
 }
 
 // A use that only tests the value (`if (deps.push)`, `!channels`, `social && deps.channels ? ...`) or names it for
