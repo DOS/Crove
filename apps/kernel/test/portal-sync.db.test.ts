@@ -475,6 +475,32 @@ suite('assisted tax portal sync (#325)', () => {
     }
   });
 
+  // The finance domain refuses the list with its own error (domain/ stays pure, #1680); the API's answer is the same as
+  // when the domain threw the runtime's DomainError: 422, the code and the domain's message, and nothing is filed.
+  it('answers a list too large 422 PORTAL_LIST_TOO_LARGE with the finance message, filing nothing', async () => {
+    const real = createTaxPortalClient({ baseUrl: portal.url, gapMs: 0, sleep: async () => {} });
+    const huge: ReturnType<typeof createTaxPortalClient> = {
+      ...real,
+      async purchaseInvoices(token, from, to, step) {
+        const answers = await real.purchaseInvoices(token, from, to, step);
+        const first = answers.find((a) => a.rows.length > 0);
+        if (!first) throw new Error('the fake portal answered no invoice');
+        const sample = first.rows[0] as Record<string, unknown>;
+        return [{ query: first.query, rows: Array.from({ length: 20_001 }, (_, i) => ({ ...sample, shdon: String(i + 1) })) }];
+      },
+    };
+    const hugeApp = appWith({ client: huge });
+    const files = async () => Number((await admin((c) => c.query<{ n: string }>('SELECT count(*) AS n FROM crove_kernel.file WHERE org_id = $1', [org.orgId]))).rows[0]?.n);
+    const before = await files();
+    const captcha = await rpc('portalSync/captcha', owner, { period: PERIOD }, org.slug, hugeApp);
+    const logged = await rpc('portalSync/login', owner, { period: PERIOD, challenge: captcha.body.challenge, captcha: FAKE_CAPTCHA_ANSWER, password: FAKE_PORTAL_PASSWORD, consent: true }, org.slug, hugeApp);
+    expect(logged.status, JSON.stringify(logged.body)).toBe(200);
+    const refused = await rpc('portalSync/fetchList', owner, { period: PERIOD, session: logged.body.session }, org.slug, hugeApp);
+    expect(refused.status, JSON.stringify(refused.body)).toBe(422);
+    expect(refused.body).toMatchObject({ code: 'PORTAL_LIST_TOO_LARGE', message: 'Kỳ này có hơn 20000 hóa đơn trên cổng thuế; hãy xuất danh sách Excel từ cổng thuế rồi tải lên' });
+    expect(await files()).toBe(before);
+  });
+
   it('says the portal is down, without its words', async () => {
     portal.options.outage = { status: 503, body: 'Service Unavailable: upstream secret detail', contentType: 'text/plain' };
     try {

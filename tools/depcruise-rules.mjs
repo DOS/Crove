@@ -57,13 +57,6 @@ export function checkModuleGraph(modules) {
 export const EXCEPTIONS = [
   {
     rule: 'domain-pure',
-    from: ['modules/finance/src/domain/portal-api.ts'],
-    to: '^packages/kernel-runtime/src/',
-    reason:
-      "normalizePortalInvoices throws the runtime's DomainError (PORTAL_LIST_TOO_LARGE, 422) so the portal sync answers with that status and message, and readSyncedList catches it by class. DomainError lives in the command runtime, a protected path; moving it to an isomorphic package is #1680.",
-  },
-  {
-    rule: 'domain-pure',
     from: ['modules/social/src/domain/publish.ts'],
     to: '^packages/channel/src/',
     reason:
