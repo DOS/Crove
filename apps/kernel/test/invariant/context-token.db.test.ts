@@ -132,7 +132,8 @@ suite('context tokens: enter_user_context on PostgreSQL (#1822, ADR-0028 section
       token(users.owner, orgA, { key: randomBytes(32).toString('base64') }),
       message,
       '',
-      `v2.${good.slice(3)}`,
+      // Another version over the same signature (the version is signed): v1 and v2 swapped, whichever the token is.
+      `${good.startsWith('v2.') ? 'v1' : 'v2'}.${good.slice(3)}`,
     ];
     for (const tok of forged) {
       await expect(enter(app, orgA, tok), tok).rejects.toMatchObject({ code: '42501', message: 'CONTEXT_TOKEN_INVALID' });
