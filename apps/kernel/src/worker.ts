@@ -725,19 +725,21 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
 
   // The period balance reconciliation (#1284): nightly, the deltas the posting definer appended compared with the
   // journal lines. A difference fails the job at once (retryLimit 0); pg-boss keeps the failed job and the prober
-  // alerts on the dead letter (docs/runbooks/incidents.md).
-  await background.add(QUEUES.periodBalanceVerify, () => boss.work(QUEUES.periodBalanceVerify, { batchSize: 1 }, async () => {
-    const started = Date.now();
-    const elapsed = () => `${Math.round((Date.now() - started) / 1000)} s`;
-    try {
-      await runPeriodBalanceReconciliation(deps.workerDb);
-      console.log(`[period-balance] deltas match the journal lines (${elapsed()})`);
-    } catch (error) {
-      console.error(`[period-balance] ALERT after ${elapsed()}: ${error instanceof Error ? error.message : 'reconciliation could not run'}`);
-      throw error;
-    }
-  }));
-  await boss.schedule(QUEUES.periodBalanceVerify, PERIOD_BALANCE_VERIFY_CRON, null, { tz: RETENTION_TZ, missed: 'once', retryLimit: 0, expireInSeconds: 3600 });
+  // alerts on the dead letter (docs/runbooks/incidents.md). A finance job: worked only with the module (#1471).
+  if (finance) {
+    await background.add(QUEUES.periodBalanceVerify, () => boss.work(QUEUES.periodBalanceVerify, { batchSize: 1 }, async () => {
+      const started = Date.now();
+      const elapsed = () => `${Math.round((Date.now() - started) / 1000)} s`;
+      try {
+        await runPeriodBalanceReconciliation(deps.workerDb);
+        console.log(`[period-balance] deltas match the journal lines (${elapsed()})`);
+      } catch (error) {
+        console.error(`[period-balance] ALERT after ${elapsed()}: ${error instanceof Error ? error.message : 'reconciliation could not run'}`);
+        throw error;
+      }
+    }));
+    await boss.schedule(QUEUES.periodBalanceVerify, PERIOD_BALANCE_VERIFY_CRON, null, { tz: RETENTION_TZ, missed: 'once', retryLimit: 0, expireInSeconds: 3600 });
+  }
 
   // Inbox triage: tasks for the agents whose template subscribes to the event. The command reads the event from the
   // outbox; the job carries only its id.

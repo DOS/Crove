@@ -262,6 +262,9 @@ suite('module enablement on PostgreSQL (plan Decision 12, ADR-0031)', () => {
       expect(jobs?.n).toBe('0');
       const runs = await adminQuery<{ n: string }>('SELECT count(*)::text AS n FROM crove_kernel.extraction');
       expect(runs[0]?.n).toBe('0');
+      // Nor does it schedule the finance reconciliation (#1471).
+      const [scheduled] = await adminQuery<{ n: string }>('SELECT count(*)::text AS n FROM crove_jobs.schedule WHERE name = $1', [QUEUES.periodBalanceVerify]);
+      expect(scheduled?.n).toBe('0');
     } finally {
       await stop();
     }

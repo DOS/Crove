@@ -58,3 +58,68 @@ describe('no cross-module SQL (plan §5.4)', () => {
     expect(offenders).toEqual([]);
   });
 });
+
+// The reverse direction (#1471): the kernel names a module's schema only where a reason is written down, because a
+// deployment may leave any module out (ADR-0031). Migrations still apply to every schema, so a module's tables and
+// functions always exist; what a reason must show is that the code is right with the module off: it runs only when the
+// module is installed (Runtime.installed), or it is meant to reach the module's data whatever is installed.
+const KERNEL_DIRS = ['packages/kernel/src', 'apps/kernel/src', 'packages/db/src'];
+// The kernel source files that name a module's schema, with the modules they name and why.
+const KERNEL_MODULE_REFERENCES: Record<string, { modules: readonly string[]; why: string }> = {
+  'packages/db/src/generated/database.ts': { modules: ['crm', 'finance', 'notes', 'social'], why: 'Kysely types of every table crove_tenant reads, generated (pnpm db:types); types only, no SQL' },
+  'packages/db/src/schema.ts': { modules: ['crm', 'finance', 'notes', 'social'], why: 'refinements of the generated table types (CHECK unions, trigger-set columns); types only, no SQL' },
+  'packages/kernel/src/offboarding.ts': {
+    modules: ['crm', 'finance', 'notes', 'social'],
+    why: 'the org export lists every table of every schema (its manifest needs a part per table): a module left out exports its old rows or none, and its data stays, as ADR-0031 says',
+  },
+  'packages/kernel/src/personal-data.ts': {
+    modules: ['crm', 'finance', 'social'],
+    why: 'the personal-data registry, find and erase: an erasure reaches data an earlier install of the module left, whatever is installed now',
+  },
+  'packages/kernel/src/commands.ts': { modules: ['notes'], why: 'a comment: kernel.member.remove queues the notes purge, which the notes worker runs only with the module' },
+  'apps/kernel/src/bio-page.ts': { modules: ['social'], why: 'public bio page routes, registered only when social is installed (http.ts)' },
+  'apps/kernel/src/booking-feed.ts': { modules: ['crm'], why: 'the booking calendar feed, served only when crm is installed (http.ts)' },
+  'apps/kernel/src/booking-page.ts': { modules: ['crm'], why: 'public booking routes, registered only when crm is installed (http.ts)' },
+  'apps/kernel/src/calendar-feed.ts': { modules: ['social'], why: 'the post calendar feed, served only when social is installed (http.ts)' },
+  'apps/kernel/src/chat-alert-save.ts': { modules: ['social'], why: 'a comment: the procedure answers 404 when social is not installed (rpc.ts)' },
+  'apps/kernel/src/chat-alerts.ts': { modules: ['social'], why: 'a comment: the sender is built only when social is installed (worker.ts)' },
+  'apps/kernel/src/credential-reseal.ts': { modules: ['social'], why: 'the chat alert targets are resealed only when social is installed; the channel credentials are kernel work' },
+  'apps/kernel/src/feeds.ts': { modules: ['social'], why: 'the RSS feed sweep, timed only when social is installed (worker.ts)' },
+  'apps/kernel/src/missing-invoice-mail.ts': { modules: ['finance'], why: 'the missing invoice reminders, timed only when finance is installed (worker.ts)' },
+  'apps/kernel/src/notes-worker.ts': { modules: ['notes'], why: 'the notes jobs, worked and scheduled only when notes is installed (worker.ts)' },
+  'apps/kernel/src/period-balance.ts': { modules: ['finance'], why: 'the period balance reconciliation, worked and scheduled only when finance is installed (worker.ts)' },
+  'apps/kernel/src/report-link.ts': { modules: ['social'], why: 'public report link routes, registered only when social is installed (http.ts)' },
+  'apps/kernel/src/review-link.ts': { modules: ['social'], why: 'public review link routes, registered only when social is installed (http.ts)' },
+  'apps/kernel/src/short-link.ts': { modules: ['social'], why: 'the short link route, registered only when social is installed (http.ts)' },
+  'apps/kernel/src/stock-photos.ts': { modules: ['social'], why: 'a comment: the stock photo procedures answer 404 when social is not installed (rpc.ts)' },
+  'apps/kernel/src/worker.ts': { modules: ['social'], why: 'the publishing sweep claims social posts only when social is installed (no publishers otherwise)' },
+};
+
+// The modules a text names by schema (crove_<module>.), among `modules`.
+function moduleSchemas(modules: ReadonlySet<string>, text: string): string[] {
+  return [...new Set([...text.matchAll(SCHEMA)].map((m) => m[1] as string))].filter((schema) => modules.has(schema)).sort();
+}
+
+describe('kernel code names a module schema only for a written reason (#1471)', () => {
+  const modules = new Set(readdirSync(MODULES).filter((name) => existsSync(join(MODULES, name, 'package.json'))));
+
+  it('finds a module schema but not the kernel, jobs or meta schemas', () => {
+    expect(moduleSchemas(new Set(['finance', 'social']), "selectFrom('crove_finance.journal_entry') JOIN crove_kernel.tenant, crove_jobs.job, crove_social.post")).toEqual(['finance', 'social']);
+    expect(moduleSchemas(new Set(['finance']), 'crove_kernel.audit_event crove_meta.schema_migrations')).toEqual([]);
+  });
+
+  it('lists every kernel file that names a module schema, with the modules it names and why, and nothing more', () => {
+    expect(modules.size).toBeGreaterThan(0);
+    const found: Record<string, string[]> = {};
+    for (const dir of KERNEL_DIRS) {
+      for (const file of sources(join(ROOT, dir))) {
+        const named = moduleSchemas(modules, readFileSync(file, 'utf8'));
+        if (named.length > 0) found[relative(ROOT, file).replaceAll('\\', '/')] = named;
+      }
+    }
+    const listed = Object.fromEntries(Object.entries(KERNEL_MODULE_REFERENCES).map(([file, entry]) => [file, [...entry.modules].sort()]));
+    // A new file, a new module in a listed file, or a listed file that no longer names it: write down why, or drop it.
+    expect(found).toEqual(listed);
+    for (const [file, entry] of Object.entries(KERNEL_MODULE_REFERENCES)) expect(entry.why.length, file).toBeGreaterThan(20);
+  });
+});
