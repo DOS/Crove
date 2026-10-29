@@ -492,6 +492,28 @@ suite('org offboarding on PostgreSQL (#38)', () => {
     await expect(workerRuntime.execute('kernel.org.export.record', elsewhere, { ...system, orgId: quiet.org.orgId })).rejects.toMatchObject({
       code: 'EXPORT_REBIND_MISMATCH',
     });
+
+    // The purge takes an export's own record as its date, never a restore's re-record (#1726, review of #1864): the
+    // owner asks for a fresh export, a restore then re-records the old one, and the fresh export never comes. The purge
+    // still waits for it.
+    const purgeState = () =>
+      withAdmin(async (admin) => {
+        const refusal = (await admin.query<{ r: string | null }>('SELECT crove_kernel.org_purge_refusal($1, 30) AS r', [org.orgId])).rows[0]?.r;
+        const check = (await admin.query<{ exported_at: Date }>('SELECT exported_at FROM crove_kernel.org_purge_check($1)', [org.orgId])).rows[0];
+        const own = (
+          await admin.query<{ at: Date }>(
+            `SELECT max(occurred_at) AS at FROM crove_kernel.audit_event
+             WHERE org_id = $1 AND command = 'kernel.org.export.record' AND outcome = 'ok' AND NOT detail ? 'rebind'`,
+            [org.orgId],
+          )
+        ).rows[0]?.at;
+        return { refusal, exportedAt: check?.exported_at.toISOString(), own: own?.toISOString() };
+      });
+    await runtime.execute('kernel.org.offboard', { confirmSlug: org.slug }, { actor: asMfa(owner.id), orgId: org.orgId });
+    expect(await rebindExport({ runtime: workerRuntime, store: original.restoredCopy('again') }, org.orgId)).toBe('rebound');
+    const state = await purgeState();
+    expect(state.refusal).toBe('export_pending');
+    expect(state.exportedAt).toBe(state.own);
   });
 
   it('runs a streamed query in one REPEATABLE READ, READ ONLY transaction that may idle while the sink works', async () => {
