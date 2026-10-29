@@ -891,7 +891,8 @@ function sqlStatements(text: string, backslashes = false): string[] {
     const ch = text[i] as string;
     const next = text[i + 1];
     if (ch === '-' && next === '-') {
-      while (i < text.length && text[i] !== '\n') i += 1;
+      // PostgreSQL ends a line comment at a carriage return as well as a newline.
+      while (i < text.length && text[i] !== '\n' && text[i] !== '\r') i += 1;
       current += ' ';
       continue;
     }

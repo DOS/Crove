@@ -1717,6 +1717,7 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
       commentedDollars: sql.raw('-- $a$\nCOMMIT -- $a$'),
       nestedComment: sql.raw('/* a /* b */ c */ COMMIT'),
       lineCommentInBlock: sql.raw('/* -- */ COMMIT'),
+      carriageReturn: sql.raw('-- a line comment\rCOMMIT'),
       dollarInIdentifier: sql.raw('SELECT 1 AS x$q$; COMMIT; SELECT 1 AS y$q$'),
       nestedAlias: sql`${sql`SELECT 1; COMMIT; SELECT 1`.as('a')}`,
       // Several statements in one query, none of them control: refused as well, fail closed.
