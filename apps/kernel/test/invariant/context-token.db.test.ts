@@ -132,7 +132,8 @@ suite('context tokens: enter_user_context on PostgreSQL (#1822, ADR-0028 section
       token(users.owner, orgA, { key: randomBytes(32).toString('base64') }),
       message,
       '',
-      `v2.${good.slice(3)}`,
+      // Another version over the same signature (the version is signed): v1 and v2 swapped, whichever the token is.
+      `${good.startsWith('v2.') ? 'v1' : 'v2'}.${good.slice(3)}`,
     ];
     for (const tok of forged) {
       await expect(enter(app, orgA, tok), tok).rejects.toMatchObject({ code: '42501', message: 'CONTEXT_TOKEN_INVALID' });
@@ -183,8 +184,13 @@ suite('context tokens: enter_user_context on PostgreSQL (#1822, ADR-0028 section
     await expect(enter(app, orgA, token(users.owner, orgA, { sessionId: revoked }))).rejects.toMatchObject({ code: '28000', message: 'SESSION_REVOKED' });
     await expect(enter(app, orgA, token(users.owner, orgA, { sessionId: revokedInA }))).rejects.toMatchObject({ code: '28000', message: 'SESSION_REVOKED_IN_ORG' });
     expect(await enter(app, orgA, token(users.owner, orgA, { sessionId: live }))).toBe(users.owner);
-    // A session the database has not seen yet (the kernel records it on first use) is not refused here.
-    expect(await enter(app, orgA, token(users.owner, orgA, { sessionId: randomUUID() }))).toBe(users.owner);
+    // A session the database has not recorded: let in until #1822 step 2, which requires an active session row for a
+    // session a token names (the kernel's session check records it in the same transaction), refused after it.
+    const unseen = await enter(app, orgA, token(users.owner, orgA, { sessionId: randomUUID() })).then(
+      (user) => user,
+      (error: { code?: string; message?: string }) => `${error.code}:${error.message}`,
+    );
+    expect([users.owner, '28000:SESSION_INVALID']).toContain(unseen);
   });
 
   it('keeps the key out of reach of every login role', async () => {
@@ -245,7 +251,8 @@ suite('context tokens: enter_user_context on PostgreSQL (#1822, ADR-0028 section
     const bytes = contextTokenKeyBytes(KEY);
     expect(tok).not.toContain(KEY);
     expect(tok).not.toContain(bytes.toString('hex'));
-    expect(tok.split('.')).toHaveLength(8);
+    // v1 has 8 fields; #1822 step 2's v2 adds the session check the kernel ran.
+    expect([8, 9]).toContain(tok.split('.').length);
     // A key of the wrong length is refused by both readers without echoing it.
     const short = Buffer.from('a short secret value').toString('base64');
     for (const read of [contextTokenKeyBytes, runnerKeyBytes]) {
@@ -260,7 +267,7 @@ suite('context tokens: enter_user_context on PostgreSQL (#1822, ADR-0028 section
     }
   });
 
-  it('runs the runtime through tokens once it has a key, and through enter_context without one', async () => {
+  it('runs the runtime through tokens once it has a key, and through enter_context, while crove_app may call it, without one', async () => {
     const keyed = createPool({ connectionString: appUrl, max: 1 });
     const keyless = createPool({ connectionString: appUrl, max: 1 });
     const wrong = createPool({ connectionString: appUrl, max: 1 });
@@ -269,7 +276,19 @@ suite('context tokens: enter_user_context on PostgreSQL (#1822, ADR-0028 section
       new Runtime(createDb(pool), { manifests: TEST_MANIFESTS, contextTokenKey }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: 'in.test' }) });
     const ctx = { actor: asUser(users.owner), orgId: orgA };
     await expect(make(keyed, KEY).query('kernel.task.list', {}, ctx)).resolves.toBeDefined();
-    await expect(make(keyless, null).query('kernel.task.list', {}, ctx)).resolves.toBeDefined();
+    // Without a key the runtime calls enter_context: let in while crove_app may call it, refused once #1822 step 2
+    // revokes it.
+    const granted = await withAdmin(
+      async (a) =>
+        (await a.query<{ can: boolean }>(`SELECT has_function_privilege('crove_app', 'crove_kernel.enter_context(uuid,uuid)', 'EXECUTE') AS can`)).rows[0]?.can,
+    );
+    const keylessOutcome = await make(keyless, null)
+      .query('kernel.task.list', {}, ctx)
+      .then(
+        () => 'entered',
+        (error: unknown) => (error as { code?: string }).code ?? 'unknown',
+      );
+    expect(keylessOutcome).toBe(granted ? 'entered' : 'FORBIDDEN');
     // A key the database does not hold: the token path is taken, and the database refuses it.
     await expect(make(wrong, randomBytes(32).toString('base64')).query('kernel.task.list', {}, ctx)).rejects.toMatchObject({ code: 'INTERNAL' });
   });

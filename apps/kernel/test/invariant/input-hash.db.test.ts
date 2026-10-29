@@ -26,6 +26,7 @@ import { financeCommands, financeQueries } from '@crove/mod-finance';
 import { notesCommands, notesQueries } from '@crove/mod-notes';
 import { loadConfig } from '../../src/config.ts';
 import { createKernel, defaultAdapters, type IdentityPort } from '../../src/kernel.ts';
+import { createSessionStatusSource } from '../../src/sessions.ts';
 import { LocalArchiveStore, verifyArchive, writeArchive } from '../../src/worm.ts';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 import { contextToken } from './fixtures/context-token.ts';
@@ -405,7 +406,9 @@ suite('keyed input hash on PostgreSQL (#1732)', () => {
       STREAM_MAX_CONNECTIONS: '0',
     });
     const identity: IdentityPort = {
-      sessions: { mode: 'off', liveCheckForR3: false, check: async () => {} },
+      // The real 'off' check (Crove's own session records), as an API on a local URL runs it: #1822 step 2 requires the
+      // session a context token names to be recorded, which a check that does nothing would not.
+      sessions: createSessionStatusSource('off'),
       revoker: null,
       authenticator: () => async () => ({ userId: users.ownerA, email: 'owner-a@example.com', name: null, aal: 'aal1', sessionId: randomUUID(), mfaAt: null }),
     };
