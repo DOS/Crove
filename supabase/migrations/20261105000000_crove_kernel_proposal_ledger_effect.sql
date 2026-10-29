@@ -5,8 +5,10 @@
 --   transaction by this actor (#1816), crove_finance.ledger_effect_recorded (20261104230000): true for a command that is
 --   not a ledger command, and for a ledger command only when a journal entry tied to the proposal through that command's
 --   path was posted in this transaction. So a session with raw SQL on the runtime's connection that writes the audit row
---   itself can no longer mark a money-path proposal executed with nothing posted. Copied from
---   20261104170000_crove_kernel_proposal_executed_gate.sql (the newest definition) with that rule added.
+--   itself can no longer mark a money-path proposal executed with nothing posted. The move also keeps the command as it
+--   was approved: the system context may otherwise change a proposal's command, and an update that turned a non-ledger
+--   proposal into a ledger one while executing it would pass both checks on the old command. Copied from
+--   20261104170000_crove_kernel_proposal_executed_gate.sql (the newest definition) with those rules added.
 -- The kernel names a finance function here because the ledger commands are finance's (approval_command_policy names them
 -- too); the guard reaches it only on approved -> executed, as the writer, which has EXECUTE on it.
 SET LOCAL lock_timeout = '2s';
@@ -93,9 +95,11 @@ BEGIN
         NEW.decided_at IS NOT NULL
       -- The proposal's command ran in this transaction, for this proposal, as this actor: the runtime writes its ok row
       -- before the execution marks the proposal executed (#1816).
-      -- For a ledger command, its effect too: a journal entry for this proposal, posted in this transaction (#1842).
+      -- For a ledger command, its effect too: a journal entry for this proposal, posted in this transaction (#1842). The
+      -- command stays as it was approved, the system context included, so the checks are of the command that executes.
       WHEN OLD.status = 'approved' AND NEW.status = 'executed' THEN
-        crove_kernel.proposal_execution_recorded(NEW.org_id, NEW.id, OLD.command)
+        NEW.command IS NOT DISTINCT FROM OLD.command
+        AND crove_kernel.proposal_execution_recorded(NEW.org_id, NEW.id, OLD.command)
         AND crove_finance.ledger_effect_recorded(NEW.org_id, NEW.id, OLD.command)
       ELSE false
     END;

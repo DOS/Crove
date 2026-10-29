@@ -4,7 +4,8 @@
 // created_xact_id). A session with raw SQL that writes the audit row itself and marks the proposal executed with nothing
 // posted is refused, and so is an entry for another proposal or one posted by an earlier transaction. The entry of the
 // reversal path (source kernel.proposal) and of the journal voucher path (a voucher naming the proposal) let the move
-// pass. A command that is not a ledger command needs no effect. crove_finance.ledger_effect_recorded answers for the
+// pass. A command that is not a ledger command needs no effect, and the move keeps the command as approved, in the system
+// context too. crove_finance.ledger_effect_recorded answers for the
 // org of the context only. Part of the invariant suite: keep it self-contained (package code under test, no helpers from
 // outside test/invariant/). Set CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
 import { randomUUID } from 'node:crypto';
@@ -34,6 +35,7 @@ suite('ledger proposals executed only with their effect (#1842)', () => {
   const dbName = `crove_test_ledger_effect_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
   let adminUrl = '';
   let appUrl = '';
+  let workerUrl = '';
   let pool: pg.Pool;
   let owner = '';
   let orgId = '';
@@ -129,6 +131,10 @@ suite('ledger proposals executed only with their effect (#1842)', () => {
     url.username = 'crove_app';
     url.password = 'test-app-pw';
     appUrl = url.toString();
+    const worker = new URL(adminUrl);
+    worker.username = 'crove_worker';
+    worker.password = 'test-worker-pw';
+    workerUrl = worker.toString();
     pool = createPool({ connectionString: appUrl, max: 2 });
     const db = createDb(pool);
     const rt = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
@@ -200,6 +206,44 @@ suite('ledger proposals executed only with their effect (#1842)', () => {
       return execute(id)(c);
     });
     expect(later).toMatchObject({ ok: false, ...REFUSED });
+  });
+
+  it('refuses a move to executed that changes the command, in the system context too', async () => {
+    // The system context may change a pending proposal's command (the worker revises what it extracted); executing one
+    // under another command would check the old command's row and effect, not the new one's.
+    const asSystem = async (fn: (c: pg.Client) => Promise<unknown>) => {
+      const c = new pg.Client({ connectionString: workerUrl });
+      await c.connect();
+      try {
+        await c.query('BEGIN');
+        await c.query('SELECT crove_kernel.enter_system_context($1::uuid)', [orgId]);
+        return { ok: true, value: await fn(c) };
+      } catch (error) {
+        const e = error as { code?: string; message: string };
+        return { ok: false, code: e.code, message: e.message };
+      } finally {
+        await c.query('ROLLBACK').catch(() => {});
+        await c.end();
+      }
+    };
+    const runAs = (command: string, proposalId: string) => (c: pg.Client) =>
+      c.query(
+        `INSERT INTO crove_kernel.audit_event (org_id, actor_type, command, command_id, outcome, input_sha256, proposal_id)
+         VALUES ($1, 'system', $2, gen_random_uuid(), 'ok', repeat('0', 64), $3)`,
+        [orgId, command, proposalId],
+      );
+    const id = await approved('t1842.other');
+    const turned = await asSystem(async (c) => {
+      await runAs('t1842.other', id)(c);
+      return c.query(`UPDATE crove_kernel.proposal SET command = 'finance.journal.reverse', status = 'executed' WHERE org_id = $1 AND id = $2`, [orgId, id]);
+    });
+    expect(turned).toMatchObject({ ok: false, ...REFUSED });
+    // The same move with the command kept passes: a non-ledger command needs no effect.
+    const kept = await asSystem(async (c) => {
+      await runAs('t1842.other', id)(c);
+      return c.query(`UPDATE crove_kernel.proposal SET status = 'executed' WHERE org_id = $1 AND id = $2`, [orgId, id]);
+    });
+    expect(kept).toMatchObject({ ok: true, value: { rowCount: 1 } });
   });
 
   it('asks no effect of a command that is not a ledger command, and answers for the org of the context only', async () => {
