@@ -287,7 +287,9 @@ suite('scheduled client report mail on PostgreSQL (#704)', () => {
     const conn = await connection(o.orgId, o.owner);
     const sale = (await exec<{ labelId: string }>(o, o.owner, 'social.label.create', { name: 'Khuyến mãi' })).labelId;
     const tagged = await published(o, conn, '2026-10-13T03:00:00Z', { reach: 1200, reactions: 40, replies: 4 });
-    await published(o, conn, '2026-10-14T03:00:00Z', { reach: 7777, reactions: 900 });
+    // Unlabelled: its reach must show nowhere, and nine digits in a row cannot occur in the page's timestamps or in the
+    // org name's six random hex characters (#1911).
+    await published(o, conn, '2026-10-14T03:00:00Z', { reach: 987_654_321, reactions: 900 });
     await exec(o, o.owner, 'social.post.set_labels', { postId: tagged, labelIds: [sale] });
     const theirs = (await exec<{ labelId: string }>(stranger, stranger.owner, 'social.label.create', { name: 'Của họ' })).labelId;
     const recipients = ['camp@example.vn'];
@@ -326,7 +328,7 @@ suite('scheduled client report mail on PostgreSQL (#704)', () => {
     expect(page).toMatchObject({ posts: 1, note: 'Chào anh chị <b>', sections: ['note', 'top', 'channels'], totals: null, audience: null, previous: null, goals: null });
     expect(page.top).toHaveLength(1);
     expect(page.channels[0]?.totals).toEqual({ reach: 1200, reactions: 40 });
-    expect(JSON.stringify(page)).not.toContain('7777');
+    expect(JSON.stringify(page)).not.toContain('987654321');
     // Deleting the label deletes the schedule (and its links with the label), never widening it to every post.
     await exec(o, o.owner, 'social.label.delete', { labelId: sale });
     expect(await list(o)).toEqual([]);
