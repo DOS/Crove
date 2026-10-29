@@ -238,7 +238,7 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
       if (isClassified(read[1] as string)) flag(`the value reads the classified column ${read[1]} outside auditValue(...)`);
     }
     // A read of a query's result by the alias a classified column was selected as (`select('tax_code as code')`).
-    for (const read of bare.matchAll(/(?<![\w$.])([A-Za-z_$][\w$]*)\s*!?\s*(?:\?\.|\.)\s*([A-Za-z_$][\w$]*)\b(?!\s*\()/g)) {
+    for (const read of bare.matchAll(/(?<![\w$.])([A-Za-z_$][\w$]*)\s*!?\s*(?:\?\.|\.)\s*([A-Za-z_$][\w$]*)\b(?!\s*\()(?!\s*(?:\?\.|\.)\s*(?:length|size)\b)/g)) {
       const decl = declaration(read[1] as string, at);
       if (!decl || !QUERY.test(decl.init)) continue;
       for (const [column, alias] of selected(decl.init, decl.from)) {
@@ -607,6 +607,9 @@ function scan(file: string, text: string, classified: Set<string>): Finding[] {
     if (m[1] !== 'ctx') reporter(m.index ?? 0, `${m[1]}.audit(...)`)('audit facts are written through ctx.audit(...), which the scan reads; call that');
   }
   for (const m of code.matchAll(/\bctx\s*(?:(?:\?\.|\.)\s*audit\b(?!\s*\()|\[)/g)) {
+    // A bracket read of another member (`ctx['trx']`) is no audit; one of audit or of a computed key may be.
+    const key = m[0].endsWith('[') ? literalAt((m.index ?? 0) + m[0].length) : undefined;
+    if (key !== undefined && key !== 'audit') continue;
     reporter(m.index ?? 0, 'ctx.audit')('ctx.audit is reached without a call the scan reads; call ctx.audit(...)');
   }
   for (const m of code.matchAll(/(?<![\w$.])audit\s*\(/g)) {
@@ -923,7 +926,9 @@ describe('audit facts and classified columns (#1626, #1632)', () => {
     expect(check('const { trx: { x }, audit } = ctx;\naudit({ email });')).toEqual([bare]);
     expect(check('defineCommand({ handler: async ({ audit }, input) => {\n  audit({ email: input.email });\n} });')).toEqual([bare]);
     expect(check('ctx?.audit({ email: p.email });')).toEqual(['email: the key names a classified column and its value is not auditValue(...)']);
-    for (const reach of ["ctx['audit']({ id });", 'ctx.audit.call(ctx, { id });', 'const w = ctx.audit;\nw({ id });']) {
+    expect(check("const trx = ctx['trx'];\nctx.audit({ id });")).toEqual([]);
+    expect(check(`${aliased}\nctx.audit({ count: before.code.length });`)).toEqual([]);
+    for (const reach of ["ctx['audit']({ id });", 'ctx[key]({ id });', 'ctx.audit.call(ctx, { id });', 'const w = ctx.audit;\nw({ id });']) {
       expect(check(reach), reach).toEqual(['ctx.audit: ctx.audit is reached without a call the scan reads; call ctx.audit(...)']);
     }
     // Facts under `audit:` anywhere, by name too; a type is none.
