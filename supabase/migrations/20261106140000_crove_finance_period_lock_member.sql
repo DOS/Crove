@@ -7,8 +7,11 @@
 -- caller had just lost. Each now takes that row FOR SHARE first. The role and permission commands
 -- (kernel.member.change_role, kernel.member.role.assign and .revoke) lock the member rows FOR UPDATE before they change
 -- them, so such a change that starts later waits for the lock or unlock to commit, and one in flight makes it wait and
--- then read the change. The member row is the first lock either function takes, before the month's period_lock row,
--- and those commands lock no period_lock row, so no wait goes the other way.
+-- then read the change. The member row is the first row either function locks, before the month's period_lock row,
+-- which those commands never lock. One wait can still go the other way: in an org whose preset reserves the ledger to
+-- the chief accountant, a revoke or demotion of the last one locks the tenant row (chief_accountant_keep_guard), which
+-- the lock or unlock command's idempotency row already holds FOR KEY SHARE; one of the two is then refused as a
+-- deadlock (RETRY), and the other decides on committed data, as the approve gate already does.
 --
 -- crove_finance.lock_period(date, uuid)    the body of 20261102150000_crove_finance_legal_entity_books.sql with the lock.
 -- crove_finance.unlock_period(date, uuid)  the body of 20261106090000_crove_finance_unlock_per_entity.sql with the lock;

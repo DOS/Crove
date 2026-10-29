@@ -24,8 +24,8 @@ import { createHttpApp } from '../src/http.ts';
 import { createSessionStatusSource } from '../src/sessions.ts';
 import { z } from 'zod';
 import { inProcessExtract } from './extract-service.ts';
-import { TEST_MANIFESTS } from './manifests.ts';
 import { enterUser } from './context-token.ts';
+import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -500,7 +500,7 @@ suite('period lock (#329)', () => {
       expect(await unlocking).toBe('PERIOD_LOCK_FORBIDDEN');
       await unlocker.query('ROLLBACK');
 
-      // With the role again, the unlock goes first: a revoke that starts then waits for it.
+      // With the role again, the unlock goes first: the member-row lock a revoke takes first then waits for it.
       await grant();
       const second = await asAdmin();
       clients.push(second);
