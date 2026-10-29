@@ -1,6 +1,7 @@
 // The backfill of activity rows about one legal entity written before #1792 (#1805) on PostgreSQL 17. Rows written
-// org-level before the commands named their entity take the entity their own command's audit event recorded, else the
-// one a missing-invoice mail's payload names, else the org's default entity; other org-level rows stay as they are.
+// org-level before the commands named their entity take the one entity that the audit event of the command writing their
+// kind recorded in the same transaction, else the one a missing-invoice mail's payload names, else the org's default
+// entity; other org-level rows stay as they are.
 // The constraint activity_entity_named is then validated, with the tax obligation and party link kinds, so an UPDATE of
 // an old row passes. Set CROVE_TEST_ADMIN_URL to a superuser URL; each run makes its own database.
 import { randomUUID } from 'node:crypto';
@@ -31,6 +32,7 @@ suite('activity entity backfill on PostgreSQL (#1805)', () => {
   let owner = '';
   let defaultEntity = '';
   let branch = '';
+  let branch2 = '';
   // Activity row ids by what they stand for.
   const rows: Record<string, string> = {};
 
@@ -44,14 +46,15 @@ suite('activity entity backfill on PostgreSQL (#1805)', () => {
     }
   }
 
-  // An org-level activity row at `at`, as the code wrote it before #1792, with the audit events its command wrote then.
-  async function oldRow(name: string, recordType: string, recordId: string, kind: string, at: string, audited: Array<Record<string, unknown>> = []) {
+  // An org-level activity row at `at`, as the code wrote it before #1792, with the audit events of its transaction:
+  // [command, detail].
+  async function oldRow(name: string, recordType: string, recordId: string, kind: string, at: string, audited: Array<[string, Record<string, unknown>]> = []) {
     await admin(async (c) => {
-      for (const detail of audited) {
+      for (const [command, detail] of audited) {
         await c.query(
           `INSERT INTO crove_kernel.audit_event (org_id, occurred_at, actor_type, actor_id, command, command_id, outcome, input_sha256, detail)
-           VALUES ($1, $2, 'user', $3, 'test.command', gen_random_uuid(), 'ok', repeat('0', 64), $4::jsonb)`,
-          [orgId, at, owner, JSON.stringify(detail)],
+           VALUES ($1, $2, 'user', $3, $4, gen_random_uuid(), 'ok', repeat('0', 64), $5::jsonb)`,
+          [orgId, at, owner, command, JSON.stringify(detail)],
         );
       }
       const { rows: inserted } = await c.query<{ id: string }>(
@@ -104,25 +107,35 @@ suite('activity entity backfill on PostgreSQL (#1805)', () => {
     ({ orgId } = await createOrg(rt, { type: 'user', userId: owner, aal: 'aal1' }, 'Hai pháp nhân cũ'));
     await admin(async (c) => {
       defaultEntity = (await c.query<{ id: string }>('SELECT id FROM crove_kernel.legal_entity WHERE org_id = $1 AND is_default', [orgId])).rows[0]?.id as string;
-      branch = (
-        await c.query<{ id: string }>(`INSERT INTO crove_kernel.legal_entity (org_id, name, kind, created_by) VALUES ($1, 'Chi nhánh Huế', 'branch', $2) RETURNING id`, [orgId, owner])
-      ).rows[0]?.id as string;
+      const add = async (name: string) =>
+        (await c.query<{ id: string }>(`INSERT INTO crove_kernel.legal_entity (org_id, name, kind, created_by) VALUES ($1, $2, 'branch', $3) RETURNING id`, [orgId, name, owner]))
+          .rows[0]?.id as string;
+      branch = await add('Chi nhánh Huế');
+      branch2 = await add('Chi nhánh Đà Nẵng');
     });
 
-    await oldRow('lockAudited', 'finance.period', orgId, 'period.locked', '2026-10-01T01:00:00Z', [{ month: '2026-09', legalEntityId: branch }]);
+    await oldRow('lockAudited', 'finance.period', orgId, 'period.locked', '2026-10-01T01:00:00Z', [['finance.period.lock', { month: '2026-09', legalEntityId: branch }]]);
     await oldRow('lockUnaudited', 'finance.period', orgId, 'period.locked', '2026-10-01T02:00:00Z');
-    await oldRow('lockAmbiguous', 'finance.period', orgId, 'period.locked', '2026-10-01T03:00:00Z', [{ legalEntityId: branch }, { legalEntityId: defaultEntity }]);
+    // Two locks in one transaction naming two branches: no one entity, so the default, not either branch.
+    await oldRow('lockAmbiguous', 'finance.period', orgId, 'period.locked', '2026-10-01T03:00:00Z', [
+      ['finance.period.lock', { legalEntityId: branch }],
+      ['finance.period.lock', { legalEntityId: branch2 }],
+    ]);
+    // Another command of the same transaction names an entity: it is not the lock's.
+    await oldRow('lockBeside', 'finance.period', orgId, 'period.locked', '2026-10-01T03:30:00Z', [['kernel.party.link_entity', { legalEntityId: branch }]]);
     await oldRow('request', 'kernel.mail_message', await mail({ kind: 'request', legalEntityId: branch }), 'missing_invoices.requested', '2026-10-01T04:00:00Z');
     await oldRow('requestAudited', 'kernel.mail_message', await mail({ kind: 'request' }), 'missing_invoices.requested', '2026-10-01T05:00:00Z', [
-      { period: '2026-09', legal_entity_id: branch },
+      ['finance.missing_invoices.request', { period: '2026-09', legal_entity_id: branch }],
     ]);
     await oldRow('reminder', 'kernel.mail_message', await mail({ kind: 'reminder' }), 'missing_invoices.reminded', '2026-10-01T06:00:00Z');
-    await oldRow('archive', 'finance.archive', orgId, 'archive.requested', '2026-10-01T07:00:00Z', [{ year: 2025 }]);
-    await oldRow('taxMark', 'kernel.tenant', orgId, 'org.tax_obligation_done', '2026-10-01T08:00:00Z', [{ obligation: 'vat_return', period: '2026-09', legalEntityId: branch }]);
-    await oldRow('partyLink', 'kernel.party', randomUUID(), 'party.entity_linked', '2026-10-01T09:00:00Z', [{ legalEntityId: branch }]);
+    await oldRow('archive', 'finance.archive', orgId, 'archive.requested', '2026-10-01T07:00:00Z', [['finance.archive.build', { year: 2025 }]]);
+    await oldRow('taxMark', 'kernel.tenant', orgId, 'org.tax_obligation_done', '2026-10-01T08:00:00Z', [
+      ['kernel.tax_obligation.done', { obligation: 'vat_return', period: '2026-09', legalEntityId: branch }],
+    ]);
+    await oldRow('partyLink', 'kernel.party', randomUUID(), 'party.entity_linked', '2026-10-01T09:00:00Z', [['kernel.party.link_entity', { legalEntityId: branch }]]);
     // A mark whose command recorded no entity, and a row of a kind that stays org-level whatever its audit names.
     await oldRow('taxUnmark', 'kernel.tenant', orgId, 'org.tax_obligation_undone', '2026-10-01T10:00:00Z');
-    await oldRow('orgLevel', 'kernel.tenant', orgId, 'org.address_changed', '2026-10-01T11:00:00Z', [{ legalEntityId: branch }]);
+    await oldRow('orgLevel', 'kernel.tenant', orgId, 'org.address_changed', '2026-10-01T11:00:00Z', [['kernel.org.set_address', { legalEntityId: branch }]]);
 
     await migrate({ adminUrl, dir: MIGRATIONS });
   }, 300_000);
@@ -144,7 +157,7 @@ suite('activity entity backfill on PostgreSQL (#1805)', () => {
     expect(await entityOf('taxMark')).toBe(branch);
     expect(await entityOf('partyLink')).toBe(branch);
     // Nothing recorded one entity: the default entity.
-    for (const name of ['lockUnaudited', 'lockAmbiguous', 'reminder', 'archive', 'taxUnmark']) expect(await entityOf(name), name).toBe(defaultEntity);
+    for (const name of ['lockUnaudited', 'lockAmbiguous', 'lockBeside', 'reminder', 'archive', 'taxUnmark']) expect(await entityOf(name), name).toBe(defaultEntity);
     // Other org-level rows stay org-level.
     expect(await entityOf('orgLevel')).toBeNull();
   });
