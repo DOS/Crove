@@ -66,6 +66,7 @@ import { PROPOSAL_PREPARERS, REQUESTABLE, preparedEntity, resubmitProposal, zPre
 import { usageCommands } from './usage-limits.ts';
 import { userStatusCommands } from './user-status.ts';
 import { taxCalendarCommands } from './tax-calendar.ts';
+import { positionsHeldBy, rerouteStrandedTasks } from './task-reroute.ts';
 
 const MEMBERS = ['owner', 'admin', 'member'] as const;
 // The command that records an invoice proposal (a purchase or a sale).
@@ -184,6 +185,9 @@ export const changeMemberRole = defineCommand({
             .returning('id')
             .execute();
     ctx.audit({ revoked_invites: revokedInvites.map((r) => r.id) });
+    // An owner or admin made member or viewer reads only their legal-entity assignments, if any: open tasks of their
+    // seats outside them go up the chart (#1799).
+    await rerouteStrandedTasks(ctx, await positionsHeldBy(ctx, input.userId));
     await ctx.activity('kernel.member', input.userId, 'member.role_changed', `Đổi vai trò thành viên từ ${previousRole} thành ${input.role}`);
     await ctx.emit('kernel.member.role_changed', { userId: input.userId, oldRole: previousRole, newRole: input.role });
     return { userId: input.userId, role: input.role, previousRole };
@@ -206,6 +210,9 @@ export const removeMember = defineCommand({
     const { actorId, target, owners } = await lockForMemberChange(ctx, input.userId);
     if (input.userId === actorId) throw new DomainError('CANNOT_REMOVE_SELF', 422, 'Bạn không thể tự xóa mình khỏi tổ chức');
     if (target.role === 'owner' && owners <= 1) throw LAST_OWNER(input.userId, null);
+    // The seats they hold become vacant (position_holder_user_fk): their open tasks the vacant seat's scope does not
+    // read go up the chart once they are gone (#1799).
+    const seats = await positionsHeldBy(ctx, input.userId);
     // Removing the last chief accountant under the accountant preset is refused (#1402).
     await keepingChiefAccountant(() => ctx.trx.deleteFrom('crove_kernel.tenant_member').where('org_id', '=', ctx.orgId).where('user_id', '=', input.userId).execute());
     // The removed member's pending invites go with them (they already stop working at acceptance while the inviter is
@@ -219,6 +226,7 @@ export const removeMember = defineCommand({
       .returning('id')
       .execute();
     ctx.audit({ target_user: input.userId, role: null, previous_role: target.role, revoked_invites: revokedInvites.map((r) => r.id) });
+    await rerouteStrandedTasks(ctx, seats);
     await ctx.activity('kernel.member', input.userId, 'member.removed', `Xóa thành viên (${target.role})`);
     await ctx.emit('kernel.member.removed', { userId: input.userId, oldRole: target.role });
     return { userId: input.userId, previousRole: target.role };
