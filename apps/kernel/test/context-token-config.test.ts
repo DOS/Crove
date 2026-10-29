@@ -67,6 +67,8 @@ describe('mintContextToken', () => {
   it('writes - for no session and no MFA time, and aal1 for anything but aal2', () => {
     const token = mintContextToken(TEST_KEY, { userId: USER, sessionId: null, orgId: ORG, aal: 'aal1', mfaAt: null }, 0);
     expect(token.split('.').slice(0, 7)).toEqual(['v1', USER, '-', ORG, 'aal1', '-', String(CONTEXT_TOKEN_TTL_S)]);
+    // An MFA time in milliseconds by mistake (13 digits) is left out, not a token the database refuses.
+    expect(mintContextToken(TEST_KEY, { userId: USER, sessionId: null, orgId: ORG, aal: 'aal2', mfaAt: 1_790_000_000_000 }, 0).split('.')[5]).toBe('-');
   });
 
   it('signs with the real clock while a test mocks Date for business time', () => {

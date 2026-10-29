@@ -1064,7 +1064,9 @@ export function mintContextToken(key: Uint8Array | string, claims: ContextTokenC
   const session = claims.sessionId === null ? null : claims.sessionId.toLowerCase();
   if (!UUID.test(user) || !UUID.test(org) || (session !== null && !UUID.test(session))) throw new Error('context token: user, org and session are UUIDs');
   const aal = claims.aal === 'aal2' ? 'aal2' : 'aal1';
-  const mfa = typeof claims.mfaAt === 'number' && Number.isFinite(claims.mfaAt) && claims.mfaAt >= 0 ? String(Math.floor(claims.mfaAt)) : '-';
+  // Epoch seconds, at most 12 digits as the database's pattern takes; anything else (milliseconds by mistake) is left out
+  // rather than failing every request of the user.
+  const mfa = typeof claims.mfaAt === 'number' && Number.isFinite(claims.mfaAt) && claims.mfaAt >= 0 && claims.mfaAt < 1e12 ? String(Math.floor(claims.mfaAt)) : '-';
   const exp = Math.floor(nowMs / 1000) + CONTEXT_TOKEN_TTL_S;
   const message = `v1.${user}.${session ?? '-'}.${org}.${aal}.${mfa}.${exp}`;
   return `${message}.${createHmac('sha256', bytes).update(message, 'utf8').digest('hex')}`;
@@ -1123,7 +1125,7 @@ export class Runtime {
     this.inputHash = inputHash;
     this.#manifestTables = manifestTableClasses(manifests as readonly ManifestTables[]);
     const contextTokenKey = options.contextTokenKey === undefined ? process.env.CROVE_CONTEXT_TOKEN_KEY : options.contextTokenKey;
-    this.#contextTokenKey = contextTokenKey ? contextTokenKeyBytes(contextTokenKey) : null;
+    this.#contextTokenKey = contextTokenKey?.trim() ? contextTokenKeyBytes(contextTokenKey) : null;
     Object.freeze(this);
   }
 

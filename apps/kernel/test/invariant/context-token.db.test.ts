@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool } from '@crove/db';
-import { contextTokenKeyBytes as runnerKeyBytes, migrate, setRolePasswords } from '@crove/db/migrate';
+import { contextTokenKeyBytes as runnerKeyBytes, installContextTokenKey, migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { contextTokenKeyBytes, mintContextToken, Runtime } from '@crove/kernel-runtime';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
@@ -145,17 +145,18 @@ suite('context tokens: enter_user_context on PostgreSQL (#1822, ADR-0028 section
     await expect(enter(app, orgB, token(users.owner, orgA))).rejects.toMatchObject({ code: '42501', message: 'CONTEXT_TOKEN_ORG' });
   });
 
-  it('refuses a token past its expiry or dated too far ahead, with 30 seconds of clock skew either way', async () => {
+  it('refuses a token past its expiry, and one dated more than 30 seconds ahead of the database clock', async () => {
     const app = await connect(appUrl);
     const now = Date.now();
-    // Expiry is the kernel's clock plus 60 seconds: minted 75 seconds ago it expired 15 seconds ago, within the skew.
-    expect(await enter(app, orgA, token(users.owner, orgA, { nowMs: now - 75_000 }))).toBe(users.owner);
-    // Minted two minutes ago it expired a minute ago.
-    await expect(enter(app, orgA, token(users.owner, orgA, { nowMs: now - 120_000 }))).rejects.toMatchObject({ code: '42501', message: 'CONTEXT_TOKEN_EXPIRED' });
+    // Expiry is the kernel's clock plus 60 seconds: minted 45 seconds ago (or by a kernel clock 45 seconds behind) it
+    // has 15 seconds left.
+    expect(await enter(app, orgA, token(users.owner, orgA, { nowMs: now - 45_000 }))).toBe(users.owner);
+    // Minted 75 seconds ago it expired 15 seconds ago: no grace after the expiry.
+    await expect(enter(app, orgA, token(users.owner, orgA, { nowMs: now - 75_000 }))).rejects.toMatchObject({ code: '42501', message: 'CONTEXT_TOKEN_EXPIRED' });
     // Minted 20 seconds in the future (a kernel clock ahead of the database's): accepted.
     expect(await enter(app, orgA, token(users.owner, orgA, { nowMs: now + 20_000 }))).toBe(users.owner);
-    // Minted a minute in the future, expiring 2 minutes from now: more than 90 seconds ahead, refused.
-    await expect(enter(app, orgA, token(users.owner, orgA, { nowMs: now + 60_000 }))).rejects.toMatchObject({ code: '42501', message: 'CONTEXT_TOKEN_EXPIRED' });
+    // Minted 40 seconds in the future, expiring 100 seconds from now: more than 90 seconds ahead, refused.
+    await expect(enter(app, orgA, token(users.owner, orgA, { nowMs: now + 40_000 }))).rejects.toMatchObject({ code: '42501', message: 'CONTEXT_TOKEN_EXPIRED' });
   });
 
   it('still checks membership: a valid token of a user outside the org enters nothing', async () => {
@@ -207,7 +208,8 @@ suite('context tokens: enter_user_context on PostgreSQL (#1822, ADR-0028 section
         [
           [
             'crove_kernel.context_token_key_install(bytea)',
-            'crove_kernel.context_token_signed(text,text)',
+            'crove_kernel.context_token_signed(text,text,boolean)',
+            'crove_kernel.context_token_key_matches(text)',
             'crove_kernel.context_token_valid(text)',
             'crove_kernel.enter_user_context(uuid,text)',
           ],
@@ -228,7 +230,8 @@ suite('context tokens: enter_user_context on PostgreSQL (#1822, ADR-0028 section
     for (const c of [app, worker]) {
       await expect(c.query('SELECT * FROM crove_kernel.context_token_key')).rejects.toThrow(/permission denied/);
       await expect(c.query('SELECT crove_kernel.context_token_key_install($1::bytea)', [randomBytes(32)])).rejects.toThrow(/permission denied/);
-      await expect(c.query(`SELECT crove_kernel.context_token_signed('m', $1)`, ['0'.repeat(64)])).rejects.toThrow(/permission denied/);
+      await expect(c.query(`SELECT crove_kernel.context_token_signed('m', $1, true)`, ['0'.repeat(64)])).rejects.toThrow(/permission denied/);
+      await expect(c.query('SELECT crove_kernel.context_token_key_matches($1)', ['0'.repeat(64)])).rejects.toThrow(/permission denied/);
     }
     await expect(worker.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgA, token(users.owner, orgA)])).rejects.toThrow(/permission denied/);
     // The boot check answers only whether a token verifies.
@@ -272,7 +275,7 @@ suite('context tokens: enter_user_context on PostgreSQL (#1822, ADR-0028 section
   });
 
   // Last: it rotates the installed key, and puts the suite's key back as the current one at the end.
-  it('keeps exactly one previous key across a rotation', async () => {
+  it('keeps exactly one previous key across a rotation, for 10 minutes', async () => {
     const app = await connect(appUrl);
     const second = randomBytes(32).toString('base64');
     const third = randomBytes(48).toString('base64');
@@ -291,6 +294,15 @@ suite('context tokens: enter_user_context on PostgreSQL (#1822, ADR-0028 section
     expect(await enter(app, orgA, token(users.owner, orgA, { key: third }))).toBe(users.owner);
     const slots = await withAdmin(async (a) => (await a.query<{ slot: string }>('SELECT slot FROM crove_kernel.context_token_key ORDER BY slot')).rows.map((r) => r.slot));
     expect(slots).toEqual(['current', 'previous']);
+    // The boot check takes the current key only: a kernel left with the previous one stops at boot.
+    const valid = async (tok: string) => (await app.query<{ v: boolean }>('SELECT crove_kernel.context_token_valid($1) AS v', [tok])).rows[0]?.v;
+    expect(await valid(token(users.owner, orgA, { key: third }))).toBe(true);
+    expect(await valid(token(users.owner, orgA, { key: second }))).toBe(false);
+
+    // Ten minutes after the current key was installed, the previous one signs nothing any more.
+    await withAdmin((a) => a.query(`UPDATE crove_kernel.context_token_key SET installed_at = installed_at - interval '11 minutes' WHERE slot = 'current'`));
+    await expect(enter(app, orgA, token(users.owner, orgA, { key: second }))).rejects.toMatchObject({ code: '42501', message: 'CONTEXT_TOKEN_INVALID' });
+    expect(await enter(app, orgA, token(users.owner, orgA, { key: third }))).toBe(users.owner);
 
     // A key outside 32 to 64 bytes is refused.
     await expect(withAdmin((a) => a.query('SELECT crove_kernel.context_token_key_install($1::bytea)', [randomBytes(31)]))).rejects.toMatchObject({
@@ -300,7 +312,11 @@ suite('context tokens: enter_user_context on PostgreSQL (#1822, ADR-0028 section
       message: 'CONTEXT_TOKEN_KEY_LENGTH',
     });
 
-    expect(await install(KEY)).toBe('installed');
+    // The runner sends a key only when the database holds another one; it puts the suite's key back.
+    const log: string[] = [];
+    await withAdmin((a) => installContextTokenKey(a, KEY, (m) => log.push(m)));
+    await withAdmin((a) => installContextTokenKey(a, KEY, (m) => log.push(m)));
+    expect(log).toEqual(['context token key installed', 'context token key unchanged']);
     expect(await enter(app, orgA, token(users.owner, orgA))).toBe(users.owner);
   });
 });

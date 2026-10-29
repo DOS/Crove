@@ -7,7 +7,7 @@ This is a different key from the context key that seals `crove.ctx` ([context-ke
 ## Where the key lives
 
 - `CROVE_CONTEXT_TOKEN_KEY`: base64 of 32 to 64 random bytes, in the deployment's environment (`.env` in the stack directory for the compose stack) and in the owner's secret store. The same value goes to the `migrate` step and to the app (`crove`, or `api` and `worker` in the split layout).
-- In the database: `crove_kernel.context_token_key`, the current key and at most one previous key, stored as their HMAC pads. Only the migration runner (the `ADMIN_DATABASE_URL` role) and superusers reach it; no login role may read or write it, and no login role may call the installer. `migrate` installs the key from its environment on every run, as a bind parameter, so the value never appears in a SQL statement, `pg_stat_statements` or a log. A run with the key already installed changes nothing (`context token key unchanged`).
+- In the database: `crove_kernel.context_token_key`, the current key and at most one previous key, stored as their HMAC pads. Only the migration runner (the `ADMIN_DATABASE_URL` role) and superusers reach it; no login role may read or write it, and no login role may call the installer. On every run `migrate` asks the database whether its current key is the one in its environment (by a signature over a fixed message, not the key) and sends the key only when it is not: a first install or a rotation. It sends it as a bind parameter, never in a statement's text, so it never reaches `pg_stat_statements`, in a transaction that turns parameter and statement logging off for itself when the migration runner is a superuser. A server that logs every parameter in a way the runner cannot turn off (pgaudit, for example) logs the key on that one run: check the database's logging before a rotation if it has such settings. A run with the key already installed sends nothing secret (`context token key unchanged`).
 - Like the context key, the table is ordinary data and travels with every dump, backup and physical replica (see "Copies" below).
 
 ## Who does what
@@ -68,7 +68,7 @@ This is a different key from the context key that seals `crove.ctx` ([context-ke
    docker compose logs --since 10m crove | grep -c 'CONTEXT_TOKEN'  # 0
    ```
 
-   Then sign in once and open a page with data (any org): the request now enters its context through a token. A boot that stops with `CROVE_CONTEXT_TOKEN_KEY is not the key the database holds` means `migrate` did not install this value (check its logs); a log line with `CONTEXT_TOKEN_EXPIRED` means the app's and the database's clocks differ by more than 30 seconds (fix the server's time sync).
+   Then sign in once and open a page with data (any org): the request now enters its context through a token. A boot that stops with `CROVE_CONTEXT_TOKEN_KEY is not the key the database holds` means `migrate` did not install this value (check its logs); a log line with `CONTEXT_TOKEN_EXPIRED` means the app's clock is more than 30 seconds ahead of the database's, or 60 seconds or more behind it (fix the servers' time sync).
 
    Rollback: empty the line in `.env` (`CROVE_CONTEXT_TOKEN_KEY=`) and run `docker compose up -d` again. The app goes back to `enter_context`, as before step 1; this works until the release that revokes it (#1822 step 2), and that release is not deployed before this runbook has run in production. The installed key stays in the table and does nothing; to remove it as well:
 
@@ -83,9 +83,9 @@ When to rotate: the value may have leaked (a copy of `.env` or of the secret sto
 1. Write a new value into `.env` with the same command as step 1.1, and check it the same way. **Person step:** replace the value in the secret store, keeping the old one until the last check passes.
 2. Apply it with `docker compose up -d`, and run the checks of step 1.2. `migrate` logs `context token key installed`, and the table now holds `current` and `previous`.
 
-The database keeps exactly one previous key: an app process that still runs with the old key (during the restart, or a split-layout process restarted later) keeps working, and tokens signed with it live at most 60 seconds. The next rotation drops it. To drop a leaked key at once, rotate twice in a row (step 2 twice, with two new values): after the second run neither slot holds it.
+The database keeps exactly one previous key and accepts it for 10 minutes after the new key was installed: an app process that still runs with the old key during the restarts keeps working, and its tokens live at most 60 seconds. After 10 minutes the old key verifies nothing, and an app process started with it stops at boot (`CROVE_CONTEXT_TOKEN_KEY is not the key the database holds`). To stop a leaked key at once rather than after 10 minutes, rotate twice in a row (step 2 twice, with two new values): after the second run neither slot holds it.
 
-Rollback: put the old value back in `.env` and run `docker compose up -d`. While it is still the previous key, `migrate` makes it current again and keeps the new one as previous.
+Rollback: put the old value back in `.env` and run `docker compose up -d`. `migrate` makes it current again and keeps the new one as previous.
 
 ## Copies
 
@@ -103,4 +103,4 @@ Pass the same value to the migration job and to every app process, as an environ
 
 ## Tested by
 
-`apps/kernel/test/invariant/context-token.db.test.ts`: a forged, re-signed, expired, other-org or other-key token is refused, a revoked session is refused, membership is still checked, a rotation keeps exactly one previous key, and no login role reads the table or calls the installer. `apps/kernel/test/context-token-config.test.ts` covers the setting and the token's format.
+`apps/kernel/test/invariant/context-token.db.test.ts`: a forged, re-signed, expired, other-org or other-key token is refused, a revoked session is refused, membership is still checked, a rotation keeps exactly one previous key for 10 minutes, the boot check takes the current key only, the runner sends a key only when the database holds another, and no login role reads the table or calls the installer. `apps/kernel/test/context-token-config.test.ts` covers the setting and the token's format.
