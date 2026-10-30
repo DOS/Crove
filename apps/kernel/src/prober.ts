@@ -111,9 +111,12 @@ const DEFAULT_MARKER_AGE_SECONDS = 93_600;
 // Never the worker's S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY, which read and write every tenant document and write the
 // archive: Compose passes the prober none, and with one in its environment and no pair of its own the check refuses.
 const markerAge = seconds(DEFAULT_MARKER_AGE_SECONDS);
-const archiveSchema = z.object({
+const archiveStoreSchema = z.object({
   ARCHIVE_STORE: optional.pipe(z.enum(['local', 's3']).optional()),
   ARCHIVE_DIR: optional,
+});
+// Read only for ARCHIVE_STORE=s3: a malformed S3_* setting of a store the check does not read is no business of the check.
+const archiveS3Schema = z.object({
   ARCHIVE_S3_BUCKET: optional,
   S3_ENDPOINT: optional.pipe(z.url({ protocol: /^https?$/ }).optional()),
   S3_REGION: optional,
@@ -227,18 +230,22 @@ function archiveMarkerSettings(env: NodeJS.ProcessEnv): ProberConfig['archiveMar
   if (!age.success) return { maxAgeSeconds: DEFAULT_MARKER_AGE_SECONDS, error: 'invalid archive settings: PROBER_MAX_ARCHIVE_MARKER_AGE_SECONDS' };
   const maxAgeSeconds = age.data;
   if (maxAgeSeconds === 0) return undefined;
-  const parsed = archiveSchema.safeParse(env);
-  if (!parsed.success) {
-    // The names only: a value may be a secret or an internal URL.
-    const fields = [...new Set(parsed.error.issues.map((i) => i.path.join('.')))].join(', ');
-    return { maxAgeSeconds, error: `invalid archive settings: ${fields}` };
-  }
-  const raw = parsed.data;
-  if (raw.ARCHIVE_STORE === 's3') {
+  // The names only: a value may be a secret or an internal URL.
+  const invalid = (error: z.ZodError) => ({ maxAgeSeconds, error: `invalid archive settings: ${[...new Set(error.issues.map((i) => i.path.join('.')))].join(', ')}` });
+  const which = archiveStoreSchema.safeParse(env);
+  if (!which.success) return invalid(which.error);
+  if (which.data.ARCHIVE_STORE === 's3') {
+    const parsed = archiveS3Schema.safeParse(env);
+    if (!parsed.success) return invalid(parsed.error);
+    const raw = parsed.data;
     if (!raw.ARCHIVE_S3_BUCKET) return { maxAgeSeconds, error: 'ARCHIVE_STORE=s3 needs ARCHIVE_S3_BUCKET' };
     const own = raw.PROBER_ARCHIVE_S3_ACCESS_KEY_ID !== undefined || raw.PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY !== undefined;
     if (own && (!raw.PROBER_ARCHIVE_S3_ACCESS_KEY_ID || !raw.PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY)) {
       return { maxAgeSeconds, error: 'set both PROBER_ARCHIVE_S3_ACCESS_KEY_ID and PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY, or neither' };
+    }
+    // The prober's key that is the worker's own key: the check must not read the archive with a key that writes.
+    if (own && raw.S3_ACCESS_KEY_ID && raw.PROBER_ARCHIVE_S3_ACCESS_KEY_ID === raw.S3_ACCESS_KEY_ID) {
+      return { maxAgeSeconds, error: "PROBER_ARCHIVE_S3_ACCESS_KEY_ID is the worker's S3_ACCESS_KEY_ID: give the prober a key of its own that only reads" };
     }
     // The worker's key in this environment (a prober run from the shared .env, say) and none of its own: the default
     // credential chain could then resolve to the worker's role, which writes. Refuse rather than guess.
@@ -264,7 +271,7 @@ function archiveMarkerSettings(env: NodeJS.ProcessEnv): ProberConfig['archiveMar
       },
     };
   }
-  return raw.ARCHIVE_DIR ? { maxAgeSeconds, store: { kind: 'local', dir: raw.ARCHIVE_DIR } } : undefined;
+  return which.data.ARCHIVE_DIR ? { maxAgeSeconds, store: { kind: 'local', dir: which.data.ARCHIVE_DIR } } : undefined;
 }
 
 // Per call to the store: a store that takes the connection and never answers fails the call, and one more attempt, inside
@@ -955,7 +962,7 @@ export async function runProber(argv: readonly string[], env: NodeJS.ProcessEnv 
   // which reads as nothing to verify yet, so the log says which store it reads. Settings the check cannot use disable
   // only that check (#2094): the other probes run, and archive_marker reports it on every probe until it is fixed.
   if (config.archiveMarker && 'error' in config.archiveMarker) {
-    error(`[prober] ERROR ${describeMarkerCheck(config.archiveMarker)}: the other checks run, and archive_marker alerts on every probe until the settings are fixed`);
+    error(`[prober] ERROR ${describeMarkerCheck(config.archiveMarker)}: the other checks run, and archive_marker is reported on every probe until the settings are fixed`);
   }
   (deps.log ?? console.log)(`[prober] probing every ${every} s, alerts to ${alertSink(config, deps).describe()}${heartbeat}, ${describeMarkerCheck(config.archiveMarker)}`);
   for (;;) {

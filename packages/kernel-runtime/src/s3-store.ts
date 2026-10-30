@@ -93,7 +93,8 @@ function isGoogle(endpoint: string | undefined): boolean {
 export interface S3ClientTimeouts {
   // Milliseconds to open a connection.
   connectionTimeoutMs?: number | undefined;
-  // Milliseconds a request may sit idle on its socket before it fails.
+  // Milliseconds from sending a request until its response headers arrive; past it the call fails. A body that stalls
+  // after the headers is not covered: bound the call with an abort signal as well.
   requestTimeoutMs?: number | undefined;
   // Attempts per call, the first included (the SDK's default is 3).
   maxAttempts?: number | undefined;
@@ -111,8 +112,11 @@ export function createS3Client(options: S3StoreOptions, endpoint: string | undef
   if (endpoint) config.endpoint = endpoint;
   const handler: { connectionTimeout?: number; requestTimeout?: number; throwOnRequestTimeout?: boolean } = {};
   if (timeouts.connectionTimeoutMs !== undefined) handler.connectionTimeout = timeouts.connectionTimeoutMs;
-  // Without throwOnRequestTimeout the handler only logs a warning when a request runs past requestTimeout.
-  if (timeouts.requestTimeoutMs !== undefined) Object.assign(handler, { requestTimeout: timeouts.requestTimeoutMs, throwOnRequestTimeout: true });
+  if (timeouts.requestTimeoutMs !== undefined) {
+    handler.requestTimeout = timeouts.requestTimeoutMs;
+    // Without this the handler only logs a warning when a request runs past requestTimeout.
+    handler.throwOnRequestTimeout = true;
+  }
   if (Object.keys(handler).length > 0) config.requestHandler = handler;
   if (timeouts.maxAttempts !== undefined) config.maxAttempts = timeouts.maxAttempts;
   if (options.accessKeyId && options.secretAccessKey) {

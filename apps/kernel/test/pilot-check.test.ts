@@ -111,6 +111,12 @@ describe('pilot-check settings', () => {
     const telegram = { ...READY, ALERT_WEBHOOK_URL: `https://api.telegram.org/bot${fake('token')}/sendMessage` };
     expect(failing(telegram)).toEqual([expect.stringContaining('ALERT_TELEGRAM_CHAT_ID')]);
     expect(failing({ ...telegram, ALERT_TELEGRAM_CHAT_ID: '-1001234567890' })).toEqual([]);
+    // A malformed archive setting disables only the prober's marker check (#2094): the preflight says so, naming the setting.
+    expect(failing({ ...READY, ARCHIVE_STORE: 's3', ARCHIVE_S3_BUCKET: 'crove-archive', S3_ENDPOINT: 'not a url' })).toEqual([
+      'Alerts: the prober would not check the WORM verification marker: invalid archive settings: S3_ENDPOINT (docs/runbooks/worm-archive.md)',
+    ]);
+    // The worker's own key in the shared .env is no problem: Compose never passes it to the prober.
+    expect(failing({ ...READY, ARCHIVE_STORE: 's3', ARCHIVE_S3_BUCKET: 'crove-archive', S3_ACCESS_KEY_ID: fake('worker-key'), S3_SECRET_ACCESS_KEY: fake('worker-secret') })).toEqual([]);
   });
 
   it('requires backups in a second location over https, apart from the files bucket (issues #307, #351)', () => {

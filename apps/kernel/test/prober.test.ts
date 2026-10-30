@@ -737,6 +737,10 @@ describe('WORM verification marker (#2082)', () => {
     });
     expect(JSON.stringify(refused)).not.toContain('AKIAWORKERKEY');
     expect(JSON.stringify(refused)).not.toContain('worker-secret-123');
+    // The prober's own pair that holds the worker's key id is the worker's key all the same.
+    expect(loadProberConfig({ ...s3, ...worker, PROBER_ARCHIVE_S3_ACCESS_KEY_ID: 'AKIAWORKERKEY', PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY: 'r' }).archiveMarker).toMatchObject({
+      error: "PROBER_ARCHIVE_S3_ACCESS_KEY_ID is the worker's S3_ACCESS_KEY_ID: give the prober a key of its own that only reads",
+    });
     // On a local store the worker's key is no matter.
     expect(loadProberConfig({ ARCHIVE_DIR: '/data/archive', ...worker }).archiveMarker).toEqual(settings);
     // A setting the check cannot use is reported as one: the check is disabled and says why (below).
@@ -761,6 +765,9 @@ describe('WORM verification marker (#2082)', () => {
       expect(await runProber(['--test-alert'], env, { ...io, fetch: hook.fetch })).toBe(EXIT.ok);
       expect(hook.calls).toHaveLength(2);
     }
+    // The S3 settings are read only for ARCHIVE_STORE=s3: with a local store, or none, a malformed one is no business of the check.
+    expect(loadProberConfig({ ARCHIVE_DIR: '/data/archive', S3_ENDPOINT: 'ftp://x', S3_FORCE_PATH_STYLE: 'maybe' }).archiveMarker).toEqual(settings);
+    expect(loadProberConfig({ S3_ENDPOINT: 'ftp://x' }).archiveMarker).toBeUndefined();
     // A limit of 0 turns the check off, whatever else is wrong with the archive settings.
     expect(loadProberConfig({ ARCHIVE_STORE: 'gcs', S3_ENDPOINT: 'ftp://x', PROBER_MAX_ARCHIVE_MARKER_AGE_SECONDS: '0' }).archiveMarker).toBeUndefined();
     // A bad setting of the rest is refused as before.
@@ -812,7 +819,7 @@ describe('WORM verification marker (#2082)', () => {
     expect(disabled.line).toMatch(/, verification marker check disabled \(ARCHIVE_STORE=s3 and S3_ACCESS_KEY_ID \(the worker's key\) is set/);
     expect(disabled.err).toEqual([
       expect.stringMatching(
-        /^\[prober\] ERROR verification marker check disabled \(.*PROBER_ARCHIVE_S3_ACCESS_KEY_ID and PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY are not.*\): the other checks run, and archive_marker alerts on every probe until the settings are fixed$/,
+        /^\[prober\] ERROR verification marker check disabled \(.*PROBER_ARCHIVE_S3_ACCESS_KEY_ID and PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY are not.*\): the other checks run, and archive_marker is reported on every probe until the settings are fixed$/,
       ),
     ]);
     expect(JSON.stringify(disabled)).not.toContain('AKIAWORKERKEY');

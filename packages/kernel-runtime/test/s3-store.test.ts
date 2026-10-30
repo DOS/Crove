@@ -399,6 +399,19 @@ describe('S3 client timeouts (#2094)', () => {
     }
   });
 
+  it('ends a call when its abort signal fires, with no timeout set', async () => {
+    const silent = await silentServer();
+    try {
+      const client = createS3Client({ ...credentials, endpoint: silent.endpoint });
+      const controller = new AbortController();
+      const call = client.send(new ListObjectsV2Command({ Bucket: 'b' }), { abortSignal: controller.signal });
+      setTimeout(() => controller.abort(), 100);
+      await expect(call).rejects.toMatchObject({ name: 'AbortError' });
+    } finally {
+      await silent.close();
+    }
+  });
+
   it('takes the number of attempts asked for', async () => {
     expect(await createS3Client(credentials, undefined, { maxAttempts: 2 }).config.maxAttempts()).toBe(2);
   });
