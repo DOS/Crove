@@ -28,6 +28,17 @@ The owner renamed the product on 2026-10-28 ([#1682](https://github.com/DOS/Ludy
 - Products are named "Ludy" and the area: **Ludy CRM**, **Ludy Accounting** (Vietnamese: **Ludy Kế toán**, the word the app's menu and its users already say), **Ludy Notes**. App messages write `{brand} CRM`, so a deployment's own name carries over. The short label under an app's icon stays the area alone.
 - Domains, email addresses, the repository URL, legal text and code identifiers (`@crove/*`, `crove_*`, `CROVE_*`, file names) still say Crove until the owner's later steps of #1682.
 
+### 1.2 Logo
+
+The owner picked the mark on 2026-10-30 ([#2052](https://github.com/DOS/Ludy/issues/2052)): three violet rounded tiles in an L, the suite's apps, with a teal four-point spark in the fourth slot, Vy.
+
+- Files: `apps/web/public/brand/` holds the mark and the wordmark (the mark and "Ludy" in Be Vietnam Pro Bold, as outlines), each in a light and a dark version, the 16 and 32 px favicons, the 512 px app icon and the Apple touch icon. `favicon.svg` (landing page and app) switches to the dark colors when the browser is dark. The app's install icons are `apps/app/public/assets/icon-*.png`. The social preview is drawn from the dark mark by `apps/web/src/components/og-image.tsx`.
+- Colors: the tiles take `brand` (#612BD3, dark #7C4DEB), the spark `brand-spark` (#14A88C, dark #3FD0B0). Both tokens are for the mark only, never for UI.
+- Use: always the whole mark, never the tiles or the spark alone, never recolored, rotated or with a face added. At least a quarter of its width of clear space around it. It holds at 16 px, so no simplified small version exists.
+- Geometry, to redraw a size by hand: one 92 unit grid, tiles 42 wide with a gap of 8 and a corner radius of 11, the spark a four-point star of radius 21 centred in the top right slot (71, 21). The install icons are the mark on a white rounded square (mark at 60% of the width, corner radius 22%); the maskable icon is the mark at 53% of the width on a square white ground, inside Android's safe zone. The 16 px favicon is drawn on its own pixel grid (7 px tiles, a 2 px gap) so the tiles stay apart.
+- The PNG files are icons linked from `<head>` or the install manifest, not page content, so the rule that raster images are AVIF or WebP (section 6) does not apply to them.
+- Similar marks: only a rough web look was done, not a trademark search. It found no mark like this one, and two near misses for the lawyer: a 2x2 grid of squares is the shape of Microsoft's logo, and a four-point spark is the common AI sparkle (Gemini and others). The trademark search for the mark, with the names Ludy and Vy, is the lawyer's, in [#63](https://github.com/DOS/Ludy/issues/63).
+
 ## 2. Principles
 
 1. **Show the product working.** Every important claim on the marketing site is backed by a visualization of the real product with real-looking Vietnamese data (an invoice, its checks, the journal entry it becomes). Text explains what the picture cannot. A section that is only an icon, a heading and two sentences is not finished.
@@ -53,7 +64,7 @@ Roles:
 | `border`, `input`, `ring` | Hairlines, field borders, focus ring. |
 | `scrollbar` | The thumb of every scrollbar: thin, on a transparent track, in both themes (never the platform's light default). |
 | `primary` | The one accent: the primary action, focus, current selection. Never decoration. |
-| `brand` | The logo mark only. |
+| `brand`, `brand-spark` | The logo mark only: its tiles and its spark (1.2). |
 | `success`, `warning`, `destructive` | Semantic states (balanced/approved, needs review, error/reject). Separate from the accent; never used for decoration. |
 | `chart-1..5` | Data series. Sequential ramp for one measure; use semantic tokens for good/bad. |
 

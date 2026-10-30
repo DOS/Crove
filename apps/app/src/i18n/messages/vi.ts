@@ -1826,6 +1826,8 @@ export const vi = {
       duplicate: 'Trùng hóa đơn',
       failed: 'Không đọc được',
       expanded: 'Đã mở ZIP',
+      // A posted file whose entry was reversed (#2032).
+      voided: 'Đã hủy (đảo bút toán)',
     },
     formatsZip: 'Hoặc một tệp ZIP tối đa 500 tệp (40 MB khi giải nén), như cổng thuế xuất ra',
     intake: {
@@ -6139,6 +6141,7 @@ export const vi = {
         allocations: 'Xem các số chứng từ đã cấp',
         policy: {
           set: 'Đặt cách đánh số chứng từ',
+          schedule: 'Hẹn đổi cách đánh số chứng từ từ đầu năm sau',
         },
         reseed: 'Nâng dãy số chứng từ sau khi khôi phục',
         void: 'Hủy số chứng từ',

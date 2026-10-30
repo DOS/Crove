@@ -144,10 +144,13 @@ export function useIntake(): Intake {
   // Files read into a proposal still to be decided (#2009): asked about again when a proposal changes (the stream's
   // proposal hint), not polled, so the chip follows the approval or the rejection made in the Inbox.
   const undecided = undecidedIds(items);
+  // A key of their own: the poll's cached answer for the same ids may be older than the read, and must never come back
+  // as this one's.
   const watched = useQueries({
-    queries: Array.from({ length: Math.ceil(undecided.length / MAX_BATCH_FILES) }, (_, i) =>
-      orpc.files.batch.queryOptions({ input: { ids: undecided.slice(i * MAX_BATCH_FILES, (i + 1) * MAX_BATCH_FILES) } }),
-    ),
+    queries: Array.from({ length: Math.ceil(undecided.length / MAX_BATCH_FILES) }, (_, i) => {
+      const options = orpc.files.batch.queryOptions({ input: { ids: undecided.slice(i * MAX_BATCH_FILES, (i + 1) * MAX_BATCH_FILES) } });
+      return { ...options, queryKey: [...options.queryKey, 'watch'] as unknown as typeof options.queryKey };
+    }),
   });
   const decided = watched.map((query) => query.dataUpdatedAt).join(',');
   const watchedLatest = useRef(watched);
@@ -168,9 +171,10 @@ export function useIntake(): Intake {
 function Row({ item, nested = false }: { item: IntakeItem; nested?: boolean }) {
   const t = useTranslations('inbox.intake');
   const proposalWords = useTranslations('inboxDetail.status');
+  const fileWords = useTranslations('inbox.fileStatus');
   // The chips of the Inbox's files (lib/status.ts, #2000): the same state looks the same on both lists, and a proposed
   // file as its proposal (#2009).
-  const proposal = fileProposal(item.state, item.proposalStatus);
+  const proposal = fileProposal(item.state, item.proposalStatus, item.voided);
   const why =
     item.state === 'upload_failed'
       ? errorMessage(item.uploadError)
@@ -187,8 +191,8 @@ function Row({ item, nested = false }: { item: IntakeItem; nested?: boolean }) {
         <span className="min-w-0 flex-1 truncate text-muted-foreground" title={item.name}>
           {item.name}
         </span>
-        <Badge variant={fileChipVariant(item.state, item.proposalStatus)}>
-          {item.state === 'expanded' ? t('expandedCount', { count: item.entries.length }) : proposal ? proposalWords(proposal) : t(`states.${item.state}`)}
+        <Badge variant={fileChipVariant(item.state, item.proposalStatus, item.voided)}>
+          {item.state === 'expanded' ? t('expandedCount', { count: item.entries.length }) : proposal === 'voided' ? fileWords('voided') : proposal ? proposalWords(proposal) : t(`states.${item.state}`)}
         </Badge>
       </div>
       {why && <p className="pb-1 text-xs break-words text-destructive">{why}</p>}

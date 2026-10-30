@@ -45,6 +45,8 @@ export interface IntakeItem {
   reason: ArchiveEntryReason | null;
   // A proposed file's proposal status (#2009): its chip shows a posted file apart from one still waiting.
   proposalStatus: ProposalStatus | null;
+  // Its posting was voided by a reversal (#2032).
+  voided: boolean;
   archive: boolean;
   // The entries of an opened archive.
   entries: IntakeItem[];
@@ -62,7 +64,7 @@ export function precheck(file: { name: string; size: number }): 'ok' | 'too_larg
 }
 
 export function newItem(key: string, name: string): IntakeItem {
-  return { key, name, state: 'queued', fileId: null, existing: false, error: null, uploadError: null, reason: null, proposalStatus: null, archive: isArchiveName(name), entries: [] };
+  return { key, name, state: 'queued', fileId: null, existing: false, error: null, uploadError: null, reason: null, proposalStatus: null, voided: false, archive: isArchiveName(name), entries: [] };
 }
 
 // The item once its upload answered: a new file is read next; a file the org already had is a duplicate.
@@ -83,6 +85,7 @@ function entryItem(parent: string, index: number, entry: NonNullable<BatchFile['
     uploadError: null,
     reason: entry.reason,
     proposalStatus: entry.file?.proposalStatus ?? null,
+    voided: entry.file?.voided ?? false,
     archive: false,
     entries: [],
   };
@@ -107,6 +110,7 @@ export function applyBatch(items: readonly IntakeItem[], batch: readonly BatchFi
       state: fromStatus(file.status),
       error: file.error,
       proposalStatus: file.proposalStatus,
+      voided: file.voided,
       archive: item.archive || file.status === 'expanded' || file.entries !== null,
       entries: (file.entries ?? []).map((entry, index) => entryItem(item.key, index, entry)),
     };
@@ -161,13 +165,18 @@ export function undecidedIds(items: readonly IntakeItem[]): string[] {
   return leaves(items).flatMap((item) => (item.fileId && item.state === 'proposed' && item.proposalStatus && UNDECIDED.has(item.proposalStatus) ? [item.fileId] : []));
 }
 
-// The proposal statuses files.batch gave, on the items (an archive's entries included) whose file it answered for.
+const AFTER_READ: ReadonlySet<FileStatus['status']> = new Set(['proposed', 'duplicate', 'failed']);
+
+// What files.batch says now about the proposed items it answered for (an archive's entries included): the proposal's
+// status, and the file's own when a later read settled it otherwise (#2032), failed after the decision. An answer that
+// says the file is still being read never moves a settled item back: the item waits for the read's outcome.
 export function withProposalStatuses(items: readonly IntakeItem[], files: readonly FileStatus[]): IntakeItem[] {
   const byId = new Map(files.map((file) => [file.id, file]));
   const apply = (item: IntakeItem): IntakeItem => {
     const file = item.fileId ? byId.get(item.fileId) : undefined;
     const entries = item.entries.length > 0 ? item.entries.map(apply) : item.entries;
-    return file && item.state === 'proposed' && file.status === 'proposed' ? { ...item, proposalStatus: file.proposalStatus, entries } : { ...item, entries };
+    if (!file || item.state !== 'proposed' || !AFTER_READ.has(file.status)) return { ...item, entries };
+    return { ...item, state: fromStatus(file.status), error: file.error, proposalStatus: file.proposalStatus, voided: file.voided, entries };
   };
   return items.map(apply);
 }

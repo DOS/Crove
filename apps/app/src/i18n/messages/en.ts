@@ -1828,6 +1828,8 @@ export const en = {
       duplicate: 'Duplicate invoice',
       failed: 'Could not read',
       expanded: 'ZIP opened',
+      // A posted file whose entry was reversed (#2032).
+      voided: 'Voided (entry reversed)',
     },
     formatsZip: 'Or a ZIP of up to 500 files (40 MB unpacked), as the tax portal exports them',
     intake: {
@@ -6139,6 +6141,7 @@ export const en = {
         allocations: 'List allocated voucher numbers',
         policy: {
           set: 'Set the voucher numbering policy',
+          schedule: 'Schedule a voucher numbering change from a future year',
         },
         reseed: 'Raise a voucher number series after a restore',
         void: 'Void a voucher number',

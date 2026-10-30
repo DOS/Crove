@@ -1,8 +1,8 @@
 // Gapless numbering (#1401, ADR-0021 section 2) on PostgreSQL 17: the backfill that keeps the numbers of vouchers
 // issued before the migration (a 'never' series that continues them), the yearly reset by default (31 December, then
-// 1 January starts at 1), the monthly reset, the policy setter and the void command with their permissions, and the
-// series query. The invariants (gapless under parallel posts, voids, direct writes, scope) are in
-// test/invariant/numbering.db.test.ts. Set CROVE_TEST_ADMIN_URL to a superuser URL; each run makes its own database.
+// 1 January starts at 1), the monthly reset, the policy setter and the void command with their permissions, the
+// series query, and a switch of the reset from a future 1 January (#1595). The invariants (gapless under parallel
+// posts, voids, direct writes, scope) are in test/invariant/numbering.db.test.ts. Set CROVE_TEST_ADMIN_URL to a superuser URL; each run makes its own database.
 import { randomUUID } from 'node:crypto';
 import { copyFileSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -333,5 +333,99 @@ suite('gapless numbering on PostgreSQL (#1401)', () => {
       await change?.query('ROLLBACK').catch(() => {});
       await change?.end().catch(() => {});
     }
+  });
+
+  // #1595: an org whose vouchers predate #1401 (reset 'never') moves to a yearly reset from a future 1 January; a
+  // voucher dated before it continues the old series.
+  it('switches a reset from 1 January of a future year with no number dated then or later, and keeps the old one before it (#1595)', async () => {
+    const schedule = (user: string, input: unknown) =>
+      rt.execute<{ previous: string; reset: string; from: string }>('kernel.number.policy.schedule', input, { actor: asUser(user), orgId: legacyOrg });
+    const doc = 'finance.journal_voucher';
+    // A year after today and after every voucher the tests above dated.
+    const year = Math.max(new Date().getFullYear() + 1, 2028);
+    const from = (y: number) => `${y}-01-01`;
+    await admin((c) => c.query(`INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member') ON CONFLICT DO NOTHING`, [legacyOrg, member]));
+
+    await expect(schedule(member, { docType: doc, reset: 'yearly', from: from(year) })).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 });
+    // A boundary that is not 1 January, or one already past.
+    await expect(schedule(owner, { docType: doc, reset: 'yearly', from: `${year}-03-01` })).rejects.toMatchObject({ code: 'VALIDATION' });
+    await expect(schedule(owner, { docType: doc, reset: 'yearly', from: '2020-01-01' })).rejects.toMatchObject({ code: 'VALIDATION', status: 422 });
+    // A voucher already dated in that year: the year has numbers in the '-' series.
+    expect(await post(owner, legacyOrg, 'journal', `${year}-02-01`)).toMatchObject({ number: 4, period: '-' });
+    await expect(schedule(owner, { docType: doc, reset: 'yearly', from: from(year) })).rejects.toMatchObject({ code: 'CONFLICT', status: 409 });
+
+    // The next year is free. A second switch from the same date replaces the first.
+    expect(await schedule(owner, { docType: doc, reset: 'monthly', from: from(year + 1) })).toMatchObject({ previous: 'never', reset: 'monthly' });
+    expect(await schedule(owner, { docType: doc, reset: 'yearly', from: from(year + 1) })).toMatchObject({ previous: 'monthly', reset: 'yearly' });
+    const policy = await admin(
+      async (c) =>
+        (await c.query<{ reset: string; schedule: unknown }>('SELECT reset, schedule FROM crove_kernel.number_series_policy WHERE org_id = $1 AND doc_type = $2', [legacyOrg, doc])).rows,
+    );
+    expect(policy).toEqual([{ reset: 'never', schedule: [{ from: from(year + 1), reset: 'yearly' }] }]);
+
+    // From the switch on, each year starts at 1; a voucher dated before it continues the '-' series.
+    expect(await post(owner, legacyOrg, 'journal', `${year + 1}-01-05`)).toMatchObject({ number: 1, period: String(year + 1) });
+    expect(await post(owner, legacyOrg, 'journal', `${year}-12-20`)).toMatchObject({ number: 5, period: '-' });
+    // An earlier date after a later one: the series keeps its latest date (greatest).
+    expect(await post(owner, legacyOrg, 'journal', `${year}-03-01`)).toMatchObject({ number: 6, period: '-' });
+    expect(await post(owner, legacyOrg, 'journal', `${year + 1}-02-01`)).toMatchObject({ number: 2, period: String(year + 1) });
+    // Now that year has numbers, its switch stays.
+    await expect(schedule(owner, { docType: doc, reset: 'monthly', from: from(year + 1) })).rejects.toMatchObject({ code: 'CONFLICT' });
+
+    // Each series fits its reset, so the WORM verifier reports none as a misfit; the audit row names the switch.
+    const checked = await admin(async (c) => {
+      await c.query('BEGIN');
+      try {
+        await c.query('SET SESSION AUTHORIZATION crove_worker');
+        const misfits = (await c.query<{ ref: string }>('SELECT ref FROM crove_kernel.archive_series_misfits()')).rows.map((r) => r.ref);
+        await c.query('RESET SESSION AUTHORIZATION');
+        const series = (
+          await c.query<{ period_key: string; reset: string; last_doc_date: string | null }>(
+            `SELECT s.period_key, crove_kernel.number_series_reset(s.org_id, s.legal_entity_id, s.doc_type, s.period_key) AS reset, s.last_doc_date::text AS last_doc_date
+             FROM crove_kernel.number_series s WHERE s.org_id = $1 AND s.doc_type = $2 ORDER BY s.period_key`,
+            [legacyOrg, doc],
+          )
+        ).rows;
+        const audits = (
+          await c.query<{ detail: unknown }>(
+            `SELECT detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'kernel.number.policy.schedule' AND outcome = 'ok' ORDER BY occurred_at`,
+            [legacyOrg],
+          )
+        ).rows.map((r) => r.detail);
+        return { misfits, series, audits };
+      } finally {
+        await c.query('ROLLBACK');
+      }
+    });
+    expect(checked.misfits.filter((ref) => ref.includes(legacyOrg))).toEqual([]);
+    expect(checked.series).toEqual([
+      { period_key: '-', reset: 'never', last_doc_date: `${year}-12-20` },
+      { period_key: String(year + 1), reset: 'yearly', last_doc_date: `${year + 1}-02-01` },
+    ]);
+    // A switch written outside the definer into a year the '-' series already numbered, with the series' last document
+    // date cleared too (it is not anchored): the vouchers the archive anchors make that series a misfit.
+    const tampered = await admin(async (c) => {
+      await c.query('BEGIN');
+      try {
+        await c.query(`UPDATE crove_kernel.number_series_policy SET schedule = $3::jsonb WHERE org_id = $1 AND doc_type = $2`, [
+          legacyOrg,
+          doc,
+          JSON.stringify([{ from: from(year), reset: 'yearly' }]),
+        ]);
+        await c.query(`UPDATE crove_kernel.number_series SET last_doc_date = NULL WHERE org_id = $1 AND doc_type = $2`, [legacyOrg, doc]);
+        await c.query('SET SESSION AUTHORIZATION crove_worker');
+        return (await c.query<{ ref: string }>('SELECT ref FROM crove_kernel.archive_series_misfits()')).rows.map((r) => r.ref).filter((ref) => ref.includes(legacyOrg));
+      } finally {
+        await c.query('ROLLBACK');
+      }
+    });
+    const dash = await admin(
+      async (c) => (await c.query<{ id: string }>(`SELECT id FROM crove_kernel.number_series WHERE org_id = $1 AND doc_type = $2 AND period_key = '-'`, [legacyOrg, doc])).rows[0]?.id,
+    );
+    expect(tampered).toEqual([`number_series:${legacyOrg}:${dash}`]);
+    expect(checked.audits).toEqual([
+      expect.objectContaining({ docType: doc, reset: 'monthly', from: from(year + 1), previous: 'never' }),
+      expect.objectContaining({ docType: doc, reset: 'yearly', from: from(year + 1), previous: 'monthly' }),
+    ]);
   });
 });

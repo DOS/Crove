@@ -256,7 +256,8 @@ export function InboxPage() {
   const proposalWords = useTranslations('inboxDetail.status');
   // A file's chip words: a proposed file says its proposal's status (#2009), any other its own.
   const fileWords = (file: FileStatus) => {
-    const proposal = fileProposal(file.status, file.proposalStatus);
+    const proposal = fileProposal(file.status, file.proposalStatus, file.voided);
+    if (proposal === 'voided') return t('fileStatus.voided');
     return proposal ? proposalWords(proposal) : isFileStatus(file.status) ? t(`fileStatus.${file.status}`) : file.status;
   };
   const f = useFormat();
@@ -530,10 +531,11 @@ export function InboxPage() {
               >
                 <span className="max-w-[16rem] truncate text-muted-foreground">{file.filename}</span>
                 {/* A proposed file shows its proposal's status (#2009): waiting, posted or rejected. */}
-                <Badge variant={isFileStatus(file.status) ? fileChipVariant(file.status, file.proposalStatus) : 'secondary'}>
+                <Badge variant={isFileStatus(file.status) ? fileChipVariant(file.status, file.proposalStatus, file.voided) : 'secondary'}>
                   {fileWords(file)}
                 </Badge>
-                {file.status === 'failed' && file.canReextract && (
+                {/* A file not read, or a posting voided by a reversal (#2032), may be read again from here. */}
+                {(file.status === 'failed' || file.voided) && file.canReextract && (
                   <button
                     type="button"
                     disabled={reextract.isPending}

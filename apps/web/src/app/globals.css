@@ -22,6 +22,8 @@
   --color-accent-ink: var(--accent-ink);
   --color-ok: var(--ok);
   --color-ok-soft: var(--ok-soft);
+  --color-brand: var(--brand);
+  --color-brand-spark: var(--brand-spark);
   --color-warn: var(--warn);
   --color-warn-soft: var(--warn-soft);
   --color-bad: var(--bad);
@@ -45,6 +47,8 @@
   --accent-ink: oklch(0.46 0.2 290);
   --ok: oklch(0.47 0.085 172);
   --ok-soft: oklch(0.95 0.025 172);
+  --brand: oklch(0.475 0.233 288.7);
+  --brand-spark: oklch(0.655 0.12 174.8);
   --warn: oklch(0.52 0.12 62);
   --warn-soft: oklch(0.96 0.045 80);
   --bad: oklch(0.53 0.2 25);
@@ -68,6 +72,8 @@
   --accent-ink: oklch(0.8 0.11 293);
   --ok: oklch(0.8 0.1 172);
   --ok-soft: oklch(0.29 0.045 172);
+  --brand: oklch(0.562 0.224 291.1);
+  --brand-spark: oklch(0.774 0.13 174.6);
   --warn: oklch(0.83 0.13 80);
   --warn-soft: oklch(0.31 0.05 75);
   --bad: oklch(0.73 0.16 20);

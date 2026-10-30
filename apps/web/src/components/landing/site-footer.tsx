@@ -1,6 +1,6 @@
 import type { Dictionary } from '../../content/vi';
 import { DOCS_URL, GITHUB_URL, LICENSE_URL, SECURITY_URL, SIGN_IN_URL } from '../../content/site';
-import { CroveMark } from './ui';
+import { LudyMark } from './ui';
 
 export function SiteFooter({ dict }: { dict: Dictionary }) {
   const { footer, nav } = dict;
@@ -9,7 +9,7 @@ export function SiteFooter({ dict }: { dict: Dictionary }) {
       <div className="wrap flex flex-col gap-8 md:flex-row md:items-start md:justify-between">
         <div className="max-w-[40ch]">
           <div className="flex items-center gap-2">
-            <CroveMark className="size-5 text-accent" />
+            <LudyMark className="size-5" />
             <span className="font-display font-semibold">Ludy</span>
           </div>
           <p className="mt-3 text-sm text-muted">{footer.tagline}</p>
