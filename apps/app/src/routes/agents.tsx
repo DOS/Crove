@@ -3,7 +3,7 @@
 // budgets, and "Stop AI". In an org of several legal entities, owners choose each position's entities (#1763). The
 // server enforces every rule; the screen hides what the viewer's role can never do.
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { useMemo, useState, type FormEvent } from 'react';
+import { useId, useMemo, useState, type FormEvent } from 'react';
 import { useTranslations } from 'use-intl';
 import { Alert, AlertDescription, AlertTitle } from '@crove/ui/components/alert';
 import { Badge } from '@crove/ui/components/badge';
@@ -14,7 +14,7 @@ import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { TableCell, TableRow } from '@crove/ui/components/table';
 import { StepUpPrompt } from '../components/two-factor.tsx';
-import { DataTable, Empty, ErrorText, ListSkeleton, PageHeader, Spinner, TableSkeleton } from '../components/ui.tsx';
+import { DataTable, Empty, ErrorText, FieldError, fieldControl, focusFirstInvalid, ListSkeleton, PageHeader, Spinner, TableSkeleton, useFieldErrors } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import {
   EVERY_ENTITY,
@@ -725,6 +725,8 @@ function Templates({ perms, entities, entitiesReady }: { perms: AgentPermissions
   );
 }
 
+type BudgetField = 'target' | 'limit' | 'warnPercent';
+
 function BudgetForm({ agents }: { agents: Agent[] }) {
   const t = useTranslations('agents');
   const moduleName = useModuleName();
@@ -734,26 +736,36 @@ function BudgetForm({ agents }: { agents: Agent[] }) {
   const [limit, setLimit] = useState('');
   const [warnPercent, setWarnPercent] = useState('80');
   const [hardStop, setHardStop] = useState(true);
-  const [touched, setTouched] = useState(false);
   const set = useMutation(orpc.agents.setBudget.mutationOptions({ onSuccess: refresh }));
   const targets: Array<{ value: string; label: string }> =
     scope === 'org' ? [{ value: '*', label: t('scope.org') }] : scope === 'module' ? modules.map((m) => ({ value: m, label: moduleName(m) })) : agents.map((a) => ({ value: a.id, label: a.displayName }));
   const amountOk = isBudgetAmount(limit);
   const warn = Number(warnPercent);
   const warnOk = Number.isInteger(warn) && warn >= 1 && warn <= 100;
+  // Each error sits under its field, checked on leaving it and on submit (DESIGN.md §4.2, #2004); the server checks again.
+  const ids = useId();
+  const idOf = (field: BudgetField) => `${ids}-${field}`;
+  const fields = useFieldErrors<BudgetField>((field) =>
+    field === 'limit' ? (amountOk ? null : t('budgetAmountInvalid')) : field === 'warnPercent' ? (warnOk ? null : t('warnPercentInvalid')) : target ? null : t('budgetTargetMissing'),
+  );
+  const control = (field: BudgetField) => fieldControl(idOf(field), { error: Boolean(fields.of(field)) });
   const pickScope = (next: (typeof SCOPES)[number]) => {
     setScope(next);
     setTarget(next === 'org' ? '*' : next === 'module' ? (modules[0] ?? '') : (agents[0]?.id ?? ''));
+    fields.edit('target');
   };
   const locked = isStepUpRequired(set.error);
   return (
     <>
       <form
         className="mt-4 grid gap-3 rounded-lg border bg-muted/40 p-3 sm:grid-cols-2 lg:grid-cols-5"
+        noValidate
         onSubmit={(event) => {
           event.preventDefault();
-          setTouched(true);
-          if (!amountOk || !warnOk || !target) return;
+          if (!fields.checkAll(['target', 'limit', 'warnPercent'])) {
+            focusFirstInvalid(event.currentTarget);
+            return;
+          }
           set.mutate({ scope, target, monthlyLimit: limit.trim(), warnPercent: warn, hardStop, idempotencyKey: crypto.randomUUID() });
         }}
       >
@@ -767,24 +779,73 @@ function BudgetForm({ agents }: { agents: Agent[] }) {
             ))}
           </NativeSelect>
         </label>
-        <label className="block text-xs">
-          <span className="text-subtle-foreground">{t('budgetTarget')}</span>
-          <NativeSelect className="mt-1 w-full" value={target} onChange={(e) => setTarget(e.target.value)} disabled={scope === 'org' || locked}>
-            {targets.map((o) => (
-              <NativeSelectOption key={o.value} value={o.value}>
-                {o.label}
-              </NativeSelectOption>
-            ))}
-          </NativeSelect>
-        </label>
-        <label className="block text-xs">
-          <span className="text-subtle-foreground">{t('budgetLimit')}</span>
-          <Input inputMode="decimal" required value={limit} disabled={locked} onChange={(e) => setLimit(e.target.value)} className="mt-1" aria-invalid={touched && !amountOk} />
-        </label>
-        <label className="block text-xs">
-          <span className="text-subtle-foreground">{t('warnPercent')}</span>
-          <Input type="number" min={1} max={100} value={warnPercent} disabled={locked} onChange={(e) => setWarnPercent(e.target.value)} className="mt-1" />
-        </label>
+        <div className="text-xs">
+          <label className="block">
+            <span className="text-subtle-foreground">{t('budgetTarget')}</span>
+            <NativeSelect
+              {...control('target')}
+              className="mt-1 w-full"
+              value={target}
+              onChange={(e) => {
+                setTarget(e.target.value);
+                fields.edit('target');
+              }}
+              disabled={scope === 'org' || locked}
+            >
+              {targets.map((o) => (
+                <NativeSelectOption key={o.value} value={o.value}>
+                  {o.label}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+          </label>
+          <FieldError id={idOf('target')} className="mt-1">
+            {fields.of('target')}
+          </FieldError>
+        </div>
+        <div className="text-xs">
+          <label className="block">
+            <span className="text-subtle-foreground">{t('budgetLimit')}</span>
+            <Input
+              {...control('limit')}
+              inputMode="decimal"
+              required
+              value={limit}
+              disabled={locked}
+              onChange={(e) => {
+                setLimit(e.target.value);
+                fields.edit('limit');
+              }}
+              onBlur={(e) => fields.blur('limit', e.target.value)}
+              className="mt-1"
+            />
+          </label>
+          <FieldError id={idOf('limit')} className="mt-1">
+            {fields.of('limit')}
+          </FieldError>
+        </div>
+        <div className="text-xs">
+          <label className="block">
+            <span className="text-subtle-foreground">{t('warnPercent')}</span>
+            <Input
+              {...control('warnPercent')}
+              type="number"
+              min={1}
+              max={100}
+              value={warnPercent}
+              disabled={locked}
+              onChange={(e) => {
+                setWarnPercent(e.target.value);
+                fields.edit('warnPercent');
+              }}
+              onBlur={(e) => fields.blur('warnPercent', e.target.value)}
+              className="mt-1"
+            />
+          </label>
+          <FieldError id={idOf('warnPercent')} className="mt-1">
+            {fields.of('warnPercent')}
+          </FieldError>
+        </div>
         <label className="flex items-center gap-2 self-end pb-2 text-xs text-muted-foreground">
           <Checkbox checked={hardStop} disabled={locked} onCheckedChange={(checked) => setHardStop(checked)} />
           {t('hardStop')}
@@ -794,9 +855,6 @@ function BudgetForm({ agents }: { agents: Agent[] }) {
             {set.isPending ? <Spinner /> : null}
             {t('setBudget')}
           </Button>
-          {touched && !amountOk && <span className="text-xs text-destructive">{t('budgetAmountInvalid')}</span>}
-          {touched && !warnOk && <span className="text-xs text-destructive">{t('warnPercentInvalid')}</span>}
-          {touched && !target && <span className="text-xs text-destructive">{t('budgetTargetMissing')}</span>}
           {set.error && !locked && <span className="text-xs text-destructive">{errorMessage(set.error)}</span>}
         </div>
       </form>

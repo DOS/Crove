@@ -1,7 +1,7 @@
 // The register form (#919): its defaults per kind, its checks and the input it sends, and the months offered for a
 // depreciation.
 import { describe, expect, it } from 'vitest';
-import { defaultAccounts, fixedAssetFormProblem, fixedAssetInput, monthLabel, previousMonth, recentMonths, type FixedAssetForm } from '../src/lib/fixed-assets.ts';
+import { defaultAccounts, FIXED_ASSET_FORM_FIELDS, fixedAssetFieldProblem, fixedAssetFormProblem, fixedAssetInput, monthLabel, previousMonth, recentMonths, type FixedAssetForm } from '../src/lib/fixed-assets.ts';
 
 const form = (over: Partial<FixedAssetForm> = {}): FixedAssetForm => ({
   kind: 'fixed_asset',
@@ -34,6 +34,14 @@ describe('the fixed asset form', () => {
     expect(fixedAssetFormProblem(form({ months: '0' }))).toBe('months');
     expect(fixedAssetFormProblem(form({ months: '601' }))).toBe('months');
     expect(fixedAssetFormProblem(form({ months: '1.5' }))).toBe('months');
+  });
+
+  it('marks each field on its own, so every error sits under its field (#2004)', () => {
+    const bad = form({ name: '', cost: 'abc', expenseAccount: '511', months: '0' });
+    expect(FIXED_ASSET_FORM_FIELDS.filter((field) => fixedAssetFieldProblem(bad, field))).toEqual(['name', 'cost', 'accounts', 'months']);
+    expect(FIXED_ASSET_FORM_FIELDS.filter((field) => fixedAssetFieldProblem(form(), field))).toEqual([]);
+    // The cost as AmountInput keeps it while focused: grouped with dots or commas, it is still whole dong.
+    expect(fixedAssetFieldProblem(form({ cost: '36,000,000' }), 'cost')).toBe(false);
   });
 
   it('offers the months up to the one before today, newest first', () => {

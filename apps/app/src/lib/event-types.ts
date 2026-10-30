@@ -88,21 +88,42 @@ export function withTitle(draft: EventTypeDraft, title: string): EventTypeDraft 
 
 const whole = (text: string): number | null => (/^\d+$/.test(text.trim()) ? Number(text.trim()) : null);
 
+const noticeHoursOf = (text: string): number | null => {
+  const hours = Number(text.trim().replace(',', '.'));
+  return text.trim() === '' || !Number.isFinite(hours) || hours < 0 ? null : hours;
+};
+
+/** The fields the form checks, in the order inputOf reports them. */
+export const EVENT_TYPE_CHECKED_FIELDS = ['durationMin', 'bufferBeforeMin', 'bufferAfterMin', 'horizonDays', 'minNoticeHours', 'dailyLimit', 'coHostUserIds'] as const;
+export type EventTypeCheckedField = (typeof EVENT_TYPE_CHECKED_FIELDS)[number];
+
+/** Whether this field of the draft stops the save: a number that is not one, or a team without co-hosts. */
+export function eventTypeFieldInvalid(draft: EventTypeDraft, field: EventTypeCheckedField): boolean {
+  switch (field) {
+    case 'minNoticeHours':
+      return noticeHoursOf(draft.minNoticeHours) === null;
+    case 'dailyLimit':
+      return draft.dailyLimit.trim() !== '' && whole(draft.dailyLimit) === null;
+    case 'coHostUserIds':
+      return draft.assignment !== 'single' && draft.coHostUserIds.length === 0;
+    default:
+      return whole(draft[field]) === null;
+  }
+}
+
 /** The input to save, or the name of the first field that is not a whole number where one is needed. */
-export function inputOf(draft: EventTypeDraft): { input: EventTypeInput } | { invalid: keyof EventTypeDraft } {
+export function inputOf(draft: EventTypeDraft): { input: EventTypeInput } | { invalid: EventTypeCheckedField } {
+  const invalid = EVENT_TYPE_CHECKED_FIELDS.find((field) => eventTypeFieldInvalid(draft, field));
+  if (invalid) return { invalid };
   const numbers = {
     durationMin: whole(draft.durationMin),
     bufferBeforeMin: whole(draft.bufferBeforeMin),
     bufferAfterMin: whole(draft.bufferAfterMin),
     horizonDays: whole(draft.horizonDays),
   };
-  for (const [key, value] of Object.entries(numbers)) if (value === null) return { invalid: key as keyof EventTypeDraft };
-  const noticeHours = Number(draft.minNoticeHours.trim().replace(',', '.'));
-  if (draft.minNoticeHours.trim() === '' || !Number.isFinite(noticeHours) || noticeHours < 0) return { invalid: 'minNoticeHours' };
+  const noticeHours = noticeHoursOf(draft.minNoticeHours) as number;
   const dailyLimit = draft.dailyLimit.trim() === '' ? null : whole(draft.dailyLimit);
-  if (draft.dailyLimit.trim() !== '' && dailyLimit === null) return { invalid: 'dailyLimit' };
   const team = draft.assignment !== 'single';
-  if (team && draft.coHostUserIds.length === 0) return { invalid: 'coHostUserIds' };
   return {
     input: {
       slug: draft.slug.trim(),

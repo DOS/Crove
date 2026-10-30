@@ -3,7 +3,7 @@
 // Event types are archived, not deleted. The server enforces every rule; the screen offers only what can succeed.
 // Team types (#1373): owners and admins pick round-robin or collective and the co-hosts; a member sees them only.
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { useState, type FormEvent } from 'react';
+import { useId, useState, type FormEvent } from 'react';
 import { useTranslations } from 'use-intl';
 import { EVENT_TYPE_ASSIGNMENTS, EVENT_TYPE_LOCATION_KINDS, type EventType, type EventTypeAssignment, type EventTypeLocationKind } from '@crove/kernel-contract';
 import { Badge } from '@crove/ui/components/badge';
@@ -13,17 +13,20 @@ import { Checkbox } from '@crove/ui/components/checkbox';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
-import { ErrorText, RowsSkeleton, Spinner } from '../components/ui.tsx';
+import { ErrorText, FieldError, fieldControl, fieldErrorId, focusFirstInvalid, RowsSkeleton, Spinner, useFieldErrors } from '../components/ui.tsx';
 import { errorMessage, orpc, queryClient } from '../lib/api.ts';
 import {
   coHostChoices,
   draftOf,
+  EVENT_TYPE_CHECKED_FIELDS,
+  eventTypeFieldInvalid,
   hostChoices,
   inputOf,
   mayManage,
   withCoHost,
   withHost,
   withTitle,
+  type EventTypeCheckedField,
   type EventTypeDraft,
   type EventTypeMember,
 } from '../lib/event-types.ts';
@@ -57,24 +60,46 @@ function EventTypeForm({
   const t = useTranslations('eventTypes');
   const tc = useTranslations('common');
   const [draft, setDraft] = useState<EventTypeDraft>(() => draftOf(type, me));
-  const [invalid, setInvalid] = useState<keyof EventTypeDraft | null>(null);
   const set = <K extends keyof EventTypeDraft>(key: K, value: EventTypeDraft[K]) => setDraft((d) => ({ ...d, [key]: value }));
-  const submit = (event: FormEvent) => {
+  // Each number's error sits under it, the co-hosts' under their list, checked on leaving the field and on submit
+  // (DESIGN.md §4.2, #2004); the server checks again.
+  const ids = useId();
+  const idOf = (field: EventTypeCheckedField) => `${ids}-${field}`;
+  const fields = useFieldErrors<EventTypeCheckedField>((field) =>
+    !eventTypeFieldInvalid(draft, field) ? null : field === 'coHostUserIds' ? t('coHostsNeeded') : t('numberInvalid'),
+  );
+  const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const result = inputOf(draft);
-    if ('invalid' in result) {
-      setInvalid(result.invalid);
+    if (!fields.checkAll(EVENT_TYPE_CHECKED_FIELDS) || 'invalid' in result) {
+      focusFirstInvalid(event.currentTarget);
       return;
     }
-    setInvalid(null);
     onSubmit(result.input);
   };
-  const number = (key: 'durationMin' | 'bufferBeforeMin' | 'bufferAfterMin' | 'minNoticeHours' | 'horizonDays' | 'dailyLimit', placeholder?: string) => (
-    <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-      {t(`fields.${key}`)}
-      <Input inputMode="decimal" className="w-28" value={draft[key]} placeholder={placeholder} onChange={(e) => set(key, e.target.value)} aria-invalid={invalid === key} />
-    </label>
+  const number = (key: Exclude<EventTypeCheckedField, 'coHostUserIds'>, placeholder?: string) => (
+    <div className="flex flex-col gap-1">
+      <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+        {t(`fields.${key}`)}
+        <Input
+          {...fieldControl(idOf(key), { error: Boolean(fields.of(key)) })}
+          inputMode="decimal"
+          className="w-28"
+          value={draft[key]}
+          placeholder={placeholder}
+          onChange={(e) => {
+            set(key, e.target.value);
+            fields.edit(key);
+          }}
+          onBlur={(e) => fields.blur(key, e.target.value)}
+        />
+      </label>
+      <FieldError id={idOf(key)} className="max-w-48">
+        {fields.of(key)}
+      </FieldError>
+    </div>
   );
+  const coHostsError = fields.of('coHostUserIds');
   return (
     <form className="mt-2 space-y-2" onSubmit={submit} aria-label={type ? t('editOf', { title: type.title }) : t('addTitle')}>
       <Input required maxLength={120} placeholder={t('titlePlaceholder')} aria-label={t('fields.title')} value={draft.title} onChange={(e) => setDraft((d) => withTitle(d, e.target.value))} />
@@ -115,7 +140,16 @@ function EventTypeForm({
             </NativeSelectOption>
           ))}
         </NativeSelect>
-        <NativeSelect className="min-w-48" value={draft.assignment} disabled={!manager} onChange={(e) => set('assignment', e.target.value as EventTypeAssignment)} aria-label={t('fields.assignment')}>
+        <NativeSelect
+          className="min-w-48"
+          value={draft.assignment}
+          disabled={!manager}
+          onChange={(e) => {
+            set('assignment', e.target.value as EventTypeAssignment);
+            fields.edit('coHostUserIds');
+          }}
+          aria-label={t('fields.assignment')}
+        >
           {EVENT_TYPE_ASSIGNMENTS.map((a) => (
             <NativeSelectOption key={a} value={a}>
               {t(`assignments.${a}`)}
@@ -124,25 +158,28 @@ function EventTypeForm({
         </NativeSelect>
       </div>
       {draft.assignment !== 'single' && (
-        <fieldset className="space-y-1" aria-invalid={invalid === 'coHostUserIds'}>
+        <fieldset className="space-y-1" aria-invalid={Boolean(coHostsError) || undefined} aria-describedby={coHostsError ? fieldErrorId(idOf('coHostUserIds')) : undefined}>
           <legend className="text-xs text-muted-foreground">{t('fields.coHostUserIds')}</legend>
           <p className="text-xs text-subtle-foreground">{t(`assignmentHints.${draft.assignment}`)}</p>
           <div className="flex flex-wrap gap-x-4 gap-y-1">
             {coHostChoices(members, draft.hostUserId).map((m) => (
               <label key={m.userId} className="flex items-center gap-2 text-sm">
-                <Checkbox checked={draft.coHostUserIds.includes(m.userId)} disabled={!manager} onCheckedChange={(on) => setDraft((d) => withCoHost(d, m.userId, on === true))} />
+                <Checkbox
+                  checked={draft.coHostUserIds.includes(m.userId)}
+                  disabled={!manager}
+                  onCheckedChange={(on) => {
+                    setDraft((d) => withCoHost(d, m.userId, on === true));
+                    fields.edit('coHostUserIds');
+                  }}
+                />
                 {m.displayName ?? m.email}
               </label>
             ))}
           </div>
+          <FieldError id={idOf('coHostUserIds')}>{coHostsError}</FieldError>
         </fieldset>
       )}
       <Textarea maxLength={1000} rows={2} placeholder={t('descriptionPlaceholder')} aria-label={t('fields.description')} value={draft.description} onChange={(e) => set('description', e.target.value)} />
-      {invalid === 'coHostUserIds' ? (
-        <ErrorText>{t('coHostsNeeded')}</ErrorText>
-      ) : invalid ? (
-        <ErrorText>{t('invalidField', { field: t(`fields.${invalid}` as 'fields.title') })}</ErrorText>
-      ) : null}
       <div className="flex gap-2">
         <Button type="submit" variant="outline" size="sm" disabled={pending || !draft.title.trim() || !draft.slug.trim()}>
           {pending ? <Spinner className="text-current" /> : null}

@@ -11,6 +11,7 @@ import {
   normalizeAmount,
   previewVoucherJournal,
   VOUCHER_PROBLEMS,
+  voucherFieldError,
   voucherFormError,
   voucherProblem,
   voucherTotal,
@@ -84,6 +85,23 @@ describe('voucherFormError', () => {
     );
     expect(voucherFormError(form({ partyId: '' }), vi)).toBe('Dòng hạch toán vào 131 hoặc 331 cần chọn đối tượng');
     expect(voucherFormError(form({ partyId: '', lines: [{ account: '6422', amount: '22.000' }] }), vi)).toBeNull();
+  });
+});
+
+describe('voucherFieldError', () => {
+  it('words the problem of each field and each line on its own, so it sits under them (#2004)', () => {
+    const bad = form({ date: '2026-02-30', description: ' ', partyId: '', lines: [{ account: '331', amount: '1' }, { account: '1111', amount: '5' }, { account: '6422', amount: 'x' }] });
+    expect(voucherFieldError(bad, 'date', vi)).toBe('Hãy chọn ngày chứng từ');
+    expect(voucherFieldError(bad, 'cashAccount', vi)).toBeNull();
+    expect(voucherFieldError(bad, 'description', en)).toBe('Enter the reason');
+    expect(voucherFieldError(bad, 'party', vi)).toBe('Dòng hạch toán vào 131 hoặc 331 cần chọn đối tượng');
+    expect(voucherFieldError(bad, 0, vi)).toBeNull();
+    expect(voucherFieldError(bad, 1, vi)).toBe('Dòng 2: tài khoản đối ứng không được trùng tài khoản tiền');
+    expect(voucherFieldError(bad, 2, en)).toBe('Line 3: the amount must be a whole number of VND above 0');
+    // A line no longer in the form (removed meanwhile) has nothing to say.
+    expect(voucherFieldError(bad, 3, vi)).toBeNull();
+    expect(voucherFieldError(bad, -1, vi)).toBeNull();
+    expect(voucherFieldError(form({ lines: [] }), 'lines', vi)).toBe('Chứng từ cần từ 1 đến 20 dòng hạch toán');
   });
 });
 

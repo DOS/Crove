@@ -37,15 +37,32 @@ function accountsFit(form: FixedAssetForm): boolean {
   return a.startsWith('242') && acc.trim() === '' && expense;
 }
 
+// The form's checks in the order it shows the fields; each problem sits under its field (DESIGN.md §4.2, #2004), the
+// accounts' under the last account field.
+export const FIXED_ASSET_FORM_FIELDS: readonly FixedAssetFormProblem[] = ['name', 'cost', 'accounts', 'startMonth', 'months'];
+
+export function fixedAssetFieldProblem(form: FixedAssetForm, field: FixedAssetFormProblem): boolean {
+  switch (field) {
+    case 'name':
+      return form.name.trim() === '';
+    case 'cost': {
+      const cost = normalizeAmount(form.cost);
+      return !WHOLE.test(cost) || !/[1-9]/.test(cost);
+    }
+    case 'accounts':
+      return !accountsFit(form);
+    case 'startMonth':
+      return !MONTH.test(form.startMonth);
+    case 'months': {
+      const months = Number(form.months);
+      return !/^\d{1,3}$/.test(form.months.trim()) || months < 1 || months > 600;
+    }
+  }
+}
+
+// The first problem of the form, or null when it can be sent.
 export function fixedAssetFormProblem(form: FixedAssetForm): FixedAssetFormProblem | null {
-  if (form.name.trim() === '') return 'name';
-  const cost = normalizeAmount(form.cost);
-  if (!WHOLE.test(cost) || !/[1-9]/.test(cost)) return 'cost';
-  if (!accountsFit(form)) return 'accounts';
-  if (!MONTH.test(form.startMonth)) return 'startMonth';
-  const months = Number(form.months);
-  if (!/^\d{1,3}$/.test(form.months.trim()) || months < 1 || months > 600) return 'months';
-  return null;
+  return FIXED_ASSET_FORM_FIELDS.find((field) => fixedAssetFieldProblem(form, field)) ?? null;
 }
 
 // The input of finance.fixed_asset.create for a form without a problem.

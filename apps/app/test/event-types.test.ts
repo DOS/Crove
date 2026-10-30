@@ -2,7 +2,7 @@
 // title, and who may host or manage; team types (#1373) with their co-hosts.
 import { describe, expect, it } from 'vitest';
 import { slugOf, type EventType } from '@crove/kernel-contract';
-import { coHostChoices, draftOf, hostChoices, inputOf, mayManage, withCoHost, withHost, withTitle, type EventTypeMember } from '../src/lib/event-types.ts';
+import { coHostChoices, draftOf, EVENT_TYPE_CHECKED_FIELDS, eventTypeFieldInvalid, hostChoices, inputOf, mayManage, withCoHost, withHost, withTitle, type EventTypeMember } from '../src/lib/event-types.ts';
 
 const ME = '00000000-0000-7000-8000-000000000001';
 const OTHER = '00000000-0000-7000-8000-000000000002';
@@ -49,6 +49,14 @@ describe('event type form', () => {
     expect(inputOf({ ...draft, durationMin: '30.5' })).toEqual({ invalid: 'durationMin' });
     expect(inputOf({ ...draft, dailyLimit: 'x' })).toEqual({ invalid: 'dailyLimit' });
     expect(inputOf({ ...draft, minNoticeHours: '' })).toEqual({ invalid: 'minNoticeHours' });
+  });
+
+  it('marks each field on its own, so every error sits under its field (#2004)', () => {
+    const draft = { ...withTitle(draftOf(null, ME), 'Tư vấn'), durationMin: '30.5', minNoticeHours: '-1', dailyLimit: 'x', assignment: 'collective' as const, coHostUserIds: [] };
+    expect(EVENT_TYPE_CHECKED_FIELDS.filter((field) => eventTypeFieldInvalid(draft, field))).toEqual(['durationMin', 'minNoticeHours', 'dailyLimit', 'coHostUserIds']);
+    expect(inputOf(draft)).toEqual({ invalid: 'durationMin' });
+    const fine = { ...draft, durationMin: '30', minNoticeHours: '0,5', dailyLimit: '', assignment: 'single' as const };
+    expect(EVENT_TYPE_CHECKED_FIELDS.filter((field) => eventTypeFieldInvalid(fine, field))).toEqual([]);
   });
 
   it('reads a saved type back into the same input', () => {

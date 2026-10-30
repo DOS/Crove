@@ -1,6 +1,7 @@
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useParams, useSearch } from '@tanstack/react-router';
-import { useState } from 'react';
+import { Fragment, useId, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { useTranslations } from 'use-intl';
 import {
   VOUCHER_MAX_LINES,
@@ -22,7 +23,7 @@ import { TableCell, TableRow } from '@crove/ui/components/table';
 import { AmountInput } from '../components/amount-input.tsx';
 import { DateInput } from '../components/date-input.tsx';
 import { useChosenEntity } from '../components/entity-switcher.tsx';
-import { DataTable, Empty, ErrorText, PageHeader, Spinner, TableSkeleton } from '../components/ui.tsx';
+import { DataTable, Empty, ErrorText, FieldError, fieldControl, fieldErrorId, fieldHintId, focusFirstInvalid, PageHeader, Spinner, TableSkeleton, useFieldErrors } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { apiFetch, errorMessage, getCurrentOrg, orpc, queryClient } from '../lib/api.ts';
 import { exportQuery } from '../lib/legal-entity-choice.ts';
@@ -36,6 +37,7 @@ import {
   nextVoucherCursor,
   normalizeAmount,
   previewVoucherJournal,
+  voucherFieldError,
   voucherFormError,
   voucherProblem,
   voucherTotal,
@@ -51,6 +53,9 @@ interface Line {
 }
 
 const newLine = (account: string): Line => ({ key: crypto.randomUUID(), account, amount: '', memo: '' });
+
+// The fields of the voucher form an error sits under; a line by its key, so its error stays with it when one above is removed.
+type FormField = 'date' | 'cashAccount' | 'description' | 'party' | `line:${string}`;
 
 // Enters a phiếu thu, phiếu chi, báo Có or báo Nợ (#327) as a proposal; an owner or admin approves it in the Inbox (R3,
 // four-eyes, fresh MFA), which numbers it and posts its entry. From a bank statement line (#326, fromLine: what
@@ -87,13 +92,29 @@ export function VoucherFormCard({ slug, onClose, fromLine }: { slug: string; onC
   const cash = prefill ? cashAccount : cashChoices.some((a) => a.code === cashAccount) ? cashAccount : (cashChoices[0]?.code ?? '');
   const form: VoucherForm = { type, date, cashAccount: cash, partyId, description, lines: lines.map((l) => ({ account: l.account, amount: l.amount })) };
   const total = voucherTotal(form.lines);
-  const problem = voucherFormError(form, root) ?? (prefill && total !== prefill.amount ? t('form.lineTotal', { amount: f.money(prefill.amount) }) : null);
+  const totalProblem = prefill && total !== prefill.amount ? t('form.lineTotal', { amount: f.money(prefill.amount) }) : null;
+  const problem = voucherFormError(form, root) ?? totalProblem;
+  // Each problem sits under its field or its line, checked on leaving it and on submit (DESIGN.md §4.2, #2004); only
+  // the count of lines and a total that differs from the statement line stay below them, after a submit.
+  const ids = useId();
+  const idOf = (field: FormField) => `${ids}-${field.replace(':', '-')}`;
+  const fields = useFieldErrors<FormField>((field) =>
+    voucherFieldError(form, field.startsWith('line:') ? lines.findIndex((l) => `line:${l.key}` === field) : (field as Exclude<FormField, `line:${string}`>), root),
+  );
+  const control = (field: FormField) => fieldControl(idOf(field), { error: Boolean(fields.of(field)) });
+  const formLevel = touched ? (voucherFieldError(form, 'lines', root) ?? totalProblem) : null;
   const journal = previewVoucherJournal(form);
   const accountName = (code: string) => chart.find((a) => a.code === code)?.name ?? '';
   const inflow = isInflow(type);
   const refusedProblem = voucherProblem(request.error);
 
+  // A line's error can depend on the cash account and a party's on the lines: changing one hides the others' errors
+  // until they are checked again.
+  const editLines = (from = 0) => lines.slice(from).forEach((l) => fields.edit(`line:${l.key}`));
   const changeType = (next: VoucherType) => {
+    fields.edit('cashAccount');
+    fields.edit('party');
+    editLines();
     // The usual counter account follows the type while the user has not changed it.
     setLines((current) => current.map((l) => (l.account === defaultCounterAccount(type) ? { ...l, account: defaultCounterAccount(next) } : l)));
     setType(next);
@@ -124,6 +145,7 @@ export function VoucherFormCard({ slug, onClose, fromLine }: { slug: string; onC
                 setPersonName('');
                 setLines([newLine(defaultCounterAccount(type))]);
                 setTouched(false);
+                fields.reset();
               }}
             >
               {t('form.another')}
@@ -140,7 +162,9 @@ export function VoucherFormCard({ slug, onClose, fromLine }: { slug: string; onC
         className="space-y-4"
         onSubmit={(event) => {
           event.preventDefault();
-          setTouched(true);
+          const fieldsOk = fields.checkAll(['date', 'cashAccount', 'description', ...lines.map((l) => `line:${l.key}` as const), 'party']);
+          flushSync(() => setTouched(true));
+          if (!fieldsOk) focusFirstInvalid(event.currentTarget);
           if (problem || !entity.ready) return;
           request.mutate({
             command: 'finance.voucher.record',
@@ -177,14 +201,39 @@ export function VoucherFormCard({ slug, onClose, fromLine }: { slug: string; onC
             </label>
             <p className="mt-1 text-subtle-foreground">{t(`typeHints.${type}`)}</p>
           </div>
-          <label className="block text-xs">
-            <span className="text-subtle-foreground">{t('form.date')}</span>
-            <DateInput required value={date} disabled={prefill !== null} onChange={setDate} className="mt-1 w-full" />
-          </label>
+          <div className="text-xs">
+            <label className="block">
+              <span className="text-subtle-foreground">{t('form.date')}</span>
+              <DateInput
+                {...control('date')}
+                required
+                value={date}
+                disabled={prefill !== null}
+                onChange={(next) => {
+                  setDate(next);
+                  fields.edit('date');
+                }}
+                className="mt-1 w-full"
+              />
+            </label>
+            <FieldError id={idOf('date')} className="mt-1">
+              {fields.of('date')}
+            </FieldError>
+          </div>
           <div className="text-xs">
             <label className="block">
               <span className="text-subtle-foreground">{cashRootOf(type) === '111' ? t('form.cashAccountCash') : t('form.cashAccountBank')}</span>
-              <NativeSelect className="mt-1 w-full" value={cash} disabled={prefill !== null} onChange={(e) => setCashAccount(e.target.value)}>
+              <NativeSelect
+                {...control('cashAccount')}
+                className="mt-1 w-full"
+                value={cash}
+                disabled={prefill !== null}
+                onChange={(e) => {
+                  setCashAccount(e.target.value);
+                  fields.edit('cashAccount');
+                  editLines();
+                }}
+              >
                 {cashChoices.map((a) => (
                   <NativeSelectOption key={a.code} value={a.code}>
                     {accountLabel(a)}
@@ -193,11 +242,22 @@ export function VoucherFormCard({ slug, onClose, fromLine }: { slug: string; onC
               </NativeSelect>
             </label>
             {accounts.data && cashChoices.length === 0 && <p className="mt-1 text-warning">{t('form.noCashAccount', { root: cashRootOf(type) })}</p>}
+            <FieldError id={idOf('cashAccount')} className="mt-1">
+              {fields.of('cashAccount')}
+            </FieldError>
           </div>
           <div className="text-xs">
             <label className="block">
               <span className="text-subtle-foreground">{t('form.party')}</span>
-              <NativeSelect className="mt-1 w-full" value={partyId} onChange={(e) => setPartyId(e.target.value)}>
+              <NativeSelect
+                {...fieldControl(idOf('party'), { hint: true, error: Boolean(fields.of('party')) })}
+                className="mt-1 w-full"
+                value={partyId}
+                onChange={(e) => {
+                  setPartyId(e.target.value);
+                  fields.edit('party');
+                }}
+              >
                 <NativeSelectOption value="">{t('form.noParty')}</NativeSelectOption>
                 {(parties.data ?? []).map((p) => (
                   <NativeSelectOption key={p.id} value={p.id}>
@@ -206,7 +266,12 @@ export function VoucherFormCard({ slug, onClose, fromLine }: { slug: string; onC
                 ))}
               </NativeSelect>
             </label>
-            <p className="mt-1 text-subtle-foreground">{t('form.partyHint')}</p>
+            <p id={fieldHintId(idOf('party'))} className="mt-1 text-subtle-foreground">
+              {t('form.partyHint')}
+            </p>
+            <FieldError id={idOf('party')} className="mt-1">
+              {fields.of('party')}
+            </FieldError>
             {fromLine?.suggested ? (
               <p className="mt-1 text-foreground">
                 {t('form.suggested', {
@@ -222,62 +287,93 @@ export function VoucherFormCard({ slug, onClose, fromLine }: { slug: string; onC
             <span className="text-subtle-foreground">{inflow ? t('form.personPayer') : t('form.personPayee')}</span>
             <Input maxLength={200} value={personName} onChange={(e) => setPersonName(e.target.value)} placeholder={t('form.personHint')} className="mt-1 w-full" />
           </label>
-          <label className="block text-xs">
-            <span className="text-subtle-foreground">{inflow ? t('form.descriptionReceipt') : t('form.descriptionPayment')}</span>
-            <Input
-              required
-              maxLength={300}
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder={t('form.descriptionPlaceholder')}
-              className="mt-1 w-full"
-            />
-          </label>
+          <div className="text-xs">
+            <label className="block">
+              <span className="text-subtle-foreground">{inflow ? t('form.descriptionReceipt') : t('form.descriptionPayment')}</span>
+              <Input
+                {...control('description')}
+                maxLength={300}
+                value={description}
+                onChange={(e) => {
+                  setDescription(e.target.value);
+                  fields.edit('description');
+                }}
+                onBlur={(e) => fields.blur('description', e.target.value)}
+                placeholder={t('form.descriptionPlaceholder')}
+                className="mt-1 w-full"
+              />
+            </label>
+            <FieldError id={idOf('description')} className="mt-1">
+              {fields.of('description')}
+            </FieldError>
+          </div>
         </div>
 
         <div>
           <p className="text-xs font-medium tracking-wide uppercase text-subtle-foreground">{t('form.lines')}</p>
           <div className="mt-2 space-y-2">
-            {lines.map((l, i) => (
-              <div key={l.key} className="grid gap-2 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,2fr)_auto]">
-                <NativeSelect
-                  aria-label={t('form.lineAccountFor', { line: String(i + 1) })}
-                  className="w-full"
-                  value={l.account}
-                  onChange={(e) => setLine(l.key, { account: e.target.value })}
-                >
-                  {pickableAccounts(chart, l.account).map((a) => (
-                    <NativeSelectOption key={a.code} value={a.code}>
-                      {accountLabel(a)}
-                    </NativeSelectOption>
-                  ))}
-                </NativeSelect>
-                <AmountInput
-                  aria-label={t('form.lineAmountFor', { line: String(i + 1) })}
-                  placeholder={t('form.lineAmount')}
-                  value={l.amount}
-                  onChange={(amount) => setLine(l.key, { amount })}
-                  className="w-full text-right tabular-nums"
-                />
-                <Input
-                  maxLength={300}
-                  aria-label={t('form.lineMemoFor', { line: String(i + 1) })}
-                  placeholder={t('form.lineMemoPlaceholder')}
-                  value={l.memo}
-                  onChange={(e) => setLine(l.key, { memo: e.target.value })}
-                  className="w-full"
-                />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  disabled={lines.length === 1}
-                  aria-label={t('form.removeLine', { line: String(i + 1) })}
-                  onClick={() => setLines((current) => current.filter((x) => x.key !== l.key))}
-                >
-                  ✕
-                </Button>
-              </div>
-            ))}
+            {lines.map((l, i) => {
+              const lineField = `line:${l.key}` as const;
+              const lineInvalid = Boolean(fields.of(lineField));
+              const linked = { 'aria-invalid': lineInvalid || undefined, 'aria-describedby': lineInvalid ? fieldErrorId(idOf(lineField)) : undefined };
+              return (
+                <Fragment key={l.key}>
+                  <div className="grid gap-2 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,2fr)_auto]">
+                    <NativeSelect
+                      {...linked}
+                      aria-label={t('form.lineAccountFor', { line: String(i + 1) })}
+                      className="w-full"
+                      value={l.account}
+                      onChange={(e) => {
+                        setLine(l.key, { account: e.target.value });
+                        fields.edit(lineField);
+                        fields.edit('party');
+                      }}
+                    >
+                      {pickableAccounts(chart, l.account).map((a) => (
+                        <NativeSelectOption key={a.code} value={a.code}>
+                          {accountLabel(a)}
+                        </NativeSelectOption>
+                      ))}
+                    </NativeSelect>
+                    <AmountInput
+                      {...linked}
+                      aria-label={t('form.lineAmountFor', { line: String(i + 1) })}
+                      placeholder={t('form.lineAmount')}
+                      value={l.amount}
+                      onChange={(amount) => {
+                        setLine(l.key, { amount });
+                        fields.edit(lineField);
+                      }}
+                      onBlur={(e) => fields.blur(lineField, e.target.value)}
+                      className="w-full text-right tabular-nums"
+                    />
+                    <Input
+                      maxLength={300}
+                      aria-label={t('form.lineMemoFor', { line: String(i + 1) })}
+                      placeholder={t('form.lineMemoPlaceholder')}
+                      value={l.memo}
+                      onChange={(e) => setLine(l.key, { memo: e.target.value })}
+                      className="w-full"
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      disabled={lines.length === 1}
+                      aria-label={t('form.removeLine', { line: String(i + 1) })}
+                      onClick={() => {
+                        editLines(i);
+                        fields.edit('party');
+                        setLines((current) => current.filter((x) => x.key !== l.key));
+                      }}
+                    >
+                      ✕
+                    </Button>
+                  </div>
+                  <FieldError id={idOf(lineField)}>{fields.of(lineField)}</FieldError>
+                </Fragment>
+              );
+            })}
           </div>
           <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
             <Button
@@ -311,7 +407,7 @@ export function VoucherFormCard({ slug, onClose, fromLine }: { slug: string; onC
           </div>
         )}
 
-        {touched && problem && <ErrorText>{problem}</ErrorText>}
+        {formLevel && <ErrorText>{formLevel}</ErrorText>}
         {request.error && <ErrorText>{refusedProblem ? t(`problems.${refusedProblem}`) : errorMessage(request.error)}</ErrorText>}
         <div className="flex gap-2">
           <Button type="submit" disabled={request.isPending}>

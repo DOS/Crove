@@ -2,15 +2,15 @@
 // it as a duplicate of another or separating its duplicates. `ns` picks the screen's own words (a vendor, a customer).
 // The server enforces the roles and every rule; these forms show its reason when it refuses.
 import { useMutation } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useState, type FormEvent } from 'react';
 import { useTranslations } from 'use-intl';
-import type { Party } from '@crove/kernel-contract';
+import { normalizeTaxCode, type Party } from '@crove/kernel-contract';
 import { Button } from '@crove/ui/components/button';
 import { Input } from '@crove/ui/components/input';
 import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { errorMessage, orpc, queryClient } from '../lib/api.ts';
-import { ErrorText } from './ui.tsx';
+import { ErrorText, FieldError, fieldControl, fieldHintId, focusFirstInvalid, isEmailAddress, useFieldErrors } from './ui.tsx';
 
 export type PartyScreen = 'vendors' | 'customers';
 // What the forms need of a party: a vendor of the vendors list or a customer of the customers list.
@@ -42,34 +42,62 @@ export function EditParty({ party, ns, onDone }: { party: EditableParty; ns: Par
       },
     }),
   );
-  const field = (key: keyof typeof form, props: { type?: string; maxLength: number; disabled?: boolean; required?: boolean }) => (
-    <div className="flex flex-col gap-1">
-      <Label htmlFor={`party-${party.id}-${key}`}>{t(`fields.${key}`)}</Label>
-      <Input id={`party-${party.id}-${key}`} value={form[key]} onChange={(e) => setForm({ ...form, [key]: e.target.value })} {...props} />
-    </div>
-  );
+  const taxCodeLocked = party.taxCode !== null;
+  // The name, a new tax code and the email are checked here, each error under its field, on leaving it and on submit
+  // (DESIGN.md §4.2, #2004); the server checks again.
+  const fields = useFieldErrors<'name' | 'taxCode' | 'email'>((key) => {
+    if (key === 'name') return form.name.trim() ? null : t('nameRequired');
+    if (key === 'taxCode') return taxCodeLocked || !form.taxCode.trim() || normalizeTaxCode(form.taxCode) ? null : t('taxCodeInvalid');
+    return !form.email.trim() || isEmailAddress(form.email) ? null : t('emailInvalid');
+  });
+  const field = (key: keyof typeof form, props: { type?: string; maxLength: number; disabled?: boolean; required?: boolean }, hint = false) => {
+    const id = `party-${party.id}-${key}`;
+    const checked = key === 'name' || key === 'taxCode' || key === 'email' ? key : null;
+    const error = checked ? fields.of(checked) : undefined;
+    return (
+      <div className="flex flex-col gap-1">
+        <Label htmlFor={id}>{t(`fields.${key}`)}</Label>
+        <Input
+          {...fieldControl(id, { hint, error: Boolean(error) })}
+          value={form[key]}
+          onChange={(e) => {
+            setForm({ ...form, [key]: e.target.value });
+            if (checked) fields.edit(checked);
+          }}
+          onBlur={(e) => checked && fields.blur(checked, e.target.value)}
+          {...props}
+        />
+        <FieldError id={id}>{error}</FieldError>
+      </div>
+    );
+  };
   const orNull = (value: string) => (value.trim() === '' ? null : value);
+  const submit = (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!fields.checkAll(['name', 'taxCode', 'email'])) {
+      focusFirstInvalid(e.currentTarget);
+      return;
+    }
+    save.mutate({
+      partyId: party.id,
+      version: party.version,
+      name: form.name,
+      taxCode: orNull(form.taxCode),
+      address: orNull(form.address),
+      email: orNull(form.email),
+      phone: orNull(form.phone),
+    });
+  };
   return (
-    <form
-      className="grid gap-3 sm:grid-cols-2"
-      aria-label={t('editOf', { name: party.name })}
-      onSubmit={(e) => {
-        e.preventDefault();
-        save.mutate({
-          partyId: party.id,
-          version: party.version,
-          name: form.name,
-          taxCode: orNull(form.taxCode),
-          address: orNull(form.address),
-          email: orNull(form.email),
-          phone: orNull(form.phone),
-        });
-      }}
-    >
+    <form className="grid gap-3 sm:grid-cols-2" noValidate aria-label={t('editOf', { name: party.name })} onSubmit={submit}>
       {field('name', { maxLength: 300, required: true })}
       <div className="flex flex-col gap-1">
-        {field('taxCode', { maxLength: 20, disabled: party.taxCode !== null })}
-        {party.taxCode !== null && <p className="text-xs text-subtle-foreground">{t('taxCodeLocked')}</p>}
+        {field('taxCode', { maxLength: 20, disabled: taxCodeLocked }, taxCodeLocked)}
+        {taxCodeLocked && (
+          <p id={fieldHintId(`party-${party.id}-taxCode`)} className="text-xs text-subtle-foreground">
+            {t('taxCodeLocked')}
+          </p>
+        )}
       </div>
       {field('address', { maxLength: 500 })}
       {field('email', { type: 'email', maxLength: 254 })}

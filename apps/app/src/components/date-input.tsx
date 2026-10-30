@@ -13,7 +13,7 @@ import { dateFieldError, formatDateValue, parseDateText, typedValue, type DateKi
 // The form attribute of the hidden pickers: an id no element has, so they belong to no form.
 export const NO_FORM = 'crove-picker-without-form';
 
-type Passed = Pick<ComponentProps<'input'>, 'id' | 'required' | 'disabled' | 'readOnly' | 'autoFocus' | 'min' | 'max' | 'aria-label' | 'aria-labelledby' | 'aria-describedby'>;
+type Passed = Pick<ComponentProps<'input'>, 'id' | 'required' | 'disabled' | 'readOnly' | 'autoFocus' | 'min' | 'max' | 'aria-label' | 'aria-labelledby' | 'aria-describedby' | 'aria-invalid'>;
 
 export function DateInput({
   kind = 'day',
@@ -23,6 +23,7 @@ export function DateInput({
   inputClassName,
   min,
   max,
+  'aria-invalid': invalid,
   ...props
 }: Passed & { kind?: DateKind; value: string; onChange: (value: string) => void; className?: string; inputClassName?: string }) {
   const t = useTranslations('common');
@@ -62,7 +63,8 @@ export function DateInput({
         inputMode="numeric"
         autoComplete="off"
         placeholder={kind === 'day' ? t('datePlaceholder') : t('monthPlaceholder')}
-        aria-invalid={error !== null || undefined}
+        // Invalid when its own text is, or when the form's check says so (an error the form shows under it).
+        aria-invalid={error !== null || invalid === true || invalid === 'true' || undefined}
         className={cn('w-full pr-9 tabular-nums', inputClassName)}
         value={text}
         onChange={(e) => {
