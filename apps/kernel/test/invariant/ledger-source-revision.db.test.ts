@@ -4,6 +4,8 @@
 // posting it with 50 different payloads leave one entry and 49 IDEMPOTENCY_CONFLICT refusals. The revision-keyed unique
 // constraint backs the lock up for every writer, the database owner included. The posting function with the revision
 // stays a pinned definer owned by crove_definer_tenant, and the payload hash helper is out of every login role's reach.
+// A purchase or sale document is posted once (#1928, the CHECK journal_entry_document_one_revision): its revision 2 is
+// refused through the posting path and when the database owner writes it, even after revision 1 was reversed.
 // The revision rules in one session are ordinary DB tests (apps/kernel/test/finance-source-revision.db.test.ts).
 // Set CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
 // Part of the invariant suite: CI runs this file from the base branch on protected-path PRs (AGENTS.md).
@@ -189,6 +191,119 @@ suite('idempotent posting under concurrency (#1283)', () => {
     expect(await insert(1)).toBeNull();
     expect(await insert(1)).toMatchObject({ code: '23505', constraint: 'journal_entry_source_revision_key' });
     expect(await insert(0)).toMatchObject({ code: '23514', constraint: 'journal_entry_source_revision_positive' });
+  });
+
+  it('refuses revision 2 of a purchase or sale document through the posting path and from the database owner (#1928, #2013)', async () => {
+    // A document and its revision 1 entry, then the reversal of that entry with the document's void, as
+    // finance.journal.reverse leaves them: the posting path's own revision checks (the next revision, the previous one
+    // reversed) then pass, and only the ledger's rule is left to refuse revision 2.
+    const party = randomUUID();
+    const document = randomUUID();
+    const lines: Line[] = [
+      { line_no: 1, account_code: '6422', debit: '100000', credit: '0' },
+      { line_no: 2, account_code: '1331', debit: '10000', credit: '0' },
+      { line_no: 3, account_code: '331', debit: '0', credit: '110000' },
+    ];
+    const mirrored = lines.map((l) => ({ ...l, debit: l.credit, credit: l.debit }));
+    // An entry written by the database owner, with its lines, in the transaction on c.
+    const write = async (c: pg.Client, sourceType: string, sourceId: string, revision: number, entryLines: Line[], reverses: string | null = null) => {
+      const { rows } = await c.query<{ id: string }>(
+        `INSERT INTO crove_finance.journal_entry (org_id, entry_date, description, source_type, source_id, source_revision, reverses_entry_id)
+         VALUES ($1, '2026-10-10', 'document', $2, $3, $4, $5) RETURNING id`,
+        [orgId, sourceType, sourceId, revision, reverses],
+      );
+      const id = rows[0]?.id ?? '';
+      for (const l of entryLines) {
+        await c.query('INSERT INTO crove_finance.journal_line (org_id, entry_id, line_no, account_code, debit, credit) VALUES ($1, $2, $3, $4, $5, $6)', [
+          orgId,
+          id,
+          l.line_no,
+          l.account_code,
+          l.debit,
+          l.credit,
+        ]);
+      }
+      return id;
+    };
+    // Runs fn in one transaction as the database owner, committed; its error, or null.
+    const asOwner = (fn: (c: pg.Client) => Promise<unknown>) =>
+      withAdmin(async (c) => {
+        await c.query('BEGIN');
+        try {
+          await fn(c);
+          await c.query('COMMIT');
+          return null;
+        } catch (error) {
+          await c.query('ROLLBACK').catch(() => {});
+          return error as { code?: string; constraint?: string };
+        }
+      });
+    expect(
+      await asOwner(async (c) => {
+        await c.query(`INSERT INTO crove_kernel.party (org_id, id, name, tax_code) VALUES ($1, $2, 'Nhà cung cấp Một lần', '0101234565')`, [orgId, party]);
+        await c.query(
+          `INSERT INTO crove_finance.purchase_document (org_id, id, direction, party_id, invoice_series, invoice_number, invoice_date, subtotal, vat_amount, total)
+           VALUES ($1, $2, 'purchase', $3, 'C26TOR', '601', '2026-10-10', 100000, 10000, 110000)`,
+          [orgId, document, party],
+        );
+        await write(c, 'finance.purchase_document', document, 1, lines);
+      }),
+    ).toBeNull();
+    expect(
+      await asOwner(async (c) => {
+        const { rows } = await c.query<{ id: string }>(
+          `SELECT id FROM crove_finance.journal_entry WHERE org_id = $1 AND source_type = 'finance.purchase_document' AND source_id = $2`,
+          [orgId, document],
+        );
+        const reversal = await write(c, 'test.reversal', randomUUID(), 1, mirrored, rows[0]?.id ?? null);
+        await c.query(`INSERT INTO crove_finance.purchase_document_void (org_id, document_id, reversal_entry_id, reason) VALUES ($1, $2, $3, 'Ghi lại')`, [
+          orgId,
+          document,
+          reversal,
+        ]);
+      }),
+    ).toBeNull();
+
+    // Through the posting path, in the owner's context.
+    const posted = await withClient(appUrl, async (c) => {
+      await c.query('BEGIN');
+      try {
+        await c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [orgId, contextToken(userId, orgId)]);
+        await c.query(`SELECT crove_finance.post_journal_entry('2026-10-12'::date, 'again', 'finance.purchase_document', $1::uuid, $2::jsonb, NULL::uuid, 2)`, [
+          document,
+          JSON.stringify(lines),
+        ]);
+        return null;
+      } catch (error) {
+        return error as { code?: string; constraint?: string };
+      } finally {
+        await c.query('ROLLBACK').catch(() => {});
+      }
+    });
+    expect(posted).toMatchObject({ code: '23514', constraint: 'journal_entry_document_one_revision' });
+    // Written by the database owner.
+    expect(await asOwner((c) => write(c, 'finance.purchase_document', document, 2, lines))).toMatchObject({
+      code: '23514',
+      constraint: 'journal_entry_document_one_revision',
+    });
+    // The constraint is in force for every row, not only new ones.
+    const validated = await withAdmin(async (c) =>
+      (
+        await c.query<{ convalidated: boolean }>(
+          `SELECT convalidated FROM pg_constraint WHERE conrelid = 'crove_finance.journal_entry'::regclass AND conname = 'journal_entry_document_one_revision'`,
+        )
+      ).rows,
+    );
+    expect(validated).toEqual([{ convalidated: true }]);
+    // Another source still posts a revision 2 once revision 1 is reversed (#1283).
+    const voucher = randomUUID();
+    expect(
+      await asOwner(async (c) => {
+        const first = await write(c, 'test.voucher', voucher, 1, pair('5000'));
+        await write(c, 'test.reversal', randomUUID(), 1, pair('5000').map((l) => ({ ...l, debit: l.credit, credit: l.debit })), first);
+        await write(c, 'test.voucher', voucher, 2, pair('6000'));
+      }),
+    ).toBeNull();
   });
 
   it('keeps the posting function with the revision a pinned definer, and the payload hash out of every login role', async () => {
