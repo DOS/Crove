@@ -226,10 +226,13 @@ export const bankIngest = defineCommand({
     const { stored, chain } = await storedAround(ctx, legalEntityId, input.bankAccount, read.lines, read.keys);
     const { statuses, toStore, breaks } = checkLines(read.lines, read.keys, stored, chain);
     const importId = await storeLines(ctx, legalEntityId, input.bankAccount, toStore);
+    // A batch the account already has stores nothing; its importId then names no line, as an import of a known file.
+    // The feed's lines were checked whole above, so none is invalid.
     const counts = { new: 0, duplicate: 0, ambiguous: 0, invalid: 0 };
     for (const status of statuses) counts[status]++;
     const dates = read.lines.map((l) => l.date);
     ctx.audit({ bankAccount: input.bankAccount, importId, source: input.source, from: dates[0], to: dates.at(-1), ...counts, breaks: breaks.length });
+    // Only a pull that stored lines shows on the account's timeline (the import shows every file a person brought).
     if (counts.new + counts.ambiguous > 0) {
       await ctx.activity(
         'finance.bank_account',

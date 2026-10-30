@@ -153,18 +153,18 @@ describe('checkStatement', () => {
 
 // A bank feed's lines (ADR-0039, #2044) go through the same keys and classification as a statement's.
 describe('readFeedLines', () => {
-  const line = (date: string, amount: string, reference: string | null, balance: string | null = null) => ({ date, description: ' Giao dịch ', amount, balance, reference });
+  const line = (date: string, amount: string, reference: string, balance: string | null = null) => ({ date, description: ' Giao dịch ', amount, balance, reference });
 
   it('puts the lines oldest first, keeping the order within a day, and keys them as a statement', () => {
-    const read = readFeedLines([line('2026-11-03', '-22000.00', 'FT2'), line('2026-11-02', '1000000', 'FT1'), line('2026-11-03', '5', null, '100.50')]);
+    const read = readFeedLines([line('2026-11-03', '-22000.00', 'FT2'), line('2026-11-02', '1000000', 'FT1'), line('2026-11-03', '5', 'FT3', '100.50')]);
     expect(read).toEqual({
       ok: true,
       lines: [
         { rowNo: 2, date: '2026-11-02', description: 'Giao dịch', amount: '1000000', balance: null, reference: 'FT1' },
         { rowNo: 1, date: '2026-11-03', description: 'Giao dịch', amount: '-22000', balance: null, reference: 'FT2' },
-        { rowNo: 3, date: '2026-11-03', description: 'Giao dịch', amount: '5', balance: '100.5', reference: null },
+        { rowNo: 3, date: '2026-11-03', description: 'Giao dịch', amount: '5', balance: '100.5', reference: 'FT3' },
       ],
-      keys: ['ref:FT1', 'ref:FT2', 'bal:2026-11-03|5|100.5|0'],
+      keys: ['ref:FT1', 'ref:FT2', 'ref:FT3'],
     });
   });
 
@@ -176,11 +176,18 @@ describe('readFeedLines', () => {
     expect(balanceBreaks(read.lines.map((l) => ({ ...l, rowNo: l.rowNo })))).toEqual([]);
   });
 
-  it('names every line whose amount is zero, too precise or too large, or whose balance is unreadable', () => {
-    expect(readFeedLines([line('2026-11-02', '1', 'A'), line('2026-11-02', '0', 'B'), line('2026-11-02', '1.005', 'C'), line('2026-11-02', '1e16', 'D'), line('2026-11-02', '1', 'E', '0.001')])).toEqual({
-      ok: false,
-      rows: [2, 3, 4, 5],
-    });
+  it('names every line whose amount is zero, too precise or too large, whose balance is unreadable, or whose day no statement has', () => {
+    expect(
+      readFeedLines([
+        line('2026-11-02', '1', 'A'),
+        line('2026-11-02', '0', 'B'),
+        line('2026-11-02', '1.005', 'C'),
+        line('2026-11-02', '1e16', 'D'),
+        line('2026-11-02', '1', 'E', '0.001'),
+        line('1999-12-31', '1', 'F'),
+        line('2100-01-01', '1', 'G'),
+      ]),
+    ).toEqual({ ok: false, rows: [2, 3, 4, 5, 6, 7] });
   });
 
   it('classifies a feed batch against the stored lines as a statement is', () => {

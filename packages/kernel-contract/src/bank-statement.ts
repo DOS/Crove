@@ -96,8 +96,11 @@ export type BankImportResult = z.infer<typeof zBankImportResult>;
 
 // A batch of bank transactions from a feed (ADR-0039, #2044): one bank account of one legal entity, each line as the
 // provider reports it, in any order. The finance module checks and stores them as it does a statement's lines
-// (ADR-0021 section 6): a reference makes the key, so a transaction that comes again, from the feed or in a statement
-// file, is stored once. The worker sends it (finance.bank.ingest, a system command); people never do.
+// (ADR-0021 section 6). Every line carries the bank's reference, which makes its key: a feed pulls overlapping windows
+// and may start mid-day, where the balance key's occurrence count would store a line twice or drop one, so a line
+// without a reference is not a feed line. An adapter maps the bank's own reference (the one statement files print),
+// so a transaction that comes again, from the feed or in a file, is stored once. The worker sends it
+// (finance.bank.ingest, a system command); people never do.
 export const BANK_FEED_MAX_LINES = 5000;
 export const zBankFeedLine = z.object({
   date: zLocalDate,
@@ -105,7 +108,7 @@ export const zBankFeedLine = z.object({
   // Signed: money in positive, money out negative; at most 2 decimals, never zero.
   amount: zMoney,
   balance: zMoney.nullable(),
-  reference: z.string().trim().min(1).max(100).nullable(),
+  reference: z.string().trim().min(1).max(100),
 });
 export type BankFeedLine = z.infer<typeof zBankFeedLine>;
 export const zBankFeedIngest = z.strictObject({

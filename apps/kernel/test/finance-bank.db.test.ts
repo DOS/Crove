@@ -58,7 +58,8 @@ suite('bank statement import (#326)', () => {
   let adminUrl = '';
   let pool: pg.Pool;
   let app: ReturnType<typeof createHttpApp>;
-  // The worker's runtime, which runs feed jobs as the system.
+  // The API's runtime, and the worker's, which runs feed jobs as the system.
+  let api: Runtime;
   let worker: Runtime;
   const workerPools: pg.Pool[] = [];
   const owner: Account = { subject: randomUUID(), email: 'owner@bank.test', session: randomUUID(), userId: '' };
@@ -158,6 +159,7 @@ suite('bank statement import (#326)', () => {
       WEB_DIST: '/nonexistent',
     });
     app = createHttpApp({ config, runtime, store: new MemoryStore(), authenticate: createAuthenticator(config, db), pool, aiEnabled: false });
+    api = runtime;
     const workerUrl = new URL(adminUrl);
     workerUrl.username = 'crove_worker';
     workerUrl.password = 'test-worker-pw';
@@ -335,7 +337,7 @@ suite('bank statement import (#326)', () => {
 
   // ADR-0039, #2044: a feed's lines are stored as a statement's are.
   const SYSTEM = { type: 'system' as const, component: 'finance.bank_feed' };
-  const feedLine = (date: string, amount: string, reference: string | null, balance: string | null = null, description = 'Giao dịch'): BankFeedLine => ({
+  const feedLine = (date: string, amount: string, reference: string, balance: string | null = null, description = 'Giao dịch'): BankFeedLine => ({
     date,
     description,
     amount,
@@ -381,18 +383,23 @@ suite('bank statement import (#326)', () => {
     ]);
   });
 
-  it('flags a feed line with neither reference nor balance when the account has one of the same date and amount', async () => {
-    await ingest([feedLine('2026-11-10', '-11000', null)]);
-    const again = await ingest([feedLine('2026-11-10', '-11000', null)]);
-    expect(again.counts).toEqual({ new: 0, duplicate: 0, ambiguous: 1, invalid: 0 });
+  it('takes feed lines only with a reference, so overlapping pulls never store one twice', async () => {
+    const legalEntityId = await defaultEntity();
+    const lines = [{ date: '2026-11-10', description: 'Phí', amount: '-11000', balance: null, reference: null }];
+    await expect(worker.execute('finance.bank.ingest', { bankAccount: '1121.VCB', legalEntityId, source: 'sandbox', lines }, { actor: SYSTEM, orgId })).rejects.toBeTruthy();
+    const fee = [feedLine('2026-11-10', '-11000', 'FT9010')];
+    expect((await ingest(fee)).counts).toMatchObject({ new: 1 });
+    expect((await ingest(fee)).counts).toEqual({ new: 0, duplicate: 1, ambiguous: 0, invalid: 0 });
   });
 
-  it('refuses a batch with an amount of zero or more than 2 decimals, storing none of it', async () => {
+  it('refuses a batch with an amount of zero or more than 2 decimals, or a day no statement has, storing none of it', async () => {
     const before = (await stored('1121.VCB')).length;
-    await expect(ingest([feedLine('2026-11-12', '10000', 'FT9100'), feedLine('2026-11-12', '0', 'FT9101'), feedLine('2026-11-12', '1.005', 'FT9102')])).rejects.toMatchObject({
+    await expect(
+      ingest([feedLine('2026-11-12', '10000', 'FT9100'), feedLine('2026-11-12', '0', 'FT9101'), feedLine('2026-11-12', '1.005', 'FT9102'), feedLine('9999-12-31', '1', 'FT9103')]),
+    ).rejects.toMatchObject({
       code: 'BANK_FEED_INVALID',
       status: 422,
-      details: { rows: [2, 3] },
+      details: { rows: [2, 3, 4] },
     });
     expect((await stored('1121.VCB')).length).toBe(before);
   });
@@ -400,8 +407,10 @@ suite('bank statement import (#326)', () => {
   it('takes feed lines only from the system, and only for an active bank account of the org', async () => {
     const lines = [feedLine('2026-11-15', '10000', 'FT9200')];
     const legalEntityId = await defaultEntity();
-    await expect(worker.execute('finance.bank.ingest', { bankAccount: '1121.VCB', legalEntityId, source: 'sandbox', lines }, { actor: { type: 'user', userId: owner.userId, aal: 'aal2' }, orgId })).rejects.toMatchObject({
+    // On the API's runtime, where an owner's context opens: the command itself refuses anyone but the system.
+    await expect(api.execute('finance.bank.ingest', { bankAccount: '1121.VCB', legalEntityId, source: 'sandbox', lines }, { actor: { type: 'user', userId: owner.userId, aal: 'aal2' }, orgId })).rejects.toMatchObject({
       code: 'FORBIDDEN',
+      message: 'Không có quyền thực hiện',
     });
     await expect(ingest(lines, '1121.OLD')).rejects.toMatchObject({ code: 'ACCOUNT_INACTIVE' });
     await expect(ingest(lines, '331')).rejects.toMatchObject({ code: 'NOT_A_BANK_ACCOUNT' });
