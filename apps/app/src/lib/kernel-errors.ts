@@ -273,6 +273,8 @@ export const KERNEL_ERROR_CODES = [
   'JOURNAL_VOUCHER_INVALID',
   // The personal-data finder (#923).
   'PERSONAL_DATA_QUERY',
+  // The notice to the authors of private items before an erasure (#1678).
+  'PERSONAL_DATA_NOTICE_TOO_MANY',
   // Year-end closing (#889).
   'YEAR_NOT_ENDED',
   'YEAR_CLOSED',

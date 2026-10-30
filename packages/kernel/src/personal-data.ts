@@ -16,7 +16,7 @@
 // - not_personal: the name matches the pattern but the column holds no data about a person.
 import { sql, type RawBuilder } from 'kysely';
 import type { MemberRole } from '@crove/db';
-import { zPersonalDataQuery, type PersonalDataErasure, type PersonalDataResult } from '@crove/kernel-contract';
+import { zPersonalDataQuery, type PersonalDataErasure, type PersonalDataNotice, type PersonalDataResult } from '@crove/kernel-contract';
 import { DomainError, defineCommand, defineQuery, type QueryContext } from '@crove/kernel-runtime';
 
 const ADMINS: readonly MemberRole[] = ['owner', 'admin'];
@@ -135,14 +135,15 @@ export const PERSONAL_DATA_COLUMNS = {
   },
   // Notes and to-dos (#1678, notes step N9, ADR-0037 section 5): free text a member wrote, which may name or describe a
   // person. A shared note is listed with its text; a private note and every to-do (always private) are counted per
-  // author, never shown. The folded search words are rebuilt from the text, so they are not searched themselves.
-  'crove_notes.note.title': { kind: 'free_text', handling: 'erase', reason: 'A shared note; the erasure does not change notes yet (#1678): ask its author to edit it, or archive or delete it', privateRows: 'unless_shared' },
-  'crove_notes.note.body': { kind: 'free_text', handling: 'erase', reason: 'A shared note; the erasure does not change notes yet (#1678): ask its author to edit it, or archive or delete it', privateRows: 'unless_shared' },
-  'crove_notes.note.tags': { kind: 'free_text', handling: 'erase', reason: 'A shared note; the erasure does not change notes yet (#1678): ask its author to edit it, or archive or delete it', privateRows: 'unless_shared', list: true },
+  // author, never shown, and the erasure deletes them once their author was told. The folded search words are rebuilt
+  // from the text, so they are not searched themselves.
+  'crove_notes.note.title': { kind: 'free_text', handling: 'erase', reason: 'A shared note: the erasure edits the value out of its title, body and tags, and the note stays', privateRows: 'unless_shared' },
+  'crove_notes.note.body': { kind: 'free_text', handling: 'erase', reason: 'A shared note: the erasure edits the value out of its title, body and tags, and the note stays', privateRows: 'unless_shared' },
+  'crove_notes.note.tags': { kind: 'free_text', handling: 'erase', reason: 'A shared note: the erasure edits the value out of its title, body and tags, and the note stays', privateRows: 'unless_shared', list: true },
   'crove_notes.note.search': { kind: 'other', handling: 'erase', reason: "The folded search words of a note's title, tags and body, rebuilt from them" },
-  'crove_notes.todo.title': { kind: 'free_text', handling: 'erase', reason: 'Free text of a to-do, private to its owner: counted per owner, never shown', privateRows: 'always' },
-  'crove_notes.todo.details': { kind: 'free_text', handling: 'erase', reason: 'Free text of a to-do, private to its owner: counted per owner, never shown', privateRows: 'always' },
-  'crove_notes.todo.checklist': { kind: 'free_text', handling: 'erase', reason: 'Steps of a to-do, private to its owner: counted per owner, never shown', privateRows: 'always' },
+  'crove_notes.todo.title': { kind: 'free_text', handling: 'erase', reason: 'Free text of a to-do, private to its owner: counted per owner, never shown, and deleted by the erasure once the owner was told', privateRows: 'always' },
+  'crove_notes.todo.details': { kind: 'free_text', handling: 'erase', reason: 'Free text of a to-do, private to its owner: counted per owner, never shown, and deleted by the erasure once the owner was told', privateRows: 'always' },
+  'crove_notes.todo.checklist': { kind: 'free_text', handling: 'erase', reason: 'Steps of a to-do, private to its owner: counted per owner, never shown, and deleted by the erasure once the owner was told', privateRows: 'always' },
   'crove_notes.todo.search': { kind: 'other', handling: 'erase', reason: "The folded search words of a to-do's title, details and steps, rebuilt from them" },
 } as const satisfies Record<string, PersonalDataColumn>;
 
@@ -280,6 +281,57 @@ export function heldFilesReason(until: Date | null): string {
 
 // The name an erased party keeps: a party row cannot lose its name, and nothing in the books names it.
 export const ERASED_PARTY_NAME = 'Đã xóa theo yêu cầu';
+// What an erasure leaves in a shared note's text where the value was (#1678).
+export const ERASED_TEXT_MARK = '[đã xóa]';
+// Private items one notice names at most, and so authors (each has one at least); a request that matches more is
+// refused, never named in part.
+export const PERSONAL_DATA_NOTICE_ITEMS = 1000;
+export const PERSONAL_DATA_NOTICE_AUTHORS = PERSONAL_DATA_NOTICE_ITEMS;
+// Why an erasure keeps a private item that mentions the value: no notice named it (written or changed since the last
+// one, or never told), so its author does not know yet.
+export const UNTOLD_PRIVATE_REASON = 'A private item whose author was not told yet (written or changed since the last notice): send the notice, then erase again';
+
+// The owner's notice before an erasure (#1678, ADR-0037 section 5): the authors of private notes and to-dos that mention
+// the value are told how many of theirs do, so they know before the erasure deletes them. Nobody but the author reads
+// a private item: crove_notes.private_notice_items answers their ids and authors only, the audit row records the ids
+// (which the erasure checks, crove_notes.private_erase: it deletes only what a notice named), and the event
+// kernel.personal_data.notified carries the authors and counts, which kernel.notification.dispatch turns into one
+// notification each, sent even when the author turned that kind off. The value itself is in neither.
+export const personalDataNotify = defineCommand({
+  name: 'kernel.personal_data.notify',
+  input: zPersonalDataQuery,
+  risk: 'R2',
+  sideEffect: 'internal',
+  access: OWNERS,
+  handler: async (ctx, input): Promise<PersonalDataNotice> => {
+    if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới gửi được thông báo này');
+    const probe = requireProbe(input.value);
+    const { rows } = await sql<{ item_type: string; item_id: string; author_user_id: string }>`
+      SELECT item_type, item_id, author_user_id FROM crove_notes.private_notice_items(${probe.kind}, ${probeValue(probe)})`.execute(ctx.trx);
+    if (rows.length > PERSONAL_DATA_NOTICE_ITEMS) {
+      throw new DomainError('PERSONAL_DATA_NOTICE_TOO_MANY', 422, `Có hơn ${PERSONAL_DATA_NOTICE_ITEMS} ghi chú riêng và việc nhắc đến giá trị này; hãy liên hệ hỗ trợ`);
+    }
+    const authors = new Map<string, { authorUserId: string; notes: number; todos: number }>();
+    for (const row of rows) {
+      const a = authors.get(row.author_user_id) ?? { authorUserId: row.author_user_id, notes: 0, todos: 0 };
+      if (row.item_type === 'note') a.notes += 1;
+      else a.todos += 1;
+      authors.set(row.author_user_id, a);
+    }
+    const told = [...authors.values()];
+    if (told.length > 0) {
+      await ctx.emit('kernel.personal_data.notified', { authors: told.map((a) => ({ userId: a.authorUserId, notes: a.notes, todos: a.todos })) });
+    }
+    // The ids the erasure checks; ids and counts only, never the value or the text.
+    ctx.audit({
+      kind: probe.kind,
+      notes: rows.filter((r) => r.item_type === 'note').map((r) => r.item_id),
+      todos: rows.filter((r) => r.item_type === 'todo').map((r) => r.item_id),
+      authors: told.length,
+    });
+    return { authors: told };
+  },
+});
 
 // The erase command (#923): an owner erases a person's data on their request, identified by the same value the finder
 // takes. R3: it cannot be undone, so it needs a fresh second factor. In the command's transaction it clears
@@ -289,7 +341,9 @@ export const ERASED_PARTY_NAME = 'Đã xóa theo yêu cầu';
 // - the sender of forwarded mails and the recipient of mails Crove sent (the keyed hash stays, so a suppression holds);
 // - the org's contact email;
 // - the visitor's name, email, phone and note on bookings from a public booking page;
-// - the address in Social report schedules (a schedule left with nobody to mail is deleted).
+// - the address in Social report schedules (a schedule left with nobody to mail is deleted);
+// - every mention of the value in shared notes (edited out, the note stays), and the private notes and to-dos that
+//   mention it and that an earlier notice told their authors about (deleted whole, unread; #1678, ADR-0037 section 5).
 // What the law or an append-only record keeps (the names and tax codes of parties in the books and of the legal entities
 // the org keeps books for, #1312, cash vouchers, the tax portal's lists, invites, review feedback, and the original files
 // of posted invoices naming the party, under their retention hold, #1009) is left as it is and listed with its reason.
@@ -394,6 +448,37 @@ export const personalDataErase = defineCommand({
       add('crove_social.report_schedule.recipients', Number(schedules.numAffectedRows ?? 0) + Number(dropped.numAffectedRows ?? 0));
     }
 
+    // Notes (#1678, ADR-0037 section 5). A shared note stays and has every mention of the value edited out, the one
+    // case where someone other than its author edits a note: ERASED_TEXT_MARK in its title and body where the value
+    // was, and a tag that mentions it goes (all of them, when the value only shows across tags). Its search words
+    // follow by trigger. A private note or to-do is its author's alone: crove_notes.private_erase deletes it whole,
+    // unread, once an earlier notice told the author (kernel.personal_data.notify); one never named stays, reported
+    // below as kept.
+    const mentions = (column: string) => freeTextMatch(probe, sql.ref(column));
+    const tagsOf = (alias: string) => sql`pg_catalog.array_to_string(${sql.ref(`${alias}.tags`)}, ' ')`;
+    const keptTags = sql`ARRAY(SELECT g.v FROM pg_catalog.unnest(t.tags) WITH ORDINALITY AS g(v, i) WHERE NOT ${freeTextMatch(probe, sql.ref('g.v'))} ORDER BY g.i)`;
+    const stillAcross = freeTextMatch(probe, sql`pg_catalog.array_to_string(${keptTags}, ' ')`);
+    const { rows: notes } = await sql<{ title: boolean; body: boolean; tags: boolean }>`
+      UPDATE crove_notes.note t
+         SET title = ${freeTextRedact(probe, sql.ref('t.title'), ERASED_TEXT_MARK)},
+             body = ${freeTextRedact(probe, sql.ref('t.body'), ERASED_TEXT_MARK)},
+             tags = CASE WHEN ${stillAcross} THEN '{}'::text[] ELSE ${keptTags} END,
+             revision = t.revision + 1, updated_at = ${ctx.now}
+        FROM crove_notes.note o
+       WHERE o.org_id = t.org_id AND o.id = t.id AND t.org_id = ${ctx.orgId}::uuid AND t.visibility = 'org'
+         AND (${mentions('t.title')} OR ${mentions('t.body')} OR ${freeTextMatch(probe, tagsOf('t'))})
+       RETURNING ${mentions('o.title')} AS title, ${mentions('o.body')} AS body, ${freeTextMatch(probe, tagsOf('o'))} AS tags`.execute(ctx.trx);
+    add('crove_notes.note.title', notes.filter((n) => n.title).length);
+    add('crove_notes.note.body', notes.filter((n) => n.body).length);
+    add('crove_notes.note.tags', notes.filter((n) => n.tags).length);
+    const { rows: privateRows } = await sql<{ notes: string; todos: string; untold_notes: string; untold_todos: string }>`
+      SELECT notes, todos, untold_notes, untold_todos FROM crove_notes.private_erase(${probe.kind}, ${probeValue(probe)})`.execute(ctx.trx);
+    const sum = (key: 'notes' | 'todos' | 'untold_notes' | 'untold_todos') => privateRows.reduce((n, r) => n + Number(r[key]), 0);
+    const privateDeleted = { notes: sum('notes'), todos: sum('todos') };
+    const untold = { notes: sum('untold_notes'), todos: sum('untold_todos') };
+    add('crove_notes.note', privateDeleted.notes);
+    add('crove_notes.todo', privateDeleted.todos);
+
     // What stays, with its reason: the finder's answer after the erasure (the cleared values no longer match).
     const after = await findPersonalData(ctx.trx, ctx.orgId, probe);
     // Grouped by column and reason: rows of one column may be kept for different reasons (the default legal entity and
@@ -420,6 +505,9 @@ export const personalDataErase = defineCommand({
       const files = Number(held[0]?.files ?? 0);
       if (files > 0) kept.set('crove_kernel.file', { column: 'crove_kernel.file', rows: files, reason: heldFilesReason(held[0]?.until ?? null) });
     }
+    // Private items no notice named: counted, never listed (the finder's privateItems after the erasure).
+    if (untold.notes > 0) kept.set('crove_notes.note', { column: 'crove_notes.note', rows: untold.notes, reason: UNTOLD_PRIVATE_REASON });
+    if (untold.todos > 0) kept.set('crove_notes.todo', { column: 'crove_notes.todo', rows: untold.todos, reason: UNTOLD_PRIVATE_REASON });
     const keptRows = new Map<string, number>();
     for (const k of kept.values()) keptRows.set(k.column, (keptRows.get(k.column) ?? 0) + k.rows);
     const result: PersonalDataErasure = {
@@ -433,4 +521,4 @@ export const personalDataErase = defineCommand({
 });
 
 export const personalDataQueries = [personalDataFind];
-export const personalDataCommands = [personalDataErase];
+export const personalDataCommands = [personalDataNotify, personalDataErase];

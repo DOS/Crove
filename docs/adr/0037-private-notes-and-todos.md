@@ -69,7 +69,8 @@ A private note or to-do is read and changed only in a context whose user is its 
   - callable in a user context, checked inside to be an owner or admin of the context's org (the members screen and the personal-data screen run as that user, not as the worker):
     - `private_counts()`: items per author, for the removal warning;
     - `private_matches(kind, value)`: per author, how many private items contain a value, for the finder (section 5);
-    - `private_erase(kind, value)`: deletes the private items that contain the value, owner only, from the R3 erasure command.
+    - `private_notice_items(kind, value)`: the ids and authors of the private items that contain a value, owner only, for the owner's notice to the authors (#1678), which records the ids in its audit row;
+    - `private_erase(kind, value)`: deletes the private items that contain the value and that an earlier notice's audit row names, owner only, from the R3 erasure command; it counts the others per author.
   The org purge (`crove_kernel.org_purge`) runs as the table owner, which row-level security does not bind here, and deletes `crove_notes` by org before the kernel's tasks.
 - The invariant suite gets a test file of its own (`notes-private.db.test.ts`): a private row is invisible and unwritable to another member, an owner, an admin, a viewer, an entity-limited member, an agent context and the system context, through raw SQL in each context; the author reads their own shared note after losing the whole-org scope; the definers return no text, the worker-only ones refuse every other login and the user-context ones refuse members and viewers; a forged context is refused by the seal. The generated RLS matrix keeps its cross-org cases for the three tables and lists them as an author-only exception to its system-context controls (notes.md step N1).
 

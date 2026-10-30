@@ -13,8 +13,8 @@ import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
-import { createOrg, kernelCommands, kernelQueries, PERSONAL_DATA_COLUMNS, personalDataProbe, upsertIdentity, type PersonalDataColumn } from '@crove/kernel';
-import type { PersonalDataErasure, PersonalDataResult } from '@crove/kernel-contract';
+import { createOrg, kernelCommands, kernelQueries, PERSONAL_DATA_COLUMNS, personalDataProbe, UNTOLD_PRIVATE_REASON, upsertIdentity, type PersonalDataColumn } from '@crove/kernel';
+import type { PersonalDataErasure, PersonalDataNotice, PersonalDataResult } from '@crove/kernel-contract';
 import { Runtime } from '@crove/kernel-runtime';
 import { TEST_MANIFESTS } from './manifests.ts';
 import { PII_TEXT_CASES } from './pii-text-cases.ts';
@@ -205,6 +205,133 @@ suite('finding a person in the org (#923)', () => {
     // Nothing for a value no item holds, and nothing from another org.
     expect((await find('nobody@khach.example')).privateItems).toEqual([]);
     expect((await find('giam.doc@khach.example', other.owner, other.orgId)).privateItems).toEqual([]);
+  });
+
+  it('edits the value out of shared notes, and deletes the private items a notice named once their authors were told (#1678)', async () => {
+    const value = 'thu.ky@khach.example';
+    const shared = randomUUID();
+    const memberNotes = [randomUUID(), randomUUID()];
+    const [unrelated, later] = [randomUUID(), randomUUID()];
+    const [memberTodo, adminTodo] = [randomUUID(), randomUUID()];
+    await admin(async (c) => {
+      await c.query(
+        `INSERT INTO crove_notes.note (org_id, id, author_user_id, visibility, title, body, tags) VALUES
+           ($1, $2, $6, 'org', 'Gặp THU.KY@khach.example', 'Thư ký: thu.ky@khach.example, số cũ', '{thu.ky@khach.example,khach}'),
+           ($1, $3, $7, 'private', 'Riêng A', 'gửi thu.ky@khach.example', '{}'),
+           ($1, $4, $7, 'private', 'Riêng B: thu.ky@khach.example', '', '{}'),
+           ($1, $5, $7, 'private', 'Riêng C', 'không liên quan', '{}')`,
+        [org.orgId, shared, memberNotes[0], memberNotes[1], unrelated, org.owner, org.member],
+      );
+      await c.query(
+        `INSERT INTO crove_notes.todo (org_id, id, owner_user_id, title, details, checklist, sort_key) VALUES
+           ($1, $2, $4, 'Gọi thư ký', 'thu.ky@khach.example', '[]', 'b0'),
+           ($1, $3, $5, 'Hồ sơ', NULL, '[{"text": "gửi thu.ky@khach.example", "done": false}]', 'b1')`,
+        [org.orgId, memberTodo, adminTodo, org.member, org.admin],
+      );
+    });
+    const privateLeft = async () =>
+      (
+        await admin((c) =>
+          c.query<{ id: string }>(
+            `SELECT id FROM crove_notes.note WHERE org_id = $1 AND visibility = 'private' AND author_user_id = ANY($2)
+             UNION ALL SELECT id FROM crove_notes.todo WHERE org_id = $1 AND id = ANY($3)`,
+            [org.orgId, [org.member], [memberTodo, adminTodo]],
+          ),
+        )
+      ).rows
+        .map((r) => r.id)
+        .sort();
+    const notify = (user = org.owner) =>
+      rt.execute<PersonalDataNotice>('kernel.personal_data.notify', { value }, { actor: asMfa(user), orgId: org.orgId, idempotencyKey: randomUUID() });
+    const byAuthor = <T extends { authorUserId: string }>(items: readonly T[]) => [...items].sort((a, b) => a.authorUserId.localeCompare(b.authorUserId));
+
+    // Before any notice the erasure edits the shared note and deletes no private item: it says how many it kept.
+    const first = await erase(value);
+    expect(Object.fromEntries(first.erased.filter((e) => e.column.startsWith('crove_notes.')).map((e) => [e.column, e.rows]))).toEqual({
+      'crove_notes.note.title': 1,
+      'crove_notes.note.body': 1,
+      'crove_notes.note.tags': 1,
+    });
+    expect(first.kept.filter((k) => k.column.startsWith('crove_notes.'))).toEqual([
+      { column: 'crove_notes.note', rows: 2, reason: UNTOLD_PRIVATE_REASON },
+      { column: 'crove_notes.todo', rows: 2, reason: UNTOLD_PRIVATE_REASON },
+    ]);
+    const note = (await admin((c) => c.query(`SELECT title, body, tags, revision, search @@ crove_kernel.search_query('thu.ky') AS searchable FROM crove_notes.note WHERE id = $1`, [shared]))).rows[0];
+    expect(note).toEqual({ title: 'Gặp [đã xóa]', body: 'Thư ký: [đã xóa], số cũ', tags: ['khach'], revision: 2, searchable: false });
+    expect(await privateLeft()).toEqual([...memberNotes, unrelated, memberTodo, adminTodo].sort());
+
+    // Owners only send the notice; it names ids and counts, never the value or the text.
+    await expect(notify(org.admin)).rejects.toMatchObject({ status: 403 });
+    await expect(notify(org.member)).rejects.toMatchObject({ status: 403 });
+    // The member turned this kind off; the notice reaches them anyway.
+    await admin((c) => c.query(`INSERT INTO crove_kernel.notification_mute (org_id, user_id, kind) VALUES ($1, $2, 'kernel.personal_data_notice')`, [org.orgId, org.member]));
+    const notice = await notify();
+    expect(byAuthor(notice.authors)).toEqual(
+      byAuthor([
+        { authorUserId: org.member, notes: 2, todos: 1 },
+        { authorUserId: org.admin, notes: 0, todos: 1 },
+      ]),
+    );
+    const audit = (
+      await admin((c) =>
+        c.query<{ detail: { notes: string[]; todos: string[]; authors: number } }>(
+          `SELECT detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'kernel.personal_data.notify' AND outcome = 'ok'`,
+          [org.orgId],
+        ),
+      )
+    ).rows;
+    expect(audit).toHaveLength(1);
+    expect([...(audit[0]?.detail.notes ?? [])].sort()).toEqual([...memberNotes].sort());
+    expect([...(audit[0]?.detail.todos ?? [])].sort()).toEqual([memberTodo, adminTodo].sort());
+    const { rows: events } = await admin((c) =>
+      c.query<{ id: string; payload: unknown }>(`SELECT id, payload FROM crove_kernel.outbox_event WHERE org_id = $1 AND type = 'kernel.personal_data.notified'`, [org.orgId]),
+    );
+    expect(events).toHaveLength(1);
+    for (const secret of ['thu.ky', 'Riêng', 'Gọi thư ký', 'Hồ sơ']) {
+      expect(JSON.stringify(audit), secret).not.toContain(secret);
+      expect(JSON.stringify(events), secret).not.toContain(secret);
+    }
+
+    // The worker turns the event into one notification per author, with counts only.
+    await rt.execute('kernel.notification.dispatch', { eventId: events[0]?.id }, { actor: { type: 'system', component: 'test' }, orgId: org.orgId });
+    const { rows: notes } = await admin((c) =>
+      c.query<{ user_id: string; detail: Record<string, string>; subject_id: string | null }>(
+        `SELECT user_id, detail, subject_id FROM crove_kernel.notification WHERE org_id = $1 AND kind = 'kernel.personal_data_notice' ORDER BY user_id`,
+        [org.orgId],
+      ),
+    );
+    expect(notes).toEqual(
+      [
+        { user_id: org.member, detail: { notes: '2', todos: '1' }, subject_id: null },
+        { user_id: org.admin, detail: { notes: '0', todos: '1' }, subject_id: null },
+      ].sort((a, b) => a.user_id.localeCompare(b.user_id)),
+    );
+
+    // A private note written after the notice was not named: the erasure keeps it, and deletes the named ones.
+    await admin((c) =>
+      c.query(`INSERT INTO crove_notes.note (org_id, id, author_user_id, visibility, title, body, tags) VALUES ($1, $2, $3, 'private', 'Riêng D', 'thu.ky@khach.example', '{}')`, [
+        org.orgId,
+        later,
+        org.member,
+      ]),
+    );
+    const second = await erase(value);
+    expect(Object.fromEntries(second.erased.filter((e) => e.column.startsWith('crove_notes.')).map((e) => [e.column, e.rows]))).toEqual({
+      'crove_notes.note': 2,
+      'crove_notes.todo': 2,
+    });
+    expect(second.kept.filter((k) => k.column.startsWith('crove_notes.'))).toEqual([{ column: 'crove_notes.note', rows: 1, reason: UNTOLD_PRIVATE_REASON }]);
+    expect(await privateLeft()).toEqual([unrelated, later].sort());
+    expect((await find(value)).privateItems).toEqual([{ authorUserId: org.member, notes: 1, todos: 0 }]);
+    const erasedAudit = (
+      await admin((c) =>
+        c.query<{ detail: unknown }>(`SELECT detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'kernel.personal_data.erase' AND outcome = 'ok' ORDER BY id DESC LIMIT 1`, [
+          org.orgId,
+        ]),
+      )
+    ).rows[0];
+    expect(erasedAudit?.detail).toMatchObject({ erased: { 'crove_notes.note': 2, 'crove_notes.todo': 2 }, kept: { 'crove_notes.note': 1 } });
+    expect(JSON.stringify(erasedAudit)).not.toContain('thu.ky');
   });
 
   it("finds the legal entities the org keeps books for, kept by law, and the default one as the org's own (#1312)", async () => {

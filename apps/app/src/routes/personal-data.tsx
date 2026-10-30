@@ -2,7 +2,8 @@
 // code or national ID, see every row of the org that holds it and what an erasure would do to each, and download the
 // rows as JSON for the person's request to see their data. An owner can then erase it (R3: a fresh second factor),
 // after confirming; the result lists what was erased and what the law or a record keeps. Members' private notes and
-// to-dos that mention the value are only counted, per author, never shown (#1678, ADR-0037).
+// to-dos that mention the value are only counted, per author, never shown (#1678, ADR-0037): the owner tells their
+// authors first, and the erasure then deletes the ones a notice named and edits the value out of shared notes.
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslations } from 'use-intl';
@@ -49,9 +50,12 @@ export function PersonalDataPage() {
     }),
   );
   const eraseNow = () => erase.mutate({ value, idempotencyKey });
-  // Notes are not erased yet (#1678): a match only in a note offers no erasure.
-  const hasErasable = found.data?.matches.some((m) => m.handling === 'erase' && !m.column.startsWith('crove_notes.')) ?? false;
-  const hasAny = (found.data?.matches.length ?? 0) > 0 || (found.data?.privateItems.length ?? 0) > 0;
+  // The notice to the authors of private items, with a key of its own: a retry tells nobody twice.
+  const [noticeKey, setNoticeKey] = useState(() => crypto.randomUUID());
+  const notify = useMutation(orpc.org.personalDataNotify.mutationOptions());
+  const hasPrivate = (found.data?.privateItems.length ?? 0) > 0;
+  const hasErasable = (found.data?.matches.some((m) => m.handling === 'erase') ?? false) || hasPrivate;
+  const hasAny = (found.data?.matches.length ?? 0) > 0 || hasPrivate;
   const nameOf = (userId: string) => {
     const member = org.data?.members.find((m) => m.userId === userId);
     return member ? (member.displayName ?? member.email) : t('formerMember');
@@ -72,8 +76,10 @@ export function PersonalDataPage() {
           event.preventDefault();
           setValue(draft.trim());
           erase.reset();
+          notify.reset();
           setConfirming(false);
           setIdempotencyKey(crypto.randomUUID());
+          setNoticeKey(crypto.randomUUID());
         }}
       >
         <Input className="min-w-64 flex-1" placeholder={t('placeholder')} aria-label={t('placeholder')} value={draft} onChange={(e) => setDraft(e.target.value)} />
@@ -156,6 +162,17 @@ export function PersonalDataPage() {
                 </p>
               ))}
               <p className="pt-1 text-xs text-muted-foreground">{t('privateHint')}</p>
+              {isOwner && !erase.data && (
+                <div className="flex flex-wrap items-center gap-2 pt-2">
+                  <Button variant="outline" size="sm" disabled={notify.isPending || notify.isSuccess} onClick={() => notify.mutate({ value, idempotencyKey: noticeKey })}>
+                    {notify.isPending ? <Spinner className="text-current" /> : null}
+                    {t('notify')}
+                  </Button>
+                  {notify.data && <span className="text-xs text-foreground">{t('notified', { authors: notify.data.authors.length })}</span>}
+                  {notify.error && <ErrorText>{errorMessage(notify.error)}</ErrorText>}
+                </div>
+              )}
+              {isOwner && <p className="text-xs text-muted-foreground">{t('notifyHint')}</p>}
             </div>
           )}
           {found.data.truncated && <p className="mb-2 text-sm text-warning">{t('truncated')}</p>}

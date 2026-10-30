@@ -346,6 +346,53 @@ suite('private notes on PostgreSQL (#1671, ADR-0037)', () => {
     }
   });
 
+  it('names and deletes private items that mention a value for owners only, deleting only what an earlier notice named (#1678)', async () => {
+    const [named, unnamed] = [randomUUID(), randomUUID()];
+    await admin((c) =>
+      c.query(
+        `INSERT INTO crove_notes.note (org_id, id, author_user_id, visibility, title, body) VALUES
+           ($1, $2, $4, 'private', 'Gọi lại', 'Thu.Ky@khach.example'), ($1, $3, $4, 'private', 'Hẹn', 'thu.ky@khach.example')`,
+        [orgId, named, unnamed, users.author],
+      ),
+    );
+    const notice = (command: string, ids: string[]) =>
+      admin((c) =>
+        c.query(
+          `INSERT INTO crove_kernel.audit_event (org_id, actor_type, actor_id, command, command_id, outcome, input_sha256, detail)
+           VALUES ($1, 'user', $2, $3, $4, 'ok', $5, $6)`,
+          [orgId, users.owner, command, randomUUID(), 'k1:' + '0'.repeat(64), JSON.stringify({ kind: 'email', notes: ids, todos: [], authors: 1 })],
+        ),
+      );
+    try {
+      const items = (actor: Actor) => outcome(run(actor, (c) => c.query(`SELECT * FROM crove_notes.private_notice_items('email', 'thu.ky@khach.example')`)));
+      const owned = await items(member('an owner', () => users.owner));
+      expect(owned).toMatchObject({ ok: true });
+      if (owned.ok) {
+        // Ids and authors, never text.
+        expect(owned.value.fields.map((f) => f.name)).toEqual(['item_type', 'item_id', 'author_user_id']);
+        expect(owned.value.rows).toEqual(
+          [named, unnamed].sort().map((id) => ({ item_type: 'note', item_id: id, author_user_id: users.author })),
+        );
+      }
+      const erase = (actor: Actor) => outcome(run(actor, (c) => c.query(`SELECT * FROM crove_notes.private_erase('email', 'thu.ky@khach.example')`)));
+      const owner = member('an owner', () => users.owner);
+      // No notice yet: nothing is deleted, and both are counted as not told.
+      expect(await erase(owner)).toMatchObject({ ok: true, value: { rows: [{ author_user_id: users.author, notes: '0', todos: '0', untold_notes: '2', untold_todos: '0' }] } });
+      // A row of another command naming an item is no notice.
+      await notice('kernel.personal_data.erase', [unnamed]);
+      await notice('kernel.personal_data.notify', [named]);
+      expect(await erase(owner)).toMatchObject({ ok: true, value: { rows: [{ author_user_id: users.author, notes: '1', todos: '0', untold_notes: '1', untold_todos: '0' }] } });
+      for (const actor of [member('an admin', () => users.admin), author, member('another member', () => users.member), member('a viewer', () => users.viewer), agentActor, system]) {
+        expect(await items(actor), actor.name).toMatchObject({ ok: false, code: '42501' });
+        expect(await erase(actor), actor.name).toMatchObject({ ok: false, code: '42501' });
+      }
+      // run() rolled the owner's erasure back: both notes are still there.
+      expect((await admin((c) => c.query('SELECT count(*)::int AS n FROM crove_notes.note WHERE org_id = $1 AND id = ANY($2)', [orgId, [named, unnamed]]))).rows[0]).toEqual({ n: 2 });
+    } finally {
+      await admin((c) => c.query('DELETE FROM crove_notes.note WHERE org_id = $1 AND id = ANY($2)', [orgId, [named, unnamed]]));
+    }
+  });
+
   it('keeps the worker definers to the worker login in the system context', async () => {
     const calls: Array<[string, unknown[]]> = [
       ['SELECT * FROM crove_notes.trash_due(now(), 10)', []],
