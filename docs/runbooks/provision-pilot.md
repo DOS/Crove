@@ -71,7 +71,7 @@ Then the deploy user, its SSH key for the workflow, the stack directory `/opt/cr
 Create the bucket in the region of the server, private, with versioning on **before the first write** (ADR-0013: Ludy refuses a write that comes back without an object version) and **Object Lock enabled**, so that the worker can hold the original file of every posted invoice for 10 years (`EVIDENCE_LOCK_DAYS`, [evidence-holds.md](evidence-holds.md)). Do not set a default retention on the bucket: Ludy holds only posted files. Give Ludy its own access key, limited to this bucket:
 
 - on the objects: `s3:GetObject`, `s3:GetObjectVersion`, `s3:PutObject`, `s3:DeleteObject`, `s3:GetObjectRetention`, `s3:PutObjectRetention` (never `s3:BypassGovernanceRetention`);
-- on the bucket: `s3:ListBucket`, `s3:GetBucketObjectLockConfiguration`.
+- on the bucket: `s3:ListBucket`, `s3:ListBucketVersions`, `s3:GetBucketObjectLockConfiguration`. `s3:ListBucketVersions` also serves the WORM archive bucket when `ARCHIVE_STORE=s3` uses this key: its nightly verifier reads each key's versions (#2020, [worm-archive.md](worm-archive.md)), and fails with `AccessDenied` without it.
 
 Ludy never deletes object versions, so two lifecycle rules free the space its deletes leave behind, and a third removes abandoned browser uploads. With the AWS CLI (any S3-compatible store: add `--endpoint-url https://<endpoint>`), as an account that may configure the bucket, not with Ludy's key:
 

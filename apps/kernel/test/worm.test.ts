@@ -16,10 +16,12 @@ import {
   S3ArchiveStore,
   archiveKey,
   batchSha256,
+  ArchiveMismatchError,
   acknowledgeRestore,
   chainSha256,
   highSha256,
   RESTORE_ACK_PREFIX,
+  restoreAckAlert,
   restoreAckKey,
   restoreReport,
   verifyArchive,
@@ -978,7 +980,7 @@ describe('series highs and the restore report (#2007)', () => {
     expect(clean).toMatchObject({ ok: true, excused: 4 });
   });
 
-  it('never excuses silently: reports the count and the acknowledgement in force, says when it is new, and fails a key with two versions (#2020)', async () => {
+  it('never excuses silently: records the count, alerts on every run while the acknowledgement is recent by the store, and fails a key with two versions (#2020)', async () => {
     const batches = restoreChain();
     const lost = batches[1]!.rows.map(([ref]): [number, string] => [2, ref]);
     const answer = (previous: string | null) => {
@@ -999,18 +1001,38 @@ describe('series highs and the restore report (#2007)', () => {
       return { db, calls };
     };
     const store = () => writableStore(batches, ackChain(batches, [{ refs: lost }]));
+    // The store wrote the acknowledgement third, a few seconds after its clock's start (writableStore).
+    const written = new Date(Date.UTC(2026, 9, 22) + 3000);
+    const day = 86_400_000;
+    const at = (days: number) => ({ now: () => new Date(written.getTime() + days * day) });
     const first = answer(null);
-    expect(await verifyArchive(first.db, store())).toMatchObject({ ok: true, excused: lost.length, restoreAck: 1, newRestoreAck: true });
-    // The run records the count and the sequence.
+    const recent = await verifyArchive(first.db, store(), at(1));
+    expect(recent).toMatchObject({ ok: true, excused: lost.length, restoreAck: 1, restoreAckWrittenAt: written.toISOString(), alertRestoreAck: true });
+    expect(restoreAckAlert(recent)).toContain(`restore acknowledgement #1, written ${written.toISOString()}, excuses ${lost.length} row(s)`);
+    // The run records the count and the sequence, for the record only.
     expect(first.calls[0]?.slice(4)).toEqual([lost.length, 1]);
-    // An acknowledgement an earlier run already recorded is not new.
-    expect(await verifyArchive(answer('1').db, store())).toMatchObject({ ok: true, restoreAck: 1, newRestoreAck: false });
-    // Without one, nothing is excused and nothing is new.
-    expect(await verifyArchive(answer(null).db, writableStore(batches))).toMatchObject({ excused: 0, restoreAck: null, newRestoreAck: false });
+    // Whatever the database says it saw before, the alert repeats on every run for 14 days by the store's clock.
+    expect(await verifyArchive(answer('9000000000000000').db, store(), at(13))).toMatchObject({ alertRestoreAck: true });
+    const old = await verifyArchive(answer(null).db, store(), at(15));
+    expect(old).toMatchObject({ ok: true, restoreAck: 1, alertRestoreAck: false });
+    expect(restoreAckAlert(old)).toBeNull();
+    // The number of days is the deployment's (ARCHIVE_RESTORE_ALERT_DAYS).
+    expect(await verifyArchive(answer(null).db, store(), { ...at(15), restoreAlertDays: 30 })).toMatchObject({ alertRestoreAck: true });
+    // A store that cannot tell when it wrote the acknowledgement does not bind it: nothing is excused, and the run fails.
+    const { writtenAt: _w, ...blind } = store();
+    const unbound = await verifyArchive(answer(null).db, blind, at(30));
+    expect(unbound).toMatchObject({ ok: false, restoreAck: null, excused: 0 });
+    expect(unbound.problems).toContainEqual({ code: 'restore_ack_mismatch', seq: 0, ref: restoreAckKey(1) });
+    // Without one, nothing is excused and nothing alerts.
+    expect(await verifyArchive(answer(null).db, writableStore(batches), at(1))).toMatchObject({ excused: 0, restoreAck: null, alertRestoreAck: false });
 
-    // A batch or an acknowledgement with a second version (a PUT over it, or a delete) is a finding.
+    // A batch or an acknowledgement with a second version (a PUT over it, or a delete) is a finding. The failing run
+    // still alerts about the recent acknowledgement, and its error names it.
     const versioned = { ...store(), versionCounts: async (prefix: string) => new Map(prefix === 'chain/v1/' ? [[archiveKey(2), 2]] : [[restoreAckKey(1), 1]]) };
-    expect((await verifyArchive(answer('1').db, versioned)).problems).toContainEqual({ code: 'object_versions', seq: 0, ref: archiveKey(2) });
+    const failing = await verifyArchive(answer(null).db, versioned, at(1));
+    expect(failing.problems).toContainEqual({ code: 'object_versions', seq: 0, ref: archiveKey(2) });
+    expect(failing).toMatchObject({ ok: false, alertRestoreAck: true });
+    expect(new ArchiveMismatchError(failing).message).toContain('restore acknowledgement #1 in force');
   });
 
   it('accepts a row lost with a time before the backup point, as a transaction still open at the backup is (#2020)', async () => {

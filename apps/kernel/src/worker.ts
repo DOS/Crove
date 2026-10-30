@@ -39,7 +39,7 @@ import { RETENTION_CRON, RETENTION_TZ, expireExports, runRetention, sweepInbound
 import { NOTES_REMIND_CRON, NOTES_TRASH_CRON, NOTES_TRASH_TZ, queueNotesMemberPurge, runNotesMemberPurge, sweepNotesFormerMembers, sweepNotesReminders, sweepNotesTrash, type NotesMemberPurgeJob } from './notes-worker.ts';
 import { PERIOD_BALANCE_VERIFY_CRON, runPeriodBalanceReconciliation } from './period-balance.ts';
 import { runYearArchive } from './year-archive.ts';
-import { ARCHIVE_VERIFY_CRON, ARCHIVE_WRITE_CRON, runArchiveVerification, writeArchive, type ArchiveStore } from './worm.ts';
+import { ARCHIVE_VERIFY_CRON, ARCHIVE_WRITE_CRON, ArchiveMismatchError, restoreAckAlert, verifyArchive, writeArchive, type ArchiveStore } from './worm.ts';
 import type { SessionRevoker, SignOutTarget } from './sessions.ts';
 import { opsAlert } from './ops-alert.ts';
 
@@ -335,7 +335,8 @@ export interface WorkerDeps {
   push?: { sender: PushSender; brand: string };
   // The WORM fact stream (worm.ts, #891): the store batches go to and how long after a row is written it is archived.
   // Unset: nothing is archived.
-  archive?: { store: ArchiveStore; lagSeconds: number };
+  // restoreAlertDays: days the verifier alerts on a restore acknowledgement after the store wrote it (#2020).
+  archive?: { store: ArchiveStore; lagSeconds: number; restoreAlertDays?: number };
   // The per-org abuse limits (#675). Unset: nothing is checked (use is still recorded).
   usageLimits?: UsageLimits;
   // Detective security alerts (#996): the alert webhook (null: the log only) and the thresholds (default
@@ -792,16 +793,15 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       const started = Date.now();
       const elapsed = () => `${Math.round((Date.now() - started) / 1000)} s`;
       try {
-        const result = await runArchiveVerification(deps.workerDb, store);
-        // An excuse is never silent (#2020): every run says what a restore acknowledgement excused, and a new one alerts,
-        // so an operator matches it to a real restore.
+        const result = await verifyArchive(deps.workerDb, store, deps.archive?.restoreAlertDays === undefined ? {} : { restoreAlertDays: deps.archive.restoreAlertDays });
+        // An excuse is never silent (#2020): every run says what a restore acknowledgement excused, and a recent one, by
+        // the store's own write time, alerts on every run, passing or failing, so an operator matches it to a real
+        // restore and a webhook down for a night loses nothing.
+        const alert = restoreAckAlert(result);
+        if (alert) opsAlert(alert);
+        if (!result.ok) throw new ArchiveMismatchError(result);
         const excused = result.restoreAck === null ? '' : `, excused ${result.excused} row(s) under restore acknowledgement #${result.restoreAck}`;
         console.log(`[archive] verified ${result.batches} batch(es), ${result.rows} row(s)${excused} in ${elapsed()}`);
-        if (result.newRestoreAck) {
-          opsAlert(
-            `[archive] ALERT a new restore acknowledgement #${result.restoreAck} excuses ${result.excused} row(s) the WORM archive holds: match it to a restore incident (docs/runbooks/worm-archive.md)`,
-          );
-        }
       } catch (error) {
         console.error(`[archive] ALERT after ${elapsed()}: ${error instanceof Error ? error.message : 'verification could not run'}`);
         throw error;

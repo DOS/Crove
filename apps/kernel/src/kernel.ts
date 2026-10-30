@@ -522,7 +522,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
             brand: config.BRAND_NAME,
             // Bounce reports reach this deployment only with both inbound settings (as for the invite mail).
             mail: { mailer: resolved.mail, templates: MAIL_TEMPLATES, brand: config.BRAND_NAME, bounceDomain: config.INBOUND_DOMAIN && config.INBOUND_SECRET ? config.INBOUND_DOMAIN : null },
-            archive: { store: archiveStore, lagSeconds: config.ARCHIVE_LAG_SECONDS },
+            archive: { store: archiveStore, lagSeconds: config.ARCHIVE_LAG_SECONDS, restoreAlertDays: config.ARCHIVE_RESTORE_ALERT_DAYS },
             usageLimits: usageLimits(config),
             securityAlerts: alerts,
             aiPrice: { inputPerMTok: config.AI_PRICE_INPUT_PER_MTOK, outputPerMTok: config.AI_PRICE_OUTPUT_PER_MTOK },

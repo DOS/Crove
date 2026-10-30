@@ -558,11 +558,14 @@ export interface ArchiveVerification {
   rows: number;
   problems: ArchiveProblem[];
   // Rows a restore acknowledgement excused (#2020): lost with a restore, and named by its report. Never silent: the
-  // run records the count and the acknowledgement in force (restoreAck, its sequence), logs them, and newRestoreAck
-  // says the acknowledgement is newer than any earlier run recorded, which the worker alerts on.
+  // run records the count and the acknowledgement in force (restoreAck, its sequence), and the worker logs them.
+  // restoreAckWrittenAt is when the store wrote that acknowledgement (its oldest version), and alertRestoreAck says it
+  // is recent (within restoreAlertDays): the worker alerts on every run until it is not. Neither comes from the
+  // database, so its owner cannot silence the alert.
   excused: number;
   restoreAck: number | null;
-  newRestoreAck: boolean;
+  restoreAckWrittenAt: string | null;
+  alertRestoreAck: boolean;
 }
 
 // After a restore (#2020): the rows a restore lost, written to the archive store by the restore check
@@ -751,7 +754,14 @@ const comesBack = (ref: string) => ref.startsWith('number_series:') || ref.start
 
 // Checks the whole archive against the database and records the result. Never throws for a problem it finds; it
 // throws only when it cannot run (store or database unreachable), and then records nothing.
-export async function verifyArchive(db: Db, store: ArchiveStore): Promise<ArchiveVerification> {
+// Days the worker alerts, on every run, about the restore acknowledgement in force after the store wrote it (#2020).
+const RESTORE_ACK_ALERT_DAYS = 14;
+
+export async function verifyArchive(
+  db: Db,
+  store: ArchiveStore,
+  options: { restoreAlertDays?: number; now?: () => Date } = {},
+): Promise<ArchiveVerification> {
   const problems: ArchiveProblem[] = [];
   const note = (problem: ArchiveProblem) => {
     if (problems.length < MAX_PROBLEMS) problems.push(problem);
@@ -891,13 +901,25 @@ export async function verifyArchive(db: Db, store: ArchiveStore): Promise<Archiv
     }
   }
 
+  // The acknowledgement in force, by the store's own write time: recent ones alert on every run, whatever the run finds.
   const restoreAck = acks.ack?.sequence ?? null;
-  const { rows: recordedRun } = await sql<{ previous: string | null }>`
-    SELECT crove_kernel.archive_verified(${problems.length === 0}, ${seq}::int, ${rowsChecked}::bigint, ${JSON.stringify(problems)}::jsonb, ${excused}::bigint,
-      ${restoreAck}::bigint) AS previous`.execute(db);
-  const recordedAck = recordedRun[0]?.previous;
-  const newRestoreAck = restoreAck !== null && (recordedAck === null || recordedAck === undefined || restoreAck > Number(recordedAck));
-  const result = { ok: problems.length === 0, batches: seq, rows: rowsChecked, problems, excused, restoreAck, newRestoreAck };
+  const ackWritten = restoreAck !== null && store.writtenAt ? await store.writtenAt(restoreAckKey(restoreAck)) : null;
+  const alertDays = options.restoreAlertDays ?? RESTORE_ACK_ALERT_DAYS;
+  const now = (options.now ?? (() => new Date()))().getTime();
+  // An acknowledgement whose write time the store cannot tell alerts too.
+  const alertRestoreAck = restoreAck !== null && (ackWritten === null || now - ackWritten.getTime() < alertDays * 86_400_000);
+  await sql`SELECT crove_kernel.archive_verified(${problems.length === 0}, ${seq}::int, ${rowsChecked}::bigint, ${JSON.stringify(problems)}::jsonb, ${excused}::bigint,
+    ${restoreAck}::bigint)`.execute(db);
+  const result = {
+    ok: problems.length === 0,
+    batches: seq,
+    rows: rowsChecked,
+    problems,
+    excused,
+    restoreAck,
+    restoreAckWrittenAt: ackWritten ? ackWritten.toISOString() : null,
+    alertRestoreAck,
+  };
   return result;
 }
 
@@ -905,17 +927,31 @@ export async function verifyArchive(db: Db, store: ArchiveStore): Promise<Archiv
 // keeps (and the worker log) names what failed without any row content.
 export class ArchiveMismatchError extends Error {
   readonly problems: ArchiveProblem[];
+  readonly result: ArchiveVerification;
 
   constructor(result: ArchiveVerification) {
     const codes = [...new Set(result.problems.map((p) => p.code))].join(', ');
-    super(`ARCHIVE_MISMATCH: ${result.problems.length} problem(s) over ${result.batches} batch(es): ${codes}; see crove_kernel.archive_verification and docs/runbooks/worm-archive.md`);
+    const ack = result.restoreAck === null ? '' : `; restore acknowledgement #${result.restoreAck} in force`;
+    super(
+      `ARCHIVE_MISMATCH: ${result.problems.length} problem(s) over ${result.batches} batch(es): ${codes}${ack}; see crove_kernel.archive_verification and docs/runbooks/worm-archive.md`,
+    );
     this.problems = result.problems;
+    this.result = result;
   }
 }
 
+// The line the worker alerts with while a restore acknowledgement is recent (#2020), in a passing run or a failing one.
+export function restoreAckAlert(result: ArchiveVerification): string | null {
+  if (!result.alertRestoreAck || result.restoreAck === null) return null;
+  return (
+    `[archive] ALERT restore acknowledgement #${result.restoreAck}, written ${result.restoreAckWrittenAt ?? 'at a time the store cannot tell'}, ` +
+    `excuses ${result.excused} row(s) the WORM archive holds: match it to a restore incident (docs/runbooks/worm-archive.md)`
+  );
+}
+
 // The nightly job: verifies, records the result, and fails when anything does not match.
-export async function runArchiveVerification(db: Db, store: ArchiveStore): Promise<ArchiveVerification> {
-  const result = await verifyArchive(db, store);
+export async function runArchiveVerification(db: Db, store: ArchiveStore, options: { restoreAlertDays?: number } = {}): Promise<ArchiveVerification> {
+  const result = await verifyArchive(db, store, options);
   if (!result.ok) throw new ArchiveMismatchError(result);
   return result;
 }
