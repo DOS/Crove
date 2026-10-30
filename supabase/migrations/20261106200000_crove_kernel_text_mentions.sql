@@ -10,8 +10,8 @@
 -- kind and value are what the finder's probe holds (packages/kernel/src/personal-data.ts, personalDataProbe):
 --   - 'email': the address in lower case. Matched without regard to case, as a whole address: nothing an address's
 --     local part may hold just before it, and no letter, digit, _ or - just after it, nor a dot that a letter or digit
---     follows, so ab@x.com is not found in cab@x.com, o'ab@x.com or ab@x.com.vn, and is found at the end of a sentence
---     ("... ab@x.com.").
+--     follows, so ab@x.example is not found in cab@x.example, o'ab@x.example or ab@x.example.test, and is found at the end of a sentence
+--     ("... ab@x.example.").
 --   - 'digits': 8 to 15 digits (a phone number, a tax code or a national ID). Found with up to three of space . ( ) -
 --     between any two digits, as people write them ("0901 234 567", "(028) 3829.1234", "0101234567-001"), an opening
 --     bracket just before them, and no digit next to either end (nor one a single space, dot or dash away). A phone
@@ -38,8 +38,8 @@ BEGIN
     IF p_value IS NULL OR p_value !~ '^[^[:space:]@]+@[^[:space:]@]+$' OR p_value <> pg_catalog.lower(p_value) OR pg_catalog.length(p_value) > 320 THEN
       RAISE EXCEPTION 'TEXT_MENTION_VALUE' USING ERRCODE = '22023';
     END IF;
-    -- Nothing an address's local part may hold just before it (RFC 5322 atext and the dot), so brien@x.com is not found
-    -- in o'brien@x.com or tag#brien@x.com. In the value only ASCII punctuation is escaped, each with a backslash, which
+    -- Nothing an address's local part may hold just before it (RFC 5322 atext and the dot), so brien@x.example is not found
+    -- in o'brien@x.example or tag#brien@x.example. In the value only ASCII punctuation is escaped, each with a backslash, which
     -- makes it literal; a letter outside ASCII is never a regex character and stays as it is (a backslash before a
     -- letter would be an escape). A letter outside ASCII matches across case as the database's locale folds it.
     RETURN '(?<![a-z0-9!#$%&''*+/=?^_`{|}~.-])' || pg_catalog.regexp_replace(p_value, '([!-/:-?[-`{-~])', '\\\1', 'g') || '(?![a-z0-9_-])(?!\.[a-z0-9])';
@@ -49,12 +49,12 @@ BEGIN
     END IF;
     -- A phone (10 or 11 digits from a leading 0, as Vietnam writes them) is also found with 84 in place of the 0, and
     -- a value given with 84 also with the 0. Any other value (a 12-digit national ID, a 13-digit branch tax code) is
-    -- found only as it is: 001091777665 is not 8401091777665.
+    -- found only as it is: 000091777665 is not 8400091777665.
     v_local := CASE WHEN p_value ~ '^84[0-9]{9,10}$' THEN '0' || pg_catalog.substr(p_value, 3) ELSE p_value END;
     v_intl := CASE WHEN v_local ~ '^0[0-9]{9,10}$' THEN '84' || pg_catalog.substr(v_local, 2) ELSE v_local END;
     -- An opening bracket just before the digits is part of the number ("(028) 3829 1234"), so an edit leaves none.
     -- No digit just before or after, nor one a single space, dot or dash away, so the value is not found inside a
-    -- longer number written in groups (001 091 777 665); a line break or two separators part two numbers, so a list
+    -- longer number written in groups (000 091 777 665); a line break or two separators part two numbers, so a list
     -- ("1. 0912 345 678", one number a line) still finds each.
     RETURN '(?<![0-9][' || v_inline || '.-]?)(?:\(?' || pg_catalog.array_to_string(pg_catalog.regexp_split_to_array(v_local, ''), v_sep)
       || '|\+?' || pg_catalog.array_to_string(pg_catalog.regexp_split_to_array(v_intl, ''), v_sep) || ')(?![' || v_inline || '.-]?[0-9])';

@@ -150,12 +150,12 @@ suite('finding a person in the org (#923)', () => {
       const value = probe.kind === 'email' ? probe.email : probe.digits;
       expect(await check(c.text, probe.kind, value), c.name).toEqual({ found: c.redacted !== c.text, edited: c.redacted });
     }
-    expect(await check(null, 'email', 'a@x.com')).toEqual({ found: false, edited: null });
+    expect(await check(null, 'email', 'a@x.example')).toEqual({ found: false, edited: null });
     // The mark is taken literally: an & or a backslash in it never brings the value back (#1678 review).
-    const marked = await admin(async (c) => (await c.query<{ edited: string }>(`SELECT crove_kernel.text_redact('mail a@x.com.', 'email', 'a@x.com', $1) AS edited`, ['R&D \\1 \\&'])).rows[0]?.edited);
+    const marked = await admin(async (c) => (await c.query<{ edited: string }>(`SELECT crove_kernel.text_redact('mail a@x.example.', 'email', 'a@x.example', $1) AS edited`, ['R&D \\1 \\&'])).rows[0]?.edited);
     expect(marked).toBe('mail R&D \\1 \\&.');
     // A value of another shape, or another kind, raises instead of matching nothing.
-    for (const [kind, value] of [['email', 'A@X.com'], ['email', 'not an email'], ['digits', '1234'], ['name', 'Nguyễn']]) {
+    for (const [kind, value] of [['email', 'A@X.example'], ['email', 'not an email'], ['digits', '1234'], ['name', 'Nguyễn']]) {
       await expect(check('x', kind as string, value as string), `${kind} ${value}`).rejects.toMatchObject({ code: '22023' });
     }
   });
@@ -168,23 +168,23 @@ suite('finding a person in the org (#923)', () => {
     await admin(async (c) => {
       await c.query(
         `INSERT INTO crove_notes.note (org_id, id, author_user_id, visibility, title, body, tags) VALUES
-           ($1, $2, $4, 'org', 'Khách hàng mới', 'Liên hệ giám đốc: Giam.Doc@khach.vn.', '{}'),
-           ($1, $3, $4, 'org', 'Địa chỉ khác', 'xgiam.doc@khach.vn và giam.doc@khach.vn.com', '{}'),
-           ($1, crove_kernel.uuid_v7(), $5, 'private', 'Riêng một', 'gọi giam.doc@khach.vn sau 15h', '{}'),
-           ($1, crove_kernel.uuid_v7(), $5, 'private', 'Riêng hai: giam.doc@khach.vn', '', '{}'),
-           ($1, crove_kernel.uuid_v7(), $4, 'private', 'Của chủ', 'không liên quan', '{giam.doc@khach.vn}')`,
+           ($1, $2, $4, 'org', 'Khách hàng mới', 'Liên hệ giám đốc: Giam.Doc@khach.example.', '{}'),
+           ($1, $3, $4, 'org', 'Địa chỉ khác', 'xgiam.doc@khach.example và giam.doc@khach.example.test', '{}'),
+           ($1, crove_kernel.uuid_v7(), $5, 'private', 'Riêng một', 'gọi giam.doc@khach.example sau 15h', '{}'),
+           ($1, crove_kernel.uuid_v7(), $5, 'private', 'Riêng hai: giam.doc@khach.example', '', '{}'),
+           ($1, crove_kernel.uuid_v7(), $4, 'private', 'Của chủ', 'không liên quan', '{giam.doc@khach.example}')`,
         [org.orgId, shared, near, org.owner, org.member],
       );
       await c.query(
         `INSERT INTO crove_notes.todo (org_id, owner_user_id, title, details, checklist, sort_key) VALUES
-           ($1, $2, 'Gọi giám đốc', 'Số (091) 777.66.55', '[]', 'a0'),
-           ($1, $2, 'Gửi hồ sơ', NULL, '[{"text": "gửi tới giam.doc@khach.vn", "done": false}]', 'a1')`,
+           ($1, $2, 'Gọi giám đốc', 'Số (000) 777.66.55', '[]', 'a0'),
+           ($1, $2, 'Gửi hồ sơ', NULL, '[{"text": "gửi tới giam.doc@khach.example", "done": false}]', 'a1')`,
         [org.orgId, org.member],
       );
     });
     const byAuthor = (result: PersonalDataResult) => [...result.privateItems].sort((a, b) => a.authorUserId.localeCompare(b.authorUserId));
     for (const user of [org.owner, org.admin]) {
-      const result = await find('giam.doc@khach.vn', user);
+      const result = await find('giam.doc@khach.example', user);
       // The shared note that holds the whole address, and not the one with longer addresses around it.
       expect(result.matches.filter((m) => m.column.startsWith('crove_notes.'))).toEqual([
         expect.objectContaining({ column: 'crove_notes.note.body', handling: 'erase', rowId: shared, row: expect.objectContaining({ visibility: 'org', title: 'Khách hàng mới' }) }),
@@ -199,12 +199,12 @@ suite('finding a person in the org (#923)', () => {
       for (const secret of ['Riêng một', 'Riêng hai', 'Của chủ', 'Gửi hồ sơ', 'Gọi giám đốc']) expect(JSON.stringify(result), secret).not.toContain(secret);
     }
     // A phone written with brackets and dots in a to-do's details, found by any spelling.
-    for (const phone of ['0917776655', '+84 917 776 655']) {
+    for (const phone of ['0007776655', '+84 007 776 655']) {
       expect((await find(phone)).privateItems, phone).toEqual([{ authorUserId: org.member, notes: 0, todos: 1 }]);
     }
     // Nothing for a value no item holds, and nothing from another org.
-    expect((await find('nobody@khach.vn')).privateItems).toEqual([]);
-    expect((await find('giam.doc@khach.vn', other.owner, other.orgId)).privateItems).toEqual([]);
+    expect((await find('nobody@khach.example')).privateItems).toEqual([]);
+    expect((await find('giam.doc@khach.example', other.owner, other.orgId)).privateItems).toEqual([]);
   });
 
   it("finds the legal entities the org keeps books for, kept by law, and the default one as the org's own (#1312)", async () => {

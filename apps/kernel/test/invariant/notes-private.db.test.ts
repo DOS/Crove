@@ -323,14 +323,14 @@ suite('private notes on PostgreSQL (#1671, ADR-0037)', () => {
   it('counts the private items that mention a value for owners and admins only, with no text (#1678)', async () => {
     const mention = randomUUID();
     await admin((c) =>
-      c.query(`INSERT INTO crove_notes.note (org_id, id, author_user_id, visibility, title, body) VALUES ($1, $2, $3, 'private', 'Gọi lại', 'Giam.Doc@khach.vn')`, [
+      c.query(`INSERT INTO crove_notes.note (org_id, id, author_user_id, visibility, title, body) VALUES ($1, $2, $3, 'private', 'Gọi lại', 'Giam.Doc@khach.example')`, [
         orgId,
         mention,
         users.author,
       ]),
     );
     try {
-      const matches = (actor: Actor) => outcome(run(actor, (c) => c.query(`SELECT * FROM crove_notes.private_matches('email', 'giam.doc@khach.vn')`)));
+      const matches = (actor: Actor) => outcome(run(actor, (c) => c.query(`SELECT * FROM crove_notes.private_matches('email', 'giam.doc@khach.example')`)));
       for (const actor of [member('an owner', () => users.owner), member('an admin', () => users.admin)]) {
         const result = await matches(actor);
         expect(result, actor.name).toMatchObject({ ok: true });
