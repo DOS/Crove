@@ -339,7 +339,8 @@ suite('org purge on PostgreSQL (#1024)', () => {
 
     const after = await snapshot(s.org.orgId);
     // Kept whole: the books, the audit and outbox streams, inbound addresses.
-    for (const table of Object.keys(before).filter((t) => t.startsWith('crove_finance.') && t !== 'crove_finance.vendor_account_rule')) {
+    // Bank feed accounts (#2044) are working rows, deleted with the connections they map.
+    for (const table of Object.keys(before).filter((t) => t.startsWith('crove_finance.') && t !== 'crove_finance.vendor_account_rule' && t !== 'crove_finance.bank_feed_account')) {
       expect([table, after[table]]).toEqual([table, before[table]]);
     }
     expect(after['crove_finance.purchase_document']).toBe(1);
