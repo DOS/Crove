@@ -1603,6 +1603,8 @@ Updated 2026-10-14 for the Vite + TanStack Router SPA (Decision 6).
 
 ## 10. AI coding foundation
 
+What is built for the gates, the migrations and the review flow, with the code and the tests that hold it, is recorded in [ADR-0001](../adr/0001-repositories-migrations-and-review-gates.md); where this section and the ADR differ about `main`, the ADR is current.
+
 > Every change to `.claude/settings*.json` and hooks in the Crove repo is only a **proposal** until the owner approves it; agents do not edit their own harness config. These files are protected paths (G6).
 
 - **`AGENTS.md` at the repo root** (<=200 lines; `CLAUDE.md` = `@AGENTS.md`). Contents:
@@ -2092,6 +2094,7 @@ ADRs live in `docs/adr/`, using the MADR template. They keep the "why"; this pla
 
 | ADR | Content | Status |
 |---|---|---|
+| [0001](../adr/0001-repositories-migrations-and-review-gates.md) | Repositories, migrations and the review gates, as built (#2048): the public core and the private Cloud layer and what keeps secrets out of the public one, the migration runner and its lint, order and hardening checks, the CI gates G1 to G6 as they run, the protected paths with the invariant suite taken from the base branch and the security review, the two-step rule for changing an invariant, what "reviewed" means for a merge, and the release path; with what is not covered (branch protection lives only in GitHub, the reviewer agent is not required) | Accepted (records the decided design of §10, Decisions 7 and 9) |
 | [0026](../adr/0026-wedge-scope-and-phase-0.md) | Wedge (Document Inbox), scope (kernel + Accounting), rigor by stage, protected-path review without an owner label, forks frozen | Accepted 2026-10-13; partly superseded by 0027 |
 | [0027](../adr/0027-oss-core-and-crove-cloud.md) | Open-source core vs Crove Cloud; auth on Supabase Auth only; app shell (Vite + TanStack Router SPA); brand | Accepted 2026-10-13 and 2026-10-14 |
 | [0028](../adr/0028-identity-sessions-and-revocation.md) | Identity: Supabase Auth access tokens verified locally with required issuer, audience and expiry; design C: a Crove session status record checked in the request transaction, fed by `auth.sessions` (self-host); Crove Cloud keeps Supabase Auth's default token lifetime for sign-outs outside Crove (amended 2026-10-15, DOS-28 events optional); immediate owner revoke; disabled users; membership on every request; R3 with a live Auth check, `aal2` and MFA in the last 5 minutes | Accepted 2026-10-14 (owner) with conditions, amended 2026-10-15; its acceptance tests are External-tenant gate T1 (issue #22) |
@@ -2110,7 +2113,6 @@ ADRs live in `docs/adr/`, using the MADR template. They keep the "why"; this pla
 
 | ADR | Content | Due |
 |---|---|---|
-| 0001 | Repos (public core + private `crove-cloud`), Crove's own migration ledger and built-in runner, G1-G6 gates, PR policy (size, protected paths, what "reviewed" means, the Decision 7 flow) | Before the first external tenant (T15) |
 | 0002 | Crove's own DB: dedicated Supabase prod/beta projects, runs on any PG17, capacity baseline, DR/RPO/RTO, 7-day PITR + rehearsed restore runbook, WORM stream, >=10-year retention | Before MVP step 2 |
 | 0003 | Runtime and environments: one image with roles `migrate`, `api`, `worker` and `all`, separate GCP projects, WIF, worker-first deploys from `crove-cloud`, readiness, per-role connection budget, egress | Before MVP step 2 |
 | 0022 | `AGPL-3.0-only` license, license-grant CLA (individual + corporate, CLA Assistant), trademark + brand policy, open-core boundary, business model, commercial license, third-party extension via API/MCP | Before accepting outside contributions (the repo is already public) |

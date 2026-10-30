@@ -5834,6 +5834,7 @@ export const en = {
       },
       bank: {
         import: 'Import a bank statement',
+        ingest: 'Store the lines of a bank feed',
         line_voucher: 'Read the voucher of a statement line',
         lines: 'List bank statement lines',
         open_lines: 'List unmatched bank statement lines',
@@ -6130,6 +6131,7 @@ export const en = {
         allocations: 'List allocated voucher numbers',
         policy: {
           set: 'Set the voucher numbering policy',
+          schedule: 'Schedule a voucher numbering change from a future year',
         },
         reseed: 'Raise a voucher number series after a restore',
         void: 'Void a voucher number',

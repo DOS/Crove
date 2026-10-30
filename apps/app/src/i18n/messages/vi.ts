@@ -5834,6 +5834,7 @@ export const vi = {
       },
       bank: {
         import: 'Nhập sao kê ngân hàng',
+        ingest: 'Lưu các dòng từ nguồn giao dịch ngân hàng',
         line_voucher: 'Xem chứng từ của dòng sao kê',
         lines: 'Xem các dòng sao kê',
         open_lines: 'Xem các dòng sao kê chưa đối chiếu',
@@ -6130,6 +6131,7 @@ export const vi = {
         allocations: 'Xem các số chứng từ đã cấp',
         policy: {
           set: 'Đặt cách đánh số chứng từ',
+          schedule: 'Hẹn đổi cách đánh số chứng từ từ đầu năm sau',
         },
         reseed: 'Nâng dãy số chứng từ sau khi khôi phục',
         void: 'Hủy số chứng từ',

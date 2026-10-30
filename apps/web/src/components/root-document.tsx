@@ -14,7 +14,14 @@ export function landingMetadata(dict: Dictionary, path: string): Metadata {
     title: dict.meta.title,
     description: dict.meta.description,
     alternates: { canonical: path, languages: { vi: '/', en: '/en' } },
-    icons: { icon: '/favicon.svg' },
+    icons: {
+      icon: [
+        { url: '/favicon.svg', type: 'image/svg+xml' },
+        { url: '/brand/favicon-32.png', type: 'image/png', sizes: '32x32' },
+        { url: '/brand/favicon-16.png', type: 'image/png', sizes: '16x16' },
+      ],
+      apple: '/brand/apple-touch-icon.png',
+    },
     openGraph: { title: dict.meta.title, description: dict.meta.description, type: 'website', url: path, locale: dict.lang === 'vi' ? 'vi_VN' : 'en_US' },
   };
 }

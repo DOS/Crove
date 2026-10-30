@@ -2,7 +2,7 @@ import type { Dictionary } from '../../content/vi';
 import { DOCS_URL, SIGN_IN_URL } from '../../content/site';
 import { MobileMenu } from './mobile-menu';
 import { ThemeToggle } from './theme-toggle';
-import { CroveMark } from './ui';
+import { LudyMark } from './ui';
 
 export function SiteHeader({ dict }: { dict: Dictionary }) {
   const { nav } = dict;
@@ -20,7 +20,7 @@ export function SiteHeader({ dict }: { dict: Dictionary }) {
       </a>
       <div className="wrap flex h-15 items-center gap-6">
         <a href={home} className="flex items-center gap-2 text-fg" aria-label="Ludy">
-          <CroveMark className="size-6 text-accent" />
+          <LudyMark className="size-6" />
           <span className="font-display text-lg font-semibold tracking-[-0.01em]">Ludy</span>
         </a>
         <nav aria-label={nav.label} className="hidden items-center gap-1 md:flex">

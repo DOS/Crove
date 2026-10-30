@@ -9,16 +9,28 @@
 //   refuses a double from any writer anyway, and the insert skips a key already there rather than failing.
 // - finance.bank.lines: the stored lines of one account for a month, quarter or year, each with what became of it
 //   (stage 2a, bank-match.ts: open, proposed as a voucher, or settled by one).
+// - finance.bank.ingest (ADR-0039, #2044): the lines a bank feed reports, sent by the worker, checked and stored on the
+//   same path as a statement's (the account lock, the ADR-0021 keys, the unique key), so a transaction that comes from
+//   the feed and again in a file is one line. A system command: people import files; only feed jobs send lines.
 import { sql } from 'kysely';
 import { z } from 'zod';
 import type { MemberRole } from '@crove/db';
-import { zBankStatementImport, zId, zLedgerPeriod, type BankImportPreview, type BankImportResult, type BankLines, type BankStatementImport } from '@crove/kernel-contract';
-import { DomainError, defineCommand, defineQuery, type QueryContext } from '@crove/kernel-runtime';
+import {
+  zBankFeedIngest,
+  zBankStatementImport,
+  zId,
+  zLedgerPeriod,
+  type BankImportPreview,
+  type BankImportResult,
+  type BankLines,
+  type BankStatementImport,
+} from '@crove/kernel-contract';
+import { DomainError, defineCommand, defineQuery, type CommandContext, type QueryContext } from '@crove/kernel-runtime';
 import { resolveLegalEntity } from './legal-entity.ts';
 import { Decimal } from '@crove/l10n-vn';
 import { chartAccounts } from './accounts.ts';
 import { bankLineStates } from './bank-match.ts';
-import { checkStatement, readStatement, type StatementCheck, type StoredChainLine } from './domain/bank-statement.ts';
+import { checkLines, checkStatement, readFeedLines, readStatement, type StatementCheck, type StoredChainLine, type StoredFacts } from './domain/bank-statement.ts';
 import { ledgerPeriod } from './domain/ledger-reports.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
@@ -38,25 +50,32 @@ async function bankAccount(ctx: QueryContext, code: string, active: boolean) {
   return account;
 }
 
-// What the account already has around the file: the stored keys among the file's, the date and amount of stored lines
-// on the file's days, the last stored line before its first day and the stored lines of its days, in import order.
-// Of one legal entity (#1280): a bank account's lines are deduplicated and chained per entity.
-async function check(ctx: QueryContext, input: BankStatementImport, legalEntityId: string): Promise<StatementCheck> {
-  const { lines, keys } = readStatement(input);
+type Chain = { before: StoredChainLine | null; within: StoredChainLine[] };
+
+// What the account already has around a batch of lines, whatever its source: the stored keys among the batch's, the
+// date and amount of stored lines on its days, the last stored line before its first day and the stored lines of its
+// days, in import order. Of one legal entity (#1280): a bank account's lines are deduplicated and chained per entity.
+async function storedAround(
+  ctx: QueryContext,
+  legalEntityId: string,
+  bankAccountCode: string,
+  lines: ReadonlyArray<{ date: string }>,
+  keys: ReadonlyArray<string | null>,
+): Promise<{ stored: StoredFacts; chain: Chain }> {
   const dates = lines.map((l) => l.date).sort();
   const from = dates[0];
   const to = dates.at(-1);
-  const fileKeys = keys.filter((k): k is string => k !== null);
+  const batchKeys = keys.filter((k): k is string => k !== null);
   const storedKeys =
-    fileKeys.length === 0
+    batchKeys.length === 0
       ? []
       : await ctx.trx
           .selectFrom('crove_finance.bank_line')
           .select('dedupe_key')
           .where('org_id', '=', ctx.orgId)
           .where('legal_entity_id', '=', legalEntityId)
-          .where('bank_account', '=', input.bankAccount)
-          .where('dedupe_key', 'in', fileKeys)
+          .where('bank_account', '=', bankAccountCode)
+          .where('dedupe_key', 'in', batchKeys)
           .execute();
   let within: Array<StoredChainLine> = [];
   let before: StoredChainLine | null = null;
@@ -66,7 +85,7 @@ async function check(ctx: QueryContext, input: BankStatementImport, legalEntityI
       .select(['value_date as date', 'amount', 'running_balance as balance'])
       .where('org_id', '=', ctx.orgId)
       .where('legal_entity_id', '=', legalEntityId)
-      .where('bank_account', '=', input.bankAccount)
+      .where('bank_account', '=', bankAccountCode)
       .where('value_date', '>=', from)
       .where('value_date', '<=', to)
       .orderBy('value_date')
@@ -79,7 +98,7 @@ async function check(ctx: QueryContext, input: BankStatementImport, legalEntityI
         .select(['value_date as date', 'amount', 'running_balance as balance'])
         .where('org_id', '=', ctx.orgId)
         .where('legal_entity_id', '=', legalEntityId)
-        .where('bank_account', '=', input.bankAccount)
+        .where('bank_account', '=', bankAccountCode)
         .where('value_date', '<', from)
         .orderBy('value_date', 'desc')
         .orderBy('import_id', 'desc')
@@ -87,14 +106,61 @@ async function check(ctx: QueryContext, input: BankStatementImport, legalEntityI
         .executeTakeFirst()) ?? null;
   }
   const dateAmounts = new Set(within.map((l) => `${l.date}|${new Decimal(l.amount).toFixed()}`));
-  return checkStatement(
-    input,
-    { keys: new Set(storedKeys.map((k) => k.dedupe_key as string)), dateAmounts },
-    {
+  return {
+    stored: { keys: new Set(storedKeys.map((k) => k.dedupe_key as string)), dateAmounts },
+    chain: {
       before: before && { ...before, amount: new Decimal(before.amount).toFixed(), balance: before.balance === null ? null : new Decimal(before.balance).toFixed() },
       within: within.map((l) => ({ ...l, amount: new Decimal(l.amount).toFixed(), balance: l.balance === null ? null : new Decimal(l.balance).toFixed() })),
     },
-  );
+  };
+}
+
+// A statement file checked against the account.
+async function check(ctx: QueryContext, input: BankStatementImport, legalEntityId: string): Promise<StatementCheck> {
+  const { lines, keys } = readStatement(input);
+  const { stored, chain } = await storedAround(ctx, legalEntityId, input.bankAccount, lines, keys);
+  return checkStatement(input, stored, chain);
+}
+
+// Stores the lines a check found new or ambiguous as one import of the account, under the account's lock (the caller
+// holds it), and returns the import's id. Every source stores through here (ADR-0039).
+async function storeLines(ctx: CommandContext, legalEntityId: string, bankAccountCode: string, lines: StatementCheck['lines']): Promise<string> {
+  // Time-ordered and taken under the lock, so ordering by import_id is the order the imports were made in.
+  const { rows: ids } = await sql<{ id: string }>`SELECT crove_kernel.uuid_v7() AS id`.execute(ctx.trx);
+  const importId = ids[0]?.id;
+  if (!importId) throw new DomainError('INTERNAL', 500, 'Lỗi hệ thống');
+  const actor = ctx.actor.type === 'user' ? ctx.actor.userId : null;
+  let stored = 0;
+  // In chunks, so a long batch stays under the bind-parameter limit.
+  for (let i = 0; i < lines.length; i += 500) {
+    const chunk = lines.slice(i, i + 500);
+    const inserted = await ctx.trx
+      .insertInto('crove_finance.bank_line')
+      .values(
+        chunk.map((l) => ({
+          org_id: ctx.orgId,
+          legal_entity_id: legalEntityId,
+          bank_account: bankAccountCode,
+          import_id: importId,
+          position: l.position,
+          value_date: l.date,
+          description: l.description,
+          amount: l.amount,
+          running_balance: l.balance,
+          bank_ref: l.reference,
+          dedupe_key: l.key,
+          ambiguous: l.ambiguous,
+          created_by: actor,
+        })),
+      )
+      .onConflict((oc) => oc.columns(['org_id', 'legal_entity_id', 'bank_account', 'dedupe_key']).where('dedupe_key', 'is not', null).doNothing())
+      .returning('id')
+      .execute();
+    stored += inserted.length;
+  }
+  // Under the lock nothing else stores lines of this account, so every line the check called new was stored.
+  if (stored !== lines.length) throw new DomainError('RETRY', 409, 'Xung đột đồng thời, hãy thử lại');
+  return importId;
 }
 
 const lockAccount = (ctx: QueryContext, legalEntityId: string, code: string) =>
@@ -126,41 +192,7 @@ export const bankImport = defineCommand({
         rows: preview.rows.filter((r) => r.errors.length > 0).map((r) => r.rowNo),
       });
     }
-    // Time-ordered and taken under the lock, so ordering by import_id is the order the imports were made in.
-    const { rows: ids } = await sql<{ id: string }>`SELECT crove_kernel.uuid_v7() AS id`.execute(ctx.trx);
-    const importId = ids[0]?.id;
-    if (!importId) throw new DomainError('INTERNAL', 500, 'Lỗi hệ thống');
-    const actor = ctx.actor.type === 'user' ? ctx.actor.userId : null;
-    let stored = 0;
-    // In chunks, so a long statement stays under the bind-parameter limit.
-    for (let i = 0; i < lines.length; i += 500) {
-      const chunk = lines.slice(i, i + 500);
-      const inserted = await ctx.trx
-        .insertInto('crove_finance.bank_line')
-        .values(
-          chunk.map((l) => ({
-            org_id: ctx.orgId,
-            legal_entity_id: legalEntityId,
-            bank_account: input.bankAccount,
-            import_id: importId,
-            position: l.position,
-            value_date: l.date,
-            description: l.description,
-            amount: l.amount,
-            running_balance: l.balance,
-            bank_ref: l.reference,
-            dedupe_key: l.key,
-            ambiguous: l.ambiguous,
-            created_by: actor,
-          })),
-        )
-        .onConflict((oc) => oc.columns(['org_id', 'legal_entity_id', 'bank_account', 'dedupe_key']).where('dedupe_key', 'is not', null).doNothing())
-        .returning('id')
-        .execute();
-      stored += inserted.length;
-    }
-    // Under the lock nothing else stores lines of this account, so every line the check called new was stored.
-    if (stored !== lines.length) throw new DomainError('RETRY', 409, 'Xung đột đồng thời, hãy thử lại');
+    const importId = await storeLines(ctx, legalEntityId, input.bankAccount, lines);
     const result = { importId, counts: preview.counts, breaks: preview.breaks };
     ctx.audit({ bankAccount: input.bankAccount, importId, filename: input.filename, from: preview.from, to: preview.to, ...preview.counts, breaks: preview.breaks.length });
     await ctx.activity(
@@ -174,6 +206,45 @@ export const bankImport = defineCommand({
     // Lines that need a look: the owners and admins are told (#671, finance.notification.dispatch).
     if (preview.counts.ambiguous > 0) await ctx.emit('finance.bank.imported', { importId, bankAccount: input.bankAccount, ambiguous: preview.counts.ambiguous });
     return result;
+  },
+});
+
+export const bankIngest = defineCommand({
+  name: 'finance.bank.ingest',
+  input: zBankFeedIngest,
+  // Records the bank's own figures and posts nothing, as an import does (R1). The feed's network call is the job's,
+  // before this runs.
+  risk: 'R1',
+  sideEffect: 'internal',
+  access: 'system',
+  handler: async (ctx, input): Promise<BankImportResult> => {
+    await bankAccount(ctx, input.bankAccount, true);
+    const legalEntityId = await resolveLegalEntity(ctx, input.legalEntityId);
+    const read = readFeedLines(input.lines);
+    if (!read.ok) throw new DomainError('BANK_FEED_INVALID', 422, 'Nguồn giao dịch ngân hàng gửi dòng không hợp lệ', { rows: read.rows });
+    await lockAccount(ctx, legalEntityId, input.bankAccount);
+    const { stored, chain } = await storedAround(ctx, legalEntityId, input.bankAccount, read.lines, read.keys);
+    const { statuses, toStore, breaks } = checkLines(read.lines, read.keys, stored, chain);
+    const importId = await storeLines(ctx, legalEntityId, input.bankAccount, toStore);
+    // A batch the account already has stores nothing; its importId then names no line, as an import of a known file.
+    // The feed's lines were checked whole above, so none is invalid.
+    const counts = { new: 0, duplicate: 0, ambiguous: 0, invalid: 0 };
+    for (const status of statuses) counts[status]++;
+    const dates = read.lines.map((l) => l.date);
+    ctx.audit({ bankAccount: input.bankAccount, importId, source: input.source, from: dates[0], to: dates.at(-1), ...counts, breaks: breaks.length });
+    // Only a pull that stored lines shows on the account's timeline (the import shows every file a person brought).
+    if (counts.new + counts.ambiguous > 0) {
+      await ctx.activity(
+        'finance.bank_account',
+        importId,
+        'bank.feed_received',
+        `Nhận giao dịch ngân hàng ${input.bankAccount} (${input.source}): ${counts.new + counts.ambiguous} dòng mới, ${counts.duplicate} dòng đã có`,
+        { legalEntityId },
+      );
+    }
+    // Lines that need a look: the owners and admins are told, as for an import (#671).
+    if (counts.ambiguous > 0) await ctx.emit('finance.bank.imported', { importId, bankAccount: input.bankAccount, ambiguous: counts.ambiguous });
+    return { importId, counts, breaks };
   },
 });
 

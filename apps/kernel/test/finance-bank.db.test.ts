@@ -2,14 +2,16 @@
 // lines of a bank account, an overlapping re-import stores only what it adds, "+X, -X, +X" on one day keeps all three,
 // lines with neither reference nor balance are flagged instead of dropped or doubled, a newest-first file is stored
 // oldest first, a mid-day overlap shows as a break in the running balance, and the account, the roles and the org
-// boundary are checked. The rules themselves are unit-tested in modules/finance/test/bank-statement.test.ts.
+// boundary are checked. A bank feed's lines (ADR-0039, #2044) go through the same path: finance.bank.ingest, a system
+// command, stores what is new, and a transaction the feed and a statement file both report is one line. The rules
+// themselves are unit-tested in modules/finance/test/bank-statement.test.ts.
 // Set CROVE_TEST_ADMIN_URL to a superuser URL; each run creates and drops its own database.
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { SignJWT } from 'jose';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { normalizeStatementAmount, type BankStatementRow } from '@crove/kernel-contract';
+import { normalizeStatementAmount, type BankFeedLine, type BankImportResult, type BankStatementRow } from '@crove/kernel-contract';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { kernelCommands, kernelQueries } from '@crove/kernel';
@@ -56,6 +58,10 @@ suite('bank statement import (#326)', () => {
   let adminUrl = '';
   let pool: pg.Pool;
   let app: ReturnType<typeof createHttpApp>;
+  // The API's runtime, and the worker's, which runs feed jobs as the system.
+  let api: Runtime;
+  let worker: Runtime;
+  const workerPools: pg.Pool[] = [];
   const owner: Account = { subject: randomUUID(), email: 'owner@bank.test', session: randomUUID(), userId: '' };
   const member: Account = { subject: randomUUID(), email: 'member@bank.test', session: randomUUID(), userId: '' };
   const viewer: Account = { subject: randomUUID(), email: 'viewer@bank.test', session: randomUUID(), userId: '' };
@@ -153,6 +159,16 @@ suite('bank statement import (#326)', () => {
       WEB_DIST: '/nonexistent',
     });
     app = createHttpApp({ config, runtime, store: new MemoryStore(), authenticate: createAuthenticator(config, db), pool, aiEnabled: false });
+    api = runtime;
+    const workerUrl = new URL(adminUrl);
+    workerUrl.username = 'crove_worker';
+    workerUrl.password = 'test-worker-pw';
+    const workerPool = createPool({ connectionString: workerUrl.toString(), max: 2 });
+    workerPools.push(workerPool);
+    worker = new Runtime(createDb(workerPool), { manifests: TEST_MANIFESTS }).register({
+      commands: [...kernelCommands, ...financeCommands],
+      queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries],
+    });
 
     for (const who of [owner, member, viewer, outsider]) {
       const me = await rpc('me/get', await tokenFor(who), undefined, null);
@@ -186,6 +202,7 @@ suite('bank statement import (#326)', () => {
 
   afterAll(async () => {
     await pool?.end();
+    for (const p of workerPools) await p.end();
     if (!ADMIN) return;
     const root = new pg.Client({ connectionString: ADMIN });
     await root.connect();
@@ -316,5 +333,87 @@ suite('bank statement import (#326)', () => {
         ),
       ),
     ).rejects.toMatchObject({ code: '23503' });
+  });
+
+  // ADR-0039, #2044: a feed's lines are stored as a statement's are.
+  const SYSTEM = { type: 'system' as const, component: 'finance.bank_feed' };
+  const feedLine = (date: string, amount: string, reference: string, balance: string | null = null, description = 'Giao dịch'): BankFeedLine => ({
+    date,
+    description,
+    amount,
+    balance,
+    reference,
+  });
+  const defaultEntity = () =>
+    admin(async (c) => (await c.query<{ id: string }>('SELECT id FROM crove_kernel.legal_entity WHERE org_id = $1 AND is_default', [orgId])).rows[0]?.id as string);
+  const ingest = async (lines: BankFeedLine[], bankAccount = '1121.VCB') =>
+    worker.execute<BankImportResult>('finance.bank.ingest', { bankAccount, legalEntityId: await defaultEntity(), source: 'sandbox', lines }, { actor: SYSTEM, orgId });
+
+  it("stores a feed's lines once, whether they come again from the feed or in a statement file", async () => {
+    const first = await ingest([
+      feedLine('2026-11-03', '-22000', 'FT9002', '977978000', 'Phí chuyển tiền'),
+      feedLine('2026-11-02', '1000000', 'FT9001', '978000000', 'Khách trả tiền'),
+    ]);
+    expect(first.counts).toEqual({ new: 2, duplicate: 0, ambiguous: 0, invalid: 0 });
+    // The next pull overlaps the first and adds one line.
+    const next = await ingest([feedLine('2026-11-03', '-22000', 'FT9002', '977978000'), feedLine('2026-11-04', '5000000', 'FT9003', '982978000')]);
+    expect(next.counts).toEqual({ new: 1, duplicate: 1, ambiguous: 0, invalid: 0 });
+    expect(next.breaks).toEqual([]);
+    // The month's statement file has the same transactions: nothing new.
+    const statement = await importFile(
+      [row('02/11/2026', '1.000.000', '', '978.000.000', 'FT9001'), row('03/11/2026', '', '22.000', '977.978.000', 'FT9002')],
+      '1121.VCB',
+    );
+    expect(statement.body?.counts).toMatchObject({ new: 0, duplicate: 2 });
+    const kept = (await stored('1121.VCB')).filter((l) => l.value_date >= '2026-11-01');
+    expect(kept.map((l) => [l.value_date, l.amount, l.dedupe_key])).toEqual([
+      ['2026-11-02', '1000000.0000', 'ref:FT9001'],
+      ['2026-11-03', '-22000.0000', 'ref:FT9002'],
+      ['2026-11-04', '5000000.0000', 'ref:FT9003'],
+    ]);
+    // The import and the pulls are audited with their source.
+    const audits = await admin(
+      async (c) =>
+        (await c.query<{ detail: { source: string; new: number } }>(`SELECT detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'finance.bank.ingest' AND outcome = 'ok' ORDER BY occurred_at`, [orgId]))
+          .rows,
+    );
+    expect(audits.map((a) => [a.detail.source, a.detail.new])).toEqual([
+      ['sandbox', 2],
+      ['sandbox', 1],
+    ]);
+  });
+
+  it('takes feed lines only with a reference, so overlapping pulls never store one twice', async () => {
+    const legalEntityId = await defaultEntity();
+    const lines = [{ date: '2026-11-10', description: 'Phí', amount: '-11000', balance: null, reference: null }];
+    await expect(worker.execute('finance.bank.ingest', { bankAccount: '1121.VCB', legalEntityId, source: 'sandbox', lines }, { actor: SYSTEM, orgId })).rejects.toBeTruthy();
+    const fee = [feedLine('2026-11-10', '-11000', 'FT9010')];
+    expect((await ingest(fee)).counts).toMatchObject({ new: 1 });
+    expect((await ingest(fee)).counts).toEqual({ new: 0, duplicate: 1, ambiguous: 0, invalid: 0 });
+  });
+
+  it('refuses a batch with an amount of zero or more than 2 decimals, or a day no statement has, storing none of it', async () => {
+    const before = (await stored('1121.VCB')).length;
+    await expect(
+      ingest([feedLine('2026-11-12', '10000', 'FT9100'), feedLine('2026-11-12', '0', 'FT9101'), feedLine('2026-11-12', '1.005', 'FT9102'), feedLine('9999-12-31', '1', 'FT9103')]),
+    ).rejects.toMatchObject({
+      code: 'BANK_FEED_INVALID',
+      status: 422,
+      details: { rows: [2, 3, 4] },
+    });
+    expect((await stored('1121.VCB')).length).toBe(before);
+  });
+
+  it('takes feed lines only from the system, and only for an active bank account of the org', async () => {
+    const lines = [feedLine('2026-11-15', '10000', 'FT9200')];
+    const legalEntityId = await defaultEntity();
+    // On the API's runtime, where an owner's context opens: the command itself refuses anyone but the system.
+    await expect(api.execute('finance.bank.ingest', { bankAccount: '1121.VCB', legalEntityId, source: 'sandbox', lines }, { actor: { type: 'user', userId: owner.userId, aal: 'aal2', sessionId: owner.session, mfaAt: null }, orgId })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Không có quyền thực hiện',
+    });
+    await expect(ingest(lines, '1121.OLD')).rejects.toMatchObject({ code: 'ACCOUNT_INACTIVE' });
+    await expect(ingest(lines, '331')).rejects.toMatchObject({ code: 'NOT_A_BANK_ACCOUNT' });
+    await expect(ingest(lines, '1121.ACB')).rejects.toMatchObject({ code: 'NOT_A_BANK_ACCOUNT' });
   });
 });
