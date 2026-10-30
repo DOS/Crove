@@ -108,4 +108,5 @@ Every container image is pinned by digest as `image:tag@sha256:<digest>`: `docke
 - **AI** calls only in `packages/agent`, through an OpenAI-compatible endpoint. AI output is tainted: deterministic checks decide, humans approve.
 - **Public repo:** no secrets, Supabase project refs, internal URLs or real customer data. gitleaks + G1 run in CI and in the pre-commit hook.
 - Code, comments and commit messages in English. No em dashes.
+- **License line:** every new source file (`.ts`, `.tsx`, `.js`, `.mjs`, `.sql` and the like) starts with `// SPDX-License-Identifier: AGPL-3.0-only` (`--` in SQL), after a shebang if any. The `Docs check` job fails a PR that adds one without it (`tools/ci/spdx-header.mjs`); third-party files keep their own license (the pg-boss migrations, the vendored pgTAP).
 - Docs-only PRs need no agent review: `pnpm docs:check` and CI (`Docs check` job) must pass.

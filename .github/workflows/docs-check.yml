@@ -38,6 +38,11 @@ jobs:
       - name: PII scan (G5)
         run: node tools/ci/pii-scan.mjs
 
+      # The license line (kernel plan §10, the `license` row; #1953): every source file this PR adds carries
+      # `SPDX-License-Identifier: AGPL-3.0-only` near its top. Files already on main are not read.
+      - name: License header (SPDX)
+        run: node tools/ci/spdx-header.mjs HEAD^1
+
       # AGENTS.md: a new migration's version is greater than every file on main. Compared against the live base
       # branch, so re-running this job after main moves catches a PR that fell behind; migration-recheck.yml does
       # that re-run after every push to main.
