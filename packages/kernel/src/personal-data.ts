@@ -25,8 +25,9 @@ const OWNERS: readonly MemberRole[] = ['owner'];
 export const PERSONAL_DATA_HANDLINGS = ['erase', 'keep_legal', 'keep_org', 'keep_record', 'hashed', 'not_personal'] as const;
 export type PersonalDataHandling = (typeof PERSONAL_DATA_HANDLINGS)[number];
 
-// What a value is, for the finder: which columns a searched email, phone or code is compared with.
-export const PERSONAL_DATA_KINDS = ['email', 'phone', 'address', 'name', 'tax_code', 'email_list', 'other'] as const;
+// What a value is, for the finder: which columns a searched email, phone or code is compared with. free_text: words
+// among which a value may be written (a note's body), matched by freeTextMatch below.
+export const PERSONAL_DATA_KINDS = ['email', 'phone', 'address', 'name', 'tax_code', 'email_list', 'free_text', 'other'] as const;
 export type PersonalDataKind = (typeof PERSONAL_DATA_KINDS)[number];
 
 // The handlings of personal data held in the org's own tables: what the finder reports and an erasure reads.
@@ -41,6 +42,9 @@ export interface PersonalDataColumn {
   // A row whose boolean column `when` is true is handled as this says instead (the org's default legal entity is the
   // business itself; the other entities are the businesses and households it keeps books for).
   override?: { when: string; handling: SearchableHandling; reason: string };
+  // Private items (ADR-0037): the finder lists a row only when it is shared ('unless_shared': its visibility is 'org'),
+  // or never ('always'); private ones are counted per author through crove_notes.private_matches instead, with no text.
+  privateRows?: 'unless_shared' | 'always';
 }
 
 // Keyed by schema.table.column.
@@ -127,28 +131,26 @@ export const PERSONAL_DATA_COLUMNS = {
     handling: 'keep_record',
     reason: 'Review feedback is an append-only record of what a client said about a post; it is removed with the org',
   },
+  // Notes and to-dos (#1678, notes step N9, ADR-0037 section 5): free text a member wrote, which may name or describe a
+  // person. A shared note is listed with its text; a private note and every to-do (always private) are counted per
+  // author, never shown. The folded search words are rebuilt from the text, so they are not searched themselves.
+  'crove_notes.note.title': { kind: 'free_text', handling: 'erase', reason: 'Free text of a note; a private note is counted per author, never shown', privateRows: 'unless_shared' },
+  'crove_notes.note.body': { kind: 'free_text', handling: 'erase', reason: 'Free text of a note; a private note is counted per author, never shown', privateRows: 'unless_shared' },
+  'crove_notes.note.tags': { kind: 'free_text', handling: 'erase', reason: 'Tags of a note; a private note is counted per author, never shown', privateRows: 'unless_shared' },
+  'crove_notes.note.search': { kind: 'other', handling: 'erase', reason: "The folded search words of a note's title, tags and body, rebuilt from them" },
+  'crove_notes.todo.title': { kind: 'free_text', handling: 'erase', reason: 'Free text of a to-do, private to its owner: counted per owner, never shown', privateRows: 'always' },
+  'crove_notes.todo.details': { kind: 'free_text', handling: 'erase', reason: 'Free text of a to-do, private to its owner: counted per owner, never shown', privateRows: 'always' },
+  'crove_notes.todo.checklist': { kind: 'free_text', handling: 'erase', reason: 'Steps of a to-do, private to its owner: counted per owner, never shown', privateRows: 'always' },
+  'crove_notes.todo.search': { kind: 'other', handling: 'erase', reason: "The folded search words of a to-do's title, details and steps, rebuilt from them" },
 } as const satisfies Record<string, PersonalDataColumn>;
 
 export type PersonalDataColumnKey = keyof typeof PERSONAL_DATA_COLUMNS;
 
 // Columns that hold personal data the finder and the erasure cannot handle yet, with the step that registers them
-// (#1874). A member's notes and to-dos (crove_notes) are free text: their title, body, tags, details, checklist and
-// folded search words, pii in the notes manifest. The finder compares whole values in email, phone and tax-code
-// columns, and its erasure sets a column to null, which a note's or a to-do's title (NOT NULL) refuses. Matching
-// inside free text, counting a member's private items without their text, and deleting them without showing them is
-// notes step N9 (#1678, ADR-0037 section 5), which moves these entries into PERSONAL_DATA_COLUMNS. Until then a former
-// member's private items are purged 30 days after their removal (#1722), and the org purge deletes every note (#1024).
-// apps/kernel/test/personal-data.test.ts asks every pii column of crove_notes to be in one list or the other.
-export const PERSONAL_DATA_PENDING = {
-  'crove_notes.note.title': 'notes step N9 (#1678)',
-  'crove_notes.note.body': 'notes step N9 (#1678)',
-  'crove_notes.note.tags': 'notes step N9 (#1678)',
-  'crove_notes.note.search': 'notes step N9 (#1678)',
-  'crove_notes.todo.title': 'notes step N9 (#1678)',
-  'crove_notes.todo.details': 'notes step N9 (#1678)',
-  'crove_notes.todo.checklist': 'notes step N9 (#1678)',
-  'crove_notes.todo.search': 'notes step N9 (#1678)',
-} as const satisfies Record<string, string>;
+// (#1874). Empty since notes step N9 registered the notes' text (#1678); a column a module classifies as pii before the
+// finder can reach it waits here. apps/kernel/test/personal-data.test.ts asks every pii column of crove_notes to be in
+// one list or the other.
+export const PERSONAL_DATA_PENDING: Readonly<Record<string, string>> = {};
 
 // The column names the invariant test treats as personal data. A column of crove_kernel, crove_finance, crove_social,
 // crove_crm or crove_notes whose name matches must be in PERSONAL_DATA_COLUMNS. Control-plane tables (the user's own
@@ -164,7 +166,7 @@ export const PERSONAL_DATA_SCHEMAS = ['crove_kernel', 'crove_finance', 'crove_so
 // PERSONAL_DATA_ROW_LIMIT rows; `truncated` says when one had more.
 export const PERSONAL_DATA_ROW_LIMIT = 200;
 
-type Probe = { kind: 'email'; email: string } | { kind: 'digits'; digits: string };
+export type Probe = { kind: 'email'; email: string } | { kind: 'digits'; digits: string };
 
 export function personalDataProbe(value: string): Probe | null {
   const trimmed = value.trim();
@@ -178,8 +180,24 @@ export function personalDataProbe(value: string): Probe | null {
   return null;
 }
 
+// Free text (#1678, shared with #1948): whether a text column mentions the probe's email address or digits among other
+// words, and the text with every mention replaced by a mark. Both go through crove_kernel.text_mentions and
+// text_redact (20261106200000), which hold the one pattern: a whole address, not part of a longer one; digits with the
+// spaces, dots, brackets or dashes people write between them, and a phone with or without +84. A column of another
+// type is read as text (an array or jsonb as its text form, where an address or a number reads as itself).
+export function freeTextMatch(probe: Probe, column: RawBuilder<unknown>): RawBuilder<boolean> {
+  return sql<boolean>`crove_kernel.text_mentions(${column}::text, ${probe.kind}, ${probeValue(probe)})`;
+}
+
+export function freeTextRedact(probe: Probe, column: RawBuilder<unknown>, mark: string): RawBuilder<string> {
+  return sql<string>`crove_kernel.text_redact(${column}::text, ${probe.kind}, ${probeValue(probe)}, ${mark})`;
+}
+
+const probeValue = (probe: Probe): string => (probe.kind === 'email' ? probe.email : probe.digits);
+
 // The columns a probe is compared with, and how. Phone numbers match with or without Vietnam's +84.
 function columnMatch(kind: PersonalDataKind, probe: Probe, column: RawBuilder<unknown>): RawBuilder<boolean> | null {
+  if (kind === 'free_text') return freeTextMatch(probe, column);
   if (probe.kind === 'email') {
     if (kind === 'email') return sql<boolean>`pg_catalog.lower(${column}) = ${probe.email}`;
     if (kind === 'email_list') return sql<boolean>`EXISTS (SELECT 1 FROM pg_catalog.unnest(${column}) AS r(v) WHERE pg_catalog.lower(r.v) = ${probe.email})`;
@@ -208,19 +226,24 @@ function requireProbe(value: string): Probe {
   return probe;
 }
 
-// Every row of the org that holds the value, column by column (the finder's answer).
+// Every row of the org that holds the value, column by column (the finder's answer), and per author how many of their
+// private notes and to-dos mention it (ADR-0037: counted, never shown, whoever runs the finder).
 async function findPersonalData(trx: QueryContext['trx'], orgId: string, probe: Probe): Promise<PersonalDataResult> {
   const matches: PersonalDataResult['matches'] = [];
   let truncated = false;
   for (const [key, entry] of Object.entries(PERSONAL_DATA_COLUMNS) as Array<[string, PersonalDataColumn]>) {
     if (!searchable(entry.handling)) continue;
+    if (entry.privateRows === 'always') continue;
     const [schema, table, column] = key.split('.') as [string, string, string];
     const match = columnMatch(entry.kind, probe, sql.ref(`t.${column}`));
     if (!match) continue;
+    // Row security already hides other members' private notes; the finder's own private ones are counted below too,
+    // not listed, so every author's are reported alike.
+    const shared = entry.privateRows === 'unless_shared' ? sql`AND t.visibility = 'org'` : sql``;
     const { rows } = await sql<{ row: Record<string, unknown> }>`
       SELECT pg_catalog.to_jsonb(t) - 'search' AS row
         FROM ${sql.table(`${schema}.${table}`)} AS t
-       WHERE t.org_id = ${orgId}::uuid AND ${match}
+       WHERE t.org_id = ${orgId}::uuid AND ${match} ${shared}
        LIMIT ${PERSONAL_DATA_ROW_LIMIT + 1}`.execute(trx);
     if (rows.length > PERSONAL_DATA_ROW_LIMIT) truncated = true;
     for (const { row } of rows.slice(0, PERSONAL_DATA_ROW_LIMIT)) {
@@ -229,7 +252,14 @@ async function findPersonalData(trx: QueryContext['trx'], orgId: string, probe: 
       matches.push({ column: key, handling, reason, rowId: typeof row.id === 'string' ? row.id : null, row });
     }
   }
-  return { kind: probe.kind === 'email' ? 'email' : 'digits', matches, truncated };
+  const { rows: privateItems } = await sql<{ author_user_id: string; notes: string; todos: string }>`
+    SELECT author_user_id, notes, todos FROM crove_notes.private_matches(${probe.kind}, ${probeValue(probe)})`.execute(trx);
+  return {
+    kind: probe.kind === 'email' ? 'email' : 'digits',
+    matches,
+    privateItems: privateItems.map((p) => ({ authorUserId: p.author_user_id, notes: Number(p.notes), todos: Number(p.todos) })),
+    truncated,
+  };
 }
 
 export const personalDataFind = defineQuery({

@@ -77,7 +77,7 @@ const KERNEL_MODULE_REFERENCES: Record<string, { modules: readonly string[]; why
   },
   'packages/kernel/src/personal-data.ts': {
     modules: ['crm', 'finance', 'notes', 'social'],
-    why: "the personal-data registry, find and erase: an erasure reaches data an earlier install of the module left, whatever is installed now; notes' text columns wait there for notes step N9 (#1874)",
+    why: 'the personal-data registry, find and erase: an erasure reaches data an earlier install of the module left, whatever is installed now; private notes and to-dos are counted through crove_notes.private_matches (#1678)',
   },
   'apps/kernel/src/bio-page.ts': { modules: ['social'], why: 'public bio page routes, registered only when social is installed (http.ts)' },
   'apps/kernel/src/booking-feed.ts': { modules: ['crm'], why: 'the booking calendar feed, served only when crm is installed (http.ts)' },

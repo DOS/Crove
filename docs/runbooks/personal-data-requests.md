@@ -13,6 +13,7 @@ How an owner of an org answers a person who asks to see or to erase the data the
 1. Open **Cài đặt > Dữ liệu cá nhân** (owners and admins).
 2. Search each value the person gave: their email address, their phone number (any spelling, with or without +84), and their tax code or national ID. Each search lists every row of the org that holds the value, where it is stored, and what an erasure would do with it.
 3. **Tải JSON** downloads the rows found. Send the file to the person through a channel that only they can open. It holds their data and nobody else's, but check it before sending.
+4. **Notes and to-dos** (#1678): the search also looks inside their text, for the whole address or the digits however they are spaced. A shared note that holds the value is listed with its text. Members' private notes and to-dos are only counted, per author ("2 ghi chú riêng của 1 thành viên"), never shown, not even your own: only their author reads them. Ask those members to look at them; the person's request may cover them.
 
 The search covers the columns listed in `packages/kernel/src/personal-data.ts`. An invariant test keeps that list complete for columns whose name looks like personal data (emails, phones, addresses, tax codes, names of people, recipients). See section 5 for what it does not search.
 
@@ -51,7 +52,7 @@ A correction is an ordinary edit: change the party on its page (Nhà cung cấp 
 
 Answer these by hand, or tell the person they are kept, until a later issue covers them:
 
-- **Free text:** activity lines, task comments, journal descriptions, voucher reasons, Social posts and comments. Search them in the app, and edit what can be edited.
+- **Free text:** activity lines, task comments, journal descriptions, voucher reasons, Social posts and comments (#1948). Search them in the app, and edit what can be edited. Notes and to-dos are found (section 2, step 4), but the erasure does not change them yet (#1678): ask the author of a shared note to edit it (owners and admins can only archive or delete it), and the authors of private items to edit or delete them.
 - **Stored files:** invoice PDFs and XML, uploaded images, and the extraction results read from them. They are accounting documents and are kept with the books; the original file of a posted invoice is held in the bucket for the legal period (`docs/runbooks/evidence-holds.md`), and the erasure result counts the ones that name the person's party.
 - **Backups and archives:** the 7-day point-in-time recovery, the WORM archive of the books (`docs/runbooks/worm-archive.md`) and offboarding exports. A restore brings erased data back, so after one, run the erasures recorded in the audit log again. Crypto-shredding of immutable stores (ADR-0017) is planned.
 - **The person's own Ludy account:** if they are a user of Ludy, their sign-in account lives with the identity provider (DOS ID or Supabase Auth), not in the org. They delete it there.

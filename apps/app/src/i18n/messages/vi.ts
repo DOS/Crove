@@ -2098,6 +2098,13 @@ export const vi = {
     erasedRow: '{column}: {rows, plural, other {# dòng}}',
     kept: 'Được giữ lại',
     keptRow: '{column}: {rows, plural, other {# dòng}}. {reason}',
+    privateNotes: '{count, plural, other {# ghi chú riêng}}',
+    privateTodos: '{count, plural, other {# việc riêng}}',
+    and: 'và',
+    privateSummary: '{items} của {authors, plural, other {# thành viên}} có giá trị này',
+    privateAuthor: '{name}: {items}',
+    privateHint: 'Ghi chú riêng và việc riêng chỉ tác giả xem được, nên ở đây chỉ hiện số lượng, không hiện nội dung.',
+    formerMember: 'Thành viên cũ',
   },
   audit: {
     title: 'Nhật ký hoạt động',

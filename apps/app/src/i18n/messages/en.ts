@@ -2102,6 +2102,13 @@ export const en = {
     erasedRow: '{column}: {rows, plural, one {# row} other {# rows}}',
     kept: 'Kept',
     keptRow: '{column}: {rows, plural, one {# row} other {# rows}}. {reason}',
+    privateNotes: '{count, plural, one {# private note} other {# private notes}}',
+    privateTodos: '{count, plural, one {# private to-do} other {# private to-dos}}',
+    and: 'and',
+    privateSummary: '{items} of {authors, plural, one {# member} other {# members}} hold this value',
+    privateAuthor: '{name}: {items}',
+    privateHint: 'Only their author can read private notes and to-dos, so only the counts show here, never the text.',
+    formerMember: 'Former member',
   },
   audit: {
     title: 'Activity log',
