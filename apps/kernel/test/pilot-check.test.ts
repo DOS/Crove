@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { vaultKeyId } from '@crove/kernel-runtime';
-import { KNOWN_DEFAULTS, PILOT_EXIT, REQUIRED_SECRETS, checkEnv, parsePilotArgs, probeDeployment, runPilotCheck, type CheckResult, type Env, type Fetch } from '../src/pilot-check.ts';
+import { KNOWN_DEFAULTS, PILOT_EXIT, REQUIRED_SECRETS, checkEnv, parsePilotArgs, probeBuildChecks, probeDeployment, runPilotCheck, type CheckResult, type Env, type Fetch } from '../src/pilot-check.ts';
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 
@@ -409,5 +409,62 @@ describe('pilot-check command', () => {
     expect(lines.join('\n')).toMatch(/^FAIL +Sign-up limited/m);
     expect(lines.join('\n')).toContain('NOT READY: 1 check(s) failed');
     expect(await runPilotCheck(['--bogus'], READY, fakeFetch({}), print)).toBe(PILOT_EXIT.error);
+  });
+});
+
+// #1995: the RLS matrix item reads the CI of the build the deployment runs, from GitHub, instead of asking the person.
+describe('pilot-check CI of the deployed build (#1995)', () => {
+  const SHA = 'a'.repeat(40);
+  const VERSION = 'https://crove.example.com/version';
+  const CHECKS = `https://api.github.com/repos/DOS/Ludy/commits/${SHA}/check-runs?per_page=100`;
+  const run = (name: string, conclusion: string | null = 'success', status = 'completed') => ({ name, status, conclusion });
+  const green = [run('Lint, typecheck, test'), run('Database tests (shard 1 of 2)'), run('Database tests (shard 2 of 2)'), run('Database tests (heavy files)'), run('Secret scan')];
+  const routes = (checkRuns: unknown[], build: unknown = SHA) => ({ [VERSION]: json({ build, migrationsMissing: [] }), [CHECKS]: json({ total_count: checkRuns.length, check_runs: checkRuns }) });
+
+  it('passes when the gate and every database-test check finished green on that commit', async () => {
+    expect(await probeBuildChecks('https://crove.example.com', {}, fakeFetch(routes(green)))).toEqual({
+      item: 'RLS matrix',
+      status: 'pass',
+      message: `CI passed on the deployed build DOS/Ludy@${SHA.slice(0, 12)}: Database tests (heavy files), Database tests (shard 1 of 2), Database tests (shard 2 of 2), Lint, typecheck, test`,
+    });
+  });
+
+  it('fails naming the checks that did not pass', async () => {
+    const red = [...green.slice(0, 1), run('Database tests (shard 1 of 2)', 'failure'), ...green.slice(2)];
+    const result = await probeBuildChecks('https://crove.example.com', {}, fakeFetch(routes(red)));
+    expect(result.status).toBe('fail');
+    expect(result.message).toContain('Database tests (shard 1 of 2) (failure)');
+  });
+
+  it('leaves it to the person when it cannot tell', async () => {
+    const status = async (r: Record<string, Route>, env: Env = {}) => (await probeBuildChecks('https://crove.example.com', env, fakeFetch(r))).status;
+    // Still running, never run, no commit as the build, GitHub refusing, nothing answering.
+    expect(await status(routes([...green.slice(1), run('Lint, typecheck, test', null, 'in_progress')]))).toBe('manual');
+    expect(await status(routes([run('Secret scan')]))).toBe('manual');
+    expect(await status(routes(green, 'dev'))).toBe('manual');
+    expect(await status({ [VERSION]: json({ build: SHA }), [CHECKS]: json({ message: 'Not Found' }, 404) })).toBe('manual');
+    expect(await status({})).toBe('manual');
+    // A source repository that is not owner/name is the operator's mistake.
+    expect(await status(routes(green), { CROVE_SOURCE_REPO: 'not a repo' })).toBe('fail');
+  });
+
+  it('asks the fork CROVE_SOURCE_REPO names, with GITHUB_TOKEN when it is set', async () => {
+    const seen: Array<{ url: string; auth: string | null }> = [];
+    const fork = `https://api.github.com/repos/acme/ludy/commits/${SHA}/check-runs?per_page=100`;
+    const fetchFn: Fetch = async (input, init) => {
+      seen.push({ url: input, auth: new Headers(init?.headers).get('authorization') });
+      return input === VERSION ? Response.json({ build: SHA }) : Response.json({ check_runs: green });
+    };
+    expect((await probeBuildChecks('https://crove.example.com', { CROVE_SOURCE_REPO: 'acme/ludy', GITHUB_TOKEN: 'ghp_test' }, fetchFn)).status).toBe('pass');
+    expect(seen.at(-1)).toEqual({ url: fork, auth: 'Bearer ghp_test' });
+  });
+
+  it('replaces the manual RLS matrix line of the run with --url', async () => {
+    const lines: string[] = [];
+    const print = (line: string) => lines.push(line);
+    expect(await runPilotCheck(['--url', 'https://crove.example.com'], READY, fakeFetch({ ...healthy, ...routes(green) }), print)).toBe(PILOT_EXIT.ok);
+    const out = lines.join('\n');
+    expect(out).toMatch(/^PASS +RLS matrix +CI passed on the deployed build/m);
+    expect(out).not.toMatch(/^MANUAL +RLS matrix/m);
   });
 });
