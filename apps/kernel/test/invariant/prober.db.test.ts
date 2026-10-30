@@ -139,10 +139,10 @@ suite('prober privileges', () => {
       expect(answer.rows).toHaveLength(1);
     }
     // #1998: crove_kernel.extraction_health(integer), the counts of failed document readings in a window (counts only,
-    // no tenant data), for crove_prober alone and a pinned definer, once it exists. This copy accepts it absent, so the
-    // migration that adds it can land while this suite runs from base; that PR then requires it.
+    // no tenant data), for crove_prober alone and a pinned definer.
     const extraction = await admin.query<{ oid: number | null }>(`SELECT to_regprocedure('crove_kernel.extraction_health(integer)')::oid AS oid`);
     const extractionOid = extraction.rows[0]?.oid ?? null;
+    expect(extractionOid).not.toBeNull();
     if (extractionOid !== null) {
       const runners = await admin.query<{ role: string }>(`SELECT r AS role FROM unnest($1::text[]) r WHERE has_function_privilege(r, $2::oid, 'EXECUTE') ORDER BY 1`, [
         roles,

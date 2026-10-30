@@ -30,6 +30,8 @@ const healthy: HealthSnapshot = {
   notify_queue_usage: 0,
   archive_verify_age_seconds: null,
   archive_lag_seconds: null,
+  extraction_service_failures: 0,
+  extraction_document_failures: 0,
 };
 const workerDown = { ...healthy, worker_heartbeat_age_seconds: 900 };
 

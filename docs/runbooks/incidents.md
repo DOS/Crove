@@ -25,7 +25,7 @@ The queries in this runbook only read. The one write is the dead-letter retry in
 | Line on the page | Prober checks | Section |
 |---|---|---|
 | Cơ sở dữ liệu (database) | `probe` | 1, and [backup-and-restore.md](backup-and-restore.md) when the data is gone |
-| Xử lý chứng từ tải lên (uploaded documents) | `heartbeat`, `job_age`, `dead_letters`, `jobs_schema` | 1, 3 |
+| Xử lý chứng từ tải lên (uploaded documents) | `heartbeat`, `job_age`, `dead_letters`, `jobs_schema`, `extraction` | 1, 3, 6 |
 | Nhận hóa đơn qua email (invoices by email) | `inbound`, `heartbeat` | 2, 1 |
 | Cập nhật trực tiếp trên màn hình (live updates) | `outbox`, `notify_queue` | 2 |
 | Đăng nhập (signing in) | `auth` | 4 |
@@ -220,7 +220,7 @@ Do it right after the key was revoked at the provider; until then a revoked key 
 
 **Symptom.** PDFs and photos are no longer read: after a few minutes the file shows "Không đọc được chứng từ sau nhiều lần thử; hãy kiểm tra cấu hình AI hoặc gửi tệp XML". E-invoice XML files keep working: they need no AI.
 
-**Alert.** None from the prober: the extraction job records the failure on the file and completes, so it is not a dead letter. The AI provider may email the account holder when credits run out.
+**Alert.** The prober counts the readings whose every attempt failed (the AI provider refused or did not answer, or the parser sandbox was down) and pages when more than `PROBER_MAX_EXTRACTION_FAILURES` (default 2) happen within `PROBER_EXTRACTION_WINDOW_SECONDS` (default 3600 s): `[Crove] ALERT ... 3 document reading(s) failed every attempt in the last 3600 s ...`, then `RESOLVED` once the failures in the window drop back to the limit (#1998). `RESOLVED` therefore means the old failures aged out of the window, not that the provider is back: with no uploads since, check the provider before closing the incident. With few uploads (no more than the limit in a window) an outage never pages: the uploaders are told on each failed file. A document that cannot be read (not an invoice, a scanned PDF, an unsupported format, AI switched off) or that the AI refuses itself (a request it rejects, such as an image over its size limit, or an answer that never fits the invoice) never pages: its uploader is told. The AI provider may also email the account holder when credits run out.
 
 **Checks.**
 

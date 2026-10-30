@@ -9,7 +9,7 @@ import { DEFAULT_BRAND_NAME } from './config.ts';
 
 // What the page shows, and the prober checks (prober.ts) behind each. A check not listed shows on no line.
 export const STATUS_COMPONENTS = [
-  { id: 'documents', label: 'Xử lý chứng từ tải lên', checks: ['heartbeat', 'job_age', 'dead_letters', 'jobs_schema'] },
+  { id: 'documents', label: 'Xử lý chứng từ tải lên', checks: ['heartbeat', 'job_age', 'dead_letters', 'jobs_schema', 'extraction'] },
   { id: 'email', label: 'Nhận hóa đơn qua email', checks: ['inbound', 'heartbeat'] },
   { id: 'updates', label: 'Cập nhật trực tiếp trên màn hình', checks: ['outbox', 'notify_queue'] },
   // Supabase Auth's health check (#1994): unknown unless the probe asked Auth (authChecked).

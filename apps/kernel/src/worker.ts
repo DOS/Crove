@@ -7,7 +7,7 @@ import type { Database, Db } from '@crove/db';
 import { vietnamToday } from '@crove/kernel-contract';
 import { DomainError, inboundKey, type AgentProgram, type BlobStore, type CredentialBroker, type Runtime } from '@crove/kernel-runtime';
 import { KERNEL_NOTIFYING_EVENTS, PROPOSAL_NUDGE_SWEEP_MS, runAgentWake, sweepProposalNudges, type UsageLimits } from '@crove/kernel';
-import type { InvoiceReader } from '@crove/agent';
+import { aiDocumentFailure, type InvoiceReader } from '@crove/agent';
 import type { Publisher, Refresher } from '@crove/channel';
 import { postMessage, type WebhookTarget } from './alert.ts';
 import { REFRESH_SWEEP_MS, refreshChannels } from './channel-refresh.ts';
@@ -491,7 +491,15 @@ export async function runSignOut(revoker: SessionRevoker | null | undefined, tar
 // what the attempt learned about the file (undefined when its lookup failed too). A file whose lookup keeps failing is
 // recorded as a document; should the file turn out to be a ZIP (#432), that refusal (ARCHIVE_NOT_READ) records the
 // failed opening of an archive instead.
-export async function recordLastAttemptFailure(runtime: Runtime, orgId: string, fileId: string, version: number | undefined, archive: ArchiveSource | null | undefined): Promise<void> {
+export async function recordLastAttemptFailure(
+  runtime: Runtime,
+  orgId: string,
+  fileId: string,
+  version: number | undefined,
+  archive: ArchiveSource | null | undefined,
+  // The last attempt's error: whether the document or the reading service failed (#1998).
+  error?: unknown,
+): Promise<void> {
   const known = archive === undefined ? await archiveSource(runtime, orgId, fileId).catch(() => undefined) : archive;
   const failArchive = () => recordArchiveFailure(runtime, orgId, fileId, 'Không mở được tệp ZIP sau nhiều lần thử; hãy tải lại tệp');
   if (known) {
@@ -499,7 +507,16 @@ export async function recordLastAttemptFailure(runtime: Runtime, orgId: string, 
     return;
   }
   try {
-    await recordExtractionFailure(runtime, orgId, fileId, 'Không đọc được chứng từ sau nhiều lần thử; hãy kiểm tra cấu hình AI hoặc gửi tệp XML', version);
+    // Every attempt threw. The AI refusing this document itself (a request it rejects, an answer that never fits the
+    // schema) is the document's failure; anything else is the reading service's, which the prober counts (#1998).
+    await recordExtractionFailure(
+      runtime,
+      orgId,
+      fileId,
+      'Không đọc được chứng từ sau nhiều lần thử; hãy kiểm tra cấu hình AI hoặc gửi tệp XML',
+      version,
+      aiDocumentFailure(error) ? 'document' : 'service',
+    );
   } catch (error) {
     if (known === undefined && error instanceof DomainError && error.code === 'ARCHIVE_NOT_READ') {
       await failArchive();
@@ -572,7 +589,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       console.error(`[extract] file ${fileId}${version ? ` version ${version}` : ''} attempt ${job.retryCount + 1}`, error);
       if (job.retryCount < EXTRACT_RETRY_LIMIT) throw error;
       // The last attempt records a failed run either way, so the file never stays "being read".
-      await recordLastAttemptFailure(deps.runtime, orgId, fileId, version, archive);
+      await recordLastAttemptFailure(deps.runtime, orgId, fileId, version, archive, error);
     }
   });
 
