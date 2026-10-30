@@ -24,8 +24,6 @@ export const KEPT: Readonly<Record<string, string>> = {
   'crove_kernel.number_allocation': 'gapless voucher numbering (#1401), append-only, kept with the ledger',
   'crove_kernel.number_void': 'gapless voucher numbering (#1401), append-only, kept with the ledger',
   'crove_kernel.number_series_policy': 'gapless voucher numbering (#1401), kept with the ledger',
-  'crove_kernel.task_comment': 'append-only; stays with the rows it references (#1032)',
-  'crove_social.post_approval': 'append-only; stays with the variants and posts it pins (#1032)',
   'crove_finance.journal_entry': 'ledger (Accounting Law 88/2015, Art. 41)',
   'crove_finance.journal_line': 'ledger (Accounting Law 88/2015, Art. 41)',
   'crove_finance.purchase_document': 'ledger (Accounting Law 88/2015, Art. 41)',
