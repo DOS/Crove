@@ -1,6 +1,6 @@
 # 0017. Personal data in rows that cannot change: crypto-shredding with a per-subject key
 
-- Status: Proposed (2026-10-30), for the coordinator's review before the build ([#1949](https://github.com/DOS/Ludy/issues/1949))
+- Status: Accepted (coordinator, 2026-10-30); Q1 to Q3 open (section 9). Build: [#1949](https://github.com/DOS/Ludy/issues/1949)
 - Date: 2026-10-30
 - Deciders: coordinator (design); owner (JOY) for the open questions in section 9
 - Scope: the crypto-shredding part of ADR-0017. The plan lists ADR-0017 as "Data classification, PII, crypto-shredding, deletion map, PDPL" (plan §16). The data classes are plan §5.2 (#1599), the deletion map is plan §7.9, and the personal-data registry, finder and erase are #923 (`packages/kernel/src/personal-data.ts`, [personal-data-requests.md](../runbooks/personal-data-requests.md)). This file records the decision for the values those cannot reach.
@@ -66,7 +66,7 @@ Applied to group B:
 | Values | Remedy | Subject |
 |---|---|---|
 | `outbox_event.payload` of `kernel.agent.proposal_requested` | **Keep it out.** The event carries the proposal id only, like every other event. The outbox archive keeps payloads as plain JSON for 400 days under Object Lock, so nothing personal may enter a payload. A test asks every emitted payload to hold ids and codes only. | none |
-| `review_feedback.reviewer_name`, `.body` | **Encrypt.** | `review_link:<id>`: the client who answered one review link. The link names no person, so this subject is erased from the post's review panel by an owner or admin. The panel then shows "Đã xóa theo yêu cầu" in their place. |
+| `review_feedback.reviewer_name`, `.body` | **Encrypt**, but not in this build: Social is paused (decision D5), so nothing in `modules/social` is sealed now. [#1959](https://github.com/DOS/Ludy/issues/1959) (Social milestone, P3) does it when Social reopens. | `review_link:<id>`: the client who answered one review link. The link names no person, so this subject is erased from the post's review panel by an owner or admin. The panel then shows "Đã xóa theo yêu cầu" in their place. |
 | Free-text reasons in `audit_event.detail` that are not about the books (the operator's note on a member's status, `kernel.user.status_note`, and the like) | **Keep it out** where the reason is not needed to prove the act. A status note keeps a code in the audit fact; its text goes to a mutable row. Otherwise **encrypt** under the member's subject. | `member:<user_id>` |
 | `task_comment.body`, `post_approval.comment` and `.snapshot` | **Not decided here**: open question Q1 (section 9). | (`member:<user_id>` if Q1 says yes) |
 | Proposals and extractions that never reached the books | **Not decided here**: open question Q2. | (`contact:<hash>` of the party's email, phone or tax code if Q2 says yes) |
@@ -80,7 +80,7 @@ A subject is one person, as the org knows them. Its row in `crove_kernel.subject
 | Column | Holds |
 |---|---|
 | `org_id`, `id` | The tenant key, `PRIMARY KEY (org_id, id)`, RLS through `apply_tenant_rls` |
-| `ref` | How the erase finds the subject, unique per org. One of: `contact:<hmac>`, the keyed hash of a normalized email or digits (the same normalization as the finder's probe, keyed like `crove_kernel.mail_address_hash`, whose key no login role reads; never the value); `member:<user_id>`; `review_link:<link_id>` |
+| `ref` | How the erase finds the subject, unique per org. One of: `contact:<hmac>`, the keyed hash of a normalized email or digits (the same normalization as the finder's probe, keyed like `crove_kernel.mail_address_hash`, whose key no login role reads; never the value); `member:<user_id>`; `review_link:<link_id>` (reserved for #1959) |
 | `key_id`, `wrapped_key` | The subject's data key, wrapped (section 3) |
 | `created_at` | |
 
@@ -105,7 +105,7 @@ A subject is one person, as the org knows them. Its row in `crove_kernel.subject
 ### 4. Who decrypts, and for what
 
 - **Only query handlers** that already show the value to a member open it, for the same members as today:
-  - the post's review panel for those who read the post;
+  - the post's review panel for those who read the post (once #1959 seals review feedback);
   - the audit log for owners and admins;
   - the data request JSON of #923 for owners and admins.
 
@@ -152,24 +152,25 @@ From now on only. Nothing already written is rewritten by this decision. What st
 - **A point-in-time restore brings deleted keys back**, and with them the values. The runbook already asks to run again the erasures recorded since the restore point.
 - **The audit rows of those erasures roll back too**, so the erase also writes its refs to the archive store as `shred/v1/<org>/<id>.json`. Those refs are keyed hashes and ids, never a value. They are written once under the archive's Object Lock.
 - **After a restore**, `kernel-shred-replay` deletes every key whose ref the store lists. It runs on demand from the restore runbook, and at worker start when `ARCHIVE_STORE` is set.
+- **The replay is idempotent and deletes only listed keys.** A ref is listed only by an erasure that ran, so a stale or partial archive can leave a key that should be gone, but never deletes a live key that had no erasure. A key already gone is a no-op. The build tests both: a replay over a store that lists other subjects leaves every live key, and a second replay changes nothing.
 
 ### 9. Open questions (not decided here)
 
 - **Q1. Members' own free text.**
   - Are task comments and post approval comments a member's personal data, to be erased on their request after they leave, or the org's work record?
-  - Who decides: the lawyer (#62), through the owner.
+  - Who decides: the lawyer (#62), through the owner. Issue: (to be linked by the coordinator).
   - Until then they stay as they are and the erase result lists them as kept.
 - **Q2. Proposals and extractions that never reached the books.**
   - These are rejected, expired or failed proposals, frozen by their guards and kept until the org purge.
   - Should a retention purge delete them after a period? Or should their party values be sealed under the party's `contact:` subject from now on? Sealing reaches into the approval path, which reads the payload to execute it.
-  - Who decides: the owner, on the coordinator's recommendation. The recommendation is a retention purge.
+  - Who decides: the owner, on the coordinator's recommendation. The recommendation is a retention purge. Issue: (to be linked by the coordinator).
 - **Q3. Legacy activity summaries.**
   - May a forward migration replace the summaries written before #1826 and #1839 with neutral text?
-  - It rewrites existing rows, so it needs the owner's approval.
+  - It rewrites existing rows, so it needs the owner's approval. Issue: (to be linked by the coordinator).
 
 ## Consequences
 
-- **What an erasure reaches.** The erase of #923 deletes the person's `contact:` subject keys besides clearing mutable rows. A review link's reviewer can be erased from the post's review panel. The result lists what was shredded, what was cleared, and what stays and why.
+- **What an erasure reaches.** The erase of #923 deletes the person's `contact:` subject keys besides clearing mutable rows. Once #1959 lands, a review link's reviewer can be erased from the post's review panel. The result lists what was shredded, what was cleared, and what stays and why.
 - **New invariant tests** (the build, `apps/kernel/test/invariant/`):
   - no login role reads or writes `subject_key`, and only the definers above reach it, each only for the context's org;
   - after an erasure, no row of a sealed column opens for the erased subject, and no plaintext of the sealed value is left in any column of the database (a canary value, searched in every text and jsonb column);
@@ -192,7 +193,9 @@ From now on only. Nothing already written is rewritten by this decision. What st
 2. Values:
    - the outbox draft out of `kernel.agent.proposal_requested`;
    - the status note's text out of the audit facts;
-   - review feedback sealed, with its erase on the review panel.
+   - not review feedback: Social is paused (D5), so its sealing is [#1959](https://github.com/DOS/Ludy/issues/1959).
 3. The #923 erase deletes `contact:` and `member:` subject keys, and its result names what was shredded.
 4. Tests: the invariant and unit tests above; the WORM verifier over sealed and shredded rows.
 5. Q1 to Q3 follow when they are answered, each as its own issue.
+
+With review feedback moved to #1959, this build seals no product column: step 2 keeps values out instead. The mechanism ships tested through a test-only command whose audit fact is sealed (the tests' own manifests, never registered in a deployment). Its first product use is #1959, or an answer to Q1 or Q2.
