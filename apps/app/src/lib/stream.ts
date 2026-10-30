@@ -36,8 +36,9 @@ export function hintMatches(hint: StreamHint, query: Query): boolean {
       return path === 'inbox.list' || path === 'files.recent' || path === 'files.batch' || (path === 'inbox.get' && inputId(query) === id);
     case 'file':
     case 'extraction':
-      // extraction carries the id of the file whose reading changed.
-      return path === 'files.recent' || path === 'inbox.list' || (path === 'inbox.get' && detail(query)?.file?.id === id);
+      // extraction carries the id of the file whose reading changed. files.batch: a re-read of a file the intake list
+      // watches (#2032).
+      return path === 'files.recent' || path === 'files.batch' || path === 'inbox.list' || (path === 'inbox.get' && detail(query)?.file?.id === id);
     case 'journal_entry': {
       // The ledger reports (#321) read every posted entry, so any new one changes them. A voucher (#327) is posted, and
       // shown as reversed, with an entry.

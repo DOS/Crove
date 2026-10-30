@@ -39,4 +39,14 @@ describe('status chips', () => {
     expect(fileChipVariant('duplicate', 'pending')).toBe(FILE_STATE_VARIANT.duplicate);
     expect(fileProposal('failed', 'rejected')).toBeNull();
   });
+
+  it('shows a voided posting as voided, in the error chip, never as posted (#2032)', () => {
+    expect(fileProposal('proposed', 'executed', true)).toBe('voided');
+    expect(fileChipVariant('proposed', 'executed', true)).toBe('destructive');
+    expect(fileChipVariant('proposed', 'executed', true)).not.toBe(fileChipVariant('proposed', 'executed'));
+    // Only a posting is voided: the flag says nothing about a proposal that was not posted.
+    expect(fileProposal('proposed', 'pending', true)).toBe('pending');
+    expect(vi.inbox.fileStatus.voided).toMatch(/\S/);
+    expect(en.inbox.fileStatus.voided).toMatch(/\S/);
+  });
 });

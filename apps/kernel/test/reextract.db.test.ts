@@ -173,6 +173,47 @@ suite('re-extraction on PostgreSQL (issue #40)', () => {
     expect(await recent(fileId)).toMatchObject({ status: 'proposed', version: 2, proposalId, proposalStatus: 'pending', canReextract: true });
   });
 
+  it('shows a re-read that failed after a rejection as failed, with its re-read, not as the old rejection (#2032)', async () => {
+    const fileId = await upload();
+    reads.push(invoice('7004', 'Bản đọc bị từ chối'));
+    const { proposalId } = await extractAndPropose({ runtime: workerRuntime, store, extractor: ai, extract }, orgA, fileId);
+    await runtime.execute('kernel.proposal.reject', { id: proposalId }, { actor: asUser(owner), orgId: orgA });
+    expect(await recent(fileId)).toMatchObject({ status: 'proposed', version: 1, proposalId, proposalStatus: 'rejected', voided: false });
+
+    const { version } = await runtime.execute<{ version: number }>('kernel.file.reextract', { fileId }, { actor: asUser(owner), orgId: orgA });
+    reads.push(null);
+    await extractAndPropose({ runtime: workerRuntime, store, extractor: ai, extract }, orgA, fileId, version);
+    expect(await recent(fileId)).toMatchObject({ status: 'failed', version: 2, proposalId, proposalStatus: 'rejected', canReextract: true });
+    // Drop the re-read's queued event, so the worker test below does not read it from the shared fake AI.
+    const closer = new pg.Client({ connectionString: adminUrl });
+    await closer.connect();
+    try {
+      await closer.query(`DELETE FROM crove_kernel.outbox_pending WHERE org_id = $1`, [orgA]);
+    } finally {
+      await closer.end();
+    }
+  });
+
+  it('keeps the rejection when the failed re-read came before it (#2032)', async () => {
+    const fileId = await upload();
+    reads.push(invoice('7005', 'Bản đọc đầu'));
+    const { proposalId } = await extractAndPropose({ runtime: workerRuntime, store, extractor: ai, extract }, orgA, fileId);
+    const { version } = await runtime.execute<{ version: number }>('kernel.file.reextract', { fileId }, { actor: asUser(owner), orgId: orgA });
+    reads.push(null);
+    await extractAndPropose({ runtime: workerRuntime, store, extractor: ai, extract }, orgA, fileId, version);
+    // The proposal still stands while it waits: the failed re-read does not hide it.
+    expect(await recent(fileId)).toMatchObject({ status: 'proposed', version: 2, proposalId, proposalStatus: 'pending' });
+    await runtime.execute('kernel.proposal.reject', { id: proposalId }, { actor: asUser(owner), orgId: orgA });
+    expect(await recent(fileId)).toMatchObject({ status: 'proposed', version: 2, proposalId, proposalStatus: 'rejected' });
+    const closer = new pg.Client({ connectionString: adminUrl });
+    await closer.connect();
+    try {
+      await closer.query(`DELETE FROM crove_kernel.outbox_pending WHERE org_id = $1`, [orgA]);
+    } finally {
+      await closer.end();
+    }
+  });
+
   it('shows a lost re-read of a file without a proposal as failed, with a message', async () => {
     const fileId = await upload();
     reads.push(null);

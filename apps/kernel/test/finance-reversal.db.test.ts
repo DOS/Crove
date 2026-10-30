@@ -237,6 +237,9 @@ suite('journal reversal through the API, and voided purchase documents (#165)', 
       runtime.execute('kernel.file.reextract', { fileId }, { actor: asUser(owner.userId), orgId: org.orgId, idempotencyKey: randomUUID() }),
     ).rejects.toMatchObject({ code: 'PROPOSAL_DECIDED' });
     expect((await rpc('inbox/get', await tokenFor(owner), { id: firstProposal })).body).toMatchObject({ voided: false, canReextract: false });
+    // Posted and standing: the file says posted, not voided (#2032).
+    const posted = (await rpc('files/recent', await tokenFor(owner), undefined)).body as Array<{ id: string; proposalStatus: string | null; voided: boolean }>;
+    expect(posted.find((f) => f.id === fileId)).toMatchObject({ proposalStatus: 'executed', voided: false });
   });
 
   // #878: the exports a document went out in, for its history; the entry is dated 15 September 2026.
@@ -389,8 +392,8 @@ suite('journal reversal through the API, and voided purchase documents (#165)', 
   it('records the same invoice again from its file after the void, with the corrected accounts', async () => {
     expect((await rpc('inbox/get', await tokenFor(owner), { id: firstProposal })).body).toMatchObject({ voided: true, canReextract: true });
     const files = await rpc('files/recent', await tokenFor(owner), undefined);
-    // The file's proposal was posted (#2009): the Inbox shows the file as posted, not as waiting.
-    expect((files.body as any[]).find((f) => f.id === fileId)).toMatchObject({ proposalStatus: 'executed', canReextract: true });
+    // The file's posting was voided (#2009, #2032): the Inbox shows the file as voided, neither posted nor waiting.
+    expect((files.body as any[]).find((f) => f.id === fileId)).toMatchObject({ proposalStatus: 'executed', voided: true, canReextract: true });
 
     const { version } = await runtime.execute<{ version: number }>(
       'kernel.file.reextract',
