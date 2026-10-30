@@ -257,6 +257,7 @@ describe('archive verifier across batch versions (#1624, #1623)', () => {
   const early: Record<string, Rows> = {
     archive_allocation_hashes: [['number:o:1', 'a'.repeat(64)]],
     archive_series_hashes: [['number_series:o:1', 'b'.repeat(64)]],
+    archive_revision_hashes: [['revision:journal:o:1', 'd'.repeat(64)]],
   };
   const rowsOf = ({ fn, from }: Range): Rows => (from === EPOCH ? (early[fn] ?? []) : []);
 
@@ -271,6 +272,7 @@ describe('archive verifier across batch versions (#1624, #1623)', () => {
       const ranges: Array<[number, string, string | undefined]> = [
         [4, 'archive_allocation_hashes', spec.allocationsFrom],
         [5, 'archive_series_hashes', spec.seriesFrom],
+        [6, 'archive_revision_hashes', spec.revisionsFrom],
       ];
       const rows = ranges
         .filter(([version]) => spec.version >= version)
@@ -295,7 +297,7 @@ describe('archive verifier across batch versions (#1624, #1623)', () => {
 
   // Verifies the batches as stored objects (a batch may lack a field), every one recorded in the database; `misfits` are
   // the series archive_series_misfits() names, and the rows in `changed` hash differently now than when written.
-  async function verify(batches: Array<Omit<ArchiveBatch, 'allocationsFrom' | 'seriesFrom'> & Partial<ArchiveBatch>>, misfits: string[] = [], changed: string[] = []) {
+  async function verify(batches: Array<Omit<ArchiveBatch, 'allocationsFrom' | 'seriesFrom' | 'revisionsFrom'> & Partial<ArchiveBatch>>, misfits: string[] = [], changed: string[] = []) {
     const objects = new Map(batches.map((b) => [archiveKey(b.seq), new TextEncoder().encode(JSON.stringify(b))]));
     const store: ArchiveStore = {
       put: async () => {},
@@ -378,6 +380,44 @@ describe('archive verifier across batch versions (#1624, #1623)', () => {
       { version: 5, ...later(3), allocationsFrom: at(2), seriesFrom: at(1) },
     ]);
     expect((await verify(shifted)).result.problems).toEqual([{ code: 'series_gap', seq: 3 }]);
+  });
+
+  it('verifies version 6 batches after version 5 ones, the first taking the source revisions from the epoch (#1337)', async () => {
+    const batches = chain([
+      v3,
+      { version: 5, ...later(2), allocationsFrom: EPOCH, seriesFrom: EPOCH },
+      { version: 6, ...later(3), allocationsFrom: at(2), seriesFrom: at(2), revisionsFrom: EPOCH },
+      { version: 6, ...later(4), allocationsFrom: at(3), seriesFrom: at(3), revisionsFrom: at(3) },
+    ]);
+    const { result, ranges } = await verify(batches);
+    expect(result).toMatchObject({ ok: true, batches: 4, problems: [] });
+    // An entry made before the switch is anchored once, by the first version 6 batch.
+    expect(batches.map((b) => b.rows.map(([ref]) => ref))).toEqual([[], ['number:o:1', 'number_series:o:1'], ['revision:journal:o:1'], []]);
+    expect(ranges.filter((r) => r.fn === 'archive_revision_hashes').map((r) => r.from)).toEqual([EPOCH, at(3)]);
+    // A changed revision or payload hash fails the batch that anchored it.
+    expect((await verify(batches, [], ['revision:journal:o:1'])).result.problems).toEqual([{ code: 'row_changed', seq: 3, ref: 'revision:journal:o:1' }]);
+  });
+
+  it('reports a version 6 batch without revisionsFrom as unreadable, and revisions_gap when the revisions do not start where they must', async () => {
+    const [head, v6] = chain([v3, { version: 6, ...later(2), allocationsFrom: EPOCH, seriesFrom: EPOCH, revisionsFrom: EPOCH }]) as [ArchiveBatch, ArchiveBatch];
+    const { revisionsFrom: _revisions, ...noRevisions } = v6;
+    expect((await verify([head, noRevisions])).result.problems).toEqual([{ code: 'object_unreadable', seq: 2 }]);
+
+    const skipped = chain([v3, { version: 6, ...later(2), allocationsFrom: EPOCH, seriesFrom: EPOCH, revisionsFrom: at(1) }]);
+    expect((await verify(skipped)).result.problems).toEqual([{ code: 'revisions_gap', seq: 2 }]);
+    const shifted = chain([
+      v3,
+      { version: 6, ...later(2), allocationsFrom: EPOCH, seriesFrom: EPOCH, revisionsFrom: EPOCH },
+      { version: 6, ...later(3), allocationsFrom: at(2), seriesFrom: at(2), revisionsFrom: at(1) },
+    ]);
+    expect((await verify(shifted)).result.problems).toEqual([{ code: 'revisions_gap', seq: 3 }]);
+    // A version 5 batch after a version 6 one leaves revisions unanchored.
+    const regressed = chain([
+      v3,
+      { version: 6, ...later(2), allocationsFrom: EPOCH, seriesFrom: EPOCH, revisionsFrom: EPOCH },
+      { version: 5, ...later(3), allocationsFrom: at(2), seriesFrom: at(2) },
+    ]);
+    expect((await verify(regressed)).result.problems).toEqual([{ code: 'version_regressed', seq: 3 }]);
   });
 
   it('reports a version 4 batch after a version 5 one as a regression', async () => {
