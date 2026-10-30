@@ -1,7 +1,7 @@
 // What an outbox event may carry (#1949): ids and codes only. ctx.emit refuses anything else, so every emitting test
 // in the repository checks its events; this file pins the rule itself.
 import { describe, expect, it } from 'vitest';
-import { eventPayloadProblem } from '../src/event-payload.ts';
+import { eventCode, eventPayloadProblem, normalizeEventPayload } from '../src/event-payload.ts';
 
 describe('eventPayloadProblem', () => {
   it('lets ids, codes, numbers, booleans and nulls through, nested', () => {
@@ -47,6 +47,23 @@ describe('eventPayloadProblem', () => {
       [{ n: Number.NaN }, 'payload.n: not a finite number'],
     ];
     for (const [payload, problem] of cases) expect(eventPayloadProblem(payload), JSON.stringify(payload)).toBe(problem);
+  });
+
+  it('reduces a code a provider gave to a code, under the code keys only', () => {
+    expect(normalizeEventPayload({ code: 'refresh refused (invalid_grant)', reason: '(oops) x', error: 'Lỗi', nested: { errorCode: 'a b' }, title: 'a b' })).toEqual({
+      code: 'refresh_refused_invalid_grant_',
+      reason: 'oops_x',
+      error: 'L_i',
+      nested: { errorCode: 'a_b' },
+      title: 'a b',
+    });
+    expect(eventCode('(((')).toBe('other');
+    expect(eventPayloadProblem(normalizeEventPayload({ code: 'Rate limit hit, retry later' }))).toBeNull();
+  });
+
+  it('lets an exempt value through only for its event type', () => {
+    expect(eventPayloadProblem({ subject: 'auth0|abc' }, 'kernel.session.revoked')).toBeNull();
+    expect(eventPayloadProblem({ subject: 'auth0|abc' }, 'kernel.member.removed')).toBe('payload.subject: a string that is neither an id nor a code');
   });
 
   it('refuses a payload nested too deep', () => {

@@ -170,9 +170,7 @@ export const channelMarkExpired = defineCommand({
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', input.connectionId)
       .execute();
-    // The event carries the reason as a code (#1949): a provider's own words stay in the row's status_reason.
-    const reason = input.reason.replace(/[^A-Za-z0-9_.:-]+/g, '_').replace(/\d{9,}/g, 'n').slice(0, 60);
-    await ctx.emit('kernel.channel.expired', { connection_id: input.connectionId, provider: row.provider, reason });
+    await ctx.emit('kernel.channel.expired', { connection_id: input.connectionId, provider: row.provider, reason: input.reason });
     return { connectionId: input.connectionId, status: 'expired' as const };
   },
 });

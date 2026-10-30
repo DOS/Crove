@@ -1687,6 +1687,8 @@ async function emittedBy(
   command: string,
   target: { type: string; id: string },
   detail: Record<string, unknown>,
+  // The audit row must hold no `draft` (#1949): a request of the old shape binds only to a propose made before the switch.
+  withoutDraft = false,
 ): Promise<boolean> {
   if (!event.commandId) return false;
   // The audit row and the event come from one transaction, so they carry the same now(): the time index finds it.
@@ -1699,6 +1701,7 @@ async function emittedBy(
         AND a.target_type = ${target.type} AND a.target_id = ${target.id}::uuid
         AND a.detail ->> 'task' = ${event.data.taskId}
         AND a.detail @> ${JSON.stringify(detail)}::jsonb
+        AND (NOT ${withoutDraft} OR NOT a.detail ? 'draft')
     ) AS bound`.execute(trx);
   return rows[0]?.bound === true;
 }
@@ -1741,11 +1744,27 @@ export const createAgentProposal = defineCommand({
     const { agentId, runId, taskId, preparer } = event.data;
     const command = 'draft' in event.data ? event.data.draft.command : event.data.command;
     const draftId = 'draftId' in event.data ? event.data.draftId : null;
-    const bound = await emittedBy(ctx.trx, ctx.orgId, event, 'kernel.task.propose', { type: 'kernel.task', id: taskId }, {
-      preparer,
-      proposal_command: command,
-      ...(draftId ? { draft: draftId } : {}),
-    });
+    const bound = await emittedBy(
+      ctx.trx,
+      ctx.orgId,
+      event,
+      'kernel.task.propose',
+      { type: 'kernel.task', id: taskId },
+      { preparer, proposal_command: command, ...(draftId ? { draft: draftId } : {}) },
+      draftId === null,
+    );
+    // Takes this request's draft off its task (#1949): no draft stays on a task once its request is answered, whatever
+    // the answer. Only a bound request's, and only while the task holds that draft.
+    const dropDraft = async () => {
+      if (!bound || !draftId) return;
+      await ctx.trx
+        .updateTable('crove_kernel.task')
+        .set({ pending_draft: null })
+        .where('org_id', '=', ctx.orgId)
+        .where('id', '=', taskId)
+        .where(sql<boolean>`pending_draft ->> 'id' = ${draftId}`)
+        .execute();
+    };
     const { rows } = bound
       ? await sql<{ run_tainted: boolean; run_status: string; task_tainted: boolean; agent_name: string; stopped: boolean; le_scope: string[] }>`
           SELECT r.tainted AS run_tainted, r.status AS run_status, t.tainted AS task_tainted, a.display_name AS agent_name, p.le_scope,
@@ -1761,12 +1780,12 @@ export const createAgentProposal = defineCommand({
       : { rows: [] };
     const facts = rows[0];
     if (!facts) {
+      await dropDraft();
       ctx.audit({ event: event.id, created: false, reason: 'chain_mismatch' });
       return { proposalId: null, reason: 'chain_mismatch' as const };
     }
-    // The draft the request names, taken off its task whatever comes next (#1949): no draft stays on a task once its
-    // request is answered. Gone or replaced by a later request on the task, it asks for nothing.
-    // A request already answered with a proposal is a duplicate, though its draft has left the task.
+    // The draft the request names, taken off its task here (#1949). Gone or replaced by a later request on the task, it
+    // asks for nothing. A request already answered with a proposal is a duplicate, though its draft has left the task.
     const existing = await ctx.trx.selectFrom('crove_kernel.proposal').select('id').where('org_id', '=', ctx.orgId).where('request_event_id', '=', event.id).executeTakeFirst();
     if (existing) return { proposalId: null, reason: 'duplicate' as const };
     let draft: z.infer<typeof zPrepared>;
@@ -1781,11 +1800,12 @@ export const createAgentProposal = defineCommand({
         .forUpdate()
         .executeTakeFirst();
       const pending = zPendingDraft.safeParse(row?.pending_draft);
-      if (!pending.success || pending.data.id !== draftId || pending.data.command !== command) {
+      const entity = 'legalEntityId' in event.data ? event.data.legalEntityId : undefined;
+      if (!pending.success || pending.data.id !== draftId || pending.data.command !== command || pending.data.legalEntityId !== entity) {
         ctx.audit({ event: event.id, created: false, reason: 'draft_replaced' });
         return { proposalId: null, reason: 'draft_replaced' as const };
       }
-      await ctx.trx.updateTable('crove_kernel.task').set({ pending_draft: null }).where('org_id', '=', ctx.orgId).where('id', '=', taskId).execute();
+      await dropDraft();
       const { command: pendingCommand, payload, legalEntityId } = pending.data;
       draft = { command: pendingCommand, payload, ...(legalEntityId ? { legalEntityId } : {}) };
     }
