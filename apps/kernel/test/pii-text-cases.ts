@@ -43,6 +43,15 @@ export const PII_TEXT_CASES: readonly PiiTextCase[] = [
   { name: 'not inside a longer number in groups', text: 'CCCD 001 091 777 665', value: '091777665', redacted: 'CCCD 001 091 777 665' },
   { name: 'a national ID is not a phone', text: 'Mã 8401091777665', value: '001091777665', redacted: 'Mã 8401091777665' },
   { name: 'a short value is not a phone', text: 'Mã 0123456', value: '84123456', redacted: 'Mã 0123456' },
+  // A bank account written in groups is not a phone inside it: one space between groups keeps it one number (#1678
+  // review), so the erasure never cuts a fragment out of it.
+  { name: 'not the start of a longer number in groups', text: 'STK 0912 3456 78 90', value: '0912345678', redacted: 'STK 0912 3456 78 90' },
+  { name: 'a 10-digit code from 84 is not a phone', text: 'MST 0401234567 và 8401234567', value: '8401234567', redacted: `MST 0401234567 và ${R}` },
+  // No-break spaces, as a pasted number often carries them.
+  { name: 'a phone with no-break spaces', text: 'Gọi 0912 345 678 nhé', value: '0912345678', redacted: `Gọi ${R} nhé` },
+  // Every regex character in an address is taken literally, and a letter outside ASCII as itself.
+  { name: 'regex characters in an address', text: 'Gửi a(b)[c]{1}|d^e$f*g?h\\i@x.com.', value: 'a(b)[c]{1}|d^e$f*g?h\\i@x.com', redacted: `Gửi ${R}.` },
+  { name: 'an address outside ASCII', text: 'Gửi đặng@x.vn hôm nay', value: 'đặng@x.vn', redacted: `Gửi ${R} hôm nay` },
   // But a list still finds each number.
   { name: 'a numbered list', text: '1. 0912 345 678', value: '0912345678', redacted: `1. ${R}` },
   { name: 'one number a line', text: '0912345678\n0987654321', value: '0912345678', redacted: `${R}\n0987654321` },

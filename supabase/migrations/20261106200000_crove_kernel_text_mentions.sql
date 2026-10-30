@@ -24,7 +24,13 @@ SET LOCAL lock_timeout = '2s';
 CREATE OR REPLACE FUNCTION crove_kernel.text_mention_pattern(p_kind text, p_value text)
 RETURNS text LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
-  v_sep constant text := '[[:space:].()-]{0,3}';
+  -- The spaces people put between digits, named one by one rather than as [[:space:]], whose reach depends on the
+  -- database's locale: space, tab, line breaks, and the no-break spaces a pasted number often carries (U+00A0,
+  -- U+2007, U+202F) and U+FEFF.
+  v_space constant text := ' ' || pg_catalog.chr(9) || pg_catalog.chr(10) || pg_catalog.chr(13) || pg_catalog.chr(160) || pg_catalog.chr(8199) || pg_catalog.chr(8239) || pg_catalog.chr(65279);
+  -- The same on one line: what may part two digits of one number at a number's edge (a line break parts two numbers).
+  v_inline constant text := ' ' || pg_catalog.chr(160) || pg_catalog.chr(8199) || pg_catalog.chr(8239) || pg_catalog.chr(65279);
+  v_sep constant text := '[' || v_space || '.()-]{0,3}';
   v_local text;
   v_intl text;
 BEGIN
@@ -32,10 +38,11 @@ BEGIN
     IF p_value IS NULL OR p_value !~ '^[^[:space:]@]+@[^[:space:]@]+$' OR p_value <> pg_catalog.lower(p_value) OR pg_catalog.length(p_value) > 320 THEN
       RAISE EXCEPTION 'TEXT_MENTION_VALUE' USING ERRCODE = '22023';
     END IF;
-    -- Every character but a letter, a digit and @ escaped: a backslash before one of them is always that character.
     -- Nothing an address's local part may hold just before it (RFC 5322 atext and the dot), so brien@x.com is not found
-    -- in o'brien@x.com or tag#brien@x.com.
-    RETURN '(?<![a-z0-9!#$%&''*+/=?^_`{|}~.-])' || pg_catalog.regexp_replace(p_value, '([^a-z0-9@])', '\\\1', 'g') || '(?![a-z0-9_-])(?!\.[a-z0-9])';
+    -- in o'brien@x.com or tag#brien@x.com. In the value only ASCII punctuation is escaped, each with a backslash, which
+    -- makes it literal; a letter outside ASCII is never a regex character and stays as it is (a backslash before a
+    -- letter would be an escape). A letter outside ASCII matches across case as the database's locale folds it.
+    RETURN '(?<![a-z0-9!#$%&''*+/=?^_`{|}~.-])' || pg_catalog.regexp_replace(p_value, '([!-/:-?[-`{-~])', '\\\1', 'g') || '(?![a-z0-9_-])(?!\.[a-z0-9])';
   ELSIF p_kind = 'digits' THEN
     IF p_value IS NULL OR p_value !~ '^[0-9]{8,15}$' THEN
       RAISE EXCEPTION 'TEXT_MENTION_VALUE' USING ERRCODE = '22023';
@@ -49,8 +56,8 @@ BEGIN
     -- No digit just before or after, nor one a single space, dot or dash away, so the value is not found inside a
     -- longer number written in groups (001 091 777 665); a line break or two separators part two numbers, so a list
     -- ("1. 0912 345 678", one number a line) still finds each.
-    RETURN '(?<![0-9][ .-]?)(?:\(?' || pg_catalog.array_to_string(pg_catalog.regexp_split_to_array(v_local, ''), v_sep)
-      || '|\+?' || pg_catalog.array_to_string(pg_catalog.regexp_split_to_array(v_intl, ''), v_sep) || ')(?![ .-]?[0-9])';
+    RETURN '(?<![0-9][' || v_inline || '.-]?)(?:\(?' || pg_catalog.array_to_string(pg_catalog.regexp_split_to_array(v_local, ''), v_sep)
+      || '|\+?' || pg_catalog.array_to_string(pg_catalog.regexp_split_to_array(v_intl, ''), v_sep) || ')(?![' || v_inline || '.-]?[0-9])';
   END IF;
   RAISE EXCEPTION 'TEXT_MENTION_KIND' USING ERRCODE = '22023';
 END $$;
