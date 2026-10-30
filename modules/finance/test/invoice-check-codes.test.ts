@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { INVOICE_CHECK_CODES, zCheck } from '@crove/kernel-contract';
-import { checkInvoice, enterpriseCheckDigit, SIGNATURE_REASONS, type InvoiceCheck, type ParsedInvoice } from '@crove/l10n-vn';
+import { checkInvoice, classificationCheck, enterpriseCheckDigit, SIGNATURE_REASONS, type InvoiceCheck, type ParsedInvoice } from '@crove/l10n-vn';
 import { relatedCheck } from '../src/extract.ts';
 import { enteredRateCheck } from '../src/record.ts';
 
@@ -82,6 +82,8 @@ describe('invoice check codes', () => {
     related('adjustment', null),
     // And the reviser this one, for a rate the accountant entered (#918).
     enteredRateCheck('USD', '25450'),
+    // And the account check (#2091): lines no rule matched, and every line with its account.
+    ...[[{ lineNo: 1, debitAccount: '000' }], [{ lineNo: 1, debitAccount: '6422' }]].map((lines) => classificationCheck(lines)!),
   ];
 
   it('gives every check a listed code named after its id, and fits the stored check schema', () => {

@@ -1,6 +1,6 @@
 // Bulk approval batches and review shortcuts (issue #315).
 import { describe, expect, it } from 'vitest';
-import { BULK_LIMIT, bulkSelectable, canApproveProposals, chunks, nextAfterDecision, nextPendingId, planBatches, previousPendingId, proposalName, reviewShortcut, sendBatches, checksByConcern, showMatched, steppedIndex, type BulkBatch } from '../src/lib/review.ts';
+import { BULK_LIMIT, bulkSelectable, canApproveProposals, chunks, countUnclassified, hasUnclassifiedLines, nextAfterDecision, nextPendingId, planBatches, previousPendingId, proposalName, reviewShortcut, sendBatches, checksByConcern, showMatched, steppedIndex, type BulkBatch } from '../src/lib/review.ts';
 
 const REVERSAL = 'finance.reversal';
 
@@ -31,6 +31,13 @@ describe('bulk approval', () => {
     expect(bulkSelectable({ ...row, kind: REVERSAL }, REVERSAL)).toBe(false);
     // A pending cash or bank voucher (#327) has no checks and no duplicate, and goes in a bulk approval too.
     expect(bulkSelectable({ ...row, kind: 'finance.cash_voucher' }, REVERSAL)).toBe(true);
+  });
+
+  // #2091: a line no rule matched has no account to approve, so its proposal is reviewed on its own page.
+  it('does not select a proposal with an unclassified line for bulk approval', () => {
+    const row = { status: 'pending', failedChecks: 0, kind: 'finance.purchase', duplicateOf: null };
+    expect(bulkSelectable({ ...row, unclassifiedLines: 0 }, REVERSAL)).toBe(true);
+    expect(bulkSelectable({ ...row, unclassifiedLines: 1 }, REVERSAL)).toBe(false);
   });
 
   it('offers bulk approval to owners and admins only', () => {
@@ -192,5 +199,17 @@ describe('check order (#1409)', () => {
       { id: 'e', status: 'warn' },
     ];
     expect(checksByConcern(checks).map((c) => c.id)).toEqual(['c', 'b', 'e', 'a', 'd']);
+  });
+});
+
+describe('the "Chưa phân loại" filter (#2091)', () => {
+  const items = [{ id: 'a', unclassifiedLines: 2 }, { id: 'b', unclassifiedLines: 0 }, { id: 'c' }, { id: 'd', unclassifiedLines: 1 }];
+
+  it('keeps exactly the proposals with at least one unclassified line, and counts them', () => {
+    expect(items.filter(hasUnclassifiedLines).map((i) => i.id)).toEqual(['a', 'd']);
+    expect(countUnclassified(items)).toBe(2);
+    expect(countUnclassified([])).toBe(0);
+    // A list row from a server that does not send the count yet counts as none.
+    expect(hasUnclassifiedLines({})).toBe(false);
   });
 });

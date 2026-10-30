@@ -10,6 +10,7 @@ import {
   zLocalDate,
   zMoney,
   zProposalStatus,
+  UNCLASSIFIED_ACCOUNT_CODE,
   zPurchaseProposal,
   zSignatureStatus,
   zVoucherCode,
@@ -108,6 +109,12 @@ function countChecks(payload: PurchaseProposal | null, status: 'fail' | 'warn'):
   return payload?.checks.filter((c) => c.status === status).length ?? 0;
 }
 
+// The lines of an invoice proposal still waiting for an account because no rule matched them (#2091): marked by the
+// suggestion, or carrying the placeholder account.
+function countUnclassified(payload: PurchaseProposal | null): number {
+  return payload?.lines.filter((l) => l.accountRule?.source === 'unclassified' || l.debitAccount === UNCLASSIFIED_ACCOUNT_CODE).length ?? 0;
+}
+
 // Payloads are parsed by the proposal's kind: a purchase read from a file, or a reversal a user asked for (#138).
 const PURCHASE_KIND = 'finance.purchase';
 const REVERSAL_KIND = 'finance.journal_reversal';
@@ -197,6 +204,7 @@ function toInboxItem(row: {
     issueDate: payload?.invoice.issueDate ?? voucher?.date ?? null,
     failedChecks: countChecks(payload, 'fail'),
     warnChecks: countChecks(payload, 'warn'),
+    unclassifiedLines: countUnclassified(payload),
     // As the approval decides: an invoice read from XML whose signature is not verified is unverified (#674).
     signatureStatus: payload
       ? payload.extractionMethod === 'einvoice_xml' && payload.signature?.status !== 'verified'
@@ -251,6 +259,8 @@ export const inboxList = defineQuery({
         sql<string | null>`(SELECT a.display_name FROM crove_kernel.agent a WHERE a.org_id = crove_kernel.proposal.org_id AND a.id = crove_kernel.proposal.requested_by_agent)`.as('agent_name'),
         countChecksSql('fail').as('failed_checks'),
         countChecksSql('warn').as('warn_checks'),
+        // The lines of an invoice proposal no rule matched (#2091), counted as countUnclassified counts them.
+        sql<string>`(SELECT count(*) FROM jsonb_array_elements(CASE WHEN kind = ${PURCHASE_KIND} AND jsonb_typeof(payload -> 'lines') = 'array' THEN payload -> 'lines' ELSE '[]'::jsonb END) l WHERE l #>> '{accountRule,source}' = 'unclassified' OR l ->> 'debitAccount' = ${UNCLASSIFIED_ACCOUNT_CODE})`.as('unclassified_lines'),
         // As the approval decides (kernel.proposal.approve): an invoice read from XML whose signature is not verified is
         // unverified, one read before #674 (no verification stored) included.
         sql<string | null>`left(CASE WHEN payload ->> 'extractionMethod' = 'einvoice_xml' AND coalesce(payload #>> '{signature,status}', '') <> 'verified' THEN 'unverified' ELSE payload #>> '{signature,status}' END, 20)`.as('signature_status'),
@@ -282,6 +292,7 @@ export const inboxList = defineQuery({
       issueDate: row.issue_date && zLocalDate.safeParse(row.issue_date).success ? row.issue_date : null,
       failedChecks: Number(row.failed_checks),
       warnChecks: Number(row.warn_checks),
+      unclassifiedLines: Number(row.unclassified_lines),
       signatureStatus: row.kind === PURCHASE_KIND ? signatureStatusOf(row.signature_status) : null,
       duplicateOf: row.duplicate_of,
       createdAt: row.created_at.toISOString(),

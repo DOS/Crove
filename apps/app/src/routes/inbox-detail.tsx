@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { BLOCKING_CHECK_IDS, vietnamToday, type CashVoucherProposal, type JournalVoucherProposal } from '@crove/kernel-contract';
+import { BLOCKING_CHECK_IDS, UNCLASSIFIED_ACCOUNT_CODE, vietnamToday, type CashVoucherProposal, type JournalVoucherProposal } from '@crove/kernel-contract';
 import { Link, useNavigate, useParams } from '@tanstack/react-router';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useLocale, useTranslations } from 'use-intl';
@@ -391,6 +391,9 @@ function InboxDetail({ slug, id, split }: { slug: string; id: string; split: boo
     () => (payload?.lines ?? []).map((l) => ({ ...l, debitAccount: lineAccounts[l.lineNo] ?? l.debitAccount })),
     [payload, lineAccounts],
   );
+  // The lines no rule matched, still without an account (#2091): they carry the placeholder until a reviewer picks one,
+  // and the kernel refuses to record them.
+  const unclassified = lines.filter((l) => l.debitAccount === UNCLASSIFIED_ACCOUNT_CODE).length;
   // A sale (issue #313): the org issued the invoice, the buyer is the customer, and the lines go to revenue.
   const sale = payload?.direction === 'sale';
   // The legal entity whose books the invoice goes to (#1542): the proposal's own, which an edit never changes (#1764).
@@ -497,7 +500,7 @@ function InboxDetail({ slug, id, split }: { slug: string; id: string; split: boo
     pending &&
     item.canApprove &&
     !busy &&
-    (plain ? true : !dirty && !!payload && !blocked && (failed === 0 || acceptFailed) && (!unverified || acceptUnverified) && latePostingValid);
+    (plain ? true : !dirty && !!payload && !blocked && unclassified === 0 && (failed === 0 || acceptFailed) && (!unverified || acceptUnverified) && latePostingValid);
   const submitApproval = () => {
     if (!item) return;
     if (plain) {
@@ -827,6 +830,11 @@ function InboxDetail({ slug, id, split }: { slug: string; id: string; split: boo
       )}
       {/* A phone has no keyboard for them (#1409). */}
       {wide && pending && (item.canApprove || item.canEdit || item.canReject) && <p className="mb-4 text-xs text-subtle-foreground">{t('shortcuts')}</p>}
+      {pending && !plain && unclassified > 0 && (
+        <p className="mb-4 text-sm text-warning" data-testid="unclassified-notice">
+          {t('unclassifiedNotice', { count: unclassified })}
+        </p>
+      )}
       {pending && dirty && (
         <p className="mb-4 text-sm text-muted-foreground">{t('dirty')}</p>
       )}
@@ -1035,8 +1043,12 @@ function InboxDetail({ slug, id, split }: { slug: string; id: string; split: boo
                         {l.description}
                         {/* What chose the account (#1399): a learned rule, the vendor's default, the built-in keywords or a user. */}
                         <p className="text-xs text-subtle-foreground">
-                          {l.accountRule && <Badge variant="secondary" className="mr-1.5">{t(`accountRuleSource.${l.accountRule.source}`)}</Badge>}
-                          {l.accountRule?.source === 'user' ? null : l.reason}
+                          {l.accountRule && (
+                            <Badge variant={l.debitAccount === UNCLASSIFIED_ACCOUNT_CODE ? 'warning' : 'secondary'} className="mr-1.5">
+                              {t(`accountRuleSource.${l.debitAccount === UNCLASSIFIED_ACCOUNT_CODE ? 'unclassified' : l.accountRule.source === 'unclassified' ? 'user' : l.accountRule.source}`)}
+                            </Badge>
+                          )}
+                          {l.accountRule?.source === 'user' || l.accountRule?.source === 'unclassified' ? null : l.reason}
                         </p>
                       </td>
                       <td className="py-2 pr-2 text-right text-foreground tabular-nums">{money(l.amount)}</td>
@@ -1046,11 +1058,17 @@ function InboxDetail({ slug, id, split }: { slug: string; id: string; split: boo
                           disabled={!item.canEdit || busy}
                           aria-label={sale ? t('revenueAccountFor', { line: String(l.lineNo) }) : t('debitAccountFor', { line: String(l.lineNo) })}
                           className="w-48"
-                          value={l.debitAccount}
+                          value={l.debitAccount === UNCLASSIFIED_ACCOUNT_CODE ? '' : l.debitAccount}
                           onChange={(e) => setLineAccounts((prev) => ({ ...prev, [l.lineNo]: e.target.value }))}
                         >
+                          {/* No account is preselected for a line no rule matched (#2091): the reviewer must choose one. */}
+                          {l.debitAccount === UNCLASSIFIED_ACCOUNT_CODE && (
+                            <NativeSelectOption value="" disabled>
+                              {t('pickAccount')}
+                            </NativeSelectOption>
+                          )}
                           {/* Accounts in use that fit the direction (#430), plus the line's own even if it was deactivated since (#319). */}
-                          {pickableAccounts(accounts.data ?? [], l.debitAccount, sale ? 'sale' : 'purchase').map((a) => (
+                          {pickableAccounts(accounts.data ?? [], l.debitAccount === UNCLASSIFIED_ACCOUNT_CODE ? null : l.debitAccount, sale ? 'sale' : 'purchase').map((a) => (
                             <NativeSelectOption key={a.code} value={a.code}>
                               {accountLabel(a)}
                             </NativeSelectOption>
@@ -1082,7 +1100,8 @@ function InboxDetail({ slug, id, split }: { slug: string; id: string; split: boo
                   {journal.map((j) => (
                     <tr key={`${j.accountCode}-${j.debit}-${j.credit}`}>
                       <td className="py-2 text-foreground">
-                        <span className="font-mono">{j.accountCode}</span> <span className="text-subtle-foreground">{accountName(j.accountCode)}</span>
+                        <span className="font-mono">{j.accountCode}</span>{' '}
+                        <span className="text-subtle-foreground">{j.accountCode === UNCLASSIFIED_ACCOUNT_CODE ? t('unclassifiedAccount') : accountName(j.accountCode)}</span>
                       </td>
                       <td className="py-2 text-right text-foreground tabular-nums">{isZeroAmount(j.debit) ? '' : money(j.debit)}</td>
                       <td className="py-2 text-right text-foreground tabular-nums">{isZeroAmount(j.credit) ? '' : money(j.credit)}</td>

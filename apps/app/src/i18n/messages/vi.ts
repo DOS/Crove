@@ -1898,10 +1898,19 @@ export const vi = {
     voucherKind: 'Chứng từ thu chi',
     journalVoucherKind: 'Phiếu kế toán',
     saleKind: 'Bán ra',
+    // Dòng hóa đơn không khớp quy tắc nào (#2091): nhãn trên dòng đề xuất và bộ lọc phía trên danh sách.
+    unclassifiedBadge: '{count, plural, other {# dòng chưa phân loại}}',
+    filter: {
+      label: 'Lọc các đề xuất',
+      all: 'Tất cả ({count, number})',
+      unclassified: 'Chưa phân loại ({count, number})',
+      unclassifiedHint: 'Các đề xuất có dòng không khớp quy tắc tài khoản nào; mở đề xuất và chọn tài khoản cho từng dòng đó.',
+      unclassifiedEmpty: 'Không có đề xuất nào còn dòng chưa phân loại',
+    },
     bulk: {
       selectAll: 'Chọn tất cả mục duyệt chung được ({count, number})',
       select: 'Chọn {name}',
-      notSelectable: 'Mục này cần duyệt riêng: có kiểm tra lỗi, có thể trùng, hoặc là bút toán đảo',
+      notSelectable: 'Mục này cần duyệt riêng: có kiểm tra lỗi, có thể trùng, là bút toán đảo, hoặc có dòng chưa có tài khoản',
       selected: 'Đã chọn {count, number}',
       approve: 'Duyệt {count, number} đề xuất',
       clear: 'Bỏ chọn',
@@ -2031,7 +2040,11 @@ export const vi = {
       vendor_default: 'Mặc định của nhà cung cấp',
       builtin: 'Từ khóa có sẵn',
       user: 'Người dùng chọn',
+      unclassified: 'Chưa phân loại',
     },
+    pickAccount: 'Chọn tài khoản',
+    unclassifiedAccount: 'Chưa phân loại, chờ chọn tài khoản',
+    unclassifiedNotice: '{count, plural, other {# dòng không khớp quy tắc tài khoản nào và chưa có tài khoản.}} Hãy chọn tài khoản cho từng dòng, lưu, rồi duyệt.',
     sellerOwn: 'Người bán (tổ chức của bạn)',
     customer: 'Khách hàng',
     saleNotice:
@@ -5266,6 +5279,10 @@ export const vi = {
     },
     source: { ai: 'Đọc bằng AI từ ảnh/PDF, cần người kiểm tra' },
     duplicate: { found: 'Hóa đơn này đã có trong Inbox hoặc đã ghi sổ' },
+    accounts: {
+      unclassified: 'Chưa phân loại {count} dòng (dòng {lines}): không khớp quy tắc tài khoản nào, hãy chọn tài khoản trước khi duyệt',
+      classified: 'Mọi dòng đã có tài khoản hạch toán',
+    },
     related: {
       replaces: 'Hóa đơn thay thế cho hóa đơn {invoice}: khi duyệt, {brand} đảo bút toán và hủy chứng từ của hóa đơn gốc',
       adjusts: 'Hóa đơn điều chỉnh cho hóa đơn {invoice}: ghi sổ phần chênh lệch, liên kết với hóa đơn gốc',
@@ -5349,6 +5366,7 @@ export const vi = {
       OWN_INVOICE: 'Người bán là chính tổ chức nên đây là hóa đơn bán ra; hãy đọc lại tệp để ghi sổ như hóa đơn bán ra',
       NOT_REVENUE_ACCOUNT: 'Dòng bán ra phải ghi vào tài khoản doanh thu (511, 515, 711, 3387 hoặc tài khoản con của chúng)',
       REVENUE_ACCOUNT_ON_PURCHASE: 'Dòng mua vào không ghi vào tài khoản doanh thu; hãy chọn tài khoản chi phí, hàng hóa hoặc tài sản',
+      ACCOUNT_UNCLASSIFIED: 'Còn dòng không khớp quy tắc tài khoản nào nên chưa có tài khoản; hãy chọn tài khoản cho từng dòng, lưu, rồi duyệt',
       INVALID_TAX_CODE: 'Mã số thuế không hợp lệ: 10 chữ số, 10 chữ số kèm 3 chữ số đơn vị phụ thuộc, hoặc 12 chữ số',
       TAX_CODE_NOT_FOUND: 'Không tìm thấy mã số thuế này trong dữ liệu tra cứu; hãy nhập tên và địa chỉ',
       TAX_LOOKUP_UNAVAILABLE: 'Dịch vụ tra cứu mã số thuế không phản hồi; hãy nhập tên và địa chỉ, hoặc thử lại sau',

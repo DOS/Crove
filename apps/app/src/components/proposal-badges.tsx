@@ -16,6 +16,8 @@ export interface ProposalBadgesItem {
   signatureStatus: string | null;
   failedChecks: number;
   warnChecks: number;
+  // Lines of an invoice proposal no rule matched (#2091); absent counts as none.
+  unclassifiedLines?: number;
   requestedByAgent: { name: string } | null;
   extracted: boolean;
   voided: boolean;
@@ -35,6 +37,7 @@ export function ProposalBadges({ item }: { item: ProposalBadgesItem }) {
       {item.direction === 'sale' && <Badge variant="secondary">{t('saleKind')}</Badge>}
       {item.duplicateOf && <Badge variant="warning">{t('maybeDuplicate')}</Badge>}
       {item.signatureStatus === 'unverified' && <Badge variant="destructive">{t('signatureUnverified')}</Badge>}
+      {(item.unclassifiedLines ?? 0) > 0 && <Badge variant="warning">{t('unclassifiedBadge', { count: item.unclassifiedLines ?? 0 })}</Badge>}
       {item.failedChecks > 0 && <Badge variant="destructive">{t('failedChecks', { count: item.failedChecks })}</Badge>}
       {item.warnChecks > 0 && <Badge variant="warning">{t('warnChecks', { count: item.warnChecks })}</Badge>}
       {item.requestedByAgent && <Badge variant="proposal">{t('agentProposed', { name: item.requestedByAgent.name })}</Badge>}

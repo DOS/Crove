@@ -34,8 +34,21 @@ export function chunks<T>(items: readonly T[], size: number = BULK_LIMIT): T[][]
 // confirm the original document one by one (acceptFailedChecks), which a bulk approval never does; a possible duplicate
 // and a reversal (it voids a posted document) are reviewed one by one too. The server still decides each item
 // (four-eyes, eligibility, revision, the voucher's own rules) and refuses what it would refuse alone.
-export function bulkSelectable(item: { status: string; failedChecks: number; kind: string; duplicateOf: string | null }, reversalKind: string): boolean {
-  return item.status === 'pending' && item.failedChecks === 0 && item.duplicateOf === null && item.kind !== reversalKind;
+export function bulkSelectable(
+  item: { status: string; failedChecks: number; kind: string; duplicateOf: string | null; unclassifiedLines?: number },
+  reversalKind: string,
+): boolean {
+  // A line no rule matched (#2091) has no account to approve: it is classified on the proposal's own page first.
+  return item.status === 'pending' && item.failedChecks === 0 && item.duplicateOf === null && item.kind !== reversalKind && (item.unclassifiedLines ?? 0) === 0;
+}
+
+// The "Chưa phân loại" filter of the Inbox (#2091): the proposals with at least one invoice line no rule matched, and how
+// many there are among `items`. The server counts the lines (kernel.inbox.list); these only narrow the page it returned.
+export function hasUnclassifiedLines(item: { unclassifiedLines?: number }): boolean {
+  return (item.unclassifiedLines ?? 0) > 0;
+}
+export function countUnclassified(items: ReadonlyArray<{ unclassifiedLines?: number }>): number {
+  return items.filter(hasUnclassifiedLines).length;
 }
 
 // Whether a list row shows the "matched" success badge: only when invoice checks ran and none failed or warned. A

@@ -21,6 +21,7 @@ describe('bulk approval item refusals', () => {
       ['PERIOD_LOCKED', 409],
       ['NOT_REVENUE_ACCOUNT', 422],
       ['REVENUE_ACCOUNT_ON_PURCHASE', 422],
+      ['ACCOUNT_UNCLASSIFIED', 422],
     ] as const) {
       expect(isBulkItemRefusal(new DomainError(code, status, 'refused'))).toBe(true);
     }

@@ -36,6 +36,10 @@ export function invoiceCheckMessage(check: Check, t: Translate, format: { money:
     case 'related.replaces_missing':
     case 'related.adjusts_missing':
       return has('invoice') ? t(`invoiceChecks.${code}`, { invoice: p.invoice ?? '' }) : check.message;
+    case 'accounts.unclassified':
+      return has('count', 'lines') ? t('invoiceChecks.accounts.unclassified', { count: p.count ?? '', lines: p.lines ?? '' }) : check.message;
+    case 'accounts.classified':
+      return t('invoiceChecks.accounts.classified');
     case 'issue_date.ok':
       return has('date') ? t('invoiceChecks.issue_date.ok', { date: date(p.date ?? '') }) : check.message;
     case 'lines_sum.ok':

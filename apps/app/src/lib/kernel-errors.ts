@@ -95,6 +95,8 @@ export const KERNEL_ERROR_CODES = [
   'OWN_INVOICE',
   'NOT_REVENUE_ACCOUNT',
   'REVENUE_ACCOUNT_ON_PURCHASE',
+  // A purchase line no rule matched has no account yet (#2091).
+  'ACCOUNT_UNCLASSIFIED',
   'INVALID_TAX_CODE',
   // Onboarding by tax code and the org's address (#324).
   'TAX_CODE_NOT_FOUND',
