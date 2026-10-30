@@ -567,6 +567,9 @@ async function main() {
   const raised = report.reseeded.find((r) => r.orgId === seeded.orgId && r.docType === 'finance.journal_voucher');
   assert(raised?.archivedHigh === '1', `the NVK series was raised above the archived number 1 (${JSON.stringify(raised)})`);
   assert(report.problems.length === 0 && report.needFloor.length === 0, `the archive matches the restored database (${JSON.stringify(report.problems)})`);
+  // The lost rows are acknowledged in the archive (#2020), so the nightly verification excuses them and nothing else.
+  assert(typeof report.acknowledged === 'string' && report.acknowledged.startsWith('restores/v1/'), `the restore is acknowledged (${report.acknowledged})`);
+  assert(report.lostRefs.some(([, ref]) => ref === `journal:${seeded.orgId}:${late.entryId}`), 'the acknowledgement names the lost entry');
   log(`archive check: ${report.beyond.length} batch(es) after the backup point; the entry, the voucher and ${lost.allocations.length} number allocation(s) named as lost; the NVK series raised above 1`);
   await time('verify through the API', async () => {
     await ready(DST);

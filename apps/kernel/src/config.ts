@@ -103,6 +103,9 @@ const schema = z.object({
   ARCHIVE_RETENTION_DAYS: z.coerce.number().int().min(1).max(36_500).default(3650),
   // How long after a row is written it is archived at the earliest, so a transaction still open is not cut off.
   ARCHIVE_LAG_SECONDS: z.coerce.number().int().min(60).max(86_400).default(600),
+  // Days the nightly verifier alerts, on every run, about the restore acknowledgement in force after the store wrote it
+  // (#2020, docs/runbooks/worm-archive.md).
+  ARCHIVE_RESTORE_ALERT_DAYS: z.coerce.number().int().min(1).max(365).default(14),
   // Fiscal year archive packages (issue #922) in the STORAGE=s3 bucket: lock each part in ARCHIVE_LOCK_MODE for this
   // many days (the bucket needs Object Lock). 0: the bucket's default retention, if any. Local disk has no lock.
   S3_ARCHIVE_LOCK_DAYS: z.coerce.number().int().min(0).max(36_500).default(0),

@@ -18,7 +18,8 @@
 //   org-purge <org slug or id> --reason <text>
 //                 apply the offboarding deletion map to an org in offboarding whose export is old enough, and close
 //                 it (issue #1024); run it in the worker's container
-//   restore-report [--reseed] [--floor <org>:<entity>:<doc type>:<period>=<next>]... [--json]
+//   restore-report [--reseed] [--floor <org>:<entity>:<doc type>:<period>=<next>]... [--floors-complete <org>]...
+//                  [--acknowledge] [--json]
 //                 after a restore: what the WORM archive holds that the database lacks, and the number series raised
 //                 above the archive (issue #2007); tools/backup/restore.sh runs it in the worker's container
 //   vapid-keys    print a new VAPID key pair for browser push (issue #1238): VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY

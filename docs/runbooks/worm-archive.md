@@ -57,7 +57,7 @@ For production, use `s3`.
    - `GOVERNANCE` (default): an account with the `s3:BypassGovernanceRetention` permission can still delete objects. Use it while you are trying the setup.
    - `COMPLIANCE`: nobody can delete an object until its retention ends, the bucket's root account included. Switch to it once the setup is final.
 3. **Retention:** `ARCHIVE_RETENTION_DAYS`, default 3650 (10 years, plan §7.9). It applies to each batch from the moment it is written.
-4. **Credentials.** They need only `s3:PutObject`, `s3:PutObjectRetention`, `s3:GetObject`, `s3:ListBucket` and `s3:GetBucketObjectLockConfiguration` on the archive bucket. Do not grant any delete permission. If possible, use credentials apart from the evidence bucket's.
+4. **Credentials.** They need only `s3:PutObject`, `s3:PutObjectRetention`, `s3:GetObject`, `s3:ListBucket`, `s3:ListBucketVersions` and `s3:GetBucketObjectLockConfiguration` on the archive bucket. Do not grant any delete permission. `s3:ListBucketVersions` is needed since #2020: the verifier reads each key's versions, and without it every run fails with `AccessDenied`. If possible, use credentials apart from the evidence bucket's.
 5. **After the first deploy, check the worker log.**
    - On start it prints `[archive] s3 bucket <name>, Object Lock <mode> for <days> days`.
    - Within a few minutes it prints `[archive] wrote N batch(es)`.
@@ -117,6 +117,8 @@ docker compose exec db psql -U postgres -c "SELECT verified_at, ok, batches, row
 | `object_missing` | The database recorded a batch the store does not have. |
 | `version_regressed`, `numbers_gap`, `entities_gap`, `allocations_gap`, `series_gap`, `revisions_gap`, `highs_gap` | A batch of a lower version follows a higher one, or a batch does not take its numbers (versions 2 and up), legal entities (versions 3 and up), number allocations (versions 4 and up), number series (versions 5 and up), source revisions (versions 6 and up) or series highs (version 7) from where the last one stopped. Either a worker older than #977, #1489, #1594, #1623, #1337 or #2007 wrote to the archive, or a batch was replaced. The numbers, entities, series, revisions or highs in that stretch are not anchored. Find the deploy that ran the old worker. |
 | `high_mismatch` | A version 7 batch's series high in the clear does not match its row hash, or a high row has no clear values: the batch was edited in the store. The restore check does not trust that high. Treat it like `chain_broken`. |
+| `restore_ack_unreadable` | An object under `restores/v1/` does not parse as a restore acknowledgement, or its key does not match its own sequence (#2020). The restore check writes these objects create-only: one that does not read was written by something else. Treat it like `chain_broken`. Under COMPLIANCE Object Lock it cannot be removed, so the verification fails on it until its retention ends; record it in the incident, with who could write the store. |
+| `restore_ack_mismatch` | A restore the newest acknowledgement names, or the restore the check is asked to acknowledge, does not read as a restore (#2020). Either the database holds an archived row stamped at or after its backup point, or a row it lost is stamped more than an hour before that point. A restore loses everything from its backup point on, so this is a deletion, not a restore (or the backup point given was wrong). Nothing of that restore is excused, and the restore check acknowledges nothing. Check the backup point against the run's `meta.env`; otherwise treat it like `row_missing`: a SEV1 incident. |
 | `series_period_mismatch` | A `number_series:` row verifies as written, but its period key does not fit the reset of its doc type (`YYYY` for yearly, `YYYY-MM` for monthly, `-` for never; #1820, `crove_kernel.archive_series_misfits`). The doc type's reset was switched, a number given out, and the reset switched back before the archiver anchored the series. Numbering never does this since #1608 (20261103050000): the reset is locked once a doc type has numbers, and a reset change waits for a first number in flight. A series created before that fix, by a reset change racing the doc type's first number (#1607), shows the same way. |
 | `record_mismatch` | `crove_kernel.archive_batch` disagrees with the store. The store is the authority. |
 
@@ -140,17 +142,65 @@ A restore brings the database back to its backup point. The archive store is not
 - **The restore check.** `tools/backup/restore.sh` runs it before the stack starts (`main.ts restore-report --reseed`, in the worker's container; [backup-and-restore.md](backup-and-restore.md), step 6).
   - It lists, per org, the journal entries, vouchers, document voids, number allocations, number voids and number series that the archive holds and the database lacks, and the batches written after the backup point.
   - It raises every number series above the highest number that the version 7 batches hold for it, so no number is given out twice.
+  - Once every series is safe, it **acknowledges** the restore (`--acknowledge`, #2020). That writes an acknowledgement to the archive store, under `restores/v1/<sequence>.json` (1, 2, ... for each restore), and records the batches written after the backup point in the restored database.
+    - The acknowledgement names each row excused from then on, with its batch:
+      - the rows this restore lost: those the restored database lacks, and the series highs that it holds with another hash;
+      - the rows of the previous acknowledgement that this database still lacks. A row a later restore brought back is excused no more.
+    - It carries each restore with its interval of batches (the first batch with a row it lost, to the newest batch then) and its **backup point**: the backup's snapshot time, from the backup run's `meta.env` (`SNAPSHOT_AT`; `FINISHED_AT` for a run made before it was recorded). That is evidence the database does not hold. `restore.sh` passes it (`--backup-point`), unless `RESTORE_BACKUP_POINT` is set on its command; a check run by hand needs it.
+      - A run without `SNAPSHOT_AT` whose dump took long is refused with its `FINISHED_AT` (`restore_ack_mismatch`). Then set `RESTORE_BACKUP_POINT` to the dump's start, from the backup log, and restore again.
+    - It is written create-only, like a batch, and with `s3` under Object Lock. Only the store holds it, so no database role can write or change one.
+    - **A restore loses a suffix in time:** every archived row stamped at or after its backup point. So the check refuses to acknowledge a restore, and the verifier excuses nothing of one (`restore_ack_mismatch`), when:
+      - the database holds any archived row stamped from the backup point to the end of the restore's batches; or
+      - a row it lost lies in a batch that ended more than an hour before the backup point. The hour covers the archive lag and a transaction still open at the backup.
+
+      A deletion fails it. For example, the database owner forgets the newest batches in `archive_batch` and deletes a row, the newer rows still there. Batch windows are checked by their time, so the rows a version's first batch took in from the epoch do not count.
+    - **The acknowledgements form a chain**, checked whole before any is trusted:
+      - sequences 1, 2, ... with no gap, each with the sha256 of the one before;
+      - each bound to the store's newest batch when it was written: it names that batch and its chain hash, and the batch after it must have been written later, by the store's own clock. On `s3` that is the `LastModified` of the object's oldest version. Object Lock turns versioning on, so a later PUT of the same key adds a version but cannot redate or remove the first. On `local` it is the file's time, which whoever controls the host can set: there the binding protects nothing against the host.
+      - The verifier fails any batch or acknowledgement key with more than one version, delete markers included (`object_versions`). So a PUT over a WORM object, or a delete, shows even though Object Lock keeps the first version, and `get` and the write time read the same single version.
+      - To keep the store create-only for the worker's key too, give the archive bucket a policy that denies `s3:PutObject` without `If-None-Match: *`: a `Deny` on `s3:PutObject` with the condition `"Null": { "s3:if-none-match": "true" }` (the request carries no `If-None-Match` header). Then no new version can be written over an existing key at all. AWS S3 accepts that condition. With MinIO, check that your release honours `If-None-Match` on a PUT and accepts the condition in a bucket policy; where it does not, the version check above is what catches an overwrite. Cloudflare R2 offers no S3 Object Lock configuration, so the worker refuses it as the archive store (`assertObjectLock`).
+      - each carries the restores of the one before it, or some of them, and at most one of its own, ending at its own newest batch. It may drop excuses of earlier restores, never add any.
+
+      A break anywhere is `restore_ack_unreadable` or `restore_ack_mismatch`, and then no acknowledgement is in force: nothing is excused.
+    - **What is left:**
+      - **The last hour before a backup point.** A row stamped less than `RESTORE_SLACK_MS` (an hour) before the point, in the restore's own batches, counts as lost with the restore. Someone who deletes such a row in the restored database between the restore and its check gets it excused with the rest. `restore.sh` runs the check right after the restore, before the stack starts.
+      - **The restored database, read with no upper bound.** Before it acknowledges, the check reads the restored database for any archived row stamped at or after the backup point, however far ahead. A restore of that backup holds none, so it refuses on one (`restore_ack_mismatch`), and runs before anything else writes: before the export rebind, and before the stack starts. The only exceptions are the rows of its own reseed: its `kernel.number.reseed` audit events, and a series made again with its archived id. Then an old row edited and moved, with every row after it, past the newest batch is refused.
+      - **A lost row never comes back.** The verifier fails a restore whose excused row shows up again under its own reference, in a batch after the acknowledgement's newest or among the rows not archived yet. Series rows and series highs are the exceptions, since they legitimately go on.
+      - **Store and database access together: the real residual.** Anyone who holds both the database owner's access and the store's write key (the worker's) can stage a fake restore. They write the next acknowledgement straight to the store, with a restore interval and a point of their choosing; delete every row from that point on; and enter those rows again under new ids. Every check above then passes. The archive alone cannot tell that from a real restore followed by work entered again. **The control is an alert they cannot silence:**
+        - every verification run records how many rows it excused and the acknowledgement in force (`excused` and `restore_ack` in `crove_kernel.archive_verification`, for the record), and logs `excused N row(s) under restore acknowledgement #n`;
+        - every run first posts `[archive] ALERT restore acknowledgement restores/v1/<n>.json, written <time>, is in the WORM archive`, from the store alone and before it reads the database, so a run the database owner stops, kills or locks has alerted already;
+        - every run, passing or failing, then posts `[archive] ALERT restore acknowledgement #n, written <time>, excuses N row(s)` to the alert webhook, for `ARCHIVE_RESTORE_ALERT_DAYS` (14 by default) after the store wrote the acknowledgement. The count N comes from the database run; the first line does not need it;
+        - each kind of alert is posted at most once per `SECURITY_ALERT_REPEAT_MINUTES` window per process, so it posts once a night;
+        - the write time is the store's own: the oldest version's `LastModified`, which the key holder cannot backdate. Nothing in the database decides or suppresses the alert;
+        - because it repeats every night, a webhook down for a night, or a failing run, loses nothing.
+
+        Every acknowledgement must match a real restore incident, recorded with its backup run. One that does not is a SEV1 security incident ([incidents.md](incidents.md)). This holds until restores get a credential of their own (below).
+      - **A verification that never finishes (not new here, and true of all WORM verification).** Someone with the database owner's access can stop the nightly verification from finishing: terminate its session, lock a table it reads, or delete its pg-boss job. They can also write `archive_verification` rows of their own, so any signal that lives only in the database can be hidden. The store-only alert above still posts before the run touches the database. The defence for the rest is a heartbeat outside the database, a check that the nightly verification ran, which is a follow-up of its own.
+      - **Production step for later (owner):** give restores a store credential of their own, which the worker does not hold, and a bucket policy that denies the worker's key any write under `restores/`. Then the worker's key alone cannot write an acknowledgement, and the restore check runs with the restore credential. Until then, the alert above is the control.
+      - Under GOVERNANCE, deleting the newest acknowledgement with the bypass permission leaves a delete marker, which the version check reports. Use COMPLIANCE in production.
+      - **The backup point is the operator's word.** The check reads a restore by the point it is given. `restore.sh` takes it from the backup run, which the database owner does not control. Someone who runs the check by hand with a made-up point, on a database where rows were deleted, can have those rows read as lost to a restore, as long as every newer row is gone too. Run it by hand only right after a restore, with the run's `SNAPSHOT_AT`.
+      - **A clock behind after a restore.** If the restored cluster's clock is behind the old one, rows written after the restore can be stamped before the end of the restore's newest batch. They then read as rows kept past the backup point: a false `restore_ack_mismatch`, and the restore's rows are no longer excused. Fix the clock, as for the ledger stamps ([ledger-after-restore.md](ledger-after-restore.md), step 2). The rows stamped in the wrong window stay, so raise it on #2020.
   - What to do with the report is in [ledger-after-restore.md](ledger-after-restore.md), step 4.
-- **Run it again by hand at any time.** It reads only, unless `--reseed` is given:
+- **Run it again by hand at any time.** It reads only, unless `--reseed` (and `--acknowledge --backup-point <the backup's SNAPSHOT_AT>`) is given:
 
   ```sh
   docker compose run --rm --no-deps worker restore-report
   ```
 
   Use the service `crove` on the all-in-one stack.
-- **The nightly verification after a restore.** The verifier still reports each lost row as `row_missing`, and the series highs of those windows as `row_changed` or `row_missing`. So the job fails every night after a restore.
+- **The nightly verification after a restore.** The verifier reads the newest acknowledgement in `restores/v1/`. While each of its restores still reads as one, it excuses exactly the rows it names, in the batch it names them for:
+  - a row missing from the database;
+  - a series high that holds another hash, because its window lost some numbers.
+
+  It counts them as `excused`, and the run passes, but not silently: it records the count and the acknowledgement's sequence, logs them on every run, and alerts on every run for `ARCHIVE_RESTORE_ALERT_DAYS` after the store wrote the acknowledgement (above). Anything else is still a finding:
+  - a row of a batch the restored database had recorded, deleted or changed since;
+  - a lost row that comes back with other content;
+  - a row of a batch after the restore.
+
+  An acknowledgement it cannot read, or one under a key that does not match its own sequence, is reported as `restore_ack_unreadable`. A restore in it that no longer reads as one is reported as `restore_ack_mismatch` and excuses nothing.
+  - If the check says that another run wrote the next acknowledgement meanwhile, two checks ran at once: run it again.
   - Record the restore and its report in the incident.
-  - Until #2020 lets the operator mark the reported rows as known lost, check that every `row_missing` the verifier names is in the report. A row the report does not name is a real finding.
+  - **A restore whose check did not acknowledge** (it stopped on exit 3, and the stack was started anyway; or it ran with `RESTORE_ARCHIVE=skip`): the worker records the batches after the backup point on its next run, and the verification fails on the lost rows every night. Before the stack starts, run the check again with `--reseed --acknowledge --backup-point <SNAPSHOT_AT>` (and the floors). Once the worker has recorded those batches, the check finds nothing after the backup point and can no longer acknowledge them; raise it on #2020.
 
 ## Running the verifier by hand
 
