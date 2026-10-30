@@ -10,7 +10,7 @@ Every part is stored once under `archive/<org_id>/<year>/<sha256>` (content addr
 |---|---|
 | `so-nhat-ky-<year>.xlsx` | The journal of the year |
 | `so-sach-<year>.xlsx` | Trial balance, general ledger, receivables and payables |
-| `bao-cao-tai-chinh-<year>.xlsx` | Financial statements B01 and B02, with B01's start of year and B02's previous year beside them (#2090) |
+| `bao-cao-tai-chinh-<year>.xlsx` | Financial statements B01 and B02. Packages built from #2090 on also carry B01's start of year and B02's previous year beside them; earlier packages, and the package of the year 2000 (no earlier year), do not, and that is not damage |
 | `gtgt-<period>.xlsx` | The VAT working of every month, or every quarter when the org files quarterly |
 | `01gtgt-<period>.xml` | The 01/GTGT declaration of the same periods, when the org has a tax code |
 
