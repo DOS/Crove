@@ -240,8 +240,9 @@ function requireUser(ctx: Pick<CommandContext, 'actor'>): string {
 // The viewer's newest notifications, how many are unread (up to NOTIFICATION_UNREAD_CAP + 1) and the kinds they turned
 // off. A proposal that is no longer pending is not waiting for anyone, so its notification is shown read. The subject's
 // title (a proposal's or task's) or file name is read here, as the viewer may read it, never kept with the notice: a
-// value the personal-data erasure redacts in the task leaves no copy behind (#1977); 20261107010000 dropped the copies
-// written before.
+// value the personal-data erasure redacts in the task leaves no copy behind (#1977). A notice written before keeps the
+// copy it was written with, which is shown only when its subject is gone; dropping those copies is an owner decision
+// (#1958).
 export const notificationList = defineQuery({
   name: 'kernel.notification.list',
   input: z.object({}),
