@@ -292,8 +292,8 @@ export function restoreReportLines(outcome: RestoreReportOutcome): string[] {
   }
   if (outcome.acknowledged) {
     lines.push(
-      `acknowledged: ${report.lostRefs.length} row(s) lost from batches ${report.recorded + 1} to ${report.batches} in ${outcome.acknowledged}; ` +
-        'the nightly verification excuses them, and those batches are recorded',
+      `acknowledged: ${report.acknowledgedRefs.length} row(s) lost to restores, ${report.lostRefs.length} of them to this one, in ${outcome.acknowledged}; ` +
+        'the nightly verification excuses exactly those, and the batches after the backup point are recorded',
     );
   }
   lines.push('provider-issued numbers (e-invoices) are not in the archive: reconcile them with the provider (docs/runbooks/ledger-after-restore.md)');

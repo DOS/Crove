@@ -35,6 +35,9 @@ const clean: RestoreReport = {
   uncoveredSeries: [],
   orphaned: [],
   lostRefs: [],
+  acknowledgedRefs: [],
+  acknowledgedIntervals: [],
+  latestAck: null,
   problems: [],
 };
 const lostOne: RestoreReport = {

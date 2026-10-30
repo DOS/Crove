@@ -5,7 +5,9 @@
 // row. The restore check (restore-report --reseed --acknowledge) writes the acknowledgement of the rows it names to the
 // store and records the batches after the backup point; the verification then passes, excusing exactly those rows,
 // and the archiver goes on from the store's newest batch. Any other tampering still fails it: a row the restore kept,
-// deleted since, is a finding. Only the store holds acknowledgements, so no database role can write one.
+// deleted since, is a finding. Only the store holds acknowledgements, so no database role can write one; and a
+// deletion dressed up as a restore (the database owner forgets the newest batches and deletes one row of the first of
+// them, the later ones still there) is refused by the restore check, which acknowledges nothing.
 // Part of the invariant suite: CI runs this file from the base branch on protected-path PRs (AGENTS.md).
 // Set CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own databases.
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -32,7 +34,10 @@ suite('WORM verifier after a restore on PostgreSQL (#2020)', () => {
   const stamp = `${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
   const dbName = `crove_test_worm_restore_${stamp}`;
   const copyName = `crove_test_worm_restored_${stamp}`;
+  // A database cloned before anything was archived, with an archive store of its own, for the forged restore.
+  const forgedName = `crove_test_worm_forged_${stamp}`;
   let dir = '';
+  let forgedDir = '';
   let store: LocalArchiveStore;
   let orgId = '';
   let userId = '';
@@ -110,6 +115,12 @@ suite('WORM verifier after a restore on PostgreSQL (#2020)', () => {
     ({ orgId } = await createOrg(runtime, { type: 'user', userId, aal: 'aal1' }, 'Org worm restore'));
     dir = mkdtempSync(join(tmpdir(), 'crove-worm-restore-'));
     store = new LocalArchiveStore(dir);
+    forgedDir = mkdtempSync(join(tmpdir(), 'crove-worm-forged-'));
+    await Promise.all(pools.splice(0).map((p) => p.end()));
+    await client(ADMIN as string, async (c) => {
+      await c.query('SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()', [dbName]);
+      await c.query(`CREATE DATABASE ${forgedName} TEMPLATE ${dbName}`);
+    });
 
     await journalVoucher(dbName);
     await age(dbName, 120);
@@ -132,8 +143,10 @@ suite('WORM verifier after a restore on PostgreSQL (#2020)', () => {
   afterAll(async () => {
     await Promise.all(pools.map((p) => p.end()));
     if (dir) rmSync(dir, { recursive: true, force: true });
+    if (forgedDir) rmSync(forgedDir, { recursive: true, force: true });
     if (!ADMIN) return;
     await client(ADMIN, async (c) => {
+      await c.query(`DROP DATABASE IF EXISTS ${forgedName} WITH (FORCE)`);
       await c.query(`DROP DATABASE IF EXISTS ${copyName} WITH (FORCE)`);
       await c.query(`DROP DATABASE IF EXISTS ${dbName} WITH (FORCE)`);
     });
@@ -194,5 +207,43 @@ suite('WORM verifier after a restore on PostgreSQL (#2020)', () => {
     expect(result.ok).toBe(false);
     expect(result.problems).toEqual([expect.objectContaining({ code: 'row_missing', ref: `audit:${id}` })]);
     expect(result.problems[0]!.seq).toBeLessThanOrEqual(recordedAtBackup);
+  });
+
+  it('refuses a deletion dressed up as a restore, and acknowledges nothing', async () => {
+    const forgedStore = new LocalArchiveStore(forgedDir);
+    // Batches 10 minutes apart: the org's creation, then four vouchers (the creation may share a voucher's window).
+    await age(forgedName, 60);
+    for (const minutes of [50, 40, 30, 20]) {
+      await journalVoucher(forgedName);
+      await age(forgedName, minutes);
+    }
+    const worker = dbFor(forgedName, WORKER);
+    while ((await writeArchive(worker, forgedStore, { lagSeconds: 60 })) > 0);
+    const batches = (await forgedStore.list('chain/v1/')).length;
+    expect(batches).toBeGreaterThanOrEqual(4);
+    expect(await verifyArchive(worker, forgedStore)).toMatchObject({ ok: true, problems: [] });
+
+    // The database owner forgets batch 2 and every later one, and deletes one audit event of batch 2.
+    await client(urlOf(forgedName), async (c) => {
+      await c.query('BEGIN');
+      await c.query(`SET LOCAL session_replication_role = replica`);
+      const { rows } = await c.query<{ id: string }>(
+        `SELECT a.id FROM crove_kernel.audit_event a, crove_kernel.archive_batch b
+         WHERE b.seq = 2 AND a.occurred_at >= b.window_from AND a.occurred_at < b.window_to ORDER BY a.occurred_at LIMIT 1`,
+      );
+      expect(rows).toHaveLength(1);
+      await c.query('DELETE FROM crove_kernel.audit_event WHERE id = $1', [rows[0]!.id]);
+      await c.query('DELETE FROM crove_kernel.archive_batch WHERE seq >= 2');
+      await c.query('COMMIT');
+    });
+    const runtime = new Runtime(worker, { manifests: TEST_MANIFESTS }).register({ commands: [numberReseedCommand()] });
+    const lines: string[] = [];
+    const code = await runRestoreReport({ db: worker, store: forgedStore, runtime, log: (l) => lines.push(l), error: (l) => lines.push(l), out: () => {} }, [
+      '--reseed',
+      '--acknowledge',
+    ]);
+    expect(code).toBe(RESTORE_REPORT_EXIT.failed);
+    expect(lines).toContain('[restore-report] PROBLEM: restore_ack_mismatch in batch 2');
+    expect(await forgedStore.list(RESTORE_ACK_PREFIX)).toEqual([]);
   });
 });

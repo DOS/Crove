@@ -19,6 +19,7 @@ import {
   acknowledgeRestore,
   chainSha256,
   highSha256,
+  RESTORE_ACK_PREFIX,
   restoreAckKey,
   restoreReport,
   verifyArchive,
@@ -634,6 +635,9 @@ describe('series highs and the restore report (#2007)', () => {
       uncoveredSeries: [],
       orphaned: [],
       lostRefs: batches[1]!.rows.map(([ref]): [number, string] => [2, ref]),
+      acknowledgedRefs: batches[1]!.rows.map(([ref]): [number, string] => [2, ref]),
+      acknowledgedIntervals: [[2, 2]],
+      latestAck: null,
       problems: [],
     });
 
@@ -703,12 +707,20 @@ describe('series highs and the restore report (#2007)', () => {
       { version: 7, rows: keptRows, highs: [high('5')] },
       { version: 7, rows: lostRows, highs: [high('6')] },
     ]);
-  const ackOf = (refs: Array<[number, string]>, recordedAtRestore = 1, batchesAtRestore = 2): RestoreAck => ({
+  const ackOf = (
+    sequence: number,
+    refs: Array<[number, string]>,
+    intervals: Array<[number, number]> = [[2, 2]],
+    recordedAtRestore = 1,
+    batchesAtRestore = 2,
+  ): RestoreAck => ({
     format: 'crove-restore-ack',
     version: 1,
+    sequence,
     acknowledgedAt: at(10),
     recordedAtRestore,
     batchesAtRestore,
+    intervals,
     refs,
   });
   // A store holding the batches and the given objects, which put writes create-only.
@@ -728,46 +740,52 @@ describe('series highs and the restore report (#2007)', () => {
       describe: () => 'memory',
     };
   }
+  const missing = (seq: number, rows: Array<[string, string]>) => rows.map(([ref]) => ({ code: 'row_missing', seq, ref }));
 
-  it('excuses exactly the rows a restore acknowledgement names, in their batch, and nothing else (#2020)', async () => {
+  it('excuses exactly the rows the newest restore acknowledgement names, in their batch, and nothing else (#2020)', async () => {
     const batches = restoreChain();
     const lost = batches[1]!.rows.map(([ref]): [number, string] => [2, ref]);
     // The restored database, with both batches recorded (the acknowledgement records the second), holds batch 1 only.
     const restored = (present = { [EPOCH]: keptRows }, highs: Record<string, ArchiveHigh[]> = { [EPOCH]: [high('5')] }) =>
       dbOf({ batches, recorded: 2, present, highs, series: [{ series_id: SERIES, next_number: '7' }] });
-    const missing = (seq: number, rows: Array<[string, string]>) => rows.map(([ref]) => ({ code: 'row_missing', seq, ref }));
 
     // Without an acknowledgement every lost row fails the verification.
-    const bare = await verifyArchive(restored(), writableStore(batches));
-    expect(bare.problems).toEqual(missing(2, batches[1]!.rows));
+    expect((await verifyArchive(restored(), writableStore(batches))).problems).toEqual(missing(2, batches[1]!.rows));
     // With one, they are excused, and counted.
-    const acked = await verifyArchive(restored(), writableStore(batches, { [restoreAckKey(1, 2)]: ackOf(lost) }));
+    const acked = await verifyArchive(restored(), writableStore(batches, { [restoreAckKey(1)]: ackOf(1, lost) }));
     expect(acked).toMatchObject({ ok: true, problems: [], excused: lost.length });
 
     // A row of batch 1, which the restore kept, deleted since: still a finding.
-    const deleted = await verifyArchive(restored({ [EPOCH]: [] }), writableStore(batches, { [restoreAckKey(1, 2)]: ackOf(lost) }));
+    const deleted = await verifyArchive(restored({ [EPOCH]: [] }), writableStore(batches, { [restoreAckKey(1)]: ackOf(1, lost) }));
     expect(deleted.problems).toEqual(missing(1, keptRows));
     // A lost row that comes back with other content: a finding; a series high whose window lost numbers: excused.
     const back = await verifyArchive(
       restored({ [EPOCH]: keptRows, [at(1)]: [[`journal:${ORG}:e2`, hash('9')]] }, { [EPOCH]: [high('5')], [at(1)]: [high('4')] }),
-      writableStore(batches, { [restoreAckKey(1, 2)]: ackOf(lost) }),
+      writableStore(batches, { [restoreAckKey(1)]: ackOf(1, lost) }),
     );
     expect(back.problems).toEqual([{ code: 'row_changed', seq: 2, ref: `journal:${ORG}:e2` }]);
-    // A reference named under another batch, or an acknowledgement that does not parse or sits under another key,
-    // excuses nothing.
+    // A reference named under another batch excuses nothing; the newest acknowledgement is the one in force.
     const misplaced = lost.map(([, ref]): [number, string] => [1, ref]);
-    expect((await verifyArchive(restored(), writableStore(batches, { [restoreAckKey(0, 2)]: ackOf(misplaced, 0, 2) }))).problems).toEqual(missing(2, batches[1]!.rows));
-    expect((await verifyArchive(restored(), writableStore(batches, { [restoreAckKey(1, 2)]: 'not json' }))).problems).toEqual([
-      { code: 'restore_ack_unreadable', seq: 0, ref: restoreAckKey(1, 2) },
-      ...missing(2, batches[1]!.rows),
-    ]);
-    expect((await verifyArchive(restored(), writableStore(batches, { [restoreAckKey(0, 2)]: ackOf(lost) }))).problems).toEqual([
-      { code: 'restore_ack_unreadable', seq: 0, ref: restoreAckKey(0, 2) },
-      ...missing(2, batches[1]!.rows),
-    ]);
+    expect((await verifyArchive(restored(), writableStore(batches, { [restoreAckKey(1)]: ackOf(1, misplaced, [[1, 2]]) }))).problems).toEqual(
+      missing(2, batches[1]!.rows),
+    );
+    expect((await verifyArchive(restored(), writableStore(batches, { [restoreAckKey(1)]: ackOf(1, lost), [restoreAckKey(2)]: ackOf(2, []) }))).problems).toEqual(
+      missing(2, batches[1]!.rows),
+    );
+    // An object that does not parse, sits under another key, or names a batch after its own restore, is a finding.
+    for (const [key, body] of [
+      [restoreAckKey(1), 'not json'],
+      [restoreAckKey(3), ackOf(1, lost)],
+      [restoreAckKey(1), ackOf(1, [[3, 'audit:x3']])],
+    ] as const) {
+      expect((await verifyArchive(restored(), writableStore(batches, { [key]: body }))).problems).toEqual([
+        { code: 'restore_ack_unreadable', seq: 0, ref: key },
+        ...missing(2, batches[1]!.rows),
+      ]);
+    }
   });
 
-  it('writes the acknowledgement once and records the batches after the backup point; refuses an archive with a problem (#2020)', async () => {
+  it('writes an acknowledgement and records the batches after the backup point; a later restore that brought a row back drops its excuse (#2020)', async () => {
     const batches = restoreChain();
     const recordedCalls: unknown[][] = [];
     const db = fakeDb((query) => {
@@ -775,22 +793,72 @@ describe('series highs and the restore report (#2007)', () => {
       return [];
     });
     const store = writableStore(batches);
-    const report = {
-      ...(await restoreReport(
-        dbOf({ batches, recorded: 1, present: { [EPOCH]: keptRows }, highs: { [EPOCH]: [high('5')] }, series: [{ series_id: SERIES, next_number: '7' }] }),
-        store,
-      )),
-    };
-    expect(report.lostRefs).toEqual(batches[1]!.rows.map(([ref]) => [2, ref]));
-    const key = await acknowledgeRestore(db, store, report, new Date(at(10)));
-    expect(key).toBe(restoreAckKey(1, 2));
-    expect(JSON.parse(new TextDecoder().decode(store.objects.get(restoreAckKey(1, 2))))).toEqual(ackOf(report.lostRefs));
+    const restoredAt = (recorded: number, present: Record<string, Array<[string, string]>>) =>
+      dbOf({ batches, recorded, present, highs: { [EPOCH]: [high('5')] }, series: [{ series_id: SERIES, next_number: '7' }] });
+
+    // Restore A loses batch 2.
+    const a = await restoreReport(restoredAt(1, { [EPOCH]: keptRows }), store);
+    const lost = batches[1]!.rows.map(([ref]): [number, string] => [2, ref]);
+    expect(a).toMatchObject({ lostRefs: lost, acknowledgedRefs: lost, latestAck: null });
+    expect(await acknowledgeRestore(db, store, a, new Date(at(10)))).toBe(restoreAckKey(1));
+    expect(JSON.parse(new TextDecoder().decode(store.objects.get(restoreAckKey(1))))).toEqual(ackOf(1, lost));
     expect(recordedCalls).toEqual([[2, at(1), at(2), batches[1]!.rows.length, batches[1]!.batchSha256, batches[1]!.chainSha256, archiveKey(2)]]);
-    // A second run over the same restore finds its own acknowledgement; another one under the key is refused.
-    expect(await acknowledgeRestore(db, store, report, new Date(at(11)))).toBe(restoreAckKey(1, 2));
-    await expect(acknowledgeRestore(db, store, { ...report, lostRefs: [[2, 'audit:x2']] })).rejects.toThrow(/already holds another acknowledgement/);
-    // Nothing to acknowledge when nothing came after the backup point; nothing at all when the archive has a problem.
-    expect(await acknowledgeRestore(db, store, { ...report, beyond: [], recorded: 2 })).toBeNull();
-    await expect(acknowledgeRestore(db, store, { ...report, problems: [{ code: 'chain_broken', seq: 2 }] })).rejects.toThrow(/nothing is acknowledged/);
+    // A second run over the same restore writes nothing new.
+    expect(await acknowledgeRestore(db, store, await restoreReport(restoredAt(1, { [EPOCH]: keptRows }), store))).toBe(restoreAckKey(1));
+    expect(await store.list(RESTORE_ACK_PREFIX)).toEqual([restoreAckKey(1)]);
+
+    // Restore B, from a backup taken before restore A that holds batch 2's journal entry: its excuse is dropped, so a
+    // later deletion of that entry is a finding. Same range as restore A, under the next sequence.
+    const kept2 = lostRows.filter(([ref]) => ref === `journal:${ORG}:e2`);
+    const b = await restoreReport(restoredAt(1, { [EPOCH]: keptRows, [at(1)]: kept2 }), store);
+    expect(b.latestAck?.sequence).toBe(1);
+    expect(b.acknowledgedRefs.map(([, ref]) => ref)).not.toContain(`journal:${ORG}:e2`);
+    expect(await acknowledgeRestore(db, store, b, new Date(at(20)))).toBe(restoreAckKey(2));
+    const deleted = await verifyArchive(restoredAt(2, { [EPOCH]: keptRows }), store);
+    expect(deleted.problems).toEqual([{ code: 'row_missing', seq: 2, ref: `journal:${ORG}:e2` }]);
+
+    // Nothing at all when the archive has a problem.
+    await expect(acknowledgeRestore(db, store, { ...b, problems: [{ code: 'chain_broken', seq: 2 }] })).rejects.toThrow(/nothing is acknowledged/);
+  });
+
+  // Five batches, each with one journal entry. A real restore loses a suffix of them; a deletion leaves later ones.
+  const five = () => chainOf([1, 2, 3, 4, 5].map((n) => ({ version: 7 as const, rows: [[`journal:${ORG}:e${n}`, hash(String(n))] as [string, string]] })));
+  const entryOf = (batches: ArchiveBatch[], n: number): Array<[string, string]> => batches[n - 1]!.rows;
+  // The database holds the entries of the given batches, and recorded `recorded` of them.
+  const holding = (batches: ArchiveBatch[], recorded: number, kept: number[]) =>
+    dbOf({ batches, recorded, present: Object.fromEntries(kept.map((n) => [n === 1 ? EPOCH : at(n - 1), entryOf(batches, n)])) });
+
+  it('refuses to read a deletion as a restore: a row lost while a later batch keeps its rows is a finding, acknowledged or not (#2020)', async () => {
+    const batches = five();
+    const deletedRef: [number, string] = [2, entryOf(batches, 2)[0]![0]];
+    // The database owner forgets batches 2 to 5 and deletes batch 2's entry; batches 3 to 5 keep theirs. The restore
+    // check refuses it, so nothing is acknowledged.
+    const forged = await restoreReport(holding(batches, 1, [1, 3, 4, 5]), writableStore(batches));
+    expect(forged.problems).toEqual([{ code: 'restore_ack_mismatch', seq: 2 }]);
+    await expect(acknowledgeRestore(fakeDb(() => []), writableStore(batches), forged)).rejects.toThrow(/nothing is acknowledged/);
+    // An acknowledgement written straight to the store naming it excuses nothing either.
+    const ack = ackOf(1, [deletedRef], [[2, 5]], 1, 5);
+    const verified = await verifyArchive(holding(batches, 5, [1, 3, 4, 5]), writableStore(batches, { [restoreAckKey(1)]: ack }));
+    expect(verified.problems).toEqual([
+      { code: 'restore_ack_mismatch', seq: 2, ref: restoreAckKey(1) },
+      { code: 'row_missing', seq: 2, ref: deletedRef[1] },
+    ]);
+    // A real restore to a point in batch 2 loses it and everything after: acknowledged, then excused.
+    const real = await restoreReport(holding(batches, 1, [1]), writableStore(batches));
+    expect(real).toMatchObject({ problems: [], acknowledgedIntervals: [[2, 5]] });
+    expect(real.acknowledgedRefs).toEqual([2, 3, 4, 5].map((n): [number, string] => [n, entryOf(batches, n)[0]![0]]));
+    const realStore = writableStore(batches);
+    await acknowledgeRestore(fakeDb(() => []), realStore, real);
+    expect(await verifyArchive(holding(batches, 5, [1]), realStore)).toMatchObject({ ok: true, excused: 4 });
+    // A row of a batch that restore kept, deleted later, is a finding in the report too.
+    const later = await restoreReport(holding(batches, 5, []), realStore);
+    expect(later.problems).toEqual([{ code: 'row_missing', seq: 1, ref: entryOf(batches, 1)[0]![0] }]);
+  });
+
+  it('accepts the batches next to the backup point holding rows of both sides (#2020)', async () => {
+    const batches = five();
+    // A transaction open at the backup is lost with a time before it: batch 2 loses a row while batch 3 keeps one.
+    const mixed = await restoreReport(holding(batches, 1, [1, 3]), writableStore(batches));
+    expect(mixed).toMatchObject({ problems: [], acknowledgedIntervals: [[2, 5]] });
   });
 });
