@@ -49,7 +49,9 @@ export const bookingFeedCreate = defineCommand({
     await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`crove_crm.booking_feed:${ctx.orgId}:${userId}`}, 0))`.execute(ctx.trx);
     await revokeLive(ctx, userId);
     const token = newFeedToken();
-    await ctx.trx.insertInto('crove_crm.booking_feed').values({ org_id: ctx.orgId, user_id: userId, token_sha256: feedTokenHash(token), created_at: ctx.now }).execute();
+    // created_at takes the column's default, the transaction's now(): revoke_for_member compares it with the member
+    // event's created_at, which the outbox stamps the same way, so the API's clock (ctx.now) cannot move a feed across it.
+    await ctx.trx.insertInto('crove_crm.booking_feed').values({ org_id: ctx.orgId, user_id: userId, token_sha256: feedTokenHash(token) }).execute();
     // The token leaves only in this answer: the audit keeps the input, never the output.
     return { token };
   },

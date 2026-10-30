@@ -6,7 +6,7 @@
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
@@ -312,6 +312,36 @@ suite('crm booking feed on PostgreSQL (#1382)', () => {
     for (const e of changes) results.push(await worker.execute<{ revoked: number }>('crm.booking_feed.revoke_for_member', { eventId: e.id }, { actor: SYSTEM, orgId: o.orgId }));
     expect(results).toEqual([{ revoked: 1 }, { revoked: 0 }]);
     expect(await bookingFeed(app, b.token)).toBeNull();
+  });
+
+  it("stamps a feed with the database's clock, as the outbox does, so a skewed API clock cannot move it across a removal", async () => {
+    const o = await org();
+    // Runs the command with the API's clock `skewMs` off the database's, and puts the real clock back after.
+    const createSkewed = async (user: string, skewMs: number) => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(Date.now() + skewMs);
+      try {
+        return await o.exec<{ token: string }>(user, 'crm.booking_feed.create');
+      } finally {
+        vi.useRealTimers();
+      }
+    };
+    const revokeFrom = async (type: string, userId: string) => {
+      const event = await admin(async (c) => (await c.query<{ id: string }>("SELECT id FROM crove_kernel.outbox_event WHERE org_id = $1 AND type = $2 AND payload->>'userId' = $3 ORDER BY id DESC LIMIT 1", [o.orgId, type, userId])).rows[0]?.id as string);
+      return worker.execute<{ revoked: number }>('crm.booking_feed.revoke_for_member', { eventId: event }, { actor: SYSTEM, orgId: o.orgId });
+    };
+    // The API's clock an hour ahead: a feed made before the removal is still older than it, so the removal revokes it.
+    const early = await createSkewed(o.a, 3_600_000);
+    const [stamp] = (await admin((c) => c.query<{ before_now: boolean }>('SELECT created_at <= pg_catalog.now() AS before_now FROM crove_crm.booking_feed WHERE org_id = $1 AND user_id = $2 AND revoked_at IS NULL', [o.orgId, o.a]))).rows;
+    expect(stamp?.before_now).toBe(true);
+    await app.execute('kernel.member.remove', { userId: o.a }, { actor: asMfa(o.owner), orgId: o.orgId });
+    expect(await revokeFrom('kernel.member.removed', o.a)).toEqual({ revoked: 1 });
+    expect(await bookingFeed(app, early.token)).toBeNull();
+    // The API's clock an hour behind: a feed made after the member came back is still newer than the removal.
+    await admin((c) => c.query("INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member')", [o.orgId, o.a]));
+    const late = await createSkewed(o.a, -3_600_000);
+    expect(await revokeFrom('kernel.member.removed', o.a)).toEqual({ revoked: 0 });
+    expect(await bookingFeed(app, late.token)).toMatchObject({ slug: o.slug });
   });
 
   it("stops the feed of a member whose account is disabled", async () => {
