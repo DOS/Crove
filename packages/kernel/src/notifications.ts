@@ -240,7 +240,7 @@ function requireUser(ctx: Pick<CommandContext, 'actor'>): string {
 // The viewer's newest notifications, how many are unread (up to NOTIFICATION_UNREAD_CAP + 1) and the kinds they turned
 // off. A proposal that is no longer pending is not waiting for anyone, so its notification is shown read. The subject's
 // title (a proposal's or task's) or file name is read here, as the viewer may read it, never kept with the notice: a
-// value the personal-data erasure redacts in the task leaves no copy behind (#1977); 20261106260000 dropped the copies
+// value the personal-data erasure redacts in the task leaves no copy behind (#1977); 20261107010000 dropped the copies
 // written before.
 export const notificationList = defineQuery({
   name: 'kernel.notification.list',
