@@ -56,6 +56,8 @@ const CLASS_OF_KIND: Record<PersonalDataKind, readonly DataClass[]> = {
   email_list: ['contact'],
   name: ['pii'],
   tax_code: ['national_id', 'national_id_if_individual'],
+  // Free text a person wrote (a note's body, #1678), which may name or describe anyone.
+  free_text: ['pii'],
   other: ['pii', 'contact', 'payment', 'national_id', 'national_id_if_individual', 'sensitive'],
 };
 const PERSONAL_HANDLINGS: readonly PersonalDataHandling[] = ['erase', 'keep_legal', 'keep_record'];
