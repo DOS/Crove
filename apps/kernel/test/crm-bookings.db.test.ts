@@ -180,7 +180,7 @@ suite('the public booking page on PostgreSQL (#1318)', () => {
     );
     const left = (await admin((c) => c.query('SELECT visitor_name, email, phone, note FROM crove_crm.booking WHERE org_id = $1', [o.orgId]))).rows;
     expect(left).toEqual([0, 1].map(() => ({ visitor_name: null, email: null, phone: null, note: null })));
-    const found = await app.query<PersonalDataResult>('kernel.personal_data.find', { value: '0901234567' }, { actor: asUser(o.owner), orgId: o.orgId });
+    const found = await app.execute<PersonalDataResult>('kernel.personal_data.find', { value: '0901234567' }, { actor: asUser(o.owner), orgId: o.orgId });
     expect(found.matches.filter((m) => m.column.startsWith('crove_crm.booking'))).toEqual([]);
   });
 

@@ -32,6 +32,10 @@ function useLine() {
     return t(parts.kind === 'month' ? 'month' : 'quarter', { label: parts.label });
   };
   const f = useFormat();
+  // An owner's notice before a personal-data erasure (#1678): how many of my private items, in the finder's words.
+  const p = useTranslations('personalData');
+  const privateItems = (notes: number, todos: number) =>
+    [notes > 0 ? p('privateNotes', { count: notes }) : null, todos > 0 ? p('privateTodos', { count: todos }) : null].filter(Boolean).join(` ${p('and')} `);
   return (n: WorkNotification): string => {
     switch (n.kind) {
       case 'kernel.approval_waiting':
@@ -50,6 +54,8 @@ function useLine() {
         return t('text.period_closing', { period: period(n.detail.period), due: n.detail.dueDate ? f.date(n.detail.dueDate) : '' });
       case 'notes.todo_due':
         return t('text.todo_due');
+      case 'kernel.personal_data_notice':
+        return t('text.personal_data_notice', { items: privateItems(Number(n.detail.notes ?? 0), Number(n.detail.todos ?? 0)) });
       default:
         return t('text.other');
     }
