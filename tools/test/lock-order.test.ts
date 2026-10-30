@@ -29,6 +29,8 @@ const SQL_AFTER_TENANT: Readonly<Record<string, string>> = {
 
 // Sources that lock or update the tenant row, with why no member, assignment or position row is locked after it.
 const TS_TENANT_LOCKS: Readonly<Record<string, string>> = {
+  'packages/kernel/src/legal-entities.ts':
+    "a change of the default entity locks the tenant row FOR NO KEY UPDATE, then the entity row, and may rename the org (#1317); it locks no member, assignment or position row",
   'packages/kernel/src/approval-preset.ts': 'the preset switch locks the tenant row FOR UPDATE, then only reads the chief accountants (no lock) and updates the tenant row',
   'packages/kernel/src/offboarding.ts': 'offboarding locks and updates the tenant row; it touches no member or position row',
   'packages/kernel/src/org-address.ts': "the org's address and contact email: an UPDATE of the tenant row only",
