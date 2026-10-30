@@ -133,6 +133,7 @@ export async function fileStatuses(ctx: QueryContext, filter: FileStatusFilter):
               ? STALE_RUN_ERROR
               : null,
         proposalId: r.proposal_id,
+        proposalStatus: r.proposal_status ?? null,
         version: r.version ?? null,
         // The same checks kernel.file.reextract makes; an archive is opened once and never read again.
         canReextract:

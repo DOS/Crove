@@ -3,6 +3,7 @@
 // is read: a proposal, a likely duplicate, or a failure. An archive becomes the documents it held, each followed the
 // same way. No React or API imports, so it is unit tested; the Inbox wires it up.
 import { MAX_BATCH_ENTRIES, MAX_BATCH_FILES, type ArchiveEntryReason, type BatchFile, type FileStatus } from '@crove/kernel-contract';
+import type { ProposalStatus } from './status.ts';
 
 // Files one batch may hold (files.batch answers for at most this many); a larger month goes in as ZIP archives.
 export const MAX_INTAKE_FILES = MAX_BATCH_FILES;
@@ -42,6 +43,8 @@ export interface IntakeItem {
   // Why the upload failed: an error the Inbox words when it renders (so a language switch rewords it).
   uploadError: unknown;
   reason: ArchiveEntryReason | null;
+  // A proposed file's proposal status (#2009): its chip shows a posted file apart from one still waiting.
+  proposalStatus: ProposalStatus | null;
   archive: boolean;
   // The entries of an opened archive.
   entries: IntakeItem[];
@@ -59,7 +62,7 @@ export function precheck(file: { name: string; size: number }): 'ok' | 'too_larg
 }
 
 export function newItem(key: string, name: string): IntakeItem {
-  return { key, name, state: 'queued', fileId: null, existing: false, error: null, uploadError: null, reason: null, archive: isArchiveName(name), entries: [] };
+  return { key, name, state: 'queued', fileId: null, existing: false, error: null, uploadError: null, reason: null, proposalStatus: null, archive: isArchiveName(name), entries: [] };
 }
 
 // The item once its upload answered: a new file is read next; a file the org already had is a duplicate.
@@ -79,6 +82,7 @@ function entryItem(parent: string, index: number, entry: NonNullable<BatchFile['
     error: entry.file?.error ?? null,
     uploadError: null,
     reason: entry.reason,
+    proposalStatus: entry.file?.proposalStatus ?? null,
     archive: false,
     entries: [],
   };
@@ -102,6 +106,7 @@ export function applyBatch(items: readonly IntakeItem[], batch: readonly BatchFi
       ...item,
       state: fromStatus(file.status),
       error: file.error,
+      proposalStatus: file.proposalStatus,
       archive: item.archive || file.status === 'expanded' || file.entries !== null,
       entries: (file.entries ?? []).map((entry, index) => entryItem(item.key, index, entry)),
     };

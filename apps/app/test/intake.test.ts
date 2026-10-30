@@ -11,6 +11,7 @@ const status = (id: string, value: FileStatus['status'], error: string | null = 
   status: value,
   error,
   proposalId: null,
+  proposalStatus: null,
   version: 1,
   canReextract: false,
   createdAt: '2026-10-18T00:00:00.000Z',
@@ -47,6 +48,20 @@ describe('bulk intake state', () => {
     // A later answer that leaves a settled file out does not undo it.
     expect(applyBatch(items, []).map((i) => i.state)).toEqual(['proposed', 'duplicate', 'upload_failed']);
     expect(summarize(items)).toEqual({ total: 3, settled: 3, proposed: 1, duplicate: 1, failed: 1 });
+  });
+
+  it("carries a proposed file's proposal status, so its chip tells posted from waiting (#2009)", () => {
+    const item = uploaded(newItem('a', 'a.xml'), { fileId: ID(1), duplicate: false });
+    expect(item.proposalStatus).toBeNull();
+    const waiting = applyBatch([item], [{ ...batchFile(ID(1), 'proposed'), proposalId: ID(9), proposalStatus: 'pending' }]);
+    expect(waiting[0]).toMatchObject({ state: 'proposed', proposalStatus: 'pending' });
+    const posted = applyBatch(waiting, [{ ...batchFile(ID(1), 'proposed'), proposalId: ID(9), proposalStatus: 'executed' }]);
+    expect(posted[0]).toMatchObject({ state: 'proposed', proposalStatus: 'executed' });
+    // An archive's entries carry theirs too.
+    const zip = uploaded(newItem('z', 'z.zip'), { fileId: ID(2), duplicate: false });
+    const entry = { name: 'x.xml', outcome: 'stored' as const, reason: null, file: { ...status(ID(3), 'proposed'), proposalId: ID(8), proposalStatus: 'rejected' as const } };
+    const [opened] = applyBatch([zip], [batchFile(ID(2), 'expanded', [entry])]);
+    expect(opened?.entries[0]).toMatchObject({ state: 'proposed', proposalStatus: 'rejected' });
   });
 
   it('turns an opened archive into its entries and polls it while an entry is being read', () => {

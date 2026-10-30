@@ -23,7 +23,7 @@ import { getConfig } from '../lib/auth.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { REVERSAL_KIND } from '../lib/reversal.ts';
 import { providerName } from '../lib/social.ts';
-import { FILE_STATE_VARIANT, type FileState } from '../lib/status.ts';
+import { FILE_STATE_VARIANT, fileChipVariant, type FileState } from '../lib/status.ts';
 import { toast } from '../lib/toast.ts';
 import { VOUCHER_KIND } from '../lib/vouchers.ts';
 import {
@@ -253,6 +253,7 @@ function SocialMails({ slug }: { slug: string }) {
 export function InboxPage() {
   const { slug } = useParams({ strict: false }) as { slug: string };
   const t = useTranslations('inbox');
+  const proposalWords = useTranslations('inboxDetail.status');
   const f = useFormat();
   // The tab lives in the address (#1513), left out for the pending proposals.
   const search: InboxSearch = useSearch({ strict: false });
@@ -522,8 +523,9 @@ export function InboxPage() {
                 title={file.error ?? undefined}
               >
                 <span className="max-w-[16rem] truncate text-muted-foreground">{file.filename}</span>
-                <Badge variant={isFileStatus(file.status) ? FILE_STATE_VARIANT[file.status] : 'secondary'}>
-                  {isFileStatus(file.status) ? t(`fileStatus.${file.status}`) : file.status}
+                {/* A proposed file shows its proposal's status (#2009): waiting, posted or rejected. */}
+                <Badge variant={isFileStatus(file.status) ? fileChipVariant(file.status, file.proposalStatus) : 'secondary'}>
+                  {file.status === 'proposed' && file.proposalStatus ? proposalWords(file.proposalStatus) : isFileStatus(file.status) ? t(`fileStatus.${file.status}`) : file.status}
                 </Badge>
                 {file.status === 'failed' && file.canReextract && (
                   <button

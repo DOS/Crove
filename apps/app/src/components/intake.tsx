@@ -21,9 +21,8 @@ import {
   summarize,
   uploaded,
   type IntakeItem,
-  type IntakeState,
 } from '../lib/intake.ts';
-import { FILE_STATE_VARIANT, type ChipVariant } from '../lib/status.ts';
+import { fileChipVariant, fileProposal } from '../lib/status.ts';
 import { useChosenEntity } from './entity-switcher.tsx';
 
 // Waits after a RATE_LIMITED refusal before the same upload is tried again, and how many times.
@@ -147,11 +146,12 @@ export function useIntake(): Intake {
   return { items, uploading, start, clear, refused };
 }
 
-// The chips of the Inbox's files (lib/status.ts, #2000): the same state looks the same on both lists.
-const VARIANT: Record<IntakeState, ChipVariant> = FILE_STATE_VARIANT;
-
 function Row({ item, nested = false }: { item: IntakeItem; nested?: boolean }) {
   const t = useTranslations('inbox.intake');
+  const proposalWords = useTranslations('inboxDetail.status');
+  // The chips of the Inbox's files (lib/status.ts, #2000): the same state looks the same on both lists, and a proposed
+  // file as its proposal (#2009).
+  const proposal = fileProposal(item.state, item.proposalStatus);
   const why =
     item.state === 'upload_failed'
       ? errorMessage(item.uploadError)
@@ -168,8 +168,8 @@ function Row({ item, nested = false }: { item: IntakeItem; nested?: boolean }) {
         <span className="min-w-0 flex-1 truncate text-muted-foreground" title={item.name}>
           {item.name}
         </span>
-        <Badge variant={VARIANT[item.state]}>
-          {item.state === 'expanded' ? t('expandedCount', { count: item.entries.length }) : t(`states.${item.state}`)}
+        <Badge variant={fileChipVariant(item.state, item.proposalStatus)}>
+          {item.state === 'expanded' ? t('expandedCount', { count: item.entries.length }) : proposal ? proposalWords(proposal) : t(`states.${item.state}`)}
         </Badge>
       </div>
       {why && <p className="pb-1 text-xs break-words text-destructive">{why}</p>}

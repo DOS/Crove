@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import { en } from '../src/i18n/messages/en.ts';
 import { vi } from '../src/i18n/messages/vi.ts';
-import { FILE_STATE_VARIANT, PROPOSAL_STATUSES, PROPOSAL_STATUS_VARIANT } from '../src/lib/status.ts';
+import { FILE_STATE_VARIANT, PROPOSAL_STATUSES, PROPOSAL_STATUS_VARIANT, fileChipVariant, fileProposal } from '../src/lib/status.ts';
 
 describe('status chips', () => {
   it('gives every proposal status a chip and a label in Vietnamese and English', () => {
@@ -25,5 +25,18 @@ describe('status chips', () => {
     // Files: an archive entry not filed and a file not read are errors.
     expect(FILE_STATE_VARIANT.rejected).toBe('destructive');
     expect(FILE_STATE_VARIANT.failed).toBe('destructive');
+  });
+
+  it("shows a proposed file as its proposal: waiting, posted or rejected (#2009)", () => {
+    expect(fileChipVariant('proposed', 'pending')).toBe('proposal');
+    expect(fileChipVariant('proposed', 'executed')).toBe('success');
+    expect(fileChipVariant('proposed', 'rejected')).toBe(PROPOSAL_STATUS_VARIANT.rejected);
+    for (const status of PROPOSAL_STATUSES) expect(fileChipVariant('proposed', status)).toBe(PROPOSAL_STATUS_VARIANT[status]);
+    // A posted file never looks like one still waiting.
+    expect(fileChipVariant('proposed', 'executed')).not.toBe(fileChipVariant('proposed', 'pending'));
+    // Without its proposal's status, and in any other state, a file keeps its own chip.
+    expect(fileChipVariant('proposed', null)).toBe(FILE_STATE_VARIANT.proposed);
+    expect(fileChipVariant('duplicate', 'pending')).toBe(FILE_STATE_VARIANT.duplicate);
+    expect(fileProposal('failed', 'rejected')).toBeNull();
   });
 });
