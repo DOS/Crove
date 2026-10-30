@@ -228,7 +228,9 @@ const CLEAN_EVENTS: ReadonlySet<string> = new Set(P04_CLEAN_EVENTS);
 // do not declare them, since the job they start runs under its own declaration and the proposal's says nothing of what
 // it writes (#2107). The other crove_jobs tables start nothing: queue_stats and warning are statistics and a log, instance
 // is the workers' heartbeat, and version holds the leases of the maintenance passes (no job content). The invariant suite
-// pins the list against the manifest, so a table a pg-boss upgrade adds is classified before it is used.
+// pins the list against the manifest, so a table a pg-boss upgrade adds is classified before it is used. Which tables
+// start nothing rests on reading the vendored pg-boss schema: re-check them on every `pnpm db:vendor:pgboss` bump, a new
+// pg-boss version or a new schema version of it, before the list or the manifest is changed to match.
 const JOB_TABLES: ReadonlySet<string> = new Set(['crove_jobs.job', 'crove_jobs.job_dependency', 'crove_jobs.schedule', 'crove_jobs.subscription', 'crove_jobs.queue', 'crove_jobs.bam']);
 const jobTablesOf = (writes: readonly CommandWrite[] | undefined): string[] => (writes ?? []).filter((w) => JOB_TABLES.has(w.table)).map((w) => w.table);
 
