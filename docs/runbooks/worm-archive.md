@@ -162,7 +162,12 @@ docker compose exec db psql -U postgres -c "INSERT INTO crove_jobs.job (name, da
 
 The result appears in `crove_kernel.archive_verification` and in the worker log: `[archive] verified ...`, or `[archive] ALERT ARCHIVE_MISMATCH ...`.
 
-Check that the verifier still runs every night. A run older than a day means the worker or its schedule is not running:
+The prober watches both for you (#1997) and alerts like for a stuck worker:
+
+- `archive_verify`: the newest verification run that passed is older than `PROBER_MAX_ARCHIVE_VERIFY_AGE_SECONDS` (26 h by default; before the first, the first batch is). Either the worker or its schedule is not running (check the worker, incidents.md, section 1, then run the verifier by hand as above), or it runs and keeps failing: read the problems of its latest rows (`SELECT verified_at, ok, problems FROM crove_kernel.archive_verification ORDER BY verified_at DESC LIMIT 3`) and follow "Verification fails: the archive and the database disagree" above.
+- `archive_lag`: the oldest audit event not yet in a batch (journal entries go in the same windows) is older than `PROBER_MAX_ARCHIVE_LAG_SECONDS` (by default the larger of 3600 s and `ARCHIVE_LAG_SECONDS` plus 900 s; the archiver itself waits `ARCHIVE_LAG_SECONDS`, 600 s by default, on purpose, so keep the limit well above it). The archiver is stopped or its writes fail: look for `[archive]` lines in the worker log and for failed `kernel-archive-write` jobs, and check the store (the `archive` volume, or the bucket and its credentials).
+
+To look by hand:
 
 ```sh
 docker compose exec db psql -U postgres -c "SELECT max(verified_at) FROM crove_kernel.archive_verification"

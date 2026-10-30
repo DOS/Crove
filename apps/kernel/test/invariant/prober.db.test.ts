@@ -121,10 +121,10 @@ suite('prober privileges', () => {
       { fn: 'crove_kernel.worker_build_lag(timestamp with time zone)', prosecdef: true, proconfig: PINNED },
     ]);
     // #1997: crove_kernel.archive_health(), the WORM archive's two ages (times only, no tenant data), for crove_prober
-    // alone and a pinned definer, once it exists. This copy accepts it absent, so the migration that adds it can land
-    // while this suite runs from base; that PR then requires it.
+    // alone and a pinned definer.
     const archive = await admin.query<{ oid: number | null }>(`SELECT to_regprocedure('crove_kernel.archive_health()')::oid AS oid`);
     const archiveOid = archive.rows[0]?.oid ?? null;
+    expect(archiveOid).not.toBeNull();
     if (archiveOid !== null) {
       const runners = await admin.query<{ role: string }>(`SELECT r AS role FROM unnest($1::text[]) r WHERE has_function_privilege(r, $2::oid, 'EXECUTE') ORDER BY 1`, [
         roles,
@@ -186,6 +186,9 @@ suite('prober privileges', () => {
     // health()'s result stays as it is: every migration file must re-apply on the final schema (migrate.db.test.ts),
     // so its result columns never change; the WORM archive's ages come from archive_health() (#1997).
     expect(Object.keys(rows[0] as object)).toEqual(columns);
+    // The WORM archive's two ages (#1997): times only.
+    const archive = await prober.query('SELECT * FROM crove_kernel.archive_health()');
+    expect(archive.fields.map((f) => f.name)).toEqual(['archive_verify_age_seconds', 'archive_lag_seconds']);
     const refused = [
       'SELECT 1 FROM crove_kernel.tenant LIMIT 1',
       'SELECT 1 FROM crove_kernel.outbox_event LIMIT 1',

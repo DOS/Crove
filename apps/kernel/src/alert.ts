@@ -21,8 +21,9 @@ export type AlertState = 'new' | 'changed' | 'repeat';
 
 export interface Finding {
   // backup: a failed backup run, reported by tools/backup/backup.sh through `prober --backup-failed` (issue #307). auth:
-  // Supabase Auth did not answer its health check (issue #1994).
-  check: 'outbox' | 'inbound' | 'jobs_schema' | 'job_age' | 'dead_letters' | 'heartbeat' | 'notify_queue' | 'probe' | 'backup' | 'auth';
+  // Supabase Auth did not answer its health check (issue #1994). archive_verify, archive_lag: the WORM archive's nightly
+  // verification stopped, or the archive fell behind (issue #1997).
+  check: 'outbox' | 'inbound' | 'jobs_schema' | 'job_age' | 'dead_letters' | 'heartbeat' | 'notify_queue' | 'probe' | 'backup' | 'auth' | 'archive_verify' | 'archive_lag';
   message: string;
   value: number | null;
   threshold: number | null;
