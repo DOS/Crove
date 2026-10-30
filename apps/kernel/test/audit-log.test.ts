@@ -20,6 +20,9 @@ describe('audit detail', () => {
     expect(auditDetailLine({ note: 'a\nb\u0000c' })).toBe('note=a b c');
     expect(auditDetailLine({ notes: ['a\nb', 'z'.repeat(250)] })).toBe(`notes=[a b, ${'z'.repeat(200)}…]`);
     expect(auditDetailLine({ deep: { a: { b: { c: { d: 1 } } } } })).toBe('deep.a.b={…}');
+    // The worker process a system row names is never shown to the org (#1951).
+    expect(auditDetailLine({ workerInstance: 'crove-worker:host-a' })).toBeNull();
+    expect(auditDetailLine('{"workerInstance":"crove-worker:host-a","rows":3}')).toBe('rows=3');
     expect(auditDetailLine({ list: Array.from({ length: 12 }, (_, i) => i) })).toBe('list=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, … (12)]');
     expect([...(auditDetailLine({ text: 'x'.repeat(5000) }) ?? '')].length).toBeLessThanOrEqual(206);
     const long = auditDetailLine(Object.fromEntries(Array.from({ length: 50 }, (_, i) => [`k${i}`, 'y'.repeat(100)])));

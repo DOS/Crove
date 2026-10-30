@@ -1,6 +1,7 @@
 // The org chart and AI agents (ADR-0029, issue #258): positions held by members or agents, with every agent-held
 // position labelled AI (section 9), the agent templates, the agents' status, max risk and daily run cap, the monthly
-// budgets, and "Stop AI". The server enforces every rule; the screen hides what the viewer's role can never do.
+// budgets, and "Stop AI". In an org of several legal entities, owners choose each position's entities (#1763). The
+// server enforces every rule; the screen hides what the viewer's role can never do.
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useMemo, useState, type FormEvent } from 'react';
 import { useTranslations } from 'use-intl';
@@ -15,7 +16,22 @@ import { TableCell, TableRow } from '@crove/ui/components/table';
 import { StepUpPrompt } from '../components/two-factor.tsx';
 import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
-import { agentPermissions, budgetUsage, chartTree, holderCandidates, isBudgetAmount, type AgentPermissions, type ChartNode } from '../lib/agents.ts';
+import {
+  EVERY_ENTITY,
+  LE_SCOPE_MAX,
+  agentPermissions,
+  budgetUsage,
+  chartTree,
+  defaultScope,
+  holderCandidates,
+  isBudgetAmount,
+  isEveryEntity,
+  scopeNames,
+  toggleScopeEntity,
+  type AgentPermissions,
+  type ChartNode,
+  type LeScope,
+} from '../lib/agents.ts';
 import { errorMessage, isStepUpRequired, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
 
@@ -24,6 +40,7 @@ type Position = Chart['positions'][number];
 type Agent = Chart['agents'][number];
 type KillSwitch = Chart['killSwitches'][number];
 type Member = { userId: string; email: string; displayName: string | null };
+type Entity = { id: string; name: string; isDefault: boolean };
 
 const RISKS = ['R0', 'R1', 'R2'] as const;
 const AGENT_STATUSES = ['active', 'paused', 'retired'] as const;
@@ -183,6 +200,125 @@ function KillSwitches({ switches, agents, perms }: { switches: KillSwitch[]; age
   );
 }
 
+// The legal entities of a position (#1763): every entity, or some of the org's, picked one by one. Shown only to owners
+// of an org with more than one entity; the server checks the ids (POSITION_SCOPE_INVALID).
+function LeScopePicker({ label, entities, value, onChange, disabled }: { label: string; entities: Entity[]; value: LeScope; onChange: (next: string[]) => void; disabled?: boolean }) {
+  const t = useTranslations('agents');
+  const every = isEveryEntity(value);
+  return (
+    <fieldset className="text-xs" disabled={disabled}>
+      <legend className="text-subtle-foreground">{label}</legend>
+      <NativeSelect
+        className="mt-1 w-full"
+        aria-label={t('leScopeMode')}
+        value={every ? 'every' : 'some'}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.value === 'every' ? [...EVERY_ENTITY] : defaultScope(entities))}
+      >
+        <NativeSelectOption value="every">{t('leScopeEvery')}</NativeSelectOption>
+        <NativeSelectOption value="some">{t('leScopeSome')}</NativeSelectOption>
+      </NativeSelect>
+      {!every && (
+        <ul className="mt-2 space-y-1">
+          {entities.map((e) => (
+            <li key={e.id}>
+              <label className="flex min-h-6 items-center gap-2 text-foreground">
+                <Checkbox
+                  checked={value.includes(e.id)}
+                  // The commands take at most LE_SCOPE_MAX entities one by one; more is every entity.
+                  disabled={disabled || (!value.includes(e.id) && value.length >= LE_SCOPE_MAX)}
+                  onCheckedChange={(checked) => onChange(toggleScopeEntity(value, e.id, checked, entities))}
+                />
+                <span className="break-words">{e.name}</span>
+              </label>
+            </li>
+          ))}
+        </ul>
+      )}
+      {!every && value.length === 0 && (
+        <p className="mt-1 text-destructive" role="alert">
+          {t('leScopeNone')}
+        </p>
+      )}
+    </fieldset>
+  );
+}
+
+const scopeReady = (scope: LeScope) => isEveryEntity(scope) || scope.length > 0;
+
+// A position's legal entities as text, and for owners the control that changes them (kernel.position.update, R3).
+function PositionScope({ position, entities, manage }: { position: Position; entities: Entity[]; manage: boolean }) {
+  const t = useTranslations('agents');
+  const tc = useTranslations('common');
+  const [editing, setEditing] = useState<string[] | null>(null);
+  const update = useMutation(
+    orpc.chart.updatePosition.mutationOptions({
+      onSuccess: () => {
+        setEditing(null);
+        refresh();
+      },
+    }),
+  );
+  const locked = isStepUpRequired(update.error);
+  const names = scopeNames(position.leScope, entities);
+  return (
+    <div className="mt-1">
+      <p className="text-xs text-subtle-foreground">
+        {t('leScopeShown', { names: names === null ? t('leScopeEvery') : names.length > 0 ? names.join(', ') : t('leScopeUnnamed') })}
+      </p>
+      {manage && editing === null && (
+        <Button
+          size="sm"
+          variant="outline"
+          className="mt-1"
+          aria-label={t('leScopeEditOf', { title: position.title })}
+          onClick={() => {
+            update.reset();
+            setEditing([...position.leScope]);
+          }}
+        >
+          {t('leScopeEdit')}
+        </Button>
+      )}
+      {manage && editing !== null && (
+        <div className="mt-2 space-y-2 rounded-lg border bg-muted/40 p-2">
+          <LeScopePicker label={t('leScope')} entities={entities} value={editing} onChange={setEditing} disabled={update.isPending || locked} />
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              disabled={update.isPending || locked || !scopeReady(editing)}
+              onClick={() => update.mutate({ id: position.id, leScope: editing, idempotencyKey: crypto.randomUUID() })}
+            >
+              {update.isPending ? <Spinner /> : null}
+              {t('save')}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={update.isPending}
+              onClick={() => {
+                // A refused request waiting for a second factor is dropped too, so it is never sent after a cancel.
+                update.reset();
+                setEditing(null);
+              }}
+            >
+              {tc('cancel')}
+            </Button>
+          </div>
+        </div>
+      )}
+      <Refusal
+        error={update.error}
+        variables={update.variables}
+        retry={(v) => update.mutate(v)}
+        reset={() => update.reset()}
+        action={t('stepUpLeScope', { title: position.title })}
+        className="mt-1 text-xs text-destructive"
+      />
+    </div>
+  );
+}
+
 function holderValue(holder: Position['holder']): string {
   if (!holder) return '';
   return holder.type === 'agent' ? `agent:${holder.agentId}` : `user:${holder.userId}`;
@@ -270,7 +406,15 @@ function AssignHolder({ position, members, agents }: { position: Position; membe
   );
 }
 
-type PositionContext = { members: Member[]; agents: Agent[]; positions: Position[]; templateRoles: ReadonlyMap<string, string>; perms: AgentPermissions };
+// entities: the org's legal entities when it has more than one, else none (the screen then shows no scope).
+type PositionContext = {
+  members: Member[];
+  agents: Agent[];
+  positions: Position[];
+  templateRoles: ReadonlyMap<string, string>;
+  perms: AgentPermissions;
+  entities: Entity[];
+};
 
 export function PositionNode({ node, ctx }: { node: ChartNode<Position>; ctx: PositionContext }) {
   const t = useTranslations('agents');
@@ -292,6 +436,7 @@ export function PositionNode({ node, ctx }: { node: ChartNode<Position>; ctx: Po
           {p.status === 'archived' && <Badge variant="outline">{t('positionArchived')}</Badge>}
         </div>
         <p className="text-xs text-subtle-foreground">{t('positionMeta', { module: moduleName(p.module), roleKey: p.roleKey })}</p>
+        {ctx.entities.length > 1 && <PositionScope position={p} entities={ctx.entities} manage={ctx.perms.manage} />}
         <p className="text-sm text-muted-foreground">
           {holder === null
             ? t('vacant')
@@ -312,7 +457,9 @@ export function PositionNode({ node, ctx }: { node: ChartNode<Position>; ctx: Po
   );
 }
 
-function AddPosition({ positions }: { positions: Position[] }) {
+// entitiesReady: the org's legal entities are known (an owner's create waits for them, so it never sends no scope
+// in an org of several only because the list has not loaded or failed).
+function AddPosition({ positions, entities, entitiesReady }: { positions: Position[]; entities: Entity[]; entitiesReady: boolean }) {
   const t = useTranslations('agents');
   const moduleName = useModuleName();
   const modules = getConfig().modules;
@@ -320,18 +467,26 @@ function AddPosition({ positions }: { positions: Position[] }) {
   const [module, setModule] = useState(modules[0] ?? 'kernel');
   const [roleKey, setRoleKey] = useState('');
   const [reportsTo, setReportsTo] = useState('');
+  // Until the owner picks, the org's default entity, which the server gives a new position anyway.
+  const [picked, setPicked] = useState<string[] | null>(null);
+  const leScope = picked ?? defaultScope(entities);
   const [key, setKey] = useState(() => crypto.randomUUID());
   const create = useMutation(orpc.chart.createPosition.mutationOptions({ onSuccess: refresh }));
   const cleared = {
     onSuccess: () => {
       setTitle('');
       setRoleKey('');
+      setPicked(null);
       setKey(crypto.randomUUID());
     },
   };
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    create.mutate({ title: title.trim(), module, roleKey: roleKey.trim(), reportsTo: reportsTo || null, idempotencyKey: key }, cleared);
+    if (!entitiesReady || (entities.length > 1 && !scopeReady(leScope))) return;
+    create.mutate(
+      { title: title.trim(), module, roleKey: roleKey.trim(), reportsTo: reportsTo || null, ...(entities.length > 1 ? { leScope } : {}), idempotencyKey: key },
+      cleared,
+    );
   };
   const locked = isStepUpRequired(create.error);
   return (
@@ -366,8 +521,13 @@ function AddPosition({ positions }: { positions: Position[] }) {
             ))}
           </NativeSelect>
         </label>
+        {entities.length > 1 && (
+          <div className="sm:col-span-2 lg:col-span-5">
+            <LeScopePicker label={t('leScope')} entities={entities} value={leScope} onChange={setPicked} disabled={locked} />
+          </div>
+        )}
         <div className="flex items-end gap-2 sm:col-span-2 lg:col-span-5">
-          <Button type="submit" disabled={create.isPending || locked}>
+          <Button type="submit" disabled={create.isPending || locked || !entitiesReady || (entities.length > 1 && !scopeReady(leScope))}>
             {create.isPending ? <Spinner /> : null}
             {t('addPosition')}
           </Button>
@@ -490,14 +650,24 @@ export function AgentRow({ agent, perms }: { agent: Agent; perms: AgentPermissio
   );
 }
 
-function Templates({ perms }: { perms: AgentPermissions }) {
+function Templates({ perms, entities, entitiesReady }: { perms: AgentPermissions; entities: Entity[]; entitiesReady: boolean }) {
   const t = useTranslations('agents');
   const moduleName = useModuleName();
   const templates = useQuery(orpc.chart.templates.queryOptions());
   const install = useMutation(orpc.chart.installTemplate.mutationOptions({ onSuccess: refresh }));
+  // The entities of the next agent installed; until the owner picks, the org's default entity, as the server would.
+  const [picked, setPicked] = useState<string[] | null>(null);
+  const leScope = picked ?? defaultScope(entities);
+  // Shown only while some template can be installed.
+  const scoped = perms.manage && entities.length > 1 && (templates.data ?? []).some((tpl) => tpl.moduleEnabled);
   return (
     <section className="mt-8">
       <h2 className="mb-3 text-sm font-semibold text-foreground">{t('templatesTitle')}</h2>
+      {scoped && (
+        <div className="mb-3 max-w-md rounded-lg border bg-muted/40 p-3">
+          <LeScopePicker label={t('leScopeInstall')} entities={entities} value={leScope} onChange={setPicked} disabled={install.isPending || isStepUpRequired(install.error)} />
+        </div>
+      )}
       {templates.isPending ? (
         <Spinner />
       ) : templates.error ? (
@@ -523,8 +693,8 @@ function Templates({ perms }: { perms: AgentPermissions }) {
                   <div>
                     <Button
                       size="sm"
-                      disabled={!tpl.moduleEnabled || install.isPending}
-                      onClick={() => install.mutate({ templateKey: tpl.key, idempotencyKey: crypto.randomUUID() })}
+                      disabled={!tpl.moduleEnabled || install.isPending || !entitiesReady || (scoped && !scopeReady(leScope))}
+                      onClick={() => install.mutate({ templateKey: tpl.key, ...(scoped ? { leScope } : {}), idempotencyKey: crypto.randomUUID() })}
                     >
                       {t('install')}
                     </Button>
@@ -688,6 +858,12 @@ export function AgentsPage() {
   // AGENT_ROLE_MISMATCH otherwise). Shared with the templates list, which asks for the same query.
   const templates = useQuery(orpc.chart.templates.queryOptions());
   const templateRoles = useMemo(() => new Map((templates.data ?? []).map((tpl) => [tpl.key, tpl.roleKey])), [templates.data]);
+  // The org's legal entities, which only owners and admins read (#1763): with one entity the screen shows no scope.
+  const legalEntities = useQuery({ ...orpc.legalEntities.list.queryOptions(), enabled: perms.manage });
+  // Owners only, whatever another screen left in the cache (Settings reads the same list for admins).
+  const entities: Entity[] = perms.manage && (legalEntities.data?.length ?? 0) > 1 ? (legalEntities.data ?? []) : [];
+  // Until the list is known, an owner's create and install wait: a failed or pending list is not a single entity.
+  const entitiesReady = !perms.manage || legalEntities.data !== undefined;
 
   return (
     <div>
@@ -700,6 +876,14 @@ export function AgentsPage() {
         <>
           <KillSwitches switches={chart.data.killSwitches} agents={chart.data.agents} perms={perms} />
           {perms.manage && <p className="mb-4 text-xs text-muted-foreground">{t('manageHint')}</p>}
+          {perms.manage && legalEntities.error && (
+            <div className="mb-4 flex flex-wrap items-center gap-2">
+              <ErrorText>{errorMessage(legalEntities.error)}</ErrorText>
+              <Button size="sm" variant="outline" disabled={legalEntities.isFetching} onClick={() => void legalEntities.refetch()}>
+                {t('leScopeRetry')}
+              </Button>
+            </div>
+          )}
           <section>
             <h2 className="mb-3 text-sm font-semibold text-foreground">{t('chart')}</h2>
             <Card className="mb-3 gap-1 p-3">
@@ -711,11 +895,11 @@ export function AgentsPage() {
             ) : (
               <ul className="space-y-2 border-l border-border pl-4">
                 {chartTree(chart.data.positions).map((node) => (
-                  <PositionNode key={node.position.id} node={node} ctx={{ members, agents: chart.data.agents, positions: chart.data.positions, templateRoles, perms }} />
+                  <PositionNode key={node.position.id} node={node} ctx={{ members, agents: chart.data.agents, positions: chart.data.positions, templateRoles, perms, entities }} />
                 ))}
               </ul>
             )}
-            {perms.manage && <AddPosition positions={chart.data.positions} />}
+            {perms.manage && <AddPosition positions={chart.data.positions} entities={entities} entitiesReady={entitiesReady} />}
           </section>
           <section className="mt-8">
             <h2 className="mb-3 text-sm font-semibold text-foreground">{t('agentsTitle')}</h2>
@@ -730,7 +914,7 @@ export function AgentsPage() {
               </DataTable>
             )}
           </section>
-          <Templates perms={perms} />
+          <Templates perms={perms} entities={entities} entitiesReady={entitiesReady} />
           {perms.budgets && <Budgets agents={chart.data.agents} perms={perms} />}
         </>
       )}

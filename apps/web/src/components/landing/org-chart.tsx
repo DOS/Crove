@@ -17,6 +17,8 @@ function NodeCard({ node, selected, onSelect, a }: { node: Node; selected: boole
       type="button"
       onClick={onSelect}
       aria-pressed={selected}
+      // Opaque and stacked over the connector lines behind it; test/a11y.spec.ts reads this name (#1657).
+      data-org-node=""
       className={`relative z-10 mx-auto flex w-full max-w-[210px] min-w-0 flex-col gap-1.5 rounded-lg border bg-surface p-2.5 text-left transition-colors sm:p-3 ${
         isAgent ? 'border-dashed border-accent/70' : 'border-line-strong/50'
       } ${selected ? 'outline-2 outline-offset-2 outline-accent' : 'hover:bg-surface-2'}`}
@@ -31,7 +33,8 @@ function NodeCard({ node, selected, onSelect, a }: { node: Node; selected: boole
             {node.initials}
           </span>
         )}
-        <span className="min-w-0 text-[13px] leading-tight font-semibold sm:text-sm">{node.name}</span>
+        {/* A word longer than a phone's narrow card (Accounting) breaks, hyphenated where the language allows (#1657). */}
+        <span className="min-w-0 text-[13px] leading-tight font-semibold hyphens-auto [overflow-wrap:anywhere] sm:text-sm">{node.name}</span>
       </span>
       <span className="text-[11px] leading-snug text-subtle sm:text-xs">{node.role}</span>
       {node.budget ? (
@@ -46,7 +49,7 @@ function NodeCard({ node, selected, onSelect, a }: { node: Node; selected: boole
         </span>
       ) : null}
       {node.chip ? (
-        <Chip tone={toneOf(node.chip.tone)} wrap className="self-start text-[11px] leading-snug sm:text-xs">
+        <Chip tone={toneOf(node.chip.tone)} wrap className="self-start text-[11px] leading-snug hyphens-auto [overflow-wrap:anywhere] sm:text-xs">
           {node.chip.tone === 'ok' ? <Check className="size-3 shrink-0" aria-hidden="true" /> : null}
           {node.chip.label}
         </Chip>
@@ -83,8 +86,10 @@ export function OrgChart({ dict }: { dict: Dictionary }) {
             </span>
           </div>
         </div>
+        {/* Text on the dot grid sits on the card's own surface (#1657): a dot never falls behind a letter, so the
+            contrast is text-subtle on surface, as everywhere else on the card. */}
         <div className="canvas-dots px-2 py-6 sm:px-6 sm:py-8">
-          <p className="mb-5 text-center text-xs text-subtle">{a.hint}</p>
+          <p className="mx-auto mb-5 w-fit bg-surface px-2 text-center text-xs text-subtle">{a.hint}</p>
           <div className="grid grid-cols-3 gap-x-2 sm:gap-x-4">
             <div className="col-span-3">{node('tuan')}</div>
             {/* Director to the two managers */}
@@ -103,7 +108,7 @@ export function OrgChart({ dict }: { dict: Dictionary }) {
               <span className="absolute top-0 right-[16.667%] h-full border-l border-dashed border-accent/70" />
               <span className="travel-up absolute top-0 left-[16.667%] size-2 rounded-full bg-accent ring-4 ring-accent/20" />
               <span className="travel-up absolute top-0 left-[83.333%] size-2 rounded-full bg-accent ring-4 ring-accent/20 [animation-delay:1.8s]" />
-              <span className="absolute top-1/2 left-1/2 hidden -translate-x-1/2 -translate-y-1/2 text-[11px] whitespace-nowrap text-subtle sm:block">{a.edgeLabel}</span>
+              <span className="absolute top-1/2 left-1/2 hidden -translate-x-1/2 -translate-y-1/2 bg-surface px-1.5 text-[11px] whitespace-nowrap text-subtle sm:block">{a.edgeLabel}</span>
             </div>
             <div className="relative col-span-3 grid grid-cols-3 gap-x-2 sm:gap-x-4">
               <span className="absolute top-1/2 right-[16.667%] left-[16.667%] border-t border-dashed border-line-strong" aria-hidden="true" />

@@ -11,7 +11,7 @@ import type { InvoiceReader } from '@crove/agent';
 import type { Publisher, Refresher } from '@crove/channel';
 import { postMessage, type WebhookTarget } from './alert.ts';
 import { REFRESH_SWEEP_MS, refreshChannels } from './channel-refresh.ts';
-import { RESEAL_SWEEP_MS, resealCredentials } from './credential-reseal.ts';
+import { RESEAL_SWEEP_MS, resealCredentials, unopenableKeysLog } from './credential-reseal.ts';
 import type { ExtractClient } from '@crove/extract-contract';
 import { FINANCE_NOTIFYING_EVENTS, PERIOD_CLOSING_SWEEP_MS, extractAndPropose, importPortalList, recordExtractionFailure, recordPortalListFailure, sweepPeriodClosing } from '@crove/mod-finance';
 import { ACCOUNT_SWEEP_MS, CHAT_ALERT_TEST_EVENT, CHAT_ALERTING_EVENTS, DIGEST_SWEEP_MS, EVERGREEN_SWEEP_MS, EXTERNAL_SWEEP_MS, FEED_SWEEP_MS, LATE_ID_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, QUEUE_LOW_SWEEP_MS, RECURRING_SWEEP_MS, REMINDER_SWEEP_MS, REPORT_SCHEDULE_SWEEP_MS, runChannelOptionJob, runCommentJob, runPublishJob, runEditJob, runRemoveJob, runThreadJob, sweepAccounts, sweepDigests, sweepEvergreen, sweepExternalPosts, sweepLateIds, sweepMetrics, sweepQueueLow, sweepRecurring, sweepReminders, sweepAssignmentReminders, sweepReportSchedules, REMOVE_READY, REMOVE_SWEEP_MS, REMOVE_WATCH_AFTER_MS, isProvider, runRemoveWatch, sweepRemovals } from '@crove/mod-social';
@@ -306,6 +306,8 @@ export interface WorkerDeps {
   revoker?: SessionRevoker | null;
   // Names this worker in crove_kernel.worker_heartbeat (default: the host name, the container id under Docker).
   instance?: string;
+  // The build it records there (#1952); default: none known.
+  build?: WorkerBuild;
   // Days of crove_kernel.refusal_tally windows kept (default DEFAULT_REFUSAL_TALLY_RETENTION_DAYS).
   refusalTallyRetentionDays?: number;
   // The built-in program of each agent template (ADR-0029 section 8), by template key.
@@ -397,11 +399,30 @@ export async function sweepSocialPublishing(boss: PgBoss, workerDb: Db, provider
 }
 
 /**
- * Records that this worker is alive and the modules whose queues it works (crove_kernel.worker_beat, crove_worker
- * only): the prober ages only those queues, so a module left out does not read as stuck workers (#1877).
+ * The application_name of this worker's database connections (#1951): 'crove-worker:' and the instance its heartbeat
+ * names, which audit_event_stamp writes into every system-context audit row (detail.workerInstance), so an alert can
+ * tie one process's work across orgs together. PostgreSQL keeps 63 bytes of it, so the composition root cuts the
+ * instance to 50 characters for both (kernel.ts). Behind a transaction-mode pooler that does not track
+ * application_name per client, the server connection running a transaction may carry another worker's name; direct
+ * connections, the default, are exact.
  */
-export async function beat(workerDb: Db, instance: string, modules: readonly string[]): Promise<void> {
-  await sql`SELECT crove_kernel.worker_beat(${instance.slice(0, 128)}, ${[...modules]}::text[])`.execute(workerDb);
+export function workerApplicationName(instance: string): string {
+  return `crove-worker:${instance}`.slice(0, 63);
+}
+
+// The build a worker runs (#1952): CROVE_BUILD and CROVE_BUILD_TIME, null for a local build.
+export interface WorkerBuild {
+  id: string | null;
+  time: string | null;
+}
+
+/**
+ * Records that this worker is alive, the modules whose queues it works and the build it runs
+ * (crove_kernel.worker_beat, crove_worker only): the prober ages only those queues, so a module left out does not read
+ * as stuck workers (#1877), and the API's /readyz waits while a live worker runs an older build (#1952).
+ */
+export async function beat(workerDb: Db, instance: string, modules: readonly string[], build: WorkerBuild = { id: null, time: null }): Promise<void> {
+  await sql`SELECT crove_kernel.worker_beat(${instance.slice(0, 128)}, ${[...modules]}::text[], ${build.id}::text, ${build.time}::timestamptz)`.execute(workerDb);
 }
 
 /**
@@ -1198,6 +1219,8 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
             (done.leftWaiting > 0 ? `, ${done.leftWaiting} team chat alerts waiting for the Social module (keep CREDENTIAL_KEY_PREVIOUS)` : ''),
         );
       }
+      // Key ids and counts only (#1888): never a token or an envelope.
+      for (const { level, line } of unopenableKeysLog(done.unopenable)) (level === 'error' ? console.error : console.warn)(line);
     } catch (error) {
       console.error('[credential-reseal] sweep', error instanceof Error ? error.name : typeof error);
     } finally {
@@ -1666,7 +1689,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   // One beat at a time, in order: the stop's beat below lands after any beat still in flight, never before it (#1887).
   let beats: Promise<void> = Promise.resolve();
   const heartbeat = (modules: readonly string[] = worked) =>
-    (beats = beats.then(() => beat(deps.workerDb, instance, modules)).catch((error) => console.error('[heartbeat]', error)));
+    (beats = beats.then(() => beat(deps.workerDb, instance, modules, deps.build)).catch((error) => console.error('[heartbeat]', error)));
   const heartbeatTimer = setInterval(() => void heartbeat(), HEARTBEAT_INTERVAL_MS);
   await heartbeat();
   // Back-pressure (#894): checked every 10 s; one check at a time, none after stop. Its start and end go to the alert

@@ -43,6 +43,8 @@ export { vatPeriod } from './domain/vat-return.ts';
 export { defaultLegalEntityId, legalEntityError, resolveLegalEntity } from './legal-entity.ts';
 export {
   normalizePortalInvoices,
+  PORTAL_LIST_TOO_LARGE_MESSAGE,
+  PortalListTooLarge,
   parseJsonKeepingNumbers,
   portalDate,
   readSyncedList,

@@ -4,8 +4,24 @@
 // reads (ExtractedPortalList), so checkPortalList and finance.portal_list.record treat both the same way.
 import { z } from 'zod';
 import { EXTRACT_LIMITS, zExtractedPortalList, type ExtractedPortalList, type PortalListSkipReason } from '@crove/extract-contract';
-import { DomainError } from '@crove/kernel-runtime';
 import { parseTaxCode } from '@crove/l10n-vn';
+
+// What the person reads for PORTAL_LIST_TOO_LARGE, whichever cap stopped the list (#1938): the portal client's (rows,
+// pages or bytes of one answer, apps/kernel/src/tax-portal.ts) on the list step, the evidence file's size, or this
+// module's row limit over every answer. An oversized captcha, login or XML answer is PORTAL_BAD_ANSWER instead. Each cause asks the same of them, so one code and one message, the app's own wording
+// (apps/app/src/i18n/messages, kernelErrors).
+export const PORTAL_LIST_TOO_LARGE_MESSAGE = 'Danh sách của kỳ này quá lớn để lấy một lần; hãy xuất danh sách Excel từ cổng thuế rồi tải lên';
+
+// A period with more invoices than one list may hold. domain/ stays pure TypeScript (plan §5.1, #1680), so this is an
+// error of its own, not the runtime's DomainError: the portal sync answers it 422 PORTAL_LIST_TOO_LARGE with this
+// message (apps/kernel/src/portal-sync.ts), and readSyncedList records the message as the list's failure.
+export class PortalListTooLarge extends Error {
+  readonly code = 'PORTAL_LIST_TOO_LARGE';
+  constructor() {
+    super(PORTAL_LIST_TOO_LARGE_MESSAGE);
+    this.name = 'PortalListTooLarge';
+  }
+}
 
 // The evidence file of a synced list: the portal's answers as JSON, stored like an import (never read as a document).
 export const PORTAL_SYNC_CONTENT_TYPE = 'application/json';
@@ -171,7 +187,7 @@ export function normalizePortalInvoices(answers: readonly PortalAnswer[], period
         continue;
       }
       if (rows.length >= EXTRACT_LIMITS.maxPortalListRows) {
-        throw new DomainError('PORTAL_LIST_TOO_LARGE', 422, `Kỳ này có hơn ${EXTRACT_LIMITS.maxPortalListRows} hóa đơn trên cổng thuế; hãy xuất danh sách Excel từ cổng thuế rồi tải lên`);
+        throw new PortalListTooLarge();
       }
       const template = text(r.khmshdon);
       const currency = text(r.dvtte)?.toUpperCase() ?? 'VND';
@@ -227,7 +243,7 @@ export function readSyncedList(bytes: Uint8Array, period: { from: string; to: st
     if (!zExtractedPortalList.safeParse(list).success) return { ok: false, error: 'Không đọc được dữ liệu đã lấy từ cổng thuế; hãy lấy lại' };
     return { ok: true, list };
   } catch (error) {
-    if (error instanceof DomainError) return { ok: false, error: error.message };
+    if (error instanceof PortalListTooLarge) return { ok: false, error: error.message };
     throw error;
   }
 }

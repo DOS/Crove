@@ -22,8 +22,11 @@ import { loadConfig } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
 import { createPortalSync } from '../src/portal-sync.ts';
 import { createSessionStatusSource } from '../src/sessions.ts';
-import { createTaxPortalClient } from '../src/tax-portal.ts';
+import { TaxPortalError, createTaxPortalClient } from '../src/tax-portal.ts';
 import { TEST_MANIFESTS } from './manifests.ts';
+
+// What the person reads for PORTAL_LIST_TOO_LARGE, whatever cap stopped the list (#1938).
+const TOO_LARGE = 'Danh sách của kỳ này quá lớn để lấy một lần; hãy xuất danh sách Excel từ cổng thuế rồi tải lên';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -472,6 +475,66 @@ suite('assisted tax portal sync (#325)', () => {
       expect(refused.body.code).toBe('PORTAL_SESSION_INVALID');
     } finally {
       expect((await rpc('org/setTaxCode', owner, { taxCode: BUYER })).status).toBe(200);
+    }
+  });
+
+  // The finance domain refuses the list with its own error (domain/ stays pure, #1680); the API's answer is the same as
+  // when the domain threw the runtime's DomainError: 422, the code and the domain's message, and nothing is filed.
+  it('answers a list too large 422 PORTAL_LIST_TOO_LARGE with the finance message, filing nothing', async () => {
+    const real = createTaxPortalClient({ baseUrl: portal.url, gapMs: 0, sleep: async () => {} });
+    const huge: ReturnType<typeof createTaxPortalClient> = {
+      ...real,
+      async purchaseInvoices(token, from, to, step) {
+        const answers = await real.purchaseInvoices(token, from, to, step);
+        const first = answers.find((a) => a.rows.length > 0);
+        if (!first) throw new Error('the fake portal answered no invoice');
+        const sample = first.rows[0] as Record<string, unknown>;
+        return [{ query: first.query, rows: Array.from({ length: 20_001 }, (_, i) => ({ ...sample, shdon: String(i + 1) })) }];
+      },
+    };
+    const hugeApp = appWith({ client: huge });
+    const files = async () => Number((await admin((c) => c.query<{ n: string }>('SELECT count(*) AS n FROM crove_kernel.file WHERE org_id = $1', [org.orgId]))).rows[0]?.n);
+    const before = await files();
+    const captcha = await rpc('portalSync/captcha', owner, { period: PERIOD }, org.slug, hugeApp);
+    const logged = await rpc('portalSync/login', owner, { period: PERIOD, challenge: captcha.body.challenge, captcha: FAKE_CAPTCHA_ANSWER, password: FAKE_PORTAL_PASSWORD, consent: true }, org.slug, hugeApp);
+    expect(logged.status, JSON.stringify(logged.body)).toBe(200);
+    const refused = await rpc('portalSync/fetchList', owner, { period: PERIOD, session: logged.body.session }, org.slug, hugeApp);
+    expect(refused.status, JSON.stringify(refused.body)).toBe(422);
+    expect(refused.body).toMatchObject({ code: 'PORTAL_LIST_TOO_LARGE', message: TOO_LARGE });
+    expect(await files()).toBe(before);
+  });
+
+  // The portal client's own cap (rows, pages or bytes of one answer) answers the same code with the same message as the
+  // finance domain's refusal above: the person does the same either way (#1938).
+  it("answers the portal client's cap with the same code and message, filing nothing", async () => {
+    const real = createTaxPortalClient({ baseUrl: portal.url, gapMs: 0, sleep: async () => {} });
+    const capped: ReturnType<typeof createTaxPortalClient> = {
+      ...real,
+      async purchaseInvoices() {
+        throw new TaxPortalError('TOO_LARGE');
+      },
+    };
+    const cappedApp = appWith({ client: capped });
+    const files = async () => Number((await admin((c) => c.query<{ n: string }>('SELECT count(*) AS n FROM crove_kernel.file WHERE org_id = $1', [org.orgId]))).rows[0]?.n);
+    const before = await files();
+    const captcha = await rpc('portalSync/captcha', owner, { period: PERIOD }, org.slug, cappedApp);
+    const logged = await rpc('portalSync/login', owner, { period: PERIOD, challenge: captcha.body.challenge, captcha: FAKE_CAPTCHA_ANSWER, password: FAKE_PORTAL_PASSWORD, consent: true }, org.slug, cappedApp);
+    expect(logged.status, JSON.stringify(logged.body)).toBe(200);
+    const refused = await rpc('portalSync/fetchList', owner, { period: PERIOD, session: logged.body.session }, org.slug, cappedApp);
+    expect(refused.status, JSON.stringify(refused.body)).toBe(422);
+    expect(refused.body).toMatchObject({ code: 'PORTAL_LIST_TOO_LARGE', message: TOO_LARGE });
+    expect(await files()).toBe(before);
+  });
+
+  // Over the byte cap outside the list step there is no list to be too large: the answer is one the system cannot read.
+  it('answers an oversized captcha as an unreadable answer, not a list too large (#1938)', async () => {
+    portal.options.outage = { status: 200, body: JSON.stringify({ key: 'k1', content: `<svg>${'x'.repeat(300 * 1024)}</svg>` }), contentType: 'application/json' };
+    try {
+      const big = await rpc('portalSync/captcha', owner, { period: PERIOD });
+      expect(big.status).toBe(503);
+      expect(big.body.code).toBe('PORTAL_BAD_ANSWER');
+    } finally {
+      portal.options.outage = null;
     }
   });
 

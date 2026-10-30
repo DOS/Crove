@@ -2,7 +2,7 @@
 // is missing from the cached session until the token refreshes, and the cached answer alone loops between /mfa and the
 // app (the kernel refuses with MFA_REQUIRED, which opens /mfa again).
 import { describe, expect, it, vi } from 'vitest';
-import { MFA_WAIT_MS, needsSecondFactorNow, secondFactorStillOwed, verifySecondFactor } from '../src/lib/auth.ts';
+import { MFA_RETRY_GAP_MS, MFA_WAIT_MS, afterMfaRefusal, needsSecondFactorNow, secondFactorStillOwed, verifySecondFactor } from '../src/lib/auth.ts';
 
 type Level = { currentLevel: string | null; nextLevel: string | null } | null;
 type Factor = { id: string; status: 'verified' | 'unverified' };
@@ -133,5 +133,71 @@ describe('secondFactorStillOwed when Supabase Auth hangs', () => {
   // openMfa counts a failed check as owed; the failure itself is not swallowed into an answer here.
   it('passes on a check that fails', async () => {
     await expect(secondFactorStillOwed(fakeClient(new Error('no session'), []).client)).rejects.toThrow('no session');
+  });
+});
+
+// After an MFA_REQUIRED refusal (#1912): the screen's queries refused just before this tab saved the verified session
+// (the stream's refresh when the server closed it for 'mfa') load again instead of keeping the error.
+describe('afterMfaRefusal', () => {
+  const deps = (owed: boolean | Error) => ({
+    stillOwed: vi.fn(() => (owed instanceof Error ? Promise.reject(owed) : Promise.resolve(owed))),
+    openChallenge: vi.fn(),
+    retryRefused: vi.fn(),
+    lastRetry: { at: -Infinity },
+  });
+
+  it('retries the refused requests when the second factor is no longer owed, without the challenge', async () => {
+    const d = deps(false);
+    await afterMfaRefusal(d);
+    expect(d.retryRefused).toHaveBeenCalledOnce();
+    expect(d.openChallenge).not.toHaveBeenCalled();
+  });
+
+  it('opens the challenge when it is still owed, or when the check fails, and retries nothing', async () => {
+    for (const owed of [true, new Error('network')] as const) {
+      const d = deps(owed);
+      await afterMfaRefusal(d);
+      expect(d.openChallenge).toHaveBeenCalledOnce();
+      expect(d.retryRefused).not.toHaveBeenCalled();
+    }
+  });
+
+  it('retries once per gap, so a server that keeps refusing gets no loop', async () => {
+    let clock = 1_000_000;
+    const d = { ...deps(false), now: () => clock };
+    await afterMfaRefusal(d);
+    clock += MFA_RETRY_GAP_MS - 1;
+    await afterMfaRefusal(d);
+    expect(d.retryRefused).toHaveBeenCalledOnce();
+    clock += 1;
+    await afterMfaRefusal(d);
+    expect(d.retryRefused).toHaveBeenCalledTimes(2);
+    expect(d.openChallenge).not.toHaveBeenCalled();
+  });
+
+  it('retries only after the verification under way has settled', async () => {
+    // The session stays aal1 until the verification saves the aal2 one: a check that did not wait would open /mfa.
+    let verified = false;
+    let settle: (value: { data: null; error: null }) => void = () => {};
+    const pending = new Promise<{ data: null; error: null }>((resolve) => (settle = resolve));
+    const client = {
+      mfa: {
+        challengeAndVerify: () => pending,
+        getAuthenticatorAssuranceLevel: async () => ({ data: { currentLevel: verified ? 'aal2' : 'aal1', nextLevel: 'aal2' }, error: null }),
+        listFactors: async () => ({ data: { all: [], totp: [] }, error: null }),
+      },
+    } as unknown as Parameters<typeof secondFactorStillOwed>[0];
+    void verifySecondFactor({ factorId: 'f1', code: '123456' }, client as unknown as Parameters<typeof verifySecondFactor>[1]);
+    const retryRefused = vi.fn();
+    const openChallenge = vi.fn();
+    const done = afterMfaRefusal({ stillOwed: () => secondFactorStillOwed(client), openChallenge, retryRefused, lastRetry: { at: -Infinity } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(retryRefused).not.toHaveBeenCalled();
+    expect(openChallenge).not.toHaveBeenCalled();
+    verified = true;
+    settle({ data: null, error: null });
+    await done;
+    expect(retryRefused).toHaveBeenCalledOnce();
+    expect(openChallenge).not.toHaveBeenCalled();
   });
 });

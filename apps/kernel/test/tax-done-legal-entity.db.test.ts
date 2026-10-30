@@ -148,7 +148,7 @@ suite('tax obligations done per legal entity on PostgreSQL (#1496)', () => {
     expect(await listed(owner, due!)).toBe(true);
     // The row says which entity still owes it (#1553).
     const open = (await dues(owner)).find((d) => d.obligation === mark.obligation && d.period === mark.period)?.openEntities;
-    expect(open).toEqual([{ id: branch, name: 'Chi nhánh' }]);
+    expect(open).toEqual([{ id: branch, name: 'Chi nhánh', canMark: true }]);
     // Marking it again is a no-op.
     expect(await exec(owner, 'kernel.tax_obligation.done', { ...mark, legalEntityId: defaultEntity })).toEqual({ ...mark, legalEntityId: defaultEntity, done: true });
 
@@ -174,7 +174,7 @@ suite('tax obligations done per legal entity on PostgreSQL (#1496)', () => {
   it('lets a member limited to one entity mark and see only that entity', async () => {
     const listedForAccountant = await dues(accountant);
     // Each entity files its own VAT return (#1531), so the branch accountant sees the branch's, owed by the branch alone.
-    expect(listedForAccountant.find((d) => d.obligation === 'vat_return')?.openEntities).toEqual([{ id: branch, name: 'Chi nhánh' }]);
+    expect(listedForAccountant.find((d) => d.obligation === 'vat_return')?.openEntities).toEqual([{ id: branch, name: 'Chi nhánh', canMark: true }]);
     const due = listedForAccountant.find((d) => d.obligation === 'pit_withholding');
     expect(due).toBeDefined();
     const mark = { obligation: due!.obligation, period: due!.period };

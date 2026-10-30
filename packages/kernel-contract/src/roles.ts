@@ -4,7 +4,10 @@ import { zId } from './schemas.ts';
 // Built-in roles a member can hold on top of their base role (issue #1279, plan §4.6). The same list as the database's
 // crove_kernel.role rows (roles.db.test.ts checks it). An org-wide role covers the whole org; external_accountant names
 // one legal entity per assignment, and a member or viewer who holds only such assignments sees only those entities.
-//   finance.chief_accountant  approves the ledger's proposals (P12) and unlocks a period (ADR-0021);
+//   finance.chief_accountant  approves the ledger's proposals (P12), unlocks a period (ADR-0021) and marks the VAT
+//                             return filed (#1508);
+//   finance.entity_chief_accountant  unlocks the periods, and marks the VAT returns filed, of the legal entity it
+//                             names, per assignment (#1507, #1508);
 //   the others grant nothing more yet: they say what the member does, and their permissions come with their modules.
 export const BUILTIN_ROLE_KEYS = [
   'finance.chief_accountant',
@@ -14,6 +17,7 @@ export const BUILTIN_ROLE_KEYS = [
   'desk.agent',
   'hr.manager',
   'external_accountant',
+  'finance.entity_chief_accountant',
 ] as const;
 export type BuiltinRoleKey = (typeof BUILTIN_ROLE_KEYS)[number];
 export const zBuiltinRoleKey = z.enum(BUILTIN_ROLE_KEYS);
@@ -22,7 +26,7 @@ export const ROLE_SCOPE_VALUES = ['org', 'legal_entity'] as const;
 export const zRoleScope = z.enum(ROLE_SCOPE_VALUES);
 
 // Permissions a role grants that something checks today.
-export const ROLE_PERMISSIONS = ['finance.proposal.approve', 'finance.period.unlock'] as const;
+export const ROLE_PERMISSIONS = ['finance.proposal.approve', 'finance.period.unlock', 'finance.vat.file'] as const;
 export type RolePermission = (typeof ROLE_PERMISSIONS)[number];
 // One constant per permission, for the app's display gates (#1641): typed as a RolePermission, so a key that leaves
 // ROLE_PERMISSIONS (which the manifest check keeps equal to the declared ones a role grants) fails typecheck, and

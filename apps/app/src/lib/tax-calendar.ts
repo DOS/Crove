@@ -1,7 +1,7 @@
 // The tax calendar on the multi-client home screen (issue #921): every client's obligations due in the next 30 days or
 // overdue, in one list by due date, and how a period reads. The dues themselves come from me.clients (each read in its
 // own org on the server); nothing here decides what is due.
-import type { TaxDueView, TaxObligation } from '@crove/kernel-contract';
+import type { TaxDueView } from '@crove/kernel-contract';
 import { periodParts } from './clients.ts';
 
 export interface TaxDueRow extends TaxDueView {
@@ -27,11 +27,11 @@ export function taxPeriodParts(period: string): { kind: 'year'; year: number } |
   return periodParts(period);
 }
 
-// Who may mark an obligation done (kernel.tax_obligation.done): owners, admins and members. With the finance module on,
-// the VAT return's mark records the return as filed (finance.vat.return_mark, #1400), which only owners and admins do.
-export function canMarkTaxDone(role: string | null | undefined, obligation?: TaxObligation, financeOn = false): boolean {
-  if (obligation === 'vat_return' && financeOn) return role === 'owner' || role === 'admin';
-  return role === 'owner' || role === 'admin' || role === 'member';
+// The open entities of a due the user may mark done there (#1917). The server answers it per entity with the rule the
+// mark itself applies: owners, admins and members for most obligations; with finance on, the VAT return's mark records
+// the return as filed (finance.vat.return_mark, #1400), for owners, admins and a chief accountant of that entity (#1508).
+export function markableEntities(due: Pick<TaxDueView, 'openEntities'>): TaxDueView['openEntities'] {
+  return due.openEntities.filter((e) => e.canMark);
 }
 
 // Which legal entity a due row's "done" marks (#1553): each entity marks its own obligations, and the row stays until
@@ -44,4 +44,3 @@ export function entityToMark(open: readonly { id: string }[], chosen: string | n
   return open.some((e) => e.id === chosen) ? chosen : null;
 }
 
-export type { TaxObligation };

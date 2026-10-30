@@ -4,9 +4,10 @@
 // name an invoice properly is skipped with its reason, never guessed.
 import { describe, expect, it } from 'vitest';
 import { zExtractedPortalList } from '@crove/extract-contract';
-import { checkPortalList, normalizePortalInvoices, portalDate, portalStatus, xmlCallKey, type PortalAnswer } from '../src/index.ts';
+import { PortalListTooLarge, checkPortalList, normalizePortalInvoices, portalDate, portalStatus, readSyncedList, xmlCallKey, type PortalAnswer } from '../src/index.ts';
 
 const PERIOD = { from: '2026-09-01', to: '2026-09-30' };
+const TOO_LARGE = 'Danh sách của kỳ này quá lớn để lấy một lần; hãy xuất danh sách Excel từ cổng thuế rồi tải lên';
 const BUYER = '0309876546';
 const SELLER = '0101234564';
 
@@ -103,7 +104,15 @@ describe('normalizePortalInvoices', () => {
 
   it('refuses a list larger than an upload may be', () => {
     const many = Array.from({ length: 20_001 }, (_, i) => row({ shdon: String(i + 1) }));
-    expect(() => normalizePortalInvoices([{ query: 'purchase_5', rows: many }], PERIOD)).toThrow(/hơn 20000 hóa đơn/);
+    // The domain's own error (domain/ stays pure, #1680); the portal sync answers it 422 with this code and message.
+    let refused: unknown;
+    try {
+      normalizePortalInvoices([{ query: 'purchase_5', rows: many }], PERIOD);
+    } catch (error) {
+      refused = error;
+    }
+    expect(refused).toBeInstanceOf(PortalListTooLarge);
+    expect(refused).toMatchObject({ code: 'PORTAL_LIST_TOO_LARGE', message: TOO_LARGE });
   });
 
   it('feeds the same checks as an uploaded list: the org must be the buyer', () => {
@@ -113,6 +122,15 @@ describe('normalizePortalInvoices', () => {
     expect(own.ok && own.ownSales).toBe(1);
     const other = checkPortalList(list, '0302712572');
     expect(other.ok).toBe(false);
+  });
+});
+
+describe('readSyncedList', () => {
+  it('records the refusal of a list too large as the stored list\'s failure (#1680)', () => {
+    // Two queries of 10001 rows each: each answer within its cap, the list over it.
+    const half = (query: 'purchase_5' | 'purchase_6', offset: number) => ({ query, rows: Array.from({ length: 10_001 }, (_, i) => row({ shdon: String(offset + i + 1) })) });
+    const evidence = { period: '2026-09', from: PERIOD.from, to: PERIOD.to, answers: [half('purchase_5', 0), half('purchase_6', 10_001)] };
+    expect(readSyncedList(new TextEncoder().encode(JSON.stringify(evidence)), PERIOD)).toEqual({ ok: false, error: TOO_LARGE });
   });
 });
 

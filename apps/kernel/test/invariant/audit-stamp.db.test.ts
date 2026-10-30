@@ -2,7 +2,8 @@
 // audit_event row, it names the actor of the session's own sealed context (a user, or the system with no actor id) and
 // is dated now; a row forged for another member, for the system, or backdated becomes the session's own, undated; no
 // context, or another org's, writes nothing; an agent keeps its own stricter rule; staff are not stamped. The runtime's
-// own rows are unchanged by it.
+// own rows are unchanged by it. A system row names the worker process that wrote it (detail.workerInstance, the
+// session's application_name, #1951), and no member's row can claim one.
 // Set CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
 // Part of the invariant suite: CI runs this file from the base branch on protected-path PRs (AGENTS.md).
 import { randomUUID } from 'node:crypto';
@@ -144,6 +145,42 @@ suite('audit rows stamped from the sealed context on PostgreSQL (#1482)', () => 
     await expect(forge(appUrl, null, o.orgId, { actorType: 'user', actorId: o.owner })).rejects.toThrow();
     await expect(forge(appUrl, userContext(other.owner, other.orgId), o.orgId, { actorType: 'user', actorId: other.owner })).rejects.toThrow();
     await expect(forge(adminUrl, null, o.orgId, { actorType: 'user', actorId: o.owner })).resolves.toEqual({ actor_type: 'user', actor_id: o.owner, recent: false });
+  });
+
+  it('names the worker process in a system row, and in no member\'s row, whatever either claims (#1951)', async () => {
+    const o = await org();
+    // One audit row with the given detail, inserted on a connection with the given application name, and its stored detail.
+    const insert = async (login: string, applicationName: string, enter: { sql: string; params: unknown[] }, detail: unknown) => {
+      const command = randomUUID();
+      const c = new pg.Client({ connectionString: login, application_name: applicationName });
+      await c.connect();
+      try {
+        await c.query('BEGIN');
+        await c.query(enter.sql, enter.params);
+        await c.query(
+          `INSERT INTO crove_kernel.audit_event (org_id, actor_type, actor_id, command, command_id, outcome, input_sha256, detail)
+           VALUES ($1, 'system', NULL, 'kernel.org.set_tax_code', $2, 'ok', repeat('0', 64), $3::jsonb)`,
+          [o.orgId, command, detail === null ? null : JSON.stringify(detail)],
+        );
+        await c.query('COMMIT');
+      } finally {
+        await c.end();
+      }
+      return withClient(
+        adminUrl,
+        async (a) =>
+          (await a.query<{ detail: Record<string, unknown> | null }>('SELECT detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command_id = $2', [o.orgId, command]))
+            .rows[0]?.detail,
+      );
+    };
+    // The worker's own name for itself, whatever the row claims; the rest of the detail as written.
+    expect(await insert(workerUrl, 'crove-worker:host-a', systemContext(o.orgId), { workerInstance: 'crove-worker:someone-else', note: 1 })).toEqual({
+      workerInstance: 'crove-worker:host-a',
+      note: 1,
+    });
+    expect(await insert(workerUrl, 'crove-worker:host-b', systemContext(o.orgId), null)).toEqual({ workerInstance: 'crove-worker:host-b' });
+    // A member's row claims no worker, whatever it writes and whatever its connection calls itself.
+    expect(await insert(appUrl, 'crove-worker:host-a', userContext(o.member, o.orgId), { workerInstance: 'crove-worker:host-a', note: 2 })).toEqual({ note: 2 });
   });
 
   it('keeps the runtime\'s own rows as it writes them', async () => {

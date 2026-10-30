@@ -15,6 +15,7 @@ import { Runtime, fileKey, sha256Hex, type BlobStore } from '@crove/kernel-runti
 import { extractAndPropose, financeCommands, financeQueries } from '@crove/mod-finance';
 import { orgPurgeCommand, parseOrgPurgeArgs, runOrgPurge, type HeldCheck } from '../src/org-purge.ts';
 import { inProcessExtract } from './extract-service.ts';
+import { KEPT, purgeCoverageProblems, readMigrations, readPurgeCatalog } from './org-purge-coverage.ts';
 import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
@@ -257,35 +258,15 @@ suite('org purge on PostgreSQL (#1024)', () => {
     expect(() => parseOrgPurgeArgs(['a', '--force', '--reason', 'x'])).toThrow(/unknown argument --force/);
   });
 
-  // A new table with an org_id fails this until crove_kernel.org_purge and the runbook's deletion map say what happens
-  // to its rows.
+  // Every crove_* table with an org_id is deleted by crove_kernel.org_purge or on KEPT with a reason, and the runbook's
+  // deletion map says which (#1217): a table a migration adds without restating org_purge, or whose restatement another
+  // migration's overwrote, fails here with its name and the migration to restate. The reading and its messages are
+  // org-purge-coverage.ts and org-purge-coverage.test.ts.
   it('has a rule for every table with an org_id', async () => {
-    const kept = [
-      'crove_kernel.tenant', 'crove_kernel.legal_entity', 'crove_kernel.audit_event', 'crove_kernel.outbox_event', 'crove_kernel.inbound_address',
-      'crove_kernel.org_usage', 'crove_kernel.outbox_archive', 'crove_kernel.external_call', 'crove_social.post_approval', 'crove_kernel.task_comment',
-      'crove_finance.bank_line', 'crove_finance.cash_voucher', 'crove_finance.depreciation_line', 'crove_finance.fixed_asset',
-      'crove_finance.input_vat_check', 'crove_finance.journal_entry', 'crove_finance.journal_line', 'crove_finance.journal_voucher',
-      'crove_finance.legal_entity_books', 'crove_finance.misa_goods_code', 'crove_finance.org_account', 'crove_finance.period_balance_delta', 'crove_finance.period_lock', 'crove_finance.portal_invoice_list', 'crove_finance.portal_invoice_row',
-      'crove_finance.purchase_document', 'crove_finance.purchase_document_void', 'crove_finance.purchase_line', 'crove_finance.purchase_tax_rate',
-      'crove_finance.vat_return_filed',
-      // The voucher numbers given out and voided (#1401), with their series and reset policies: the books reference them.
-      'crove_kernel.number_allocation', 'crove_kernel.number_series', 'crove_kernel.number_series_policy', 'crove_kernel.number_void',
-    ];
-    const purged = (await one<{ src: string }>(`SELECT prosrc AS src FROM pg_proc WHERE oid = 'crove_kernel.org_purge(integer)'::regprocedure`)).src;
-    const named = new Set([...purged.matchAll(/'(crove_[a-z]+\.[a-z_]+)'/g), ...purged.matchAll(/DELETE FROM (crove_[a-z]+\.[a-z_]+)/g)].map((m) => m[1]));
-    // Tables whose rows go with a parent the purge deletes, through an ON DELETE CASCADE foreign key (checked below).
-    const cascaded: Record<string, string> = { 'crove_kernel.role_assignment': 'crove_kernel.tenant_member' };
-    const tables = Object.keys(await snapshot(randomUUID()));
-    expect(tables.filter((t) => !kept.includes(t) && !named.has(t) && !(t in cascaded))).toEqual([]);
-    for (const [child, parent] of Object.entries(cascaded)) {
-      expect(named.has(parent), parent).toBe(true);
-      const fk = await one<{ n: number }>(
-        `SELECT count(*)::int AS n FROM pg_constraint WHERE contype = 'f' AND conrelid = $1::regclass AND confrelid = $2::regclass AND confdeltype = 'c'`,
-        [child, parent],
-      );
-      expect(fk.n, `${child} cascades from ${parent}`).toBe(1);
-    }
-    expect(kept.filter((t) => named.has(t) && t !== 'crove_kernel.task_comment' && t !== 'crove_social.post_approval')).toEqual([]);
+    const catalog = await admin(readPurgeCatalog);
+    expect(catalog.tables).toContain('crove_kernel.tenant_member');
+    expect(catalog.cascades).toContainEqual({ child: 'crove_kernel.role_assignment', parent: 'crove_kernel.tenant_member' });
+    expect(purgeCoverageProblems(catalog, KEPT, readMigrations())).toEqual([]);
   });
 
   it('refuses each unmet precondition and changes nothing', async () => {

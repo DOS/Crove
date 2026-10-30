@@ -1,10 +1,10 @@
-import { Outlet, createRootRoute, createRoute, createRouter, redirect, type ErrorComponentProps } from '@tanstack/react-router';
+import { Outlet, createRootRoute, createRoute, createRouter, notFound, redirect, type ErrorComponentProps } from '@tanstack/react-router';
 import { useTranslations } from 'use-intl';
 import { Button } from '@crove/ui/components/button';
 import { errorMessage, getCurrentOrg, isUnauthenticated, orpc, queryClient, setCurrentOrg } from './lib/api.ts';
 import { accessToken, auth, getConfig, needsSecondFactor, needsSecondFactorNow } from './lib/auth.ts';
 import { landingFor } from './lib/clients.ts';
-import { screenInstalled } from './lib/modules.ts';
+import { outsideInstalled, screenInstalled } from './lib/modules.ts';
 import { pendingInvite, rememberInvite, takeTokenFromHash } from './lib/invite.ts';
 import { signOut } from './lib/session-actions.ts';
 import { AgentsPage } from './routes/agents.tsx';
@@ -54,7 +54,7 @@ import { SocialChannelsPage } from './routes/social-channels.tsx';
 import { OAuthCallbackPage } from './routes/social-oauth.tsx';
 import { SocialComposePage, SocialPostPage } from './routes/social-post.tsx';
 import { SocialSharePage } from './routes/social-share.tsx';
-import { SHARE_PATH, pendingShare, readShareFragment, readShareOrg, rememberShare } from './lib/social-share.ts';
+import { SHARE_PATH, forgetShare, pendingShare, readShareFragment, readShareOrg, rememberShare } from './lib/social-share.ts';
 import { TaskDetailPage, TasksPage } from './routes/tasks.tsx';
 import { BookingsPage } from './routes/bookings.tsx';
 import { NotesPage } from './routes/notes.tsx';
@@ -95,7 +95,52 @@ function ErrorPage({ error }: ErrorComponentProps) {
   );
 }
 
-const rootRoute = createRootRoute({ component: () => <Outlet />, errorComponent: ErrorPage });
+// What an address the app has no page for shows, with a way back to the start (#1660).
+function NotFoundMessage() {
+  const t = useTranslations('common');
+  return (
+    <div className="max-w-md text-center">
+      <h1 className="text-lg font-semibold text-foreground">{t('notFound')}</h1>
+      <p className="mt-2 text-sm text-muted-foreground">{t('notFoundHint')}</p>
+      <div className="mt-6 flex justify-center">
+        <Button variant="outline" size="lg" onClick={() => window.location.assign('/')}>
+          {t('backHome')}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// Outside an org: an unknown address, or a screen outside /o/$slug of a module this deployment leaves out, with nothing
+// to sign in to.
+function NotFoundPage() {
+  return (
+    <main className="flex min-h-full items-center justify-center bg-background px-4">
+      <NotFoundMessage />
+    </main>
+  );
+}
+
+// Inside an org (a mistyped /o/<slug>/... address): in the org's own frame, after its sign-in check.
+function OrgNotFoundPage() {
+  return (
+    <div className="flex min-h-[50vh] items-center justify-center px-4">
+      <NotFoundMessage />
+    </div>
+  );
+}
+
+// A screen outside /o/$slug of a module this deployment leaves out (CROVE_MODULES) is not found (ADR-0031 §3, #1660):
+// its page would only fail, as the API answers the module's calls (the booking page, the review and report links) or as
+// no part of the app starts it (the share target and the channel OAuth callback, which only social's screens begin).
+// Before any sign-in, so a public link stays public. The module comes from the manifests, by the matched route's own
+// path.
+function requireInstalledOutside(matches: readonly { fullPath: unknown }[]) {
+  const route = matches.at(-1)?.fullPath;
+  if (typeof route === 'string' && !outsideInstalled(getConfig().modules, route)) throw notFound();
+}
+
+const rootRoute = createRootRoute({ component: () => <Outlet />, errorComponent: ErrorPage, notFoundComponent: NotFoundPage });
 
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -104,8 +149,11 @@ const indexRoute = createRoute({
     await requireAuth();
     // An invite opened before signing in (or signing up) is answered first.
     if (pendingInvite()) throw redirect({ to: '/-/invite' });
-    // So is a page shared before signing in (#1235).
-    if (pendingShare()) throw redirect({ to: SHARE_PATH });
+    // So is a page shared before signing in (#1235), where social runs; elsewhere it is dropped.
+    if (pendingShare()) {
+      if (outsideInstalled(getConfig().modules, SHARE_PATH)) throw redirect({ to: SHARE_PATH });
+      forgetShare();
+    }
     const me = await queryClient.fetchQuery(orpc.me.get.queryOptions()).catch(async (error: unknown) => {
       if (!isUnauthenticated(error)) throw error;
       await auth().signOut({ scope: 'local' });
@@ -126,13 +174,24 @@ const clientsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/clie
 const loginRoute = createRoute({ getParentRoute: () => rootRoute, path: '/login', component: AuthPage });
 
 // A client's review link (#589): /-/review#<token>, no account and no sign-in; the token is the only credential.
-const reviewRoute = createRoute({ getParentRoute: () => rootRoute, path: '/-/review', component: SocialReviewPage });
+const reviewRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/-/review',
+  beforeLoad: ({ matches }) => requireInstalledOutside(matches),
+  component: SocialReviewPage,
+});
 // A client's report link (#643): /-/report#<token>, the same way.
-const reportRoute = createRoute({ getParentRoute: () => rootRoute, path: '/-/report', component: SocialReportPage });
+const reportRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/-/report',
+  beforeLoad: ({ matches }) => requireInstalledOutside(matches),
+  component: SocialReportPage,
+});
 // A booking page of the crm module (#1318): /-/b/<org>/<event type>, no account. The API answers 404 without crm.
 const bookingRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/-/b/$org/$type',
+  beforeLoad: ({ matches }) => requireInstalledOutside(matches),
   component: function BookingRouteView() {
     const { org, type } = bookingRoute.useParams();
     return <BookingPage org={org} type={type} />;
@@ -158,7 +217,10 @@ const inviteRoute = createRoute({
 const shareRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: SHARE_PATH,
-  beforeLoad: async () => {
+  beforeLoad: async ({ matches }) => {
+    // Nothing is kept of a share to a deployment without social, not even in the address bar.
+    if (!outsideInstalled(getConfig().modules, SHARE_PATH) && window.location.hash) window.history.replaceState(window.history.state, '', window.location.pathname);
+    requireInstalledOutside(matches);
     const shared = readShareFragment(window.location.hash);
     if (shared) rememberShare({ ...shared, org: readShareOrg(window.location.hash) });
     if (window.location.hash) window.history.replaceState(window.history.state, '', window.location.pathname);
@@ -190,7 +252,10 @@ const resetPasswordRoute = createRoute({
 const oauthCallbackRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/channels/oauth/$provider/callback',
-  beforeLoad: requireAuth,
+  beforeLoad: async ({ matches }) => {
+    requireInstalledOutside(matches);
+    await requireAuth();
+  },
   component: OAuthCallbackPage,
 });
 
@@ -227,6 +292,7 @@ export const orgRoute = createRoute({
     requireInstalledScreen(params.slug, matches);
   },
   component: OrgLayout,
+  notFoundComponent: OrgNotFoundPage,
 });
 
 const orgIndexRoute = createRoute({

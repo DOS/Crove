@@ -29,7 +29,7 @@ import {
   type PortalListResult,
   type PortalXmlResult,
 } from '@crove/kernel-contract';
-import { PORTAL_SYNC_CONTENT_TYPE, checkPortalList, normalizePortalInvoices, vatPeriod, type PortalCallError, type PortalXmlPlan } from '@crove/mod-finance';
+import { PORTAL_LIST_TOO_LARGE_MESSAGE, PORTAL_SYNC_CONTENT_TYPE, PortalListTooLarge, checkPortalList, normalizePortalInvoices, vatPeriod, type PortalAnswer, type PortalCallError, type PortalXmlPlan } from '@crove/mod-finance';
 import { ConcurrencyLimiter } from './concurrency.ts';
 import { RateLimiter } from './rate-limit.ts';
 import { safeFilename, sniffType } from './sniff.ts';
@@ -81,11 +81,23 @@ function portalError(kind: PortalCallError): DomainError {
     case 'SESSION_EXPIRED':
       return new DomainError('PORTAL_SESSION_EXPIRED', 409, 'Phiên đăng nhập cổng thuế đã hết hạn; hãy đăng nhập lại');
     case 'TOO_LARGE':
-      return new DomainError('PORTAL_LIST_TOO_LARGE', 422, 'Danh sách của kỳ này quá lớn để lấy một lần; hãy xuất danh sách Excel từ cổng thuế rồi tải lên');
+      // The same message as the finance domain's refusal (#1938): one code, one message.
+      return new DomainError('PORTAL_LIST_TOO_LARGE', 422, PORTAL_LIST_TOO_LARGE_MESSAGE);
     case 'TOO_SLOW':
       return new DomainError('PORTAL_STEP_TIMEOUT', 503, 'Cổng thuế trả lời chậm nên lượt lấy dữ liệu đã tạm dừng; hãy bấm lấy lại để tiếp tục');
     case 'BAD_ANSWER':
       return new DomainError('PORTAL_BAD_ANSWER', 503, 'Cổng thuế trả lời theo cách hệ thống chưa đọc được; hãy xuất danh sách Excel từ cổng thuế rồi tải lên');
+  }
+}
+
+// The portal's answers as a list, or the finance domain's refusal of a list too large as the API's answer: 422
+// PORTAL_LIST_TOO_LARGE with the domain's message (#1680), which is the client cap's too (#1938).
+function normalizeAnswers(answers: PortalAnswer[], range: { from: string; to: string }) {
+  try {
+    return normalizePortalInvoices(answers, range);
+  } catch (error) {
+    if (error instanceof PortalListTooLarge) throw new DomainError(error.code, 422, error.message);
+    throw error;
   }
 }
 
@@ -189,7 +201,9 @@ export function createPortalSync(deps: PortalSyncDeps): PortalSync {
       // and invoice); a refusal or an unreadable answer closes it.
       const outcome = RETRYABLE.has(kind) ? 'retry' : 'failed';
       await runtime.execute('finance.portal_sync.call_end', { key, outcome, error: kind }, opts);
-      if (error instanceof TaxPortalError) throw portalError(error.kind);
+      // An answer over the byte cap is a list too large only on the list step; a captcha, a login or an XML answer that
+      // big is one the system cannot read (#1938). The call keeps its own kind above.
+      if (error instanceof TaxPortalError) throw portalError(kind === 'TOO_LARGE' && begin.step !== 'list' ? 'BAD_ANSWER' : kind);
       throw error;
     }
     const externalRef = ref?.(result);
@@ -272,7 +286,7 @@ export function createPortalSync(deps: PortalSyncDeps): PortalSync {
         );
         // Normalized and checked before anything is stored: a list Crove cannot use is said at once, and nothing is
         // filed. The worker reads the stored answer again with the same rules when it records the list.
-        const normalized = normalizePortalInvoices(answers, range);
+        const normalized = normalizeAnswers(answers, range);
         const checked = checkPortalList(normalized.list, orgTaxCode);
         if (!checked.ok) throw new DomainError('PORTAL_LIST_UNUSABLE', 422, checked.error);
         // The evidence: what the portal answered, without a time stamp, so the same answer is the same file.

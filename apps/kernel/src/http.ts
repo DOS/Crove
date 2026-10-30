@@ -117,6 +117,7 @@ import {
   bookingView,
 } from './booking-page.ts';
 import { STATUS_PAGE_CSP, readStatusFile, renderStatusPage, statusView, type ProbeStatus } from './status-page.ts';
+import { WEB_MANIFEST_PATH, brandedManifest } from './web-manifest.ts';
 import { shortLinkTarget, SHORT_LINK_HITS_PER_MINUTE } from './short-link.ts';
 import { ORG_SLUG, attachmentDisposition } from './attachment.ts';
 import { createRpcHandler, resolveMembership, resolveOrg, type BookingReader, type RpcChannels, type SocialDrafter } from './rpc.ts';
@@ -147,6 +148,8 @@ const UUID_TEXT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
 
 export interface HttpDeps {
   config: Config;
+  // /readyz fails while a live worker runs a build older than this one (#1952, plan §3.5); off for the "all" process.
+  workerBuildCheck?: boolean;
   runtime: Runtime;
   store: BlobStore;
   authenticate: Authenticate;
@@ -411,6 +414,15 @@ export function createHttpApp(deps: HttpDeps) {
         const { rows } = await client.query<{ ok: boolean }>('SELECT crove_kernel.auth_grants_ready() AS ok');
         if (!rows[0]?.ok) return c.json({ ready: false, reason: 'auth_grants' }, 503);
       }
+      // Worker build >= API build (#1952, plan §3.5): the deploy rolls the workers out first and back last, and this API
+      // takes no traffic while a live worker (a beat in the last 90 seconds) runs an older build, or one of unknown
+      // build time (a release before #1952). Builds are ordered by CROVE_BUILD_TIME, the commit's date; without one
+      // (a local build) nothing is compared. No live worker is not a reason: the prober alerts on a missing heartbeat,
+      // and readiness must not flap on a worker's restart.
+      if (deps.workerBuildCheck && config.CROVE_BUILD_TIME) {
+        const { rows } = await client.query<{ older: number }>('SELECT older FROM crove_kernel.worker_build_lag($1::timestamptz)', [config.CROVE_BUILD_TIME]);
+        if ((rows[0]?.older ?? 0) > 0) return c.json({ ready: false, reason: 'worker_build' }, 503);
+      }
       return c.json({ ready: true });
     } catch {
       return c.json({ ready: false, reason: 'database' }, 503);
@@ -608,9 +620,10 @@ export function createHttpApp(deps: HttpDeps) {
 
   if (config.INBOUND_DOMAIN && config.INBOUND_SECRET) {
     const domain = config.INBOUND_DOMAIN;
-    const secret = config.INBOUND_SECRET;
+    // The previous value too while a rotation is under way (#1214): the mail worker and the kernel switch apart.
+    const secrets = config.INBOUND_SECRET_PREVIOUS ? [config.INBOUND_SECRET, config.INBOUND_SECRET_PREVIOUS] : [config.INBOUND_SECRET];
     app.post('/api/inbound/email', bodyLimit({ maxSize: MAX_EMAIL_BYTES }), async (c) => {
-      if (!secretMatches(c.req.header('authorization'), secret)) return c.json({ code: 'UNAUTHENTICATED' }, 401);
+      if (!secretMatches(c.req.header('authorization'), secrets)) return c.json({ code: 'UNAUTHENTICATED' }, 401);
       try {
         const raw = new Uint8Array(await c.req.arrayBuffer());
         // Stored and queued only; the worker parses it and files the attachments (External-tenant gate T5).
@@ -1843,6 +1856,25 @@ export function createHttpApp(deps: HttpDeps) {
   // The SPA, served on the same origin.
   if (existsSync(config.WEB_DIST)) {
     const root = relative(process.cwd(), config.WEB_DIST) || '.';
+    // The install manifest names the app after the deployment's brand (#1691), read and rendered once like index.html.
+    // On the static files' own route, so it stays one of the SPA's public files; revalidated on every fetch, so a
+    // renamed deployment is installed under its new name. Without the file, or with one that is not JSON, the static
+    // route answers as before.
+    const manifestPath = join(config.WEB_DIST, ...WEB_MANIFEST_PATH.split('/').filter(Boolean));
+    let manifest: string | null = null;
+    app.use('/assets/*', async (c, next) => {
+      if (c.req.path !== WEB_MANIFEST_PATH || (c.req.method !== 'GET' && c.req.method !== 'HEAD')) return next();
+      if (manifest === null) {
+        const source = await readFile(manifestPath, 'utf8').catch(() => null);
+        if (source === null) return next();
+        try {
+          manifest = brandedManifest(source, config.BRAND_NAME);
+        } catch {
+          return next();
+        }
+      }
+      return c.body(manifest, 200, { 'content-type': 'application/manifest+json', 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff' });
+    });
     app.use('/assets/*', serveStatic({ root }));
     app.use('/favicon.svg', serveStatic({ root }));
     const indexPath = join(config.WEB_DIST, 'index.html');

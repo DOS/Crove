@@ -532,4 +532,57 @@ suite('finance books per legal entity, part 2b (#1280)', () => {
     const malformed = await insert('finance.cash_voucher', 'finance.voucher.record', 'không phải mã');
     expect(await shown(malformed)).toEqual({ list: defaultEntity, get: defaultEntity });
   });
+
+  it("lists a customer's receivable on 131 per legal entity, and a scoped member only in its own (#1534)", async () => {
+    const customer = await admin(
+      async (c) => (await c.query<{ id: string }>(`INSERT INTO crove_kernel.party (org_id, name) VALUES ($1, 'Khách Hai Sổ') RETURNING id`, [org.orgId])).rows[0]?.id as string,
+    );
+    // A sale on credit in each entity's books, posted and committed as the owner.
+    const owe = async (entity: string, amount: string) => {
+      const c = new pg.Client({ connectionString: appUrl });
+      await c.connect();
+      try {
+        await c.query('BEGIN');
+        await c.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [org.orgId, contextToken(owner.userId, org.orgId)]);
+        await c.query(`SELECT crove_finance.post_journal_entry('2026-10-15'::date, 'bán chịu', 'test.sale', $1::uuid, $2::jsonb, NULL, 1, $3::uuid)`, [
+          randomUUID(),
+          JSON.stringify([
+            { line_no: 1, account_code: '131', debit: amount, credit: '0', party_id: customer },
+            { line_no: 2, account_code: '5111', debit: '0', credit: amount },
+          ]),
+          entity,
+        ]);
+        await c.query('COMMIT');
+      } finally {
+        await c.end();
+      }
+    };
+    await owe(defaultEntity, '500000');
+    await owe(branch, '200000');
+    type Page = { items: Array<{ id: string; receivable: string }> };
+    const receivable = async (who: { actor: ReturnType<typeof asUser>; orgId: string }, legalEntityId?: string) =>
+      (await runtime.query<Page>('finance.customers.list', { q: 'khách hai sổ', ...(legalEntityId ? { legalEntityId } : {}) }, who)).items.find((i) => i.id === customer)?.receivable ?? null;
+    // The owner: the default entity's books unless another is named; the third entity has none of it.
+    expect(await receivable(as(owner))).toBe('500000');
+    expect(await receivable(as(owner), defaultEntity)).toBe('500000');
+    expect(await receivable(as(owner), branch)).toBe('200000');
+    expect(await receivable(as(owner), hue)).toBeNull();
+    // A member limited to the branch: its books by default, never the default entity's, whatever it names.
+    const branchOnly = await upsertIdentity(createDb(pool), { issuer: 'le-areas', subject: randomUUID(), email: 'branch-only@le-areas.test', name: null });
+    await admin(async (c) => {
+      await c.query(`INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member')`, [org.orgId, branchOnly]);
+      await c.query(`INSERT INTO crove_kernel.role_assignment (org_id, user_id, role_key, legal_entity_id, granted_by) VALUES ($1, $2, 'external_accountant', $3, $4)`, [
+        org.orgId,
+        branchOnly,
+        branch,
+        owner.userId,
+      ]);
+    });
+    const limited = { actor: asUser(branchOnly), orgId: org.orgId };
+    expect(await receivable(limited)).toBe('200000');
+    expect(await receivable(limited, branch)).toBe('200000');
+    for (const other of [defaultEntity, hue, randomUUID()]) {
+      await expect(runtime.query('finance.customers.list', { legalEntityId: other }, limited)).rejects.toMatchObject({ code: 'LEGAL_ENTITY_NOT_ALLOWED', status: 403 });
+    }
+  });
 });

@@ -33,7 +33,7 @@ import { journalVoucherTitle, journalVoucherTotal } from './domain/journal-vouch
 import { canonical } from './domain/money.ts';
 import { postJournalVoucher } from './journal-voucher.ts';
 import { resolveLegalEntity } from './legal-entity.ts';
-import { dateLabel, periodLockState } from './period-lock.ts';
+import { dateLabel, periodLockedThrough } from './period-lock.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const REQUESTERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
@@ -244,7 +244,7 @@ export const fixedAssetsQuery = defineQuery({
 // with nothing to post, and a month already posted.
 async function buildDepreciation(ctx: QueryContext, month: string, legalEntityId: string): Promise<DepreciationProposal> {
   const date = lastDay(month);
-  const { lockedThrough } = await periodLockState(ctx, legalEntityId);
+  const lockedThrough = await periodLockedThrough(ctx, legalEntityId);
   if (lockedThrough && date <= lockedThrough) {
     throw new DomainError('PERIOD_LOCKED', 409, `Sổ đã khóa đến hết ngày ${dateLabel(lockedThrough)}, nên không ghi được bút toán ngày ${dateLabel(date)}`, {
       lockedThrough,

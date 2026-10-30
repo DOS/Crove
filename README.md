@@ -1,6 +1,6 @@
 # Ludy
 
-**The open-source, AI-native Business OS for solo founders and SMEs.** Vietnam first.
+**The open-source, AI-native Business OS for OPC, solo founders and SMEs.**
 
 Forward or upload your purchase invoices. Ludy reads them (Vietnamese e-invoice XML deterministically, PDFs and photos with any OpenAI-compatible model), checks every number, and puts a proposed TT133 journal entry in your AI Inbox. You review, adjust accounts if needed, and approve. Approved invoices become vendors, purchase documents and balanced journal entries you can export to Excel for your accountant.
 
@@ -20,14 +20,42 @@ Open http://localhost:8080, create an account, create your organization, and dro
 
 The defaults are for local use. Before anyone else can reach your instance, copy `.env.example` to `.env` and change every secret: [docs/self-host/](docs/self-host/README.md) walks through a server setup (TLS, mail, storage, sign-up, backups, upgrades).
 
-## What works today (MVP)
+## What works today
 
-- Email + password sign-up and sign-in (bundled [Supabase Auth](https://github.com/supabase/auth)), organizations, members and roles
-- Upload of e-invoice XML (the tax authority's format under Decree 254/2026 and Circular 91/2026, as before under Decree 123/2020), PDF and images; inbound email per organization
+**Platform**
+- Email + password sign-up and sign-in (bundled [Supabase Auth](https://github.com/supabase/auth)) with two-factor authentication, organizations, members, roles, and legal entities (branches) with access per entity
+- AI Inbox: every AI result is a proposal checked by deterministic rules; people approve, edit or reject, with four-eyes approval and step-up for risky actions
+- Tenant isolation with PostgreSQL row-level security, an append-only audit log anchored in a tamper-evident archive, idempotent commands
+- Notes and personal to-do lists, in-app notifications, organization export and offboarding
+
+**Accounting** (module `finance`)
+- E-invoice XML (the tax authority's format under Decree 254/2026 and Circular 91/2026, as before under Decree 123/2020), PDF and photos, uploaded or sent to the organization's inbound address
 - Deterministic checks: line totals, VAT, tax-code check digit, tax-authority code, duplicates
-- AI Inbox: proposals with suggested TT133 accounts that learn per vendor; approve, edit or reject
-- Purchase documents, vendors, journal entries that always balance, Excel export
-- Tenant isolation with PostgreSQL row-level security, append-only audit log, idempotent approvals
+- Purchase and sales documents, cash and bank vouchers, journal vouchers, fixed assets, bank statement matching
+- TT133 ledger: journal entries that always balance, gapless voucher numbers, trial balance, receivables and payables per party, period locks and year-end closing
+- VAT return working (01/GTGT) and its XML; B01-DNN and B02-DNN statements and their HTKK XML
+- Exports to Excel and to the MISA SME import templates; tax portal sync
+
+Not yet checked on a real company's books by an accountant, nor filed through HTKK or eTax: that is the pilot's job (see the roadmap).
+
+**Social** (module `social`, paused): compose, client review links, queues, exactly-once publishing, AI drafts, metrics, media library. Live connections to Meta and Zalo OA wait for the platforms' developer apps.
+
+**Bookings** (module `crm`): booking pages, event types, working hours and days off.
+
+## Roadmap
+
+Ludy is heading for a first pilot with an accounting firm. Status on 2026-10-30; the live counts are on the [milestones page](https://github.com/DOS/Ludy/milestones).
+
+| Milestone | Goal | Status |
+|---|---|---|
+| M0 Decisions and discovery | A design partner, real sample documents, where Cloud data lives | Waiting on people: the pilot agreement, consented samples, interviews |
+| M1 Pilot deploy (Nov 2026) | An instance a design partner can use | 20 of 22 done: the readiness checklist with the partner and phone alerts are left |
+| M2 Monthly close loop (Dec 2026) | A client's month booked end to end | Built; acceptance on real data with the partner's accountant is left |
+| M3 Paid pilot (Jan 2027) | Exports the firm's tools accept, bank matching, terms of service | 40 of 50 done: accountant and legal sign-offs are left |
+| GA gate | The security, privacy (PDPL) and operations bar before general availability | 227 of 244 done |
+| Social | Publishing to social channels | Paused (decision D5): built, live channel connections left |
+
+Later, not scheduled: two-way external calendars and meeting links for bookings, more notes features (turning a line into a to-do, AI summaries, links to meetings).
 
 ## Configuration
 
@@ -35,7 +63,7 @@ The defaults are for local use. Before anyone else can reach your instance, copy
 |---|---|
 | Modules | `CROVE_MODULES`: comma-separated modules to run, such as `finance` (default: every module; `kernel` is always on). A module left out registers no commands, routes, jobs or menus; migrations still apply to every schema. Give the `api` and `worker` roles and the prober the same value (ADR-0031; the prober counts those modules' queued jobs, #1894) |
 | AI for PDFs and photos | `AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL` (any OpenAI-compatible endpoint: OpenAI, Ollama, vLLM, ...) |
-| Product name users see | `BRAND_NAME`: the name the app, the browser tab title, mails (sender name and texts), the authenticator app entry, the status and bio pages, the calendar feed, chat alerts, Zalo articles without an author, exported files and their names show, 1 to 40 characters of letters, digits, spaces and `. , & ' + _ ! ( ) -`. Unset keeps "Ludy"; any other character stops the boot. Code, schemas, logs and the AGPL source notice keep "Crove". Browsers read it from `/api/config` |
+| Product name users see | `BRAND_NAME`: the name the app, the browser tab title, the installed app (the PWA manifest, #1691), mails (sender name and texts), the authenticator app entry, the status and bio pages, the calendar feed, chat alerts, Zalo articles without an author, exported files and their names show, 1 to 40 characters of letters, digits, spaces and `. , & ' + _ ! ( ) -`. Unset keeps "Ludy"; any other character stops the boot. Code, schemas, logs and the AGPL source notice keep "Crove". Browsers read it from `/api/config` |
 | Feedback and support link | `SUPPORT_URL`: where the app's "Góp ý / Hỗ trợ" link goes, an `https:` page (a chat group, a help desk) or a `mailto:` address. Unset hides the link; any other scheme stops the boot. Browsers read it from `/api/config` |
 | Terms and privacy notice | `TERMS_URL`, `PRIVACY_URL`: `https:` pages the sign-up and invite screens link to ("Khi tiếp tục, bạn đồng ý với..."). Unset hides each link; any other scheme stops the boot. Drafts to adapt, not yet reviewed by a lawyer: [docs/legal/](docs/legal/README.md) |
 | Onboarding by tax code | `TAX_CODE_LOOKUP_URL`: an https URL template with `{taxCode}` (for example `https://api.vietqr.io/v2/business/{taxCode}`, which answers in the shape the kernel reads). With it, the new-organization form looks up a client's tax code and fills in the name and address; unset hides the button, since the lookup sends the tax codes users type to that provider. Answers are cached in the process for a day |

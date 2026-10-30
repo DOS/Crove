@@ -71,6 +71,20 @@ describe('WorkingHoursCard', () => {
     expect(html).not.toContain(en.workingHours.defaultHint);
   });
 
+  it('reads dates as dd/mm/yyyy and times as 24-hour HH:mm, whatever the browser (#1428)', () => {
+    const html = card(true, { ...calendar, hours: { timeZone: 'Asia/Ho_Chi_Minh', windows: [{ weekday: 1, start: 0, end: 1440 }] } });
+    // Every native date or time input is a hidden picker; the fields people read and type in are text.
+    const inputs = html.match(/<input[^>]*>/g) ?? [];
+    const native = inputs.filter((i) => /type="(date|time)"/.test(i));
+    expect(native.length).toBeGreaterThan(0);
+    for (const input of native) expect(input).toContain('aria-hidden="true"');
+    expect(inputs.filter((i) => i.includes(`placeholder="${en.common.datePlaceholder}"`))).toHaveLength(2);
+    expect(inputs.filter((i) => i.includes(`placeholder="${en.common.timePlaceholder}"`))).toHaveLength(2);
+    // Midnight at the end of the day reads 00:00, as it is typed: the start and the end, each field and its picker.
+    const monday = html.split('<li')[1] ?? '';
+    expect(monday.match(/value="00:00"/g)).toHaveLength(4);
+  });
+
   it('says when the default hours apply, and offers a viewer nothing to change', () => {
     const html = card(false, { ...calendar, saved: false, events: [] });
     expect(html).toContain(en.workingHours.defaultHint);

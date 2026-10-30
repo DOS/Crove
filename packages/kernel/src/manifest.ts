@@ -11,7 +11,7 @@ export const kernelManifest = defineModule({
   dependsOn: [],
   tables: {
     crove_kernel: {
-      activity: columns(['org_id', 'id', 'record_type', 'record_id', 'kind', 'summary', 'actor_id', 'occurred_at', 'agent_id', 'legal_entity_id']),
+      activity: columns(['org_id', 'id', 'record_type', 'record_id', 'kind', 'actor_id', 'occurred_at', 'agent_id', 'legal_entity_id'], { summary: 'pii' }),
       agent: columns(['org_id', 'id', 'template_key', 'display_name', 'runtime', 'model_alias', 'status', 'max_risk', 'daily_run_cap', 'created_by', 'created_at', 'updated_at']),
       agent_template: columns(['key', 'module', 'title', 'role_key', 'max_risk', 'job_description', 'subscribes', 'daily_run_cap']),
       agent_wakeup: columns(['org_id', 'id', 'agent_id', 'status', 'reasons', 'request_count', 'tainted', 'request_depth', 'run_id', 'created_at', 'updated_at']),
@@ -69,14 +69,14 @@ export const kernelManifest = defineModule({
       role_permission: columns(['role_key', 'permission']),
       security_event: columns(['id', 'window_start', 'caller', 'command', 'code', 'target_org', 'overflow', 'refusals', 'first_at', 'last_at']),
       security_signal_seen: columns(['signal', 'subject', 'alerted_at']),
-      task: columns(['org_id', 'id', 'title', 'description', 'kind', 'assignee_position_id', 'parent_task_id', 'source', 'source_ref', 'source_event_id', 'created_by_type', 'created_by_id', 'created_by_run', 'status', 'due', 'request_depth', 'tainted', 'checkout_run_id', 'lock_expires_at', 'fence', 'created_at', 'updated_at', 'legal_entity_id']),
-      task_comment: columns(['org_id', 'id', 'task_id', 'body', 'author_type', 'author_id', 'run_id', 'tainted', 'created_at']),
+      task: columns(['org_id', 'id', 'title', 'description', 'kind', 'assignee_position_id', 'parent_task_id', 'source', 'source_ref', 'source_event_id', 'created_by_type', 'created_by_id', 'created_by_run', 'status', 'due', 'request_depth', 'tainted', 'checkout_run_id', 'lock_expires_at', 'fence', 'created_at', 'updated_at', 'legal_entity_id'], { pending_draft: 'pii' }),
+      task_comment: columns(['org_id', 'id', 'task_id', 'author_type', 'author_id', 'run_id', 'tainted', 'created_at'], { body: 'pii' }),
       tax_obligation_done: columns(['org_id', 'id', 'obligation', 'period', 'done_by', 'done_at', 'legal_entity_id']),
       tax_profile: columns(['org_id', 'id', 'obligations', 'pit_filing_period', 'fiscal_year_end_month', 'updated_by', 'created_at', 'updated_at']),
       tenant: columns(['org_id', 'slug', 'name', 'status', 'base_currency', 'created_by', 'created_at', 'vat_filing_period', 'missing_invoice_reminder_day', 'approval_preset', 'approval_policy_version'], { inbound_token: 'sensitive', tax_code: 'national_id_if_individual', address: 'contact', contact_email: 'contact' }),
       tenant_member: columns(['org_id', 'user_id', 'role', 'created_at']),
       usage_deferral: columns(['org_id', 'id', 'metric', 'subject_type', 'subject_id', 'retry_at', 'notified', 'created_at']),
-      worker_heartbeat: columns(['instance', 'beat_at', 'modules']),
+      worker_heartbeat: columns(['instance', 'beat_at', 'modules', 'build', 'build_time']),
     },
     crove_meta: {
       pipeline_session: columns(['pid', 'backend_start', 'step', 'marked_at']),

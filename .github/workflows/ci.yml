@@ -328,11 +328,19 @@ jobs:
           persist-credentials: false
 
       - name: Build the kernel image
-        run: docker build --build-arg "CROVE_BUILD=$GITHUB_SHA" -t "$IMAGE" .
+        run: |
+          built_at="$(git show -s --format=%cI "$GITHUB_SHA")"
+          test -n "$built_at"
+          docker build --build-arg "CROVE_BUILD=$GITHUB_SHA" --build-arg "CROVE_BUILD_TIME=$built_at" -t "$IMAGE" .
 
-      # GET /version reports CROVE_BUILD (#892): the build argument reaches the running image.
-      - name: The image carries its build id
-        run: test "$(docker run --rm --entrypoint printenv "$IMAGE" CROVE_BUILD)" = "$GITHUB_SHA"
+      # GET /version reports CROVE_BUILD (#892), and CROVE_BUILD_TIME orders builds for /readyz (#1952): both build
+      # arguments reach the running image.
+      - name: The image carries its build id and time
+        run: |
+          test "$(docker run --rm --entrypoint printenv "$IMAGE" CROVE_BUILD)" = "$GITHUB_SHA"
+          built_at="$(git show -s --format=%cI "$GITHUB_SHA")"
+          test -n "$built_at"
+          test "$(docker run --rm --entrypoint printenv "$IMAGE" CROVE_BUILD_TIME)" = "$built_at"
 
       - name: Modules load and no parser package is in the image
         run: |

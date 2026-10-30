@@ -159,6 +159,8 @@ services:
       TAX_PORTAL_STEP_SECONDS: ${TAX_PORTAL_STEP_SECONDS:-90}
       INBOUND_DOMAIN: ${INBOUND_DOMAIN:-}
       INBOUND_SECRET: ${INBOUND_SECRET:-}
+      # During a rotation only: the value the mail worker may still send (docs/runbooks/secret-rotation.md, section 2).
+      INBOUND_SECRET_PREVIOUS: ${INBOUND_SECRET_PREVIOUS:-}
       # Invite mails go through the same SMTP server as Supabase Auth's (Mailpit at http://localhost:8025 locally).
       SMTP_HOST: ${SMTP_HOST:-mailpit}
       SMTP_PORT: ${SMTP_PORT:-1025}

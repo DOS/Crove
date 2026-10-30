@@ -24,8 +24,8 @@ describe('legal entity choice', () => {
     expect(chooseEntity([], 'a')).toBeNull();
   });
 
-  it('shows on the finance books, the Overview and Settings only', () => {
-    for (const path of ['/o/acme/journal', '/o/acme/journal/opening-balances', '/o/acme/ledger', '/o/acme/vat', '/o/acme/documents', '/o/acme/bank', '/o/acme/vouchers', '/o/acme/fixed-assets', '/o/acme/portal-invoices', '/o/acme/overview', '/o/acme/settings']) {
+  it('shows on the finance books, the customers (#1534), the Overview and Settings only', () => {
+    for (const path of ['/o/acme/journal', '/o/acme/journal/opening-balances', '/o/acme/ledger', '/o/acme/vat', '/o/acme/documents', '/o/acme/bank', '/o/acme/vouchers', '/o/acme/fixed-assets', '/o/acme/portal-invoices', '/o/acme/customers', '/o/acme/overview', '/o/acme/settings']) {
       expect(isEntityPath(path), path).toBe(true);
     }
     for (const path of ['/o/acme/inbox', '/o/acme/tasks', '/o/acme/social', '/clients', '/o/acme', '/journal']) {

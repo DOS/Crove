@@ -318,6 +318,34 @@ suite('private notes on PostgreSQL (#1671, ADR-0037)', () => {
     }
   });
 
+  // The personal-data finder (#1678, ADR-0037 section 5): per author, how many private notes and to-dos mention a value,
+  // for owners and admins in their own context only; never which ones or their text.
+  it('counts the private items that mention a value for owners and admins only, with no text (#1678)', async () => {
+    const mention = randomUUID();
+    await admin((c) =>
+      c.query(`INSERT INTO crove_notes.note (org_id, id, author_user_id, visibility, title, body) VALUES ($1, $2, $3, 'private', 'Gọi lại', 'Giam.Doc@khach.example')`, [
+        orgId,
+        mention,
+        users.author,
+      ]),
+    );
+    try {
+      const matches = (actor: Actor) => outcome(run(actor, (c) => c.query(`SELECT * FROM crove_notes.private_matches('email', 'giam.doc@khach.example')`)));
+      for (const actor of [member('an owner', () => users.owner), member('an admin', () => users.admin)]) {
+        const result = await matches(actor);
+        expect(result, actor.name).toMatchObject({ ok: true });
+        if (!result.ok) continue;
+        expect(result.value.fields.map((f) => f.name), actor.name).toEqual(['author_user_id', 'notes', 'todos']);
+        expect(result.value.rows, actor.name).toEqual([{ author_user_id: users.author, notes: '1', todos: '0' }]);
+      }
+      for (const actor of [author, member('another member', () => users.member), member('a viewer', () => users.viewer), agentActor, system]) {
+        expect(await matches(actor), actor.name).toMatchObject({ ok: false, code: '42501' });
+      }
+    } finally {
+      await admin((c) => c.query('DELETE FROM crove_notes.note WHERE org_id = $1 AND id = $2', [orgId, mention]));
+    }
+  });
+
   it('keeps the worker definers to the worker login in the system context', async () => {
     const calls: Array<[string, unknown[]]> = [
       ['SELECT * FROM crove_notes.trash_due(now(), 10)', []],

@@ -2,6 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { vaultKeyId } from '@crove/kernel-runtime';
 import { KNOWN_DEFAULTS, PILOT_EXIT, REQUIRED_SECRETS, checkEnv, parsePilotArgs, probeDeployment, runPilotCheck, type CheckResult, type Env, type Fetch } from '../src/pilot-check.ts';
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
@@ -46,10 +47,52 @@ describe('pilot-check settings', () => {
     expect(failing({ ...READY, TRUSTED_PROXY_HOPS: '2' })).toEqual([]);
   });
 
+  // #1214: the previous inbound secret of a rotation, checked as the current one, never printed, and a reminder to
+  // remove it.
+  it('checks a previous inbound secret like the current one and asks to remove it once the rotation is done (#1214)', () => {
+    const current = fake('inbound-current', 40);
+    const previous = fake('inbound-previous', 40);
+    const env = { ...READY, INBOUND_DOMAIN: 'in.example.com', INBOUND_SECRET: current };
+    expect(failing({ ...env, INBOUND_SECRET_PREVIOUS: previous })).toEqual([]);
+    const reminder = checkEnv({ ...env, INBOUND_SECRET_PREVIOUS: previous }).find((r) => r.item === 'Secrets' && r.status === 'manual');
+    expect(reminder?.message).toMatch(/^INBOUND_SECRET_PREVIOUS is set: an inbound secret rotation is under way/);
+    expect(checkEnv(env).some((r) => r.item === 'Secrets' && r.status === 'manual')).toBe(false);
+    expect(failing({ ...env, INBOUND_SECRET_PREVIOUS: current })).toEqual(['Secrets: INBOUND_SECRET_PREVIOUS is the same as INBOUND_SECRET']);
+    expect(failing({ ...READY, INBOUND_SECRET_PREVIOUS: previous })).toEqual(['Secrets: INBOUND_SECRET_PREVIOUS is set without INBOUND_SECRET']);
+    expect(failing({ ...env, INBOUND_SECRET_PREVIOUS: 'short' })).toEqual(['Secrets: INBOUND_SECRET_PREVIOUS is shorter than 32 characters']);
+    expect(failing({ ...env, INBOUND_SECRET_PREVIOUS: 'change-me-to-a-long-random-string-0123456789' })).toEqual([
+      'Secrets: INBOUND_SECRET_PREVIOUS still has a sample value from .env.example or docker-compose.yml',
+    ]);
+    for (const result of checkEnv({ ...env, INBOUND_SECRET_PREVIOUS: previous })) expect(result.message).not.toContain(previous);
+  });
+
+  // #1888: the worker reports envelopes under a key it cannot open; the preflight names the keys it opens and points there.
+  it('names the credential keys the worker opens and fails one that does not parse (#1888)', () => {
+    const bytes = (start: number) => Buffer.from(Array.from({ length: 32 }, (_, i) => (start + i * 7) % 256));
+    const [current, previous] = [bytes(1), bytes(2)];
+    const line = (env: Env) => checkEnv(env).find((r) => r.item === 'Credential key');
+    expect(line(READY)).toMatchObject({ status: 'manual', message: expect.stringMatching(/^the worker opens tokens sealed under the key in CREDENTIAL_KEY_FILE .*"\[credential-reseal\] ERROR sealed under a key this worker cannot open"/) });
+    expect(line({ ...READY, CREDENTIAL_KEY: current.toString('base64') })?.message).toContain(`the worker opens tokens sealed under CREDENTIAL_KEY (${vaultKeyId(current)}); `);
+    expect(line({ ...READY, CREDENTIAL_KEY: current.toString('base64'), CREDENTIAL_KEY_PREVIOUS: previous.toString('hex') })?.message).toContain(
+      `the worker opens tokens sealed under CREDENTIAL_KEY (${vaultKeyId(current)}) and CREDENTIAL_KEY_PREVIOUS (${vaultKeyId(previous)}); `,
+    );
+    // With the key in its file, the previous key from the environment is opened too, and named.
+    expect(line({ ...READY, CREDENTIAL_KEY_PREVIOUS: previous.toString('hex') })?.message).toContain(
+      `the worker opens tokens sealed under the key in CREDENTIAL_KEY_FILE (docker compose: /data/keys/credential.key on the keys volume) and CREDENTIAL_KEY_PREVIOUS (${vaultKeyId(previous)}); `,
+    );
+    expect(line(READY)?.message).toContain('docker compose logs crove | grep "cannot open"');
+    // A sample value fails as for every optional secret (Codex review): the worker would refuse it at start.
+    expect(failing({ ...READY, CREDENTIAL_KEY_PREVIOUS: 'change-me' })).toEqual(['Secrets: CREDENTIAL_KEY_PREVIOUS still has a sample value']);
+    expect(failing({ ...READY, CREDENTIAL_KEY: 'not-a-key', CREDENTIAL_KEY_PREVIOUS: previous.toString('hex').slice(2) })).toEqual([
+      'Secrets: CREDENTIAL_KEY is not a 32-byte key as base64 or 64 hex characters (openssl rand -base64 32)',
+      'Secrets: CREDENTIAL_KEY_PREVIOUS is not a 32-byte key as base64 or 64 hex characters (openssl rand -base64 32)',
+    ]);
+  });
+
   it('passes a ready deployment and leaves the human items as manual', () => {
     const results = checkEnv(READY);
     expect(failures(results)).toEqual([]);
-    expect(results.filter((r) => r.status === 'manual').map((r) => r.item)).toEqual(['Alerts', 'Extraction sandbox', 'RLS matrix', 'Backups', 'Evidence holds', 'Owner sign-off']);
+    expect(results.filter((r) => r.status === 'manual').map((r) => r.item)).toEqual(['Alerts', 'Credential key', 'Extraction sandbox', 'RLS matrix', 'Backups', 'Evidence holds', 'Owner sign-off']);
     // Evidence holds (#1009): the bucket's Object Lock is confirmed by hand; without S3 or with holds off, the owner
     // accepts that posted files are not held.
     const holds = (env: Record<string, string | undefined>) => checkEnv(env).find((r) => r.item === 'Evidence holds')?.message;
@@ -359,7 +402,7 @@ describe('pilot-check command', () => {
     const lines: string[] = [];
     const print = (line: string) => lines.push(line);
     expect(await runPilotCheck([], READY, fakeFetch({}), print)).toBe(PILOT_EXIT.ok);
-    expect(lines.join('\n')).toContain('Automatic checks passed. Confirm the 6 manual item(s)');
+    expect(lines.join('\n')).toContain('Automatic checks passed. Confirm the 7 manual item(s)');
     expect(await runPilotCheck(['--url', 'https://crove.example.com'], READY, fakeFetch(healthy), print)).toBe(PILOT_EXIT.ok);
     lines.length = 0;
     expect(await runPilotCheck([], { ...READY, AUTH_DISABLE_SIGNUP: 'false' }, fakeFetch({}), print)).toBe(PILOT_EXIT.failed);

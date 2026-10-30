@@ -80,6 +80,10 @@ describe('CredentialVault', () => {
     expect(during.needsReseal(resealed)).toBe(false);
     const after = new CredentialVault([newKey]);
     expect(() => after.open(sealed, binding)).toThrow(/unknown key/);
+    // The ids it opens, the current one first (#1888): an envelope under any other id does not open.
+    expect(during.keyIds).toEqual([newKey.id, oldKey.id]);
+    expect(after.keyIds).toEqual([newKey.id]);
+    expect(new CredentialVault([newKey, newKey]).keyIds).toEqual([newKey.id]);
     // A key id that names a key but not this envelope's key does not open either.
     expect(() => during.open({ keyId: newKey.id, envelope: sealed.envelope }, binding)).toThrow(/does not open/);
   });

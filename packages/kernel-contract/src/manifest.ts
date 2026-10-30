@@ -113,10 +113,23 @@ export type NavDeclaration =
   | { readonly app: string; readonly group: string; readonly path: string; readonly label: string }
   | { readonly app: null; readonly path: string; readonly label: string };
 
+// A screen of the app outside /o/$slug (#1660): a share target, an OAuth callback, a link sent outside the org. A
+// deployment without the module answers it not found, as the API answers its calls, and every route of the app's
+// router outside /o/$slug belongs to exactly one manifest.
+export interface OutsideRouteDeclaration {
+  // The full path, as the router writes it: '/-/share', '/-/b/$org/$type'.
+  readonly path: string;
+  // Opened without an account (a client's or a visitor's link): its route asks for no sign-in, and the module guard
+  // runs before any (apps/app/test/module-screens.test.ts checks both).
+  readonly public?: true;
+}
+
 // A module's screens and menu items. They are data with no server code, so the app's bundle reads them from
 // @crove/kernel-contract (MODULE_SCREENS in screens.ts) and each module's manifest names its own entry there.
 export interface ModuleScreens {
   readonly routes: readonly RouteDeclaration[];
+  // Its screens outside /o/$slug, when it has any.
+  readonly outside?: readonly OutsideRouteDeclaration[];
   readonly nav: readonly NavDeclaration[];
 }
 

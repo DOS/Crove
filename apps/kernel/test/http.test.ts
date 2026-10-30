@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -23,6 +23,7 @@ import type { AuthUser } from '../src/auth.ts';
 import { ConcurrencyLimiter } from '../src/concurrency.ts';
 import { assertExportKey, loadConfig } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
+import { secretMatches } from '../src/inbound.ts';
 import { buildZip } from '../../extract/test/zip-fixture.ts';
 
 const SECRET = 'x'.repeat(32);
@@ -33,6 +34,29 @@ describe('configuration guards', () => {
 
   it('refuses a short JWT secret', () => {
     expect(() => loadConfig({ ...base, AUTH_JWT_SECRET: 'short' })).toThrow(/32 characters/);
+  });
+
+  // #1214: the previous inbound secret of a rotation follows the current one's rules, and the errors carry neither value.
+  it('takes a previous inbound secret only with a current one, as long, different and not a sample value', () => {
+    const current = 'c'.repeat(32);
+    const previous = 'p'.repeat(32);
+    expect(loadConfig({ ...base, INBOUND_SECRET: current, INBOUND_SECRET_PREVIOUS: previous }).INBOUND_SECRET_PREVIOUS).toBe(previous);
+    expect(loadConfig({ ...base, INBOUND_SECRET: current, INBOUND_SECRET_PREVIOUS: '' }).INBOUND_SECRET_PREVIOUS).toBeUndefined();
+    const refusal = (env: Record<string, string>) => {
+      try {
+        loadConfig({ ...base, ...env });
+      } catch (error) {
+        const message = (error as Error).message;
+        expect(message).not.toContain(current);
+        expect(message).not.toContain(previous);
+        return message;
+      }
+      return null;
+    };
+    expect(refusal({ INBOUND_SECRET_PREVIOUS: previous })).toBe('INBOUND_SECRET_PREVIOUS is set without INBOUND_SECRET');
+    expect(refusal({ INBOUND_SECRET: current, INBOUND_SECRET_PREVIOUS: 'p'.repeat(31) })).toBe('INBOUND_SECRET_PREVIOUS must be at least 32 characters');
+    expect(refusal({ INBOUND_SECRET: current, INBOUND_SECRET_PREVIOUS: current })).toBe('INBOUND_SECRET_PREVIOUS must differ from INBOUND_SECRET');
+    expect(refusal({ INBOUND_SECRET: current, INBOUND_SECRET_PREVIOUS: 'change-me-to-a-long-random-string-0123456789' })).toBe('INBOUND_SECRET_PREVIOUS still has a sample value');
   });
 
   it('allows sample secrets and autoconfirm on localhost only', () => {
@@ -211,6 +235,58 @@ describe('configuration guards', () => {
     };
     expect(await read({})).toBe('Ludy');
     expect(await read({ BRAND_NAME: 'Tên Mới' })).toBe('Tên Mới');
+  });
+
+  // #1691: the installed app is named after the configured brand; every other field of the app's manifest stays.
+  it('serves the install manifest under BRAND_NAME, "Ludy" when unset, and the other assets as files', async () => {
+    const source = readFileSync(new URL('../../app/public/assets/manifest.webmanifest', import.meta.url), 'utf8');
+    const dist = await mkdtemp(join(tmpdir(), 'crove-manifest-'));
+    try {
+      await mkdir(join(dist, 'assets'));
+      writeFileSync(join(dist, 'index.html'), '<!doctype html><title>Ludy</title>');
+      writeFileSync(join(dist, 'assets', 'manifest.webmanifest'), source);
+      writeFileSync(join(dist, 'assets', 'app.js'), 'export {};\n');
+      const serve = (env: Record<string, string>) =>
+        createHttpApp({
+          config: loadConfig({ ...base, WEB_DIST: dist, ...env }),
+          runtime: { installed: () => true, modules: () => ['kernel'] } as unknown as Runtime,
+          store: {} as BlobStore,
+          authenticate: async () => {
+            throw new Error('not used');
+          },
+          pool: {} as pg.Pool,
+          aiEnabled: false,
+        });
+      const { name: _name, short_name: _short, ...rest } = JSON.parse(source) as Record<string, unknown>;
+      for (const [env, brand] of [[{}, 'Ludy'], [{ BRAND_NAME: "Sổ Xanh & Co's" }, "Sổ Xanh & Co's"]] as const) {
+        const response = await serve(env).request('/assets/manifest.webmanifest');
+        expect(response.status).toBe(200);
+        expect(response.headers.get('content-type')).toBe('application/manifest+json');
+        expect(response.headers.get('cache-control')).toBe('no-cache');
+        expect(await response.json()).toEqual({ ...rest, name: brand, short_name: brand });
+      }
+      // HEAD answers like GET; another method goes on to the static route, as before.
+      const branded = serve({ BRAND_NAME: 'Tên Mới' });
+      const head = await branded.request('/assets/manifest.webmanifest', { method: 'HEAD' });
+      expect(head.status).toBe(200);
+      expect(head.headers.get('content-type')).toBe('application/manifest+json');
+      expect((await branded.request('/assets/manifest.webmanifest', { method: 'POST' })).headers.get('content-type')).not.toBe('application/manifest+json');
+      // The other static files are still the files themselves.
+      const script = await branded.request('/assets/app.js');
+      expect(script.status).toBe(200);
+      expect(await script.text()).toBe('export {};\n');
+      // A build without the manifest, or with one that is not JSON: the static route answers as before, nothing breaks.
+      for (const broken of [null, '{ not json']) {
+        await rm(join(dist, 'assets', 'manifest.webmanifest'), { force: true });
+        if (broken !== null) writeFileSync(join(dist, 'assets', 'manifest.webmanifest'), broken);
+        const response = await serve({ BRAND_NAME: 'Tên Mới' }).request('/assets/manifest.webmanifest');
+        expect(response.status, String(broken)).not.toBe(500);
+        expect(response.headers.get('cache-control'), String(broken)).not.toBe('no-cache');
+        if (broken !== null) expect(await response.text()).toBe(broken);
+      }
+    } finally {
+      await rm(dist, { recursive: true, force: true });
+    }
   });
 });
 
@@ -460,6 +536,8 @@ describe('auth proxy', () => {
 
 describe('inbound email on the API', () => {
   const INBOUND_SECRET = 'y'.repeat(32);
+  // A rotation under way (#1214): the old value the mail worker may still send.
+  const INBOUND_SECRET_PREVIOUS = 'w'.repeat(32);
   let touched: string[] = [];
   // What the enqueue definer answers: true (queued), false (already pending) or an error.
   let enqueue: () => boolean = () => true;
@@ -470,6 +548,7 @@ describe('inbound email on the API', () => {
       AUTH_ISSUER: 'crove-auth',
       INBOUND_DOMAIN: 'in.test',
       INBOUND_SECRET,
+      INBOUND_SECRET_PREVIOUS,
       WEB_DIST: '/nonexistent',
     }),
     runtime: {
@@ -525,6 +604,31 @@ describe('inbound email on the API', () => {
     } finally {
       enqueue = () => true;
     }
+  });
+
+  it('accepts the current and the previous secret during a rotation, and refuses any other value (#1214)', async () => {
+    const recipient = { 'x-crove-recipient': `${'a'.repeat(24)}@in.test` };
+    for (const secret of [INBOUND_SECRET, INBOUND_SECRET_PREVIOUS]) {
+      touched = [];
+      expect((await deliver({ authorization: `Bearer ${secret}`, ...recipient })).status).toBe(202);
+      expect(touched).toHaveLength(2);
+    }
+    touched = [];
+    for (const wrong of ['v'.repeat(32), INBOUND_SECRET.slice(1), `${INBOUND_SECRET}y`, `${INBOUND_SECRET}${INBOUND_SECRET_PREVIOUS}`, '']) {
+      expect((await deliver({ authorization: `Bearer ${wrong}`, ...recipient })).status, wrong).toBe(401);
+    }
+    expect((await deliver({ authorization: INBOUND_SECRET, ...recipient })).status).toBe(401);
+    expect((await deliver(recipient)).status).toBe(401);
+    expect(touched).toEqual([]);
+  });
+
+  it('compares every secret, over digests of one length (#1214)', () => {
+    expect(secretMatches(`Bearer ${INBOUND_SECRET}`, [INBOUND_SECRET])).toBe(true);
+    expect(secretMatches(`Bearer ${INBOUND_SECRET_PREVIOUS}`, [INBOUND_SECRET, INBOUND_SECRET_PREVIOUS])).toBe(true);
+    expect(secretMatches(`Bearer ${INBOUND_SECRET_PREVIOUS}`, [INBOUND_SECRET])).toBe(false);
+    expect(secretMatches(undefined, [INBOUND_SECRET])).toBe(false);
+    expect(secretMatches('Bearer ', [INBOUND_SECRET])).toBe(false);
+    expect(secretMatches(`Bearer ${INBOUND_SECRET}`, [])).toBe(false);
   });
 
   it('refuses a wrong secret, an empty body and a malformed address before storing anything', async () => {

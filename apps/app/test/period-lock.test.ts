@@ -1,15 +1,11 @@
 // Period lock on the ledger screen (issue #329): who may lock and unlock, and month and day steps. Today and this month
 // in Vietnam are @crove/kernel-contract vietnamToday and vietnamMonth (#560), tested there.
 import { describe, expect, it } from 'vitest';
-import { canLockPeriods, canUnlockPeriods, monthLabel, nextDay, postingDateAllowed, previousMonth } from '../src/lib/period-lock.ts';
+import { canLockPeriods, monthLabel, nextDay, postingDateAllowed, previousMonth } from '../src/lib/period-lock.ts';
 
 describe('period lock helpers', () => {
-  it('lets owners and admins lock, and only owners unlock', () => {
+  it('lets owners and admins lock (who unlocks an entity, its lock state says, #1507)', () => {
     expect(['owner', 'admin', 'member', 'viewer', null].map((r) => canLockPeriods(r))).toEqual([true, true, false, false, false]);
-    expect(['owner', 'admin', 'member', 'viewer', undefined].map((r) => canUnlockPeriods(r))).toEqual([true, false, false, false, false]);
-    // A chief accountant (#1279, ADR-0021).
-    expect(canUnlockPeriods('member', ['finance.period.unlock'])).toBe(true);
-    expect(canUnlockPeriods('admin', ['finance.proposal.approve'])).toBe(false);
   });
 
   it('steps back a month across the year and writes it as Vietnamese accounting does', () => {

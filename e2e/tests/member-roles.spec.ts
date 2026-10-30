@@ -21,7 +21,7 @@ test('an owner gives the chief accountant role and takes it back', async ({ page
   const roles = row.getByRole('group', { name: `Vai trò nghiệp vụ của ${owner}` });
   await roles.getByRole('button', { name: `Giao vai trò cho ${owner}` }).click();
   await roles.getByLabel('Vai trò nghiệp vụ', { exact: true }).selectOption({ label: 'Kế toán trưởng' });
-  await expect(roles.getByText('Duyệt các đề xuất ghi sổ và mở khóa tháng đã khóa sổ, như chủ sở hữu.')).toBeVisible();
+  await expect(roles.getByText('Duyệt các đề xuất ghi sổ, mở khóa tháng đã khóa sổ và đánh dấu đã nộp tờ khai GTGT, như chủ sở hữu.')).toBeVisible();
   await roles.getByRole('button', { name: 'Giao vai trò', exact: true }).click();
   await expect(roles.getByText('Kế toán trưởng', { exact: true })).toBeVisible();
 

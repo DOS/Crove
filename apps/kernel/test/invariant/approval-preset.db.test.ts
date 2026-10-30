@@ -62,6 +62,31 @@ suite('approval policy presets on PostgreSQL (#1402)', () => {
     }
   }
 
+  // The sessions of this test's database that wait on a lock the session `pid` holds (#1943): a race test waits on its
+  // own sessions this way, never on a session of another test that happens to wait on a lock of its own.
+  async function blockedBy(pid: number): Promise<number[]> {
+    const { rows } = await withAdmin((c) =>
+      c.query<{ pid: number }>(
+        `SELECT a.pid FROM pg_catalog.pg_stat_activity a
+         WHERE a.datname = pg_catalog.current_database() AND $1::int = ANY (pg_catalog.pg_blocking_pids(a.pid))`,
+        [pid],
+      ),
+    );
+    return rows.map((r) => r.pid);
+  }
+
+  // Polls `probe` until it answers, at most 400 times, 25 ms apart (each probe opens its own admin connection).
+  async function until<T>(what: string, probe: () => Promise<T | undefined>): Promise<T> {
+    for (let tries = 0; ; tries++) {
+      const value = await probe();
+      if (value !== undefined) return value;
+      if (tries > 400) throw new Error(what);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+
+  const backendPid = async (c: pg.Client) => (await c.query<{ pid: number }>('SELECT pg_catalog.pg_backend_pid() AS pid')).rows[0]?.pid as number;
+
   // Runs fn as the API login role in the user's sealed context of the org, then commits (so deferred triggers run).
   async function committedInContext(userId: string, orgId: string, fn: (c: pg.Client) => Promise<void>): Promise<void> {
     const app = await connect(appUrl);
@@ -328,6 +353,96 @@ suite('approval policy presets on PostgreSQL (#1402)', () => {
     // Back on founder, the role is an ordinary one again.
     await o.setPreset(asMfa(o.owner), 'founder');
     await expect(o.exec(asMfa(o.owner), 'kernel.member.role.revoke', { assignmentId: second.assignmentId })).resolves.toMatchObject({ assignmentId: second.assignmentId });
+  });
+
+  // #1933: a change made without an idempotency key holds nothing on the org's tenant row before its keep guard runs.
+  // The guard used to read the preset (founder) before it locked and return at once, so a switch to the accountant
+  // preset still counted the holder whose revoke was not committed yet, and both committed. The revoke here runs in a
+  // session left open, as the owner, without an idempotency row, while the owner's switch runs through the command.
+  it('never ends on the accountant preset without a chief accountant when a revoke without an idempotency key races the switch (#1933)', async () => {
+    const o = await org();
+    const { assignmentId } = await o.exec<{ assignmentId: string }>(asMfa(o.owner), 'kernel.member.role.assign', {
+      userId: o.chief,
+      roleKey: 'finance.chief_accountant',
+      legalEntityId: null,
+    });
+    const remover = await connect(appUrl);
+    const removerPid = await backendPid(remover);
+    await remover.query('BEGIN');
+    try {
+      await remover.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [o.orgId, contextToken(o.owner, o.orgId)]);
+      // The last chief accountant's assignment is deleted, and not committed yet.
+      await remover.query('SELECT * FROM crove_kernel.role_assignment_revoke($1::uuid)', [assignmentId]);
+      let settled = false;
+      const switching = o.setPreset(asMfa(o.owner), 'accountant').then(
+        (value) => {
+          settled = true;
+          return value;
+        },
+        (error: { code?: string }) => {
+          settled = true;
+          return error.code;
+        },
+      );
+      // The switch finishes (the old guard held nothing), or waits behind the revoke: the session this test's remover
+      // blocks is the switch, by its own pid, and no session of another test that waits on a lock of its own (#1943).
+      await until('the switch neither finished nor waited', async () => (settled || (await blockedBy(removerPid)).length > 0 ? true : undefined));
+      expect(settled).toBe(false);
+      await remover.query('COMMIT');
+      // Once the revoke committed, the switch counts no chief accountant.
+      expect(await switching).toBe('NO_CHIEF_ACCOUNTANT');
+    } finally {
+      await remover.query('ROLLBACK').catch(() => {});
+    }
+    expect(await o.policy()).toEqual({ preset: 'founder', version: 1 });
+    expect(await withAdmin(async (c) => (await c.query('SELECT 1 FROM crove_kernel.role_assignment WHERE id = $1', [assignmentId])).rowCount)).toBe(0);
+  });
+
+  // #1943: the other order. The switch locks the tenant row first and is held there: an admin session holds the activity
+  // table, so the switch waits at its activity row with the tenant row locked and the accountant preset written. The
+  // revoke, in a session of its own without an idempotency row, then waits in its keep guard for the switch's lock (the
+  // member row and the assignment are not the switch's), and once the switch commits it reads the accountant preset and
+  // refuses: the org keeps its chief accountant.
+  it('refuses the revoke of the last chief accountant that waited for a switch to the accountant preset (#1943)', async () => {
+    const o = await org();
+    const { assignmentId } = await o.exec<{ assignmentId: string }>(asMfa(o.owner), 'kernel.member.role.assign', {
+      userId: o.chief,
+      roleKey: 'finance.chief_accountant',
+      legalEntityId: null,
+    });
+    const hold = await connect(adminUrl);
+    const holdPid = await backendPid(hold);
+    const remover = await connect(appUrl);
+    const removerPid = await backendPid(remover);
+    await hold.query('BEGIN');
+    await remover.query('BEGIN');
+    try {
+      await hold.query('LOCK TABLE crove_kernel.activity IN EXCLUSIVE MODE');
+      await remover.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [o.orgId, contextToken(o.owner, o.orgId)]);
+      const switching = o.setPreset(asMfa(o.owner), 'accountant');
+      // Awaited below; on a run that fails before, its refusal is not reported a second time as unhandled.
+      switching.catch(() => {});
+      // The switch, by its own pid: the session the held activity table blocks.
+      const switchPid = await until('the switch never reached its activity row', async () => (await blockedBy(holdPid))[0]);
+      // It holds the tenant row: a lock that conflicts with its FOR UPDATE is refused at once.
+      await expect(
+        withAdmin((c) => c.query('SELECT 1 FROM crove_kernel.tenant WHERE org_id = $1 FOR KEY SHARE NOWAIT', [o.orgId])),
+      ).rejects.toMatchObject({ code: '55P03' });
+      const revoking = remover.query('SELECT * FROM crove_kernel.role_assignment_revoke($1::uuid)', [assignmentId]).then(
+        () => 'revoked',
+        (error: Error) => error.message,
+      );
+      // The revoke waits behind the switch, on the switch's own pid.
+      await until('the revoke did not wait for the switch', async () => ((await blockedBy(switchPid)).includes(removerPid) ? true : undefined));
+      await hold.query('COMMIT');
+      await expect(switching).resolves.toMatchObject({ preset: 'accountant' });
+      expect(await revoking).toBe('LAST_CHIEF_ACCOUNTANT');
+    } finally {
+      await hold.query('ROLLBACK').catch(() => {});
+      await remover.query('ROLLBACK').catch(() => {});
+    }
+    expect(await o.policy()).toEqual({ preset: 'accountant', version: 2 });
+    expect(await withAdmin(async (c) => (await c.query('SELECT 1 FROM crove_kernel.role_assignment WHERE id = $1', [assignmentId])).rowCount)).toBe(1);
   });
 
   it('refuses the switch to an AI agent', async () => {

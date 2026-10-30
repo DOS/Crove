@@ -12,7 +12,7 @@ export interface VisibleEntity {
 // The screens that work in one entity: the finance books (the tax portal's purchase list among them), the Overview
 // (the VAT return filed per entity) and Settings (the learned account rules per entity). The switcher shows on these
 // only.
-const ENTITY_SCREENS: ReadonlySet<string> = new Set(['documents', 'journal', 'vouchers', 'bank', 'fixed-assets', 'ledger', 'vat', 'portal-invoices', 'overview', 'settings']);
+const ENTITY_SCREENS: ReadonlySet<string> = new Set(['documents', 'journal', 'vouchers', 'bank', 'fixed-assets', 'ledger', 'vat', 'portal-invoices', 'customers', 'overview', 'settings']);
 
 // Whether a path (/o/<slug>/<screen>/...) is one of the screens that work in one entity.
 export function isEntityPath(pathname: string): boolean {

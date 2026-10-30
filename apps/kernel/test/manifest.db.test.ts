@@ -31,7 +31,7 @@ const CONTROL_PLANE: ModuleManifest = {
       inbound_address: columns(['org_id', 'id', 'created_at', 'retired_at'], { token: 'sensitive' }),
       inbound_pending: columns(['seq', 'blob_id', 'raw_sha256', 'size_bytes', 'received_at'], { recipient: 'sensitive' }),
       stream_ticket: columns(['ticket_hash', 'user_id', 'stream_org_id', 'session_id', 'aal', 'mfa_at', 'token_expires_at', 'expires_at', 'created_at']),
-      user_account: columns(['id', 'issuer', 'created_at', 'last_seen_at', 'disabled_at'], { subject: 'pii', email: 'contact', display_name: 'pii' }),
+      user_account: columns(['id', 'issuer', 'created_at', 'last_seen_at', 'disabled_at'], { subject: 'pii', email: 'contact', display_name: 'pii', status_reason: 'pii' }),
     },
   },
   permissions: [],
@@ -56,6 +56,8 @@ const CLASS_OF_KIND: Record<PersonalDataKind, readonly DataClass[]> = {
   email_list: ['contact'],
   name: ['pii'],
   tax_code: ['national_id', 'national_id_if_individual'],
+  // Free text a person wrote (a note's body, #1678), which may name or describe anyone.
+  free_text: ['pii'],
   other: ['pii', 'contact', 'payment', 'national_id', 'national_id_if_individual', 'sensitive'],
 };
 const PERSONAL_HANDLINGS: readonly PersonalDataHandling[] = ['erase', 'keep_legal', 'keep_record'];
@@ -237,8 +239,9 @@ suite('module manifests against the catalog (#1588, #1599)', () => {
     expect(problems).toEqual([]);
     // Every function and policy names its permissions in a form the scan attributes (#1641).
     expect(sqlProblems, 'database functions or policies that name a permission the manifest check cannot read').toEqual([]);
-    // The database names both permissions on main: unlock_period() and the accountant preset's chief accountant guard.
-    expect([...new Set(sqlUses.map((u) => u.permission))].sort()).toEqual(['finance.period.unlock', 'finance.proposal.approve']);
+    // The database names three permissions on main: unlock_period(), the accountant preset's chief accountant guard and
+    // vat_return_filed_guard (#1508).
+    expect([...new Set(sqlUses.map((u) => u.permission))].sort()).toEqual(['finance.period.unlock', 'finance.proposal.approve', 'finance.vat.file']);
     expect(grants.length).toBeGreaterThan(0);
     expect(
       permissionProblems(MANIFESTS, { uses: [...uses, ...sqlUses], grants }),

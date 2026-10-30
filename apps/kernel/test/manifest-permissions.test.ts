@@ -37,9 +37,11 @@ describe('module manifests declare their permissions (#1630)', () => {
   it('declares every permission a command or the approval policy names, with the risk of its commands', () => {
     const { uses, problems } = staticPermissionUses();
     expect(problems).toEqual([]);
-    // The three gates on main: kernel.proposal.approve and its bulk form, finance.period.unlock, and the ledger policy.
+    // The gates on main: kernel.proposal.approve and its bulk form, finance.period.unlock, finance.vat.return_mark, and
+    // the ledger policy.
     expect(uses.map((u) => `${u.by}: ${u.permission}`).sort()).toEqual([
       'command finance.period.unlock: finance.period.unlock',
+      'command finance.vat.return_mark: finance.vat.file',
       'command kernel.proposal.approve: finance.proposal.approve',
       'command kernel.proposal.approve_many: finance.proposal.approve',
       'the approval policy (LEDGER_APPROVE_PERMISSION): finance.proposal.approve',
@@ -183,7 +185,8 @@ describe("the app's permission checks (#1641)", () => {
   it('names only permission constants, all of them declared', () => {
     const { uses, problems } = appPermissionUses(appSources(), contract);
     expect(problems).toEqual([]);
-    expect(uses.map((u) => u.permission).sort()).toEqual(['finance.period.unlock', 'finance.proposal.approve']);
+    // The unlock is decided per legal entity by the lock state the server answers (unlockable, #1507), not by the org list.
+    expect(uses.map((u) => u.permission).sort()).toEqual(['finance.proposal.approve']);
     expect(permissionProblems(MODULE_MANIFESTS, { uses: [...staticPermissionUses().uses, ...uses] })).toEqual([]);
   });
 
