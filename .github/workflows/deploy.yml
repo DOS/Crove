@@ -171,6 +171,7 @@ jobs:
           labels=(--label "org.opencontainers.image.source=$SOURCE" --label "org.opencontainers.image.revision=$SHA" --label "org.opencontainers.image.version=$RELEASE")
           # The commit's date orders builds for the API's /readyz (worker build >= API build, #1952).
           built_at="$(git show -s --format=%cI "$SHA")"
+          test -n "$built_at"
           docker build "${labels[@]}" --build-arg "CROVE_BUILD=$SHA" --build-arg "CROVE_BUILD_TIME=$built_at" -t "$repo:$RELEASE" .
           docker build "${labels[@]}" -f apps/extract/Dockerfile -t "$repo-extract:$RELEASE" .
           docker push --quiet "$repo:$RELEASE"

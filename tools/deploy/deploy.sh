@@ -20,13 +20,16 @@
 #
 # Deploy: pull both images by digest, start the database, run `migrate`, start Supabase Auth and run `auth-grants`,
 # start the other services, then the app: the worker before the API when they run as separate services (`worker`
-# and `api`), else the all-in-one `crove` service. It waits for /readyz (every committed migration in the ledger,
+# and `api`), so a release's API never serves before its worker runs, else the all-in-one `crove` service. It waits for /readyz (every committed migration in the ledger,
 # Supabase Auth grants in place) and runs the smoke test. When anything after the migration fails, it rolls back to
 # the release that ran before and exits 1.
 #
 # Rollback restores images and compose files only. Migrations are forward only: the schema stays where the newer
 # release left it, so every migration must keep the previous release working (expand, then contract in a later
-# release; plan §3.5).
+# release; plan §3.5). Toward an older release (a rollback, or the recovery after a failed deploy) separate services
+# roll the other way round, the API before the worker (plan §3.5, #1965): the worker is never older than the API that
+# serves, whose /readyz would wait on it (503 worker_build, #1952). Older means deployed earlier (STAGED_AT), so a
+# second rollback, back to the release the first one left, rolls the worker first again.
 #
 # Exit codes: 0 done; 1 the deploy failed and the previous release runs again (or nothing was changed); 2 bad usage
 # or configuration; 3 the deploy failed and so did the rollback: the instance needs an operator.
@@ -429,10 +432,24 @@ wait_ready() {
 
 up() { dc up --detach --no-build --no-deps --wait --wait-timeout "$WAIT_TIMEOUT" "$@"; }
 
-# Rolls the active release's services. The database and the migration are deploy only (step "migrate" in
-# do_deploy); a rollback starts here with the older release's files.
+# Rolls the worker of the active release when it runs as its own service, and checks it stays up.
+roll_worker() {
+  log 'rolling the worker'
+  dc up --detach --no-build --no-deps worker || return 1
+  sleep "$WORKER_SETTLE"
+  if ! dc ps --status running --services | grep -qx worker; then
+    err 'the worker is not running'
+    dc logs --tail 50 worker >&2 || true
+    return 1
+  fi
+}
+
+# roll_services [forward|back]: rolls the active release's services. The database and the migration are deploy only
+# (step "migrate" in do_deploy); a rollback starts here with the older release's files. forward (toward a newer
+# release, the default) rolls a separate worker before the API, back (toward an older one) the API before the worker
+# (plan §3.5): either way the worker that runs is never older than the API that serves.
 roll_services() {
-  local infra=() rest=() url s
+  local direction="${1:-forward}" infra=() rest=() url s
   load_services || return 1
   mapfile -t infra < <(infra_services)
   if has_service auth; then
@@ -448,18 +465,16 @@ roll_services() {
     log "starting ${rest[*]}"
     up "${rest[@]}" || return 1
   fi
-  # Worker first (plan §3.5): the worker of a release must run before its API serves.
   if has_service worker && has_service api; then
-    log 'rolling the worker'
-    dc up --detach --no-build --no-deps worker || return 1
-    sleep "$WORKER_SETTLE"
-    if ! dc ps --status running --services | grep -qx worker; then
-      err 'the worker is not running'
-      dc logs --tail 50 worker >&2 || true
-      return 1
+    if [ "$direction" = back ]; then
+      log 'rolling the API (toward an older release: the API before the worker)'
+      up api || return 1
+      roll_worker || return 1
+    else
+      roll_worker || return 1
+      log 'rolling the API'
+      up api || return 1
     fi
-    log 'rolling the API'
-    up api || return 1
   else
     log 'rolling crove (api and worker in one container)'
     up crove || return 1
@@ -546,16 +561,17 @@ prune_releases() {
   done < <(for d in "$DEPLOY_DIR"/releases/*/; do if [ -f "$d/release.env" ]; then printf '%s %s\n' "$(sed -n 's/^STAGED_AT=//p' "$d/release.env")" "${d%/}"; fi; done | sort -r | cut -d' ' -f2-)
 }
 
-# Rolls back to a release after a failed deploy or rollback. Exit 1 when it is serving again, 3 when not.
+# recover <release> <what> <forward|back>: rolls to a release after a failed deploy (back, to the older one that ran
+# before) or rollback (forward, to the newer one it left). Exit 1 when it is serving again, 3 when not.
 recover() {
-  local target="$1" what="$2"
+  local target="$1" what="$2" direction="$3"
   if [ -z "$target" ]; then
     record "$what failed, nothing to roll back to"
     die "$EXIT_FAILED" "$what failed and there is no earlier release to roll back to; the failed release is left as it is"
   fi
   log "rolling back to $target"
   activate "$target"
-  if roll_services; then
+  if roll_services "$direction"; then
     record "$what failed, rolled back to $target"
     die "$EXIT_FAILED" "$what failed; rolled back to $target, which serves again"
   fi
@@ -641,7 +657,7 @@ do_deploy() {
 
   log 'starting the database'
   if ! up db; then
-    recover "$current" "deploy $name (database)"
+    recover "$current" "deploy $name (database)" back
   fi
   # Migrations first, with the new image. They are forward only: the running release keeps working on the new
   # schema (expand and contract), so a failure here needs no rollback of the services.
@@ -652,8 +668,8 @@ do_deploy() {
     die "$EXIT_FAILED" "migrations failed; the services were not changed${current:+ ($current still runs)}. Fix forward with a new migration"
   fi
 
-  if ! roll_services; then
-    recover "$current" "deploy $name"
+  if ! roll_services forward; then
+    recover "$current" "deploy $name" back
   fi
 
   if [ "$current" != "$name" ]; then
@@ -687,9 +703,15 @@ do_rollback() {
   if ! pull_images "$(release_field "$previous" IMAGE)" "$(release_field "$previous" EXTRACT_IMAGE)" "$REGISTRY" "$REGISTRY_USER" "$REGISTRY_PASSWORD"; then
     log 'pulling the previous images failed; trying with the images on the host'
   fi
+  # Toward the release deployed earlier, the API first; back to the one a rollback left, the worker first (#1965).
+  local direction=back undo=forward
+  if [ -n "$current" ] && [[ "$(release_field "$previous" STAGED_AT)" > "$(release_field "$current" STAGED_AT)" ]]; then
+    direction=forward
+    undo=back
+  fi
   activate "$previous"
-  if ! roll_services; then
-    recover "$current" "rollback to $previous"
+  if ! roll_services "$direction"; then
+    recover "$current" "rollback to $previous" "$undo"
   fi
   # Swap, so a second rollback returns to the release just left.
   write_state previous "$current"

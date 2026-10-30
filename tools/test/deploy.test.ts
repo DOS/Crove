@@ -183,6 +183,64 @@ describe.skipIf(!runHere)('deploy.sh', { timeout: 300_000 }, () => {
     expect(c.some((l) => / crove$/.test(l))).toBe(false);
   });
 
+  // #1965 (plan §3.5): toward an older release the API goes first, so the worker that runs is never older than the API
+  // that serves (whose /readyz waits on an older worker, #1952); toward a newer one, the worker first.
+  describe('separate services, toward an older release (#1965)', () => {
+    const env = { STUB_SERVICES: 'db migrate auth crove-extract api worker' };
+    const worker = 'compose up --detach --no-build --no-deps worker';
+    const api = 'compose up --detach --no-build --no-deps --wait --wait-timeout 600 api';
+    const last = (lines: string[], text: string) => lines.findLastIndex((l) => l.includes(text));
+
+    it('rolls the API before the worker on a rollback, and the worker before the API on the second one', () => {
+      expect(deploy('v1.0.0', 'a', env).status).toBe(0);
+      expect(deploy('v1.1.0', 'b', env).status).toBe(0);
+      rmSync(log);
+      let res = run(['rollback'], env);
+      expect(res.status, res.out).toBe(0);
+      let c = calls();
+      expect(indexOf(c, api)).toBeGreaterThan(-1);
+      expect(indexOf(c, worker)).toBeGreaterThan(indexOf(c, api));
+      // The worker is still checked: it stays up before the instance is called ready.
+      expect(indexOf(c, 'compose ps --status running --services')).toBeGreaterThan(indexOf(c, worker));
+      expect(indexOf(c, 'compose port api 8080')).toBeGreaterThan(indexOf(c, worker));
+      expect(res.out).toContain('rolling the API (toward an older release: the API before the worker)');
+      // The second rollback returns to the release deployed later: toward it, the worker first again.
+      rmSync(log);
+      res = run(['rollback'], env);
+      expect(res.status, res.out).toBe(0);
+      c = calls();
+      expect(indexOf(c, worker)).toBeGreaterThan(-1);
+      expect(indexOf(c, api)).toBeGreaterThan(indexOf(c, worker));
+      expect(res.out).not.toContain('the API before the worker');
+    });
+
+    it('recovers a failed deploy API first, toward the release that ran before', () => {
+      expect(deploy('v1.0.0', 'a', env).status).toBe(0);
+      rmSync(log);
+      const res = deploy('v1.1.0', 'b', { ...env, STUB_BAD_DIGEST: digest('b') });
+      expect(res.status, res.out).toBe(1);
+      expect(res.out).toContain(`rolled back to ${releaseDir('v1.0.0', 'a')}, which serves again`);
+      const c = calls();
+      // The deploy: the worker, then the API. The recovery: the API, then the worker.
+      expect(indexOf(c, api)).toBeGreaterThan(indexOf(c, worker));
+      expect(last(c, worker)).toBeGreaterThan(last(c, api));
+      expect(last(c, api)).toBeGreaterThan(indexOf(c, api));
+    });
+
+    it('recovers a failed rollback worker first, toward the newer release it left', () => {
+      expect(deploy('v1.0.0', 'a', env).status).toBe(0);
+      expect(deploy('v1.1.0', 'b', env).status).toBe(0);
+      rmSync(log);
+      const res = run(['rollback'], { ...env, STUB_BAD_DIGEST: digest('a') });
+      expect(res.status, res.out).toBe(1);
+      expect(res.out).toContain(`rolled back to ${releaseDir('v1.1.0', 'b')}, which serves again`);
+      const c = calls();
+      // The rollback: the API, then the worker. The recovery: the worker, then the API.
+      expect(indexOf(c, worker)).toBeGreaterThan(indexOf(c, api));
+      expect(last(c, api)).toBeGreaterThan(last(c, worker));
+    });
+  });
+
   it('does not roll the API when the new worker does not stay up, and rolls back', () => {
     const env = { STUB_SERVICES: 'db migrate auth crove-extract api worker' };
     expect(deploy('v1.0.0', 'a', env).status).toBe(0);
