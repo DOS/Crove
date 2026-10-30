@@ -53,6 +53,7 @@ import {
 import type { SessionRevoker, SignOutTarget } from './sessions.ts';
 import { opsAlert } from './ops-alert.ts';
 import { BANK_FEEDS_DUE_PAGE, bankFeedsDue, runBankFeedSync, type BankFeedSyncJob } from './bank-feed-sync.ts';
+import { BANK_FEED_NOTICE_CLAIM, claimBankFeedNotices } from './bank-feed-webhook.ts';
 import type { BankFeedProvider } from '@crove/bank-feed';
 
 const SOCIAL_PUBLISH_RETRY_LIMIT = 2;
@@ -1810,6 +1811,32 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
           );
         });
         if (sent < 100) break;
+      }
+      // A bank feed provider's signed notice (ADR-0039, #2044): the connections that list an account it names get a sync.
+      // Only where an adapter is on; without one the route does not exist and nothing is waiting.
+      if (finance && deps.channels?.bankFeeds && Object.keys(deps.channels.bankFeeds).length > 0) {
+        const adapters = deps.channels.bankFeeds;
+        for (;;) {
+          const claimed = await relayBatch(deps.workerDb, boss, async (trx) => {
+            const rows = await claimBankFeedNotices(trx);
+            const seen = new Set<string>();
+            return rows.map((row) => {
+              // A claimed account no connection lists (a row of nulls), a connection already queued in this batch, or an
+              // adapter this deployment does not have: nothing to send, but still a claimed row for the batch's count.
+              if (!row.orgId || !row.connectionId || !row.provider || !Object.hasOwn(adapters, row.provider) || seen.has(row.connectionId)) return async () => null;
+              seen.add(row.connectionId);
+              const target = { orgId: row.orgId, connectionId: row.connectionId } satisfies BankFeedSyncJob;
+              return (boss: JobSender) =>
+                boss.send(QUEUES.bankFeedSync, target, {
+                  singletonKey: jobKey(target.orgId, QUEUES.bankFeedSync, target.connectionId),
+                  retryLimit: BANK_FEED_SYNC_RETRY_LIMIT,
+                  retryDelay: 30,
+                  retryBackoff: true,
+                });
+            });
+          });
+          if (claimed < BANK_FEED_NOTICE_CLAIM) break;
+        }
       }
     } catch (error) {
       console.error('[relay]', error);

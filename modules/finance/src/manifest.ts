@@ -11,6 +11,7 @@ export const financeManifest = defineModule({
     crove_finance: {
       account: columns(['code', 'name', 'parent_code', 'standard']),
       bank_feed_account: columns(['org_id', 'id', 'legal_entity_id', 'channel_connection_id', 'cursor', 'last_synced_at', 'created_by', 'created_at'], { bank_account: 'payment', external_account_id: 'payment' }),
+      bank_feed_notice_pending: columns(['seq', 'provider', 'received_at'], { external_account_id: 'payment' }),
       bank_feed_listed_account: columns(['org_id', 'id', 'channel_connection_id', 'listed_at'], { external_account_id: 'payment', display_name: 'pii' }),
       bank_line: columns(['org_id', 'id', 'import_id', 'position', 'value_date', 'amount', 'running_balance', 'bank_ref', 'dedupe_key', 'ambiguous', 'created_by', 'created_at', 'legal_entity_id'], { bank_account: 'payment', description: 'pii' }),
       cash_voucher: columns(['org_id', 'id', 'voucher_type', 'number', 'voucher_date', 'cash_account', 'party_id', 'amount', 'proposal_id', 'created_by', 'created_at', 'bank_line_id', 'legal_entity_id', 'number_period', 'number_allocation_id'], { person_name: 'pii', description: 'pii' }),
