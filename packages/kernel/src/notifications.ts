@@ -130,7 +130,7 @@ export const notificationDispatch = defineCommand({
         if (!e.success) return { sent: 0 };
         const proposal = await ctx.trx
           .selectFrom('crove_kernel.proposal')
-          .select(['id', 'command', 'title', 'status', 'legal_entity_id'])
+          .select(['id', 'command', 'status', 'legal_entity_id'])
           .where('org_id', '=', ctx.orgId)
           .where('id', '=', e.data.proposalId)
           .executeTakeFirst();
@@ -141,9 +141,9 @@ export const notificationDispatch = defineCommand({
           users: await eligibleApprovers(ctx.trx, ctx.orgId, proposal.command),
           key: `proposal:${proposal.id}`,
           subject: { type: 'kernel.proposal', id: proposal.id },
-          // The proposal's entity (#1538): a notice names its title.
+          // The proposal's entity (#1538). Its title is read when the notice is shown, never copied (#1977).
           legalEntityId: proposal.legal_entity_id,
-          detail: { title: proposal.title.slice(0, 200) },
+          detail: {},
           eventId: event.id,
           actor: event.actor,
         });
@@ -155,7 +155,7 @@ export const notificationDispatch = defineCommand({
         const file = await ctx.trx
           .selectFrom('crove_kernel.file as f')
           .leftJoin('crove_kernel.extraction as x', (join) => join.onRef('x.org_id', '=', 'f.org_id').onRef('x.file_id', '=', 'f.id').on('x.version', '=', e.data.version))
-          .select(['f.id', 'f.filename', 'f.created_by', 'x.requested_by', 'x.legal_entity_id'])
+          .select(['f.id', 'f.created_by', 'x.requested_by', 'x.legal_entity_id'])
           .where('f.org_id', '=', ctx.orgId)
           .where('f.id', '=', e.data.fileId)
           .executeTakeFirst();
@@ -168,7 +168,8 @@ export const notificationDispatch = defineCommand({
           key: `file_unreadable:${file.id}:${e.data.version}`,
           subject: { type: 'kernel.file', id: file.id },
           legalEntityId: file.legal_entity_id,
-          detail: { filename: file.filename.slice(0, 200) },
+          // The file's name is read when the notice is shown (#1977).
+          detail: {},
           eventId: event.id,
         });
         return { sent };
@@ -182,7 +183,7 @@ export const notificationDispatch = defineCommand({
         // waits for nobody.
         const waiting = await ctx.trx
           .selectFrom('crove_kernel.task')
-          .select(['id', 'title'])
+          .select('id')
           .where('org_id', '=', ctx.orgId)
           .where('id', 'in', e.data.taskIds)
           .where((eb) => (e.data.toPositionId === null ? eb('assignee_position_id', 'is', null) : eb('assignee_position_id', '=', e.data.toPositionId)))
@@ -205,11 +206,9 @@ export const notificationDispatch = defineCommand({
           // One task opens itself; several open the task list.
           subject: waiting.length === 1 && e.data.count === 1 ? { type: 'kernel.task', id: first.id } : null,
           legalEntityId: e.data.legalEntityId,
-          // The event lists the first ids only: when every listed one still waits, so do the rest it counts.
-          detail:
-            waiting.length === 1 && e.data.count === 1
-              ? { title: first.title.slice(0, 200) }
-              : { count: String(waiting.length === e.data.taskIds.length ? e.data.count : waiting.length) },
+          // The event lists the first ids only: when every listed one still waits, so do the rest it counts. One task's
+          // title is read when the notice is shown (#1977).
+          detail: waiting.length === 1 && e.data.count === 1 ? {} : { count: String(waiting.length === e.data.taskIds.length ? e.data.count : waiting.length) },
           eventId: event.id,
           actor: event.actor,
         });
@@ -237,7 +236,10 @@ function requireUser(ctx: Pick<CommandContext, 'actor'>): string {
 }
 
 // The viewer's newest notifications, how many are unread (up to NOTIFICATION_UNREAD_CAP + 1) and the kinds they turned
-// off. A proposal that is no longer pending is not waiting for anyone, so its notification is shown read.
+// off. A proposal that is no longer pending is not waiting for anyone, so its notification is shown read. The subject's
+// title (a proposal's or task's) or file name is read here, as the viewer may read it, never kept with the notice: a
+// value the personal-data erasure redacts in the task leaves no copy behind (#1977). A notice written before keeps its
+// copy only when the subject is gone (20261106260000).
 export const notificationList = defineQuery({
   name: 'kernel.notification.list',
   input: z.object({}),
@@ -252,10 +254,19 @@ export const notificationList = defineQuery({
       subject_type: string | null;
       subject_id: string | null;
       detail: Record<string, unknown>;
+      subject_title: string | null;
+      subject_filename: string | null;
       created_at: Date;
       read: boolean;
     }>`
-      SELECT n.id, n.kind, n.subject_type, n.subject_id, n.detail, n.created_at, (n.read_at IS NOT NULL OR ${settled}) AS read
+      SELECT n.id, n.kind, n.subject_type, n.subject_id, n.detail, n.created_at, (n.read_at IS NOT NULL OR ${settled}) AS read,
+             CASE n.subject_type
+               WHEN 'kernel.proposal' THEN (SELECT p.title FROM crove_kernel.proposal p WHERE p.org_id = n.org_id AND p.id = n.subject_id)
+               WHEN 'kernel.task' THEN (SELECT t.title FROM crove_kernel.task t WHERE t.org_id = n.org_id AND t.id = n.subject_id)
+             END AS subject_title,
+             CASE WHEN n.subject_type = 'kernel.file'
+               THEN (SELECT f.filename FROM crove_kernel.file f WHERE f.org_id = n.org_id AND f.id = n.subject_id)
+             END AS subject_filename
       FROM crove_kernel.notification n
       WHERE n.org_id = ${ctx.orgId} AND n.user_id = ${me}
       ORDER BY n.created_at DESC, n.id DESC
@@ -273,7 +284,11 @@ export const notificationList = defineQuery({
         kind: r.kind,
         subjectType: r.subject_type,
         subjectId: r.subject_id,
-        detail: Object.fromEntries(Object.entries(r.detail ?? {}).filter((e): e is [string, string] => typeof e[1] === 'string')),
+        detail: {
+          ...Object.fromEntries(Object.entries(r.detail ?? {}).filter((e): e is [string, string] => typeof e[1] === 'string')),
+          ...(r.subject_title !== null ? { title: r.subject_title.slice(0, 200) } : {}),
+          ...(r.subject_filename !== null ? { filename: r.subject_filename.slice(0, 200) } : {}),
+        },
         createdAt: r.created_at.toISOString(),
         read: r.read,
       })),
