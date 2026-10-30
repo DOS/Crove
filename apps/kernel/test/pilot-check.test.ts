@@ -122,6 +122,11 @@ describe('pilot-check settings', () => {
     expect(failing({ ...READY, ARCHIVE_STORE: 's3', ARCHIVE_S3_BUCKET: 'crove-archive', PROBER_ARCHIVE_S3_ACCESS_KEY_ID: fake('reader') })).toEqual([
       expect.stringContaining('set both PROBER_ARCHIVE_S3_ACCESS_KEY_ID and PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY, or neither'),
     ]);
+    // No key of its own and no opt-in to the default credential chain (#2098): reported, naming both ways out.
+    expect(failing({ ...READY, ARCHIVE_STORE: 's3', ARCHIVE_S3_BUCKET: 'crove-archive' })).toEqual([
+      expect.stringContaining('PROBER_ARCHIVE_S3_DEFAULT_CHAIN=true'),
+    ]);
+    expect(failing({ ...READY, ARCHIVE_STORE: 's3', ARCHIVE_S3_BUCKET: 'crove-archive', PROBER_ARCHIVE_S3_DEFAULT_CHAIN: 'true' })).toEqual([]);
     // The worker's own key in the shared .env is no problem: Compose never passes it to the prober.
     expect(failing({ ...READY, ARCHIVE_STORE: 's3', ARCHIVE_S3_BUCKET: 'crove-archive', S3_ACCESS_KEY_ID: fake('worker-key'), S3_SECRET_ACCESS_KEY: fake('worker-secret') })).toEqual([]);
   });

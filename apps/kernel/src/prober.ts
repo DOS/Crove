@@ -42,7 +42,10 @@ const optional = z
   .string()
   .optional()
   .transform((v) => (v && v.trim() !== '' ? v.trim() : undefined));
-const seconds = (fallback: number) => z.coerce.number().int().min(0).max(604_800).default(fallback);
+// An empty or blank value is no value: the default applies, never 0 (which turns a check off). z.coerce.number() would
+// read '' as 0, and a variable a deployment leaves empty (an .env line with nothing after the =) must not do that (#2098).
+const unsetWhenBlank = (value: unknown) => (typeof value === 'string' && value.trim() === '' ? undefined : value);
+const seconds = (fallback: number) => z.preprocess(unsetWhenBlank, z.coerce.number().int().min(0).max(604_800).default(fallback));
 
 const schema = z.object({
   // Connect as crove_prober (password CROVE_PROBER_DB_PASSWORD, set by `migrate`).
@@ -107,7 +110,9 @@ const DEFAULT_MARKER_AGE_SECONDS = 93_600;
 // alerts. 0 turns it off. The store is the worker's: ARCHIVE_STORE=s3 reads ARCHIVE_S3_BUCKET with S3_ENDPOINT, S3_REGION
 // and S3_FORCE_PATH_STYLE; local reads ARCHIVE_DIR (the image sets /data/archive; mount the archive volume read-only), and
 // without ARCHIVE_DIR the check is off. Credentials: PROBER_ARCHIVE_S3_ACCESS_KEY_ID and PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY
-// (a read-only key), both or neither; neither means the SDK's default credential chain (an instance or task role).
+// (a read-only key), both or neither. Neither is refused unless PROBER_ARCHIVE_S3_DEFAULT_CHAIN=true says to use the SDK's
+// default credential chain (an instance or task role, or whatever AWS_* variables and profile the process has): that
+// chain can resolve to a role that writes the archive, and nothing here can tell, so it is opt-in (#2098).
 // Never the worker's S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY, which read and write every tenant document and write the
 // archive: Compose passes the prober none, and with one in its environment and no pair of its own the check refuses.
 const markerAge = seconds(DEFAULT_MARKER_AGE_SECONDS);
@@ -123,6 +128,8 @@ const archiveS3Schema = z.object({
   S3_FORCE_PATH_STYLE: optional.pipe(z.enum(['true', 'false']).optional()),
   PROBER_ARCHIVE_S3_ACCESS_KEY_ID: optional,
   PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY: optional,
+  // 'true': read the bucket with the SDK's default credential chain instead of a pair of the prober's own (#2098).
+  PROBER_ARCHIVE_S3_DEFAULT_CHAIN: optional.pipe(z.enum(['true', 'false']).optional()),
   // Read only to tell that the worker's key is in this environment; never used.
   S3_ACCESS_KEY_ID: optional,
 });
@@ -249,6 +256,11 @@ function archiveMarkerSettings(env: NodeJS.ProcessEnv): ProberConfig['archiveMar
     if (own && raw.S3_ACCESS_KEY_ID && raw.PROBER_ARCHIVE_S3_ACCESS_KEY_ID === raw.S3_ACCESS_KEY_ID) {
       return { maxAgeSeconds, error: "PROBER_ARCHIVE_S3_ACCESS_KEY_ID is the worker's S3_ACCESS_KEY_ID: give the prober a key of its own that only reads" };
     }
+    const defaultChain = raw.PROBER_ARCHIVE_S3_DEFAULT_CHAIN === 'true';
+    // A pair and the default chain are two answers to one question: which credentials read the bucket.
+    if (own && defaultChain) {
+      return { maxAgeSeconds, error: 'PROBER_ARCHIVE_S3_DEFAULT_CHAIN=true and a PROBER_ARCHIVE_S3_* key are both set: use one or the other' };
+    }
     // The worker's key in this environment (a prober run from the shared .env, say) and none of its own: the default
     // credential chain could then resolve to the worker's role, which writes. Refuse rather than guess.
     if (!own && raw.S3_ACCESS_KEY_ID) {
@@ -257,10 +269,21 @@ function archiveMarkerSettings(env: NodeJS.ProcessEnv): ProberConfig['archiveMar
         workerKey: true,
         error:
           "ARCHIVE_STORE=s3 and S3_ACCESS_KEY_ID (the worker's key) is set, but the prober's own PROBER_ARCHIVE_S3_ACCESS_KEY_ID and PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY are not: " +
-          "set them to a read-only key, or unset S3_ACCESS_KEY_ID in the prober's environment to use the default credential chain",
+          "set them to a read-only key, or unset S3_ACCESS_KEY_ID in the prober's environment and set PROBER_ARCHIVE_S3_DEFAULT_CHAIN=true to use the default credential chain",
       };
     }
-    // Neither set: the default credential chain, never the worker's S3_* key.
+    // No key of its own: the default credential chain only when asked for (#2098). It resolves to whatever the process
+    // can reach (an instance or task role, AWS_* variables, a profile, a web identity), which may be a role that writes
+    // the archive, and nothing here can tell.
+    if (!own && !defaultChain) {
+      return {
+        maxAgeSeconds,
+        error:
+          'ARCHIVE_STORE=s3 and the prober has no key of its own: set PROBER_ARCHIVE_S3_ACCESS_KEY_ID and PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY to a read-only key, ' +
+          "or PROBER_ARCHIVE_S3_DEFAULT_CHAIN=true to use the SDK's default credential chain (an instance or task role that only reads)",
+      };
+    }
+    // The prober's own pair, or the default credential chain asked for; never the worker's S3_* key.
     return {
       maxAgeSeconds,
       store: {
