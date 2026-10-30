@@ -12,7 +12,7 @@ import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { useChosenEntity } from '../components/entity-switcher.tsx';
-import { ErrorText, Spinner } from '../components/ui.tsx';
+import { ErrorText, RowsSkeleton, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { accountLabel, pickableAccounts } from '../lib/accounts.ts';
 import { errorMessage, orpc, queryClient } from '../lib/api.ts';
@@ -127,7 +127,7 @@ export function AccountRulesCard({ canManage }: { canManage: boolean }) {
       <p className="text-sm font-medium text-muted-foreground">{t('title')}</p>
       <p className="mt-2 text-sm text-muted-foreground">{t('intro')}</p>
       {rules.isPending ? (
-        <Spinner />
+        <RowsSkeleton />
       ) : rules.error ? (
         <ErrorText>{errorMessage(rules.error)}</ErrorText>
       ) : (rules.data ?? []).length === 0 ? (

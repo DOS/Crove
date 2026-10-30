@@ -12,7 +12,7 @@ import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
-import { ErrorText, FieldError, fieldControl, fieldHintId, focusFirstInvalid, Spinner, useFieldErrors } from '../components/ui.tsx';
+import { ErrorText, FieldError, fieldControl, fieldHintId, focusFirstInvalid, RowsSkeleton, Spinner, useFieldErrors } from '../components/ui.tsx';
 import { errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { parentChoices, parentName } from '../lib/legal-entities.ts';
 
@@ -207,7 +207,7 @@ export function LegalEntitiesCard() {
       <p className="text-sm font-medium text-muted-foreground">{t('title')}</p>
       <p className="mt-2 text-sm text-muted-foreground">{t('intro')}</p>
       {entities.isLoading ? (
-        <Spinner />
+        <RowsSkeleton />
       ) : entities.error ? (
         <ErrorText>{errorMessage(entities.error)}</ErrorText>
       ) : (

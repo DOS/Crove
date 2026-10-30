@@ -11,7 +11,7 @@ import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
-import { ErrorText, Spinner } from '../components/ui.tsx';
+import { ErrorText, RowsSkeleton } from '../components/ui.tsx';
 import { accountLabel, parentChoices, subAccounts, type ChartAccount } from '../lib/accounts.ts';
 import { errorMessage, orpc, queryClient } from '../lib/api.ts';
 
@@ -145,7 +145,7 @@ export function ChartOfAccountsCard({ canManage }: { canManage: boolean }) {
       <p className="text-sm font-medium text-muted-foreground">{t('title')}</p>
       <p className="mt-2 text-sm text-muted-foreground">{t('intro')}</p>
       {accounts.isLoading ? (
-        <Spinner />
+        <RowsSkeleton />
       ) : accounts.error ? (
         <ErrorText>{errorMessage(accounts.error)}</ErrorText>
       ) : (

@@ -240,6 +240,110 @@ export function ListSkeleton({ rows = 3 }: { rows?: number }) {
   );
 }
 
+// A page's title and subtitle while it loads, where PageHeader puts them.
+function HeaderSkeleton() {
+  return (
+    <div className="mb-6 space-y-2">
+      <Skeleton className="h-6 w-56 max-w-full" />
+      <Skeleton className="h-4 w-80 max-w-full" />
+    </div>
+  );
+}
+
+// While a whole page loads (DESIGN.md §5.3, #2005): its header and, below it, a table, a list of cards or a two-column
+// grid of cards (a settings page), so no page waits behind a lone spinner.
+export function PageSkeleton({ body = 'table', columns }: { body?: 'table' | 'list' | 'cards'; columns?: number }) {
+  return (
+    <div>
+      <HeaderSkeleton />
+      {body === 'table' ? (
+        <TableSkeleton {...(columns ? { columns } : {})} />
+      ) : body === 'list' ? (
+        <ListSkeleton />
+      ) : (
+        <div className="grid gap-6 lg:grid-cols-2">
+          {[0, 1, 2, 3].map((i) => (
+            <CardSkeleton key={i} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// While the rows of a settings card load: the card's divided rows, a name on the left and a value on the right.
+export function RowsSkeleton({ rows = 3 }: { rows?: number }) {
+  const t = useTranslations('common');
+  return (
+    <div aria-busy="true" className="mt-3 divide-y">
+      <span className="sr-only">{t('loading')}</span>
+      {Array.from({ length: rows }, (_, r) => (
+        <div key={r} className="flex items-center gap-6 py-3">
+          <Skeleton className="h-3.5 w-1/3" />
+          <Skeleton className="ml-auto h-3 w-1/5" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// While a card loads: its title and a few lines of text.
+export function CardSkeleton({ className }: { className?: string }) {
+  const t = useTranslations('common');
+  return (
+    <div aria-busy="true" className={cn('space-y-2.5 rounded-xl border bg-card p-4', className)}>
+      <span className="sr-only">{t('loading')}</span>
+      <Skeleton className="h-4 w-1/3" />
+      <Skeleton className="h-3 w-2/3" />
+      <Skeleton className="h-3 w-1/2" />
+    </div>
+  );
+}
+
+// While a source document loads: a page-shaped block where an image appears, a short box where a PDF or an XML file's
+// link does.
+export function DocumentSkeleton({ image }: { image: boolean }) {
+  const t = useTranslations('common');
+  return (
+    <div aria-busy="true">
+      <span className="sr-only">{t('loading')}</span>
+      <Skeleton className={cn('w-full rounded-lg', image ? 'aspect-[3/4]' : 'h-20')} />
+    </div>
+  );
+}
+
+// While a proposal loads: its header, the parties card and the lines on the left, the document panel on the right, as
+// the proposal page lays them out.
+export function ProposalSkeleton() {
+  // The lines' table skeleton says it is loading; the rest are bars.
+  return (
+    <div aria-busy="true">
+      <Skeleton className="h-4 w-24" />
+      <div className="mt-3">
+        <HeaderSkeleton />
+      </div>
+      <div className="grid gap-6 lg:grid-cols-5">
+        <div className="min-w-0 space-y-6 lg:col-span-3">
+          <div className="grid gap-4 rounded-xl border bg-card p-4 sm:grid-cols-2">
+            {[0, 1].map((i) => (
+              <div key={i} className="space-y-2">
+                <Skeleton className="h-3 w-1/4" />
+                <Skeleton className="h-4 w-2/3" />
+                <Skeleton className="h-3 w-1/2" />
+              </div>
+            ))}
+          </div>
+          <TableSkeleton columns={4} rows={4} />
+        </div>
+        <div className="min-w-0 rounded-xl border bg-card p-4 lg:col-span-2">
+          <Skeleton className="mb-3 h-4 w-1/4" />
+          <Skeleton className="aspect-[3/4] w-full rounded-lg" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // A table with one header row; the body rows are TableRow/TableCell from @crove/ui. `numeric` lists the columns that
 // hold amounts: their headers are right-aligned like the amounts (DESIGN.md 4.3).
 // A list's table (DESIGN.md §4.3). Its header stays in view (#1444): a table taller than the window scrolls inside its

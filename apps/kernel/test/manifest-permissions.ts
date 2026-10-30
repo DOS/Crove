@@ -13,6 +13,7 @@ import { socialManifest } from '@crove/mod-social';
 import { loadConfig } from '../src/config.ts';
 import { moduleDefinitions } from '../src/kernel.ts';
 import { orgPurgeCommand } from '../src/org-purge.ts';
+import { numberReseedCommand } from '../src/restore-report.ts';
 import { stripSqlComments } from './manifest-entities.ts';
 
 type Risk = PermissionDeclaration['risk'];
@@ -116,7 +117,7 @@ export function stripComments(source: string): string {
 export function staticPermissionUses(): { uses: PermissionUse[]; problems: string[] } {
   const uses: PermissionUse[] = [];
   const config = loadConfig({ DATABASE_URL: 'postgres://localhost/x', AUTH_JWT_SECRET: 'unit-test-jwt-secret-0123456789abcdef', AUTH_ISSUER: 'crove-auth' });
-  const commands = [...moduleDefinitions(config).commands, orgPurgeCommand({ store: {} as never })];
+  const commands = [...moduleDefinitions(config).commands, orgPurgeCommand({ store: {} as never }), numberReseedCommand()];
   for (const c of commands) if (c.permission !== undefined) uses.push({ permission: c.permission, by: `command ${c.name}`, risk: c.risk });
   const policy = approvalPolicyUses(readFileSync(APPROVAL_SOURCE, 'utf8'));
   return { uses: [...uses, ...policy.uses], problems: policy.problems };

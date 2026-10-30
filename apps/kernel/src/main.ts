@@ -18,6 +18,9 @@
 //   org-purge <org slug or id> --reason <text>
 //                 apply the offboarding deletion map to an org in offboarding whose export is old enough, and close
 //                 it (issue #1024); run it in the worker's container
+//   restore-report [--reseed] [--floor <org>:<entity>:<doc type>:<period>=<next>]... [--json]
+//                 after a restore: what the WORM archive holds that the database lacks, and the number series raised
+//                 above the archive (issue #2007); tools/backup/restore.sh runs it in the worker's container
 //   vapid-keys    print a new VAPID key pair for browser push (issue #1238): VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY
 //   context-token-key  print a new context token key (#1822): CROVE_CONTEXT_TOKEN_KEY, for migrate and the kernel
 // It wires the open-source default adapters into the composition root (createKernel, ADR-0030).
@@ -32,8 +35,8 @@ import { describeStorage } from './storage.ts';
 import { runUsageReport } from './usage-report.ts';
 import { generateVapidKeys } from './web-push.ts';
 
-type Role = 'migrate' | 'auth-grants' | 'prober' | 'usage-report' | 'pilot-check' | 'exports-rebind' | 'user-disable' | 'user-enable' | 'org-purge' | 'vapid-keys' | 'context-token-key' | ServerRole;
-const ROLES: readonly Role[] = ['migrate', 'auth-grants', 'api', 'worker', 'all', 'prober', 'usage-report', 'pilot-check', 'exports-rebind', 'user-disable', 'user-enable', 'org-purge', 'vapid-keys', 'context-token-key'];
+type Role = 'migrate' | 'auth-grants' | 'prober' | 'usage-report' | 'pilot-check' | 'exports-rebind' | 'user-disable' | 'user-enable' | 'org-purge' | 'restore-report' | 'vapid-keys' | 'context-token-key' | ServerRole;
+const ROLES: readonly Role[] = ['migrate', 'auth-grants', 'api', 'worker', 'all', 'prober', 'usage-report', 'pilot-check', 'exports-rebind', 'user-disable', 'user-enable', 'org-purge', 'restore-report', 'vapid-keys', 'context-token-key'];
 
 async function runMigrate(config: Config) {
   const adminUrl = config.ADMIN_DATABASE_URL;
@@ -93,6 +96,7 @@ VAPID_PRIVATE_KEY=${keys.privateKey}`);
     process.exit(await createKernel(config, defaultAdapters(config)).setUserStatus(role === 'user-disable', process.argv.slice(3)));
   }
   if (role === 'org-purge') process.exit(await createKernel(config, defaultAdapters(config)).purgeOrg(process.argv.slice(3)));
+  if (role === 'restore-report') process.exit(await createKernel(config, defaultAdapters(config)).restoreReport(process.argv.slice(3)));
   const live = config.AUTH_SESSION_CHECK === 'jwt' ? liveAuthUrl(config) : null;
   console.log(
     `[auth] session check: ${config.AUTH_SESSION_CHECK}, step-up for R3: ${config.AUTH_STEP_UP}` +

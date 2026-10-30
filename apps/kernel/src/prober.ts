@@ -327,18 +327,26 @@ export async function readHealth(databaseUrl: string, deadLetterWindowSeconds: n
     // both statements on one server connection and leaves nothing set on it (#1894 review).
     await client.query('BEGIN READ ONLY');
     await client.query(`SELECT pg_catalog.set_config('crove.prober_modules', $1, true)`, [modules.join(',')]);
-    const { rows } = await client.query<HealthSnapshot>(
+    const { rows } = await client.query<Omit<HealthSnapshot, 'notify_queue_usage' | 'archive_verify_age_seconds' | 'archive_lag_seconds'>>(
       `SELECT checked_at::text AS checked_at, outbox_pending, outbox_oldest_age_seconds, inbound_pending, inbound_oldest_age_seconds,
-              jobs_schema_present, jobs_queued, job_oldest_queued_age_seconds, dead_letter_count, worker_heartbeat_age_seconds,
-              archive_verify_age_seconds, archive_lag_seconds
+              jobs_schema_present, jobs_queued, job_oldest_queued_age_seconds, dead_letter_count, worker_heartbeat_age_seconds
        FROM crove_kernel.health($1::int)`,
       [deadLetterWindowSeconds],
     );
     const row = rows[0];
     if (!row) throw new Error('crove_kernel.health() returned no row');
+    // The WORM archive's two ages (#1997), from a function of their own: health()'s columns never change.
+    const { rows: archive } = await client.query<Pick<HealthSnapshot, 'archive_verify_age_seconds' | 'archive_lag_seconds'>>(
+      'SELECT archive_verify_age_seconds, archive_lag_seconds FROM crove_kernel.archive_health()',
+    );
     const { rows: queue } = await client.query<{ usage: number }>('SELECT pg_catalog.pg_notification_queue_usage() AS usage');
     await client.query('COMMIT');
-    return { ...row, notify_queue_usage: Number(queue[0]?.usage ?? 0) };
+    return {
+      ...row,
+      notify_queue_usage: Number(queue[0]?.usage ?? 0),
+      archive_verify_age_seconds: archive[0]?.archive_verify_age_seconds ?? null,
+      archive_lag_seconds: archive[0]?.archive_lag_seconds ?? null,
+    };
   } finally {
     await client.end().catch(() => {});
   }

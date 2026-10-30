@@ -11,11 +11,12 @@ import { crmCommands } from '@crove/mod-crm';
 import { financeCommands } from '@crove/mod-finance';
 import { socialCommands } from '@crove/mod-social';
 import { orgPurgeCommand } from '../src/org-purge.ts';
+import { numberReseedCommand } from '../src/restore-report.ts';
 
 const FILE = fileURLToPath(new URL('../../../docs/generated/agent-autonomy.md', import.meta.url));
 
 const all = (): Array<CommandDef<unknown, unknown>> =>
-  [...kernelCommands, orgPurgeCommand({ store: {} as never }), ...financeCommands, ...socialCommands, ...crmCommands] as Array<CommandDef<unknown, unknown>>;
+  [...kernelCommands, orgPurgeCommand({ store: {} as never }), numberReseedCommand(), ...financeCommands, ...socialCommands, ...crmCommands] as Array<CommandDef<unknown, unknown>>;
 
 const roles = (r: readonly string[] | 'any') => (r === 'any' ? 'any position' : r.map((k) => `\`${k}\``).join(', '));
 

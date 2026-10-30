@@ -16,7 +16,7 @@ import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-se
 import { TableCell, TableRow } from '@crove/ui/components/table';
 import { useChosenEntity } from '../components/entity-switcher.tsx';
 import { DateInput } from '../components/date-input.tsx';
-import { DataTable, Empty, ErrorText, Notice, PageHeader, Spinner, TableSkeleton } from '../components/ui.tsx';
+import { CardSkeleton, DataTable, Empty, ErrorText, Notice, PageHeader, Spinner, TableSkeleton } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { VoucherFormCard } from './vouchers.tsx';
@@ -197,7 +197,7 @@ function StatementImport({ bankAccount, onImported }: { bankAccount: string; onI
 function LineVoucher({ slug, line, onClose }: { slug: string; line: BankLine; onClose: () => void }) {
   const t = useTranslations('vouchers');
   const made = useQuery(orpc.bank.lineVoucher.queryOptions({ input: { bankLineId: line.id } }));
-  if (made.isLoading) return <Spinner />;
+  if (made.isLoading) return <CardSkeleton className="mb-6" />;
   if (made.error) return <ErrorText>{errorMessage(made.error)}</ErrorText>;
   if (!made.data) return null;
   if (!made.data.voucher) {

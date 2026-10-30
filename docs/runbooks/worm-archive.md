@@ -10,7 +10,7 @@ This runbook covers setting the archive up, reading its two alerts, and what to 
 ## How it works
 
 - **Batches.** Every minute, the worker cuts the rows that are not yet archived into batches. The rows of one batch span at most 5 minutes. A row is archived no earlier than `ARCHIVE_LAG_SECONDS` (default 600) after it is written, so a transaction that is still open is not cut off. The code is `apps/kernel/src/worm.ts`.
-- **What a batch holds.** References and hashes only, each with the SHA-256 of a fixed set of columns. It also holds a batch hash and a chain hash, which folds in the previous batch.
+- **What a batch holds.** References and hashes only, each with the SHA-256 of a fixed set of columns. It also holds a batch hash and a chain hash, which folds in the previous batch. The one exception is the series highs of version 7 (below), which a restore must read back.
   - Version 1 batches (#891): `audit:<id>` and `journal:<org>:<id>` (`crove_kernel.archive_row_hashes`, migration `20261023230000`).
   - Version 2 batches (#977), written from migration `20261026230000` on: the same, plus `cash_voucher:<org>:<id>` (a PT, PC, BC or BN with its type, number, date, account and amount), `journal_voucher:<org>:<id>` (an NVK and its number) and `document_void:<org>:<document>` (a voided purchase document and its reversal entry), from `crove_kernel.archive_number_hashes`. A voucher keeps its number when its entry is reversed; the reversal is a journal entry that names the original.
   - The first version 2 batch takes in every voucher and void made before it (its `numbersFrom` is the epoch); later batches take their own window. The verifier checks each batch with the version it was written with.
@@ -18,6 +18,10 @@ This runbook covers setting the archive up, reading its two alerts, and what to 
   - Version 4 batches (#1594, #1596), written from migration `20261103060000` on: the same, plus the gapless numbering (#1401), from `crove_kernel.archive_allocation_hashes`: `number:<org>:<id>` (an allocation: its legal entity, its series and the series' legal entity, number and the record it went to), `number_void:<org>:<id>` (a void, with its reason) and `voucher_number:<cash_voucher|journal_voucher>:<org>:<id>` (a voucher's number, number period and allocation). The first version 4 batch takes in every allocation, void and voucher made before it (its `allocationsFrom` is the epoch); later batches take their own window.
   - Version 5 batches (#1623), written from migration `20261104140000` on: the same, plus `number_series:<org>:<id>` (a number series: its legal entity, doc type, period key and creation time, and the reset policy in force for its doc type, `yearly` when the doc type has no policy row), from `crove_kernel.archive_series_hashes`. A doc type's reset can change only before its first number, so a switched reset, or a policy row deleted or added for a doc type with numbers with a reset other than `yearly`, changes the row of each of its series. A legitimate change before the first number is an audit event, anchored since version 1. The first version 5 batch takes in every series made before it (its `seriesFrom` is the epoch); later batches take their own window.
   - Version 6 batches (#1337), written from migration `20261107050000` on: the same, plus `revision:journal:<org>:<id>` (a journal entry's source type and id, its source revision and the hash of its posting request, #1283), from `crove_kernel.archive_revision_hashes`. Changing which revision an entry posts, or its payload hash, now fails the verification. The first version 6 batch takes in every entry made before it (its `revisionsFrom` is the epoch); later batches take their own window.
+  - Version 7 batches (#2007), written from migration `20261107140000` on: the same, plus `number_high:<org>:<series id>` for every number series that gave out a number in the window. It holds the series' legal entity, doc type and period key, and the highest number allocated in the window, from `crove_kernel.archive_series_highs`. The first version 7 batch takes them from the epoch (its `highsFrom`), so it holds the highest number of every series ever numbered; later batches take their own window.
+    - **The exception to "hashes and references only".** The batch also holds these values in the clear, in its `highs` list. After a restore, they are what lets the series be raised above every number the archive holds ([After a restore](#after-a-restore)).
+    - They are ids, a doc type, a period key and a number: no personal data.
+    - Each value is checked against its row hash, which the chain covers. A value changed in the store fails the verification as `high_mismatch`.
 - **Where batches go.** Each batch is written once to `chain/v1/<sequence>.json` in the archive store, then recorded in `crove_kernel.archive_batch`.
 - **The nightly check.** At 03:10 Vietnam time the verifier reads every batch back from the store, checks the chain, and recomputes every row hash from the database. The result goes to `crove_kernel.archive_verification`.
 - **How alerts reach you.** Both jobs fail loudly:
@@ -111,7 +115,8 @@ docker compose exec db psql -U postgres -c "SELECT verified_at, ok, batches, row
 | `row_added` | A row sits in a window that was already archived: it was inserted with a backdated time. |
 | `chain_broken`, `window_gap`, `batch_hash_mismatch`, `chain_hash_mismatch`, `object_unreadable`, `object_out_of_order` | A batch in the store was changed, removed or replaced. With `s3` and Object Lock this should be impossible; check the bucket's lock and access logs. |
 | `object_missing` | The database recorded a batch the store does not have. |
-| `version_regressed`, `numbers_gap`, `entities_gap`, `allocations_gap`, `series_gap`, `revisions_gap` | A batch of a lower version follows a higher one, or a batch does not take its numbers (versions 2 and up), legal entities (versions 3 and up), number allocations (versions 4 and up), number series (versions 5 and up) or source revisions (version 6) from where the last one stopped: a worker older than #977, #1489, #1594, #1623 or #1337 wrote to the archive, or a batch was replaced. The numbers, entities, series or revisions in that stretch are not anchored. Find the deploy that ran the old worker. |
+| `version_regressed`, `numbers_gap`, `entities_gap`, `allocations_gap`, `series_gap`, `revisions_gap`, `highs_gap` | A batch of a lower version follows a higher one, or a batch does not take its numbers (versions 2 and up), legal entities (versions 3 and up), number allocations (versions 4 and up), number series (versions 5 and up), source revisions (versions 6 and up) or series highs (version 7) from where the last one stopped. Either a worker older than #977, #1489, #1594, #1623, #1337 or #2007 wrote to the archive, or a batch was replaced. The numbers, entities, series, revisions or highs in that stretch are not anchored. Find the deploy that ran the old worker. |
+| `high_mismatch` | A version 7 batch's series high in the clear does not match its row hash, or a high row has no clear values: the batch was edited in the store. The restore check does not trust that high. Treat it like `chain_broken`. |
 | `series_period_mismatch` | A `number_series:` row verifies as written, but its period key does not fit the reset of its doc type (`YYYY` for yearly, `YYYY-MM` for monthly, `-` for never; #1820, `crove_kernel.archive_series_misfits`). The doc type's reset was switched, a number given out, and the reset switched back before the archiver anchored the series. Numbering never does this since #1608 (20261103050000): the reset is locked once a doc type has numbers, and a reset change waits for a first number in flight. A series created before that fix, by a reset change racing the doc type's first number (#1607), shows the same way. |
 | `record_mismatch` | `crove_kernel.archive_batch` disagrees with the store. The store is the authority. |
 
@@ -127,6 +132,25 @@ docker compose exec db psql -U postgres -c "SELECT verified_at, ok, batches, row
 5. **Write it up in an issue (security label):** what changed, when it was noticed, what was restored.
 
 A single `row_added` right after a long-running transaction, with no other finding, can be a transaction that stayed open longer than `ARCHIVE_LAG_SECONDS`. Look up the row's command in the audit trail. If it is a normal command, raise the lag. Do not silence the alert.
+
+## After a restore
+
+A restore brings the database back to its backup point. The archive store is not restored: it keeps every batch written after that point, with the rows the restored database no longer has.
+
+- **The restore check.** `tools/backup/restore.sh` runs it before the stack starts (`main.ts restore-report --reseed`, in the worker's container; [backup-and-restore.md](backup-and-restore.md), step 6).
+  - It lists, per org, the journal entries, vouchers, document voids, number allocations, number voids and number series that the archive holds and the database lacks, and the batches written after the backup point.
+  - It raises every number series above the highest number that the version 7 batches hold for it, so no number is given out twice.
+  - What to do with the report is in [ledger-after-restore.md](ledger-after-restore.md), step 4.
+- **Run it again by hand at any time.** It reads only, unless `--reseed` is given:
+
+  ```sh
+  docker compose run --rm --no-deps worker restore-report
+  ```
+
+  Use the service `crove` on the all-in-one stack.
+- **The nightly verification after a restore.** The verifier still reports each lost row as `row_missing`, and the series highs of those windows as `row_changed` or `row_missing`. So the job fails every night after a restore.
+  - Record the restore and its report in the incident.
+  - Until #2020 lets the operator mark the reported rows as known lost, check that every `row_missing` the verifier names is in the report. A row the report does not name is a real finding.
 
 ## Running the verifier by hand
 

@@ -84,7 +84,7 @@ See [`.env.example`](./.env.example) for the full list.
 
 ## Monitoring and alerts
 
-The image's `prober` role checks that background work is moving and alerts you when it is not. It connects as `crove_prober`, a login that can only call `crove_kernel.health()` (aggregate ages and counts, no tenant data), `crove_kernel.prober_alert_gate()` (the alert state below) and core functions such as `pg_notification_queue_usage()`, and alerts when:
+The image's `prober` role checks that background work is moving and alerts you when it is not. It connects as `crove_prober`, a login that can only call `crove_kernel.health()` (aggregate ages and counts, no tenant data), `crove_kernel.archive_health()` (the WORM archive's two ages, #1997), `crove_kernel.prober_alert_gate()` (the alert state below) and core functions such as `pg_notification_queue_usage()`, and alerts when:
 
 | Check | Default limit | Variable |
 |---|---|---|

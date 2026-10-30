@@ -13,7 +13,7 @@ import { Checkbox } from '@crove/ui/components/checkbox';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
-import { ErrorText, Spinner } from '../components/ui.tsx';
+import { ErrorText, RowsSkeleton, Spinner } from '../components/ui.tsx';
 import { errorMessage, orpc, queryClient } from '../lib/api.ts';
 import {
   coHostChoices,
@@ -251,7 +251,7 @@ export function EventTypesCard({ members, me, role }: { members: readonly EventT
       <p className="text-sm font-medium text-muted-foreground">{t('title')}</p>
       <p className="mt-2 text-sm text-muted-foreground">{t('intro')}</p>
       {types.isLoading ? (
-        <Spinner />
+        <RowsSkeleton />
       ) : types.error ? (
         <ErrorText>{errorMessage(types.error)}</ErrorText>
       ) : (
