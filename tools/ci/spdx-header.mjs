@@ -51,19 +51,26 @@ export function missingHeaders(added, read) {
   return checkedPaths(added).filter((path) => !hasHeader(read(path)));
 }
 
-function git(args) {
-  return execFileSync('git', args, { encoding: 'utf8' }).split('\n').filter(Boolean);
+// Files HEAD adds since `since`. Renames are found, so a moved file shows as renamed, not added. NUL-separated (-z), so a
+// path with spaces or non-ASCII characters comes back as it is, never quoted.
+export function addedFiles(since) {
+  const out = execFileSync('git', ['diff', '-z', '--name-only', '--find-renames', '--diff-filter=A', since, 'HEAD'], { encoding: 'utf8' });
+  return out.split('\0').filter(Boolean);
 }
 
-// Files HEAD adds since `since`. Renames are found, so a moved file shows as renamed, not added.
-export function addedFiles(since) {
-  return git(['diff', '--name-only', '--find-renames', '--diff-filter=A', since, 'HEAD']);
+// A file's text, or '' when it cannot be read as one (a symbolic link to a directory, say), so it is reported.
+function readText(path) {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    return '';
+  }
 }
 
 function main() {
-  const since = process.argv[2] ?? git(['merge-base', 'origin/main', 'HEAD'])[0];
+  const since = process.argv[2] ?? execFileSync('git', ['merge-base', 'origin/main', 'HEAD'], { encoding: 'utf8' }).trim();
   const added = addedFiles(since);
-  const missing = missingHeaders(added, (path) => readFileSync(path, 'utf8'));
+  const missing = missingHeaders(added, readText);
   if (missing.length === 0) {
     console.log(`spdx header OK: ${checkedPaths(added).length} new source file(s) checked`);
     return;
