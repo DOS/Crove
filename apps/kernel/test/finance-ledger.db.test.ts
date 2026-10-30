@@ -506,8 +506,10 @@ suite('ledger reports per month, quarter or year (#321)', () => {
     const { slug } = await twoYearOrg();
     const year = await statementsOf('2026', slug);
     const previousYear = await statementsOf('2025', slug);
-    expect(year.comparison.startOfYear).toEqual({ asOf: '2025-12-31', amounts: byCode(previousYear.b01.lines) });
-    expect(year.comparison.lastYear).toEqual({ period: '2025', from: '2025-01-01', to: '2025-12-31', amounts: byCode(previousYear.b02.lines) });
+    // Each column also carries the warnings of its own period's statement (B01 balanced, balances no line reads).
+    expect(year.comparison.startOfYear).toEqual({ asOf: '2025-12-31', amounts: byCode(previousYear.b01.lines), balanced: previousYear.b01.balanced, unmapped: previousYear.b01.unmapped.length });
+    expect(year.comparison.lastYear).toEqual({ period: '2025', from: '2025-01-01', to: '2025-12-31', amounts: byCode(previousYear.b02.lines), unmapped: previousYear.b02.unmapped.length });
+    expect(year.comparison.startOfYear).toMatchObject({ balanced: true, unmapped: 0 });
     // A year has no period before it: its previous year is the comparison.
     expect(year.comparison.previous).toBeNull();
     // The figures themselves: two invoices stood at the end of 2025 and five were booked in 2026.
