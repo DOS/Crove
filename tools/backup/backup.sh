@@ -12,7 +12,8 @@
 #                 without staging/ uploads and temporary files. An org blob the previous run already holds is a hard
 #                 link to it (org blobs are content addressed), so a run costs disk only for new blobs.
 #   files.sha256  the sha256 of every blob; each file row's blob must be there with its sha256, or the run fails
-#   meta.env      when, from which stack, schema and PostgreSQL version (read in the dump's snapshot), and the layout
+#   meta.env      when (the finish, and the snapshot's own time, SNAPSHOT_AT), from which stack, schema and PostgreSQL
+#                 version (read in the dump's snapshot), and the layout
 #                 of the copy in the bucket
 #   SHA256SUMS    the sha256 of every file above except files/ (covered by files.sha256); written last
 # and logs to <BACKUP_DIR>/logs/<run id>.log.
@@ -174,12 +175,12 @@ dc exec -T db sh -c 'rm -rf /tmp/crove-backup && mkdir -m 700 /tmp/crove-backup'
 # version are exactly what the dump contains.
 db_psql -d postgres <<SQL
 BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
-SELECT pg_catalog.pg_export_snapshot() AS snapshot \gset
+SELECT pg_catalog.pg_export_snapshot() AS snapshot, pg_catalog.to_char(pg_catalog.clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS snapshot_at \gset
 \setenv CROVE_SNAPSHOT :snapshot
 \! pg_dump -U postgres -d postgres --format=custom --snapshot="\$CROVE_SNAPSHOT" --exclude-table-data=crove_kernel.context_key --file=/tmp/crove-backup/db.dump && touch /tmp/crove-backup/dump.ok
 $COUNTS_SQL \g /tmp/crove-backup/counts.tsv
 $FILE_REFS_SQL \g /tmp/crove-backup/file-refs.tsv
-COPY (SELECT (SELECT max(version) FROM crove_meta.schema_migrations), pg_catalog.current_setting('server_version')) TO STDOUT \g /tmp/crove-backup/versions.tsv
+COPY (SELECT (SELECT max(version) FROM crove_meta.schema_migrations), pg_catalog.current_setting('server_version'), :'snapshot_at') TO STDOUT \g /tmp/crove-backup/versions.tsv
 COMMIT;
 SQL
 dc exec -T db test -f /tmp/crove-backup/dump.ok
@@ -193,7 +194,7 @@ for f in db.dump counts.tsv file-refs.tsv versions.tsv; do
   [ "$inside" = "$outside" ] || { STEP="copying $f out of the db container (checksum differs)"; false; }
 done
 dc exec -T db rm -rf /tmp/crove-backup
-IFS=$'\t' read -r schema_version postgres_version <"$TMP/versions.tsv"
+IFS=$'\t' read -r schema_version postgres_version snapshot_at <"$TMP/versions.tsv"
 [[ "$schema_version" =~ ^[0-9]{14}$ ]] || { STEP="database dump: no schema version in crove_meta.schema_migrations"; false; }
 dc exec -T db pg_dumpall -U postgres --roles-only --no-role-passwords >"$PARTIAL/roles.sql"
 grep -q 'CREATE ROLE crove_app' "$PARTIAL/roles.sql" || { STEP="roles dump (no crove_app role)"; false; }
@@ -260,6 +261,7 @@ finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 cat >"$PARTIAL/meta.env" <<META
 RUN_ID=$RUN_ID
 FINISHED_AT=$finished_at
+SNAPSHOT_AT=$snapshot_at
 STORAGE=$STORAGE
 SCHEMA_VERSION=$schema_version
 POSTGRES_VERSION=$postgres_version

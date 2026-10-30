@@ -18,7 +18,7 @@ export const kernelManifest = defineModule({
       ai_run: columns(['org_id', 'id', 'agent_id', 'module', 'status', 'tainted', 'request_depth', 'cost', 'started_at', 'expires_at', 'finished_at', 'error']),
       approval_preset: columns(['key', 'ledger_chief_accountant_only']),
       archive_batch: columns(['seq', 'window_from', 'window_to', 'row_count', 'batch_sha256', 'chain_sha256', 'object_key', 'written_at']),
-      archive_verification: columns(['id', 'ok', 'batches', 'rows_checked', 'problems', 'verified_at']),
+      archive_verification: columns(['id', 'ok', 'batches', 'rows_checked', 'problems', 'verified_at', 'excused', 'restore_ack']),
       audit_event: columns(['org_id', 'id', 'occurred_at', 'actor_type', 'actor_id', 'command', 'command_id', 'outcome', 'target_type', 'target_id', 'input_sha256', 'proposal_id', 'detail']),
       auth_session_org: columns(['org_id', 'user_id', 'session_id', 'status', 'first_seen_at', 'last_seen_at', 'revoked_at', 'revoked_by', 'reason']),
       availability_rule: columns(['org_id', 'id', 'user_id', 'weekday', 'start_minute', 'end_minute', 'time_zone', 'created_by', 'created_at']),
