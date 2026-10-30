@@ -251,6 +251,12 @@ export const KERNEL_ERROR_CODES = [
   // Bank statements (#326).
   'NOT_A_BANK_ACCOUNT',
   'BANK_IMPORT_INVALID',
+  // Bank feeds (ADR-0039, #2044).
+  'BANK_FEED_NOT_FOUND',
+  'BANK_FEED_INACTIVE',
+  'BANK_FEED_ACCOUNT_MAPPED',
+  'BANK_FEED_ACCOUNT_NOT_FOUND',
+  'BANK_FEED_DISABLED',
   // The chart of accounts and vendor defaults (#319).
   'ACCOUNT_CODE_TAKEN',
   'ACCOUNT_HAS_SUB_ACCOUNTS',

@@ -33,6 +33,7 @@ export interface PublicConfig {
   taxPortalSync?: boolean;
   // The offline sandbox channel can be connected (CHANNEL_SANDBOX); `oauth` lists the providers connected through
   // their OAuth dialog that the server has app credentials for.
+  bankFeeds?: { sandbox: boolean };
   channels?: { sandbox: boolean; bluesky?: boolean; telegram?: boolean; mastodon?: boolean; discord?: boolean; wordpress?: boolean; oauth?: string[] };
 }
 

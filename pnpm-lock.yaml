@@ -475,6 +475,9 @@ importers:
       '@crove/agent':
         specifier: workspace:*
         version: link:../../packages/agent
+      '@crove/bank-feed':
+        specifier: workspace:*
+        version: link:../../packages/bank-feed
       '@crove/channel':
         specifier: workspace:*
         version: link:../../packages/channel
@@ -735,6 +738,8 @@ importers:
       '@crove/extract-contract':
         specifier: workspace:*
         version: link:../extract-contract
+
+  packages/bank-feed: {}
 
   packages/channel: {}
 

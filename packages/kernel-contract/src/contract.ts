@@ -227,7 +227,7 @@ import {
 import { zOpeningBalanceImport, zOpeningBalancePreview } from './opening-balance.ts';
 import { MISSING_INVOICE_REMINDER_DAY_MAX, zMissingInvoiceStatus, zPortalReconciliation } from './portal-list.ts';
 import { zPortalCaptcha, zPortalListResult, zPortalLoginInput, zPortalSession, zPortalXmlResult } from './portal-sync.ts';
-import { zBankImportPreview, zBankImportResult, zBankLineVoucher, zBankLines, zBankOpenLines, zBankStatementImport } from './bank-statement.ts';
+import { zBankFeedAccountView, zBankFeedMap, zBankImportPreview, zBankImportResult, zBankLineVoucher, zBankLines, zBankOpenLines, zBankStatementImport } from './bank-statement.ts';
 import { zTimeline } from './timeline.ts';
 import { zMisaCode, zMisaGoodsCode } from './misa-goods.ts';
 import { zAuditCursor, zAuditExport, zAuditFilter, zAuditPage } from './audit.ts';
@@ -1467,6 +1467,19 @@ export const contract = {
     suggestions: oc.input(z.object({ bankAccount: zAccountCode, period: zLedgerPeriod, legalEntityId: zId.optional() })).output(z.array(zBankLineVoucher)),
     // The open lines per bank account, for the Inbox (stage 2b). Every member.
     openLines: oc.input(zLegalEntityChoice.optional()).output(zBankOpenLines),
+  },
+  // Bank feeds (ADR-0039, #2044): a connection's accounts mapped to the org's bank accounts. Every member lists the
+  // mappings of the entities they read; owners and admins connect, map and unmap. Read-only feeds: nothing here moves
+  // money.
+  bankFeeds: {
+    accounts: oc.output(z.array(zBankFeedAccountView)),
+    // The offline sandbox feed, when the deployment enables it (BANK_FEED_SANDBOX): a login of its own each time, and
+    // the accounts it reaches, to map.
+    connectSandbox: oc
+      .input(z.object({ displayName: z.string().trim().min(1).max(200) }))
+      .output(z.object({ connectionId: zId, accounts: z.array(z.object({ externalAccountId: z.string(), displayName: z.string() })) })),
+    map: oc.input(zBankFeedMap.extend({ idempotencyKey: zId })).output(z.object({ feedAccountId: zId })),
+    unmap: oc.input(z.object({ feedAccountId: zId, idempotencyKey: zId })).output(z.object({ feedAccountId: zId })),
   },
   // The org chart (ADR-0029): positions shared by members and AI agents. Every member reads it; changing it is the
   // owner's (R3: role keys, holders and reporting lines decide what agents may do). A retry with the same

@@ -5467,6 +5467,11 @@ export const vi = {
       ARCHIVE_PENDING: 'Gói lưu trữ của năm này đang được tạo; hãy đợi xong rồi xem lại',
       NOT_A_BANK_ACCOUNT: 'Tài khoản này không phải tài khoản tiền gửi ngân hàng (112) của tổ chức',
       BANK_IMPORT_INVALID: 'Sao kê có dòng không đọc được; hãy xem lại trước khi nhập',
+      BANK_FEED_NOT_FOUND: 'Không tìm thấy kết nối nguồn giao dịch ngân hàng',
+      BANK_FEED_INACTIVE: 'Kết nối nguồn giao dịch ngân hàng không còn hoạt động; hãy kết nối lại',
+      BANK_FEED_ACCOUNT_MAPPED: 'Tài khoản này đã gắn với một pháp nhân khác; hãy gỡ liên kết trước',
+      BANK_FEED_ACCOUNT_NOT_FOUND: 'Không tìm thấy tài khoản của nguồn giao dịch ngân hàng',
+      BANK_FEED_DISABLED: 'Nguồn giao dịch ngân hàng thử nghiệm chưa được bật trên máy chủ này',
       ACCOUNT_CODE_TAKEN: 'Mã tài khoản này đã có trong hệ thống tài khoản',
       ACCOUNT_HAS_SUB_ACCOUNTS: 'Tài khoản còn tài khoản con đang dùng; hãy ngừng dùng chúng trước',
       ACCOUNT_INACTIVE: 'Tài khoản đã ngừng sử dụng; hãy chọn tài khoản khác',
@@ -5842,6 +5847,11 @@ export const vi = {
         open_lines: 'Xem các dòng sao kê chưa đối chiếu',
         preview: 'Xem trước sao kê ngân hàng',
         suggestions: 'Xem gợi ý đối chiếu sao kê',
+      },
+      bank_feed: {
+        accounts: 'Xem các tài khoản của nguồn giao dịch ngân hàng',
+        map: 'Liên kết tài khoản của nguồn giao dịch ngân hàng',
+        unmap: 'Gỡ liên kết tài khoản của nguồn giao dịch ngân hàng',
       },
       categorization_rule: {
         create: 'Thêm quy tắc định khoản',

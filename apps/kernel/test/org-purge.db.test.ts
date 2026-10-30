@@ -119,6 +119,13 @@ suite('org purge on PostgreSQL (#1024)', () => {
         )
       ).rows[0]?.id;
       await c.query(`INSERT INTO crove_kernel.task_comment (org_id, task_id, body, author_type) VALUES ($1, $2, 'Đã xem', 'system')`, [org.orgId, pinned]);
+      // A bank feed account (#2044) and its connection: the account is deleted before the connection it references.
+      const feedConnection = randomUUID();
+      await c.query(
+        'INSERT INTO crove_kernel.channel_connection (org_id, id, provider, external_account_id, display_name, connected_by) VALUES ($1, $2, $3, $4, $5, $6)',
+        [org.orgId, feedConnection, 'bank_sandbox', `feed-${tag}`, 'Ngân hàng', owner],
+      );
+      await c.query(`INSERT INTO crove_finance.bank_feed_account (org_id, channel_connection_id, external_account_id, bank_account) VALUES ($1, $2, 'SBX-001', '1121')`, [org.orgId, feedConnection]);
       // An approved Social post (append-only approval, #1032): its approval, variant, post and channel connection.
       const connection = randomUUID();
       await c.query(
@@ -332,7 +339,8 @@ suite('org purge on PostgreSQL (#1024)', () => {
 
     const after = await snapshot(s.org.orgId);
     // Kept whole: the books, the audit and outbox streams, inbound addresses.
-    for (const table of Object.keys(before).filter((t) => t.startsWith('crove_finance.') && t !== 'crove_finance.vendor_account_rule')) {
+    // Bank feed accounts (#2044) are working rows, deleted with the connections they map.
+    for (const table of Object.keys(before).filter((t) => t.startsWith('crove_finance.') && t !== 'crove_finance.vendor_account_rule' && t !== 'crove_finance.bank_feed_account')) {
       expect([table, after[table]]).toEqual([table, before[table]]);
     }
     expect(after['crove_finance.purchase_document']).toBe(1);
@@ -415,7 +423,8 @@ suite('org purge on PostgreSQL (#1024)', () => {
             'crove_social.post_approval': 1,
             'crove_social.post_variant': 1,
             'crove_social.post': 1,
-            'crove_kernel.channel_connection': 1,
+            'crove_kernel.channel_connection': 2,
+            'crove_finance.bank_feed_account': 1,
             'crove_social.push_subscription': 1,
             'crove_social.saved_view': 1,
             'crove_social.media_archive': 2,

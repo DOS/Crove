@@ -6,7 +6,7 @@
 // command, stores what is new, and a transaction the feed and a statement file both report is one line. The rules
 // themselves are unit-tested in modules/finance/test/bank-statement.test.ts.
 // Set CROVE_TEST_ADMIN_URL to a superuser URL; each run creates and drops its own database.
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { SignJWT } from 'jose';
 import pg from 'pg';
@@ -15,7 +15,7 @@ import { normalizeStatementAmount, type BankFeedLine, type BankImportResult, typ
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { kernelCommands, kernelQueries } from '@crove/kernel';
-import { Runtime, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
+import { CredentialVault, parseVaultKey, Runtime, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
 import { createAuthenticator } from '../src/auth.ts';
 import { loadConfig } from '../src/config.ts';
@@ -58,6 +58,8 @@ suite('bank statement import (#326)', () => {
   let adminUrl = '';
   let pool: pg.Pool;
   let app: ReturnType<typeof createHttpApp>;
+  // With the sandbox bank feed on (ADR-0039, #2044), and a credential key to seal its secret.
+  let feedApp: ReturnType<typeof createHttpApp>;
   // The API's runtime, and the worker's, which runs feed jobs as the system.
   let api: Runtime;
   let worker: Runtime;
@@ -93,8 +95,8 @@ suite('bank statement import (#326)', () => {
       .sign(new TextEncoder().encode(SECRET));
   }
 
-  async function rpc(path: string, token: string, input: unknown, org: string | null = slug) {
-    const response = await app.request(`/api/rpc/${path}`, {
+  async function rpc(path: string, token: string, input: unknown, org: string | null = slug, on: ReturnType<typeof createHttpApp> = app) {
+    const response = await on.request(`/api/rpc/${path}`, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', ...(org ? { 'x-crove-org': org } : {}) },
       body: JSON.stringify(input === undefined ? {} : { json: input }),
@@ -160,6 +162,16 @@ suite('bank statement import (#326)', () => {
     });
     app = createHttpApp({ config, runtime, store: new MemoryStore(), authenticate: createAuthenticator(config, db), pool, aiEnabled: false });
     api = runtime;
+    const vault = new CredentialVault([parseVaultKey(randomBytes(32).toString('base64'))]);
+    feedApp = createHttpApp({
+      config,
+      runtime,
+      store: new MemoryStore(),
+      authenticate: createAuthenticator(config, db),
+      pool,
+      aiEnabled: false,
+      channels: { broker: vault, sandbox: false, bankFeedSandbox: true },
+    });
     const workerUrl = new URL(adminUrl);
     workerUrl.username = 'crove_worker';
     workerUrl.password = 'test-worker-pw';
@@ -415,5 +427,86 @@ suite('bank statement import (#326)', () => {
     await expect(ingest(lines, '1121.OLD')).rejects.toMatchObject({ code: 'ACCOUNT_INACTIVE' });
     await expect(ingest(lines, '331')).rejects.toMatchObject({ code: 'NOT_A_BANK_ACCOUNT' });
     await expect(ingest(lines, '1121.ACB')).rejects.toMatchObject({ code: 'NOT_A_BANK_ACCOUNT' });
+  });
+
+  // ADR-0039, #2044 part 2a: a bank feed connection's accounts mapped to the org's bank accounts.
+  const feed = async (path: string, who: Account, input?: unknown) => rpc(`bankFeeds/${path}`, await tokenFor(who), input, slug, feedApp);
+
+  it('offers the sandbox bank feed only where the deployment turns it on', async () => {
+    expect(((await (await feedApp.request('/api/config')).json()) as { bankFeeds: unknown }).bankFeeds).toEqual({ sandbox: true });
+    expect(((await (await app.request('/api/config')).json()) as { bankFeeds: unknown }).bankFeeds).toEqual({ sandbox: false });
+    expect(await rpc('bankFeeds/connectSandbox', await tokenFor(owner), { displayName: 'Ngân hàng thử' })).toMatchObject({ status: 404, body: { code: 'BANK_FEED_DISABLED' } });
+  });
+
+  it('connects the sandbox, maps an account to a bank account, and keeps the connection out of the Social channels', async () => {
+    expect((await feed('connectSandbox', member, { displayName: 'Ngân hàng thử' })).status).toBe(403);
+    const connected = await feed('connectSandbox', owner, { displayName: 'Ngân hàng thử' });
+    expect(connected.status).toBe(200);
+    expect(connected.body.accounts.map((a: { externalAccountId: string }) => a.externalAccountId)).toEqual(['SBX-001', 'SBX-002']);
+    const connectionId = String(connected.body.connectionId);
+    // Sealed like any channel's: a credential row holds it, and no audit row or answer carries a sandbox secret.
+    const stored = await admin(async (c) => (await c.query<{ provider: string }>('SELECT provider FROM crove_kernel.channel_connection WHERE org_id = $1 AND id = $2', [orgId, connectionId])).rows);
+    expect(stored).toEqual([{ provider: 'bank_sandbox' }]);
+    expect(Number((await admin(async (c) => (await c.query<{ n: string }>('SELECT count(*) AS n FROM crove_kernel.credential WHERE org_id = $1', [orgId])).rows[0]?.n)))).toBeGreaterThan(0);
+    expect(JSON.stringify(connected.body)).not.toMatch(/sbx_/);
+    expect(
+      await admin(async (c) => (await c.query(`SELECT 1 FROM crove_kernel.audit_event WHERE org_id = $1 AND detail::text LIKE '%sbx\\_%'`, [orgId])).rows),
+    ).toEqual([]);
+    expect((await rpc('channels/list', await tokenFor(owner), {}, slug, feedApp)).body.map((c: { id: string }) => c.id)).not.toContain(connectionId);
+
+    const map = (who: Account, input: Record<string, unknown>) => feed('map', who, { connectionId, externalAccountId: 'SBX-001', bankAccount: '1121.VCB', idempotencyKey: randomUUID(), ...input });
+    expect((await map(member, {})).status).toBe(403);
+    expect((await map(viewer, {})).status).toBe(403);
+    expect(await map(owner, { bankAccount: '331' })).toMatchObject({ status: 422, body: { code: 'NOT_A_BANK_ACCOUNT' } });
+    expect(await map(owner, { bankAccount: '1121.OLD' })).toMatchObject({ status: 422, body: { code: 'ACCOUNT_INACTIVE' } });
+    const mapped = await map(owner, {});
+    expect(mapped.status).toBe(200);
+    // Mapping it again points it at another bank account of the same entity; another entity takes an unmap first.
+    const again = await map(owner, { bankAccount: '1121' });
+    expect(again.body.feedAccountId).toBe(mapped.body.feedAccountId);
+    const branch = await admin(
+      async (c) =>
+        (await c.query<{ id: string }>(`INSERT INTO crove_kernel.legal_entity (org_id, name, kind, created_by) VALUES ($1, 'Chi nhánh ngân hàng', 'branch', $2) RETURNING id`, [orgId, owner.userId])).rows[0]
+          ?.id as string,
+    );
+    expect(await map(owner, { bankAccount: '1121', legalEntityId: branch })).toMatchObject({ status: 409, body: { code: 'BANK_FEED_ACCOUNT_MAPPED' } });
+    const listed = await feed('accounts', viewer);
+    expect(listed.status).toBe(200);
+    expect(listed.body).toMatchObject([
+      { id: mapped.body.feedAccountId, connectionId, provider: 'bank_sandbox', connectionName: 'Ngân hàng thử', connectionStatus: 'active', externalAccountId: 'SBX-001', bankAccount: '1121', lastSyncedAt: null },
+    ]);
+    // Another org sees none of it, and cannot map this connection.
+    expect((await rpc('bankFeeds/accounts', await tokenFor(outsider), {}, otherSlug, feedApp)).body).toEqual([]);
+    expect(
+      await rpc('bankFeeds/map', await tokenFor(outsider), { connectionId, externalAccountId: 'SBX-001', bankAccount: '1121', idempotencyKey: randomUUID() }, otherSlug, feedApp),
+    ).toMatchObject({ status: 404, body: { code: 'BANK_FEED_NOT_FOUND' } });
+
+    // Unmapped, it is gone from the list; a second unmap finds nothing.
+    expect((await feed('unmap', member, { feedAccountId: mapped.body.feedAccountId, idempotencyKey: randomUUID() })).status).toBe(403);
+    expect((await feed('unmap', owner, { feedAccountId: mapped.body.feedAccountId, idempotencyKey: randomUUID() })).status).toBe(200);
+    expect((await feed('accounts', owner)).body).toEqual([]);
+    expect(await feed('unmap', owner, { feedAccountId: mapped.body.feedAccountId, idempotencyKey: randomUUID() })).toMatchObject({ status: 404, body: { code: 'BANK_FEED_ACCOUNT_NOT_FOUND' } });
+  });
+
+  it('maps only a bank feed connection, and only an active one', async () => {
+    const social = await admin(
+      async (c) =>
+        (
+          await c.query<{ id: string }>(
+            `INSERT INTO crove_kernel.channel_connection (org_id, provider, external_account_id, display_name, connected_by) VALUES ($1, 'sandbox', $2, 'Trang', $3) RETURNING id`,
+            [orgId, randomUUID(), owner.userId],
+          )
+        ).rows[0]?.id as string,
+    );
+    expect(await feed('map', owner, { connectionId: social, externalAccountId: 'SBX-001', bankAccount: '1121', idempotencyKey: randomUUID() })).toMatchObject({
+      status: 404,
+      body: { code: 'BANK_FEED_NOT_FOUND' },
+    });
+    const connectionId = String((await feed('connectSandbox', owner, { displayName: 'Ngân hàng cũ' })).body.connectionId);
+    await admin((c) => c.query(`UPDATE crove_kernel.channel_connection SET status = 'revoked' WHERE org_id = $1 AND id = $2`, [orgId, connectionId]));
+    expect(await feed('map', owner, { connectionId, externalAccountId: 'SBX-001', bankAccount: '1121', idempotencyKey: randomUUID() })).toMatchObject({
+      status: 422,
+      body: { code: 'BANK_FEED_INACTIVE' },
+    });
   });
 });

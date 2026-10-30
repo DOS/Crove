@@ -5467,6 +5467,11 @@ export const en = {
       ARCHIVE_PENDING: 'The archive package of this year is being built. Wait for it to finish, then check again.',
       NOT_A_BANK_ACCOUNT: 'This is not a bank account (112) of the organization.',
       BANK_IMPORT_INVALID: 'Some lines of the statement could not be read. Check them before importing.',
+      BANK_FEED_NOT_FOUND: 'This bank feed connection was not found.',
+      BANK_FEED_INACTIVE: 'This bank feed connection no longer works; connect it again.',
+      BANK_FEED_ACCOUNT_MAPPED: 'This account is already mapped to another legal entity; unmap it first.',
+      BANK_FEED_ACCOUNT_NOT_FOUND: 'This bank feed account was not found.',
+      BANK_FEED_DISABLED: 'The test bank feed is not turned on for this server.',
       ACCOUNT_CODE_TAKEN: 'This account code is already in the chart of accounts.',
       ACCOUNT_HAS_SUB_ACCOUNTS: 'The account still has sub-accounts in use. Stop using them first.',
       ACCOUNT_INACTIVE: 'The account is no longer in use. Choose another account.',
@@ -5842,6 +5847,11 @@ export const en = {
         open_lines: 'List unmatched bank statement lines',
         preview: 'Preview a bank statement',
         suggestions: 'Read bank matching suggestions',
+      },
+      bank_feed: {
+        accounts: 'List bank feed accounts',
+        map: 'Map a bank feed account',
+        unmap: 'Unmap a bank feed account',
       },
       categorization_rule: {
         create: 'Add an account rule',
