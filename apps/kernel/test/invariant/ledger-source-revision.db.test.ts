@@ -240,7 +240,7 @@ suite('idempotent posting under concurrency (#1283)', () => {
       });
     expect(
       await asOwner(async (c) => {
-        await c.query(`INSERT INTO crove_kernel.party (org_id, id, name, tax_code) VALUES ($1, $2, 'Nhà cung cấp Một lần', '0101234565')`, [orgId, party]);
+        await c.query(`INSERT INTO crove_kernel.party (org_id, id, name, tax_code) VALUES ($1, $2, 'Nhà cung cấp Một lần', '0101234567')`, [orgId, party]);
         await c.query(
           `INSERT INTO crove_finance.purchase_document (org_id, id, direction, party_id, invoice_series, invoice_number, invoice_date, subtotal, vat_amount, total)
            VALUES ($1, $2, 'purchase', $3, 'C26TOR', '601', '2026-10-10', 100000, 10000, 110000)`,
