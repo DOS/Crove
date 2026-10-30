@@ -655,6 +655,7 @@ export const vi = {
     archivedToast: 'Đã lưu trữ ghi chú',
     deletedToast: 'Đã chuyển ghi chú vào thùng rác',
     undoneToast: 'Đã đưa ghi chú trở lại',
+    undonePartly: 'Mới hoàn tác được một phần, hãy xem lại ghi chú: {reason}',
     makeShared: 'Chuyển thành dùng chung',
     makePrivate: 'Chuyển thành riêng tư',
     shareTitle: 'Chuyển ghi chú thành dùng chung',

@@ -169,17 +169,26 @@ function Editor({
       void refreshNotes();
       if (action === 'delete' || action === 'archive') {
         const going = navigate({ to: '/o/$slug/notes', params: { slug }, search: back });
-        // Undo (DESIGN.md §4.5, #2003): restore brings a note back from the archive and the trash at once, so a note
-        // that was archived before it went to the trash goes back to the archive.
+        // Undo (DESIGN.md §4.5, #2003) reverses only the state this action set. Restore clears the archive and the trash
+        // at once, so the other one, as the note has it when the undo runs, is set again: a note archived before it went
+        // to the trash goes back to the archive, and one moved to the trash after it was archived stays there.
         const ref = { noteId: note.id };
-        const wasArchived = note.archivedAt !== null;
         const undo = async () => {
+          let keep: 'archive' | 'delete' | null = null;
           try {
+            const now = await api.notes.get(ref);
+            keep = action === 'delete' ? (now.archivedAt !== null ? 'archive' : null) : now.deletedAt !== null ? 'delete' : null;
             await api.notes.restore(ref);
-            if (action === 'delete' && wasArchived) await api.notes.archive(ref);
-            toast(t('undoneToast'));
           } catch (error) {
             toast(common('undoFailed', { reason: errorMessage(error) }), 'error');
+            void refreshNotes();
+            return;
+          }
+          try {
+            if (keep) await api.notes[keep](ref);
+            toast(t('undoneToast'));
+          } catch (error) {
+            toast(t('undonePartly', { reason: errorMessage(error) }), 'error');
           } finally {
             void refreshNotes();
           }

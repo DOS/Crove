@@ -657,6 +657,7 @@ export const en = {
     archivedToast: 'Note archived',
     deletedToast: 'Note moved to the trash',
     undoneToast: 'Note brought back',
+    undonePartly: 'Undone only in part, check the note: {reason}',
     makeShared: 'Share with the organization',
     makePrivate: 'Make private',
     shareTitle: 'Share this note',
