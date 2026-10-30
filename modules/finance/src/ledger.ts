@@ -45,14 +45,14 @@ export interface Posting {
   legalEntityId?: string;
 }
 
-export interface PostedEntry {
+export interface PostingResult {
   id: string;
   // True when the same revision and payload were already posted (in this transaction or an earlier one): nothing was
   // written, and the posting's side effects already happened then.
   replayed: boolean;
 }
 
-export async function postJournalEntry(ctx: CommandContext, posting: Posting): Promise<PostedEntry> {
+export async function postJournalEntry(ctx: CommandContext, posting: Posting): Promise<PostingResult> {
   const lines = posting.lines.map((l) => ({
     line_no: l.lineNo,
     account_code: l.accountCode,
@@ -62,11 +62,12 @@ export async function postJournalEntry(ctx: CommandContext, posting: Posting): P
     memo: l.memo,
   }));
   const revision = posting.sourceRevision ?? 1;
-  // One source at a time, with the lock the definer takes first (same key, built the same way from the context's org),
-  // so no other transaction can post this revision between the look below and the definer's own. Held to the end of
-  // the transaction; the definer's second take of it is free.
+  // One source at a time, with the lock the definer takes first (the same key: the definer's org is the context's, which
+  // is ctx.orgId, never NULL, since a NULL part would take no lock at all), so no other transaction can post this
+  // revision between the look below and the definer's own. Held to the end of the transaction; the definer's second
+  // take of it is free.
   await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(
-      'crove_finance.journal_entry.source:' || crove_kernel.ctx_org_id()::text || ':' || ${posting.sourceType}::text || ':' || ${posting.sourceId}::uuid::text, 0))`.execute(
+      'crove_finance.journal_entry.source:' || ${ctx.orgId}::uuid::text || ':' || ${posting.sourceType}::text || ':' || ${posting.sourceId}::uuid::text, 0))`.execute(
     ctx.trx,
   );
   // Already posted: the definer replays it (same payload) or refuses it (another one). A replay can only be of an entry

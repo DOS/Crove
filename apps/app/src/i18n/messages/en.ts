@@ -5440,6 +5440,8 @@ export const en = {
       IDEMPOTENCY_CONFLICT: 'This document was already posted with different content (lines, amounts, date or the entry it reverses). The books keep the posted entry; to change it, reverse that entry and post again.',
       REVISION_OUT_OF_ORDER: 'This document can only be posted again as its next revision, without skipping or going back.',
       SOURCE_STILL_POSTED: "This document's previous entry is still on the books. Reverse it first, then post again.",
+      POSTING_SUPERSEDED: 'This request is for an older posting: its entry was reversed, or the document was posted again since. The books do not post it again.',
+      ALREADY_POSTED: 'This document is already posted; this posting adds nothing.',
       REVERSAL_REVISION: 'A reversal is posted once, as the first revision of its source; it cannot be posted again as a new revision.',
       DOCUMENT_REPOST: 'An invoice is posted once and cannot be posted again. If it is wrong, reverse its entry and record the replacement or adjustment invoice as a new document.',
       LEGAL_ENTITY_REQUIRED: 'Choose a legal entity before viewing or posting to the books.',
