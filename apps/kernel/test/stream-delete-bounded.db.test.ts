@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // A bulk delete of notes or to-dos sends a bounded number of stream hints (issue #1992), on PostgreSQL 17: one per org
 // and audience, routed as a row's hint is (crove_kernel.stream_notify: a to-do to its owner, a note to its author, a
-// shared note also with `+shared`), never one per row. A delete of one row sends that row's hint, as before. Set
-// CROVE_TEST_ADMIN_URL to a superuser URL; the run makes its own database.
+// shared note also with `+shared`), never one per row. A delete of one row sends that row's hint, as before. Deleting
+// notes sends no hint for each to-do made from them, which the foreign key unlinks (#2036): neither the trash sweep nor
+// a former member's purge. Set CROVE_TEST_ADMIN_URL to a superuser URL; the run makes its own database.
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
@@ -42,8 +43,43 @@ suite('stream hints of a bulk delete (#1992)', () => {
     return (await createOrg(app, { type: 'user', userId: owner, aal: 'aal1' }, `Xóa ${tag}`)).orgId;
   }
 
+  // Runs fn as the worker login in the org's system context, as the notes jobs do.
+  async function asWorker(orgId: string, fn: (c: pg.Client) => Promise<unknown>): Promise<void> {
+    const url = new URL(adminUrl);
+    url.username = 'crove_worker';
+    url.password = 'test-worker-pw';
+    const c = new pg.Client({ connectionString: url.toString() });
+    await c.connect();
+    try {
+      await c.query('BEGIN');
+      await c.query('SELECT crove_kernel.enter_system_context($1::uuid)', [orgId]);
+      await fn(c);
+      await c.query('COMMIT');
+    } finally {
+      await c.end();
+    }
+  }
+
+  // n private notes of one author, each with two to-dos of the given owner made from it; the notes trashed long ago
+  // when asked.
+  async function notesWithTodos(orgId: string, author: string, owner: string, n: number, trashed: boolean): Promise<void> {
+    await admin((c) =>
+      c.query(
+        `WITH made AS (
+           INSERT INTO crove_notes.note (org_id, author_user_id, visibility, title, deleted_at)
+           SELECT $1::uuid, $2::uuid, 'private', 'Ghi chú ' || i, CASE WHEN $5::boolean THEN now() - interval '31 days' END
+           FROM generate_series(1, $4::integer) i
+           RETURNING id
+         )
+         INSERT INTO crove_notes.todo (org_id, owner_user_id, title, sort_key, source_note_id)
+         SELECT $1::uuid, $3::uuid, 'Việc', 'V' || row_number() OVER (), made.id FROM made, generate_series(1, 2)`,
+        [orgId, author, owner, n, trashed],
+      ),
+    );
+  }
+
   // The crove_stream payloads the statements send, in the order they come, up to a marker sent after them.
-  async function hintsOf(statements: (c: pg.Client) => Promise<void>): Promise<string[]> {
+  async function hintsOf(statements: (c: pg.Client) => Promise<unknown>): Promise<string[]> {
     const listener = new pg.Client({ connectionString: adminUrl });
     await listener.connect();
     const payloads: string[] = [];
@@ -79,7 +115,7 @@ suite('stream hints of a bulk delete (#1992)', () => {
     base.pathname = `/${dbName}`;
     adminUrl = base.toString();
     await migrate({ adminUrl, dir: MIGRATIONS });
-    await setRolePasswords(adminUrl, { crove_app: 'test-app-pw' });
+    await setRolePasswords(adminUrl, { crove_app: 'test-app-pw', crove_worker: 'test-worker-pw' });
     const url = new URL(adminUrl);
     url.username = 'crove_app';
     url.password = 'test-app-pw';
@@ -158,24 +194,61 @@ suite('stream hints of a bulk delete (#1992)', () => {
     expect(payloads).toEqual([`${orgId} todo ${todo} @${ann}`, `${orgId} note ${note} @${binh}+shared`]);
   });
 
+  it('sends no hint per to-do the trash sweep unlinks from its notes, and one for the notes (#2036)', async () => {
+    const orgId = await org();
+    const ann = randomUUID();
+    await notesWithTodos(orgId, ann, ann, 50, true);
+    const payloads = await hintsOf(() => asWorker(orgId, (c) => c.query('SELECT crove_notes.trash_empty(now())')));
+    expect(payloads.map((p) => p.replace(/ note [0-9a-f-]{36} /, ' note <id> '))).toEqual([`${orgId} note <id> @${ann}`]);
+    // The 100 to-dos stay, no longer linked.
+    const left = await admin(
+      async (c) => (await c.query<{ n: string; linked: string }>('SELECT count(*) AS n, count(source_note_id) AS linked FROM crove_notes.todo WHERE org_id = $1', [orgId])).rows[0],
+    );
+    expect(left).toEqual({ n: '100', linked: '0' });
+  });
+
+  it('sends one hint for the to-dos of a former member and one for their notes, not one per to-do (#2036)', async () => {
+    const orgId = await org();
+    const gone = randomUUID();
+    await notesWithTodos(orgId, gone, gone, 40, false);
+    let removed = 0;
+    const payloads = await hintsOf(() =>
+      asWorker(orgId, async (c) => {
+        removed = Number((await c.query<{ n: string }>('SELECT crove_notes.member_items_purge($1::uuid) AS n', [gone])).rows[0]?.n);
+      }),
+    );
+    expect(removed).toBe(120);
+    expect(payloads.map((p) => p.replace(/ (todo|note) [0-9a-f-]{36} /, ' $1 <id> '))).toEqual([`${orgId} todo <id> @${gone}`, `${orgId} note <id> @${gone}`]);
+  });
+
+  it('still sends the hint of a to-do whose link an update of its own clears, rather than a note delete', async () => {
+    const orgId = await org();
+    const ann = randomUUID();
+    await notesWithTodos(orgId, ann, ann, 1, false);
+    const todos = await admin(async (c) => (await c.query<{ id: string }>('SELECT id FROM crove_notes.todo WHERE org_id = $1 ORDER BY id', [orgId])).rows.map((r) => r.id));
+    const payloads = await hintsOf((c) => c.query('UPDATE crove_notes.todo SET source_note_id = NULL WHERE org_id = $1 AND id = $2', [orgId, todos[0]]));
+    expect(payloads).toEqual([`${orgId} todo ${todos[0]} @${ann}`]);
+  });
+
   it('keeps the statement trigger to deletes, and its function to nobody', async () => {
     const rows = await admin(
       async (c) =>
         (
-          await c.query<{ tbl: string; name: string; statement: boolean; on_delete: boolean; on_insert: boolean }>(
+          await c.query<{ tbl: string; name: string; statement: boolean; on_delete: boolean; on_insert: boolean; on_update: boolean }>(
             `SELECT t.tgrelid::regclass::text AS tbl, t.tgname AS name, (t.tgtype & 1) = 0 AS statement,
-                    (t.tgtype & 8) <> 0 AS on_delete, (t.tgtype & 4) <> 0 AS on_insert
+                    (t.tgtype & 8) <> 0 AS on_delete, (t.tgtype & 4) <> 0 AS on_insert, (t.tgtype & 16) <> 0 AS on_update
              FROM pg_catalog.pg_trigger t
-             WHERE t.tgrelid IN ('crove_notes.note'::regclass, 'crove_notes.todo'::regclass) AND t.tgname IN ('stream_hint', 'stream_hint_delete')
+             WHERE t.tgrelid IN ('crove_notes.note'::regclass, 'crove_notes.todo'::regclass) AND t.tgname LIKE 'stream\\_hint%'
              ORDER BY 1, 2`,
           )
         ).rows,
     );
     expect(rows).toEqual([
-      { tbl: 'crove_notes.note', name: 'stream_hint', statement: false, on_delete: false, on_insert: true },
-      { tbl: 'crove_notes.note', name: 'stream_hint_delete', statement: true, on_delete: true, on_insert: false },
-      { tbl: 'crove_notes.todo', name: 'stream_hint', statement: false, on_delete: false, on_insert: true },
-      { tbl: 'crove_notes.todo', name: 'stream_hint_delete', statement: true, on_delete: true, on_insert: false },
+      { tbl: 'crove_notes.note', name: 'stream_hint', statement: false, on_delete: false, on_insert: true, on_update: true },
+      { tbl: 'crove_notes.note', name: 'stream_hint_delete', statement: true, on_delete: true, on_insert: false, on_update: false },
+      { tbl: 'crove_notes.todo', name: 'stream_hint', statement: false, on_delete: false, on_insert: true, on_update: false },
+      { tbl: 'crove_notes.todo', name: 'stream_hint_delete', statement: true, on_delete: true, on_insert: false, on_update: false },
+      { tbl: 'crove_notes.todo', name: 'stream_hint_update', statement: false, on_delete: false, on_insert: false, on_update: true },
     ]);
     const callers = await admin(
       async (c) =>

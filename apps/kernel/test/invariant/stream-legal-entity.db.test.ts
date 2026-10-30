@@ -313,21 +313,31 @@ suite('invariant: invalidation hints honor the legal-entity scope', () => {
     await root.end();
   });
 
+  // Every trigger whose function sends on crove_stream, whatever its name: the row trigger stream_hint, and the
+  // statement and update triggers of notes and to-dos (stream_hint_delete, stream_hint_update; #1992, #2036, #2037).
+  const STREAM_TRIGGERS = `
+    FROM pg_catalog.pg_trigger t
+    JOIN pg_catalog.pg_proc f ON f.oid = t.tgfoid
+    WHERE NOT t.tgisinternal AND f.prosrc LIKE '%crove_stream%'`;
+
   it('names the entity column in the stream hint of every table under le_scope, and of no other', async () => {
     const rows = await admin(async (c) =>
       (
-        await c.query<{ tbl: string; args: Buffer; scoped: boolean }>(
-          `SELECT t.tgrelid::regclass::text AS tbl, t.tgargs AS args,
+        await c.query<{ tbl: string; name: string; args: Buffer; scoped: boolean }>(
+          `SELECT t.tgrelid::regclass::text AS tbl, t.tgname AS name, t.tgargs AS args,
                   EXISTS (SELECT 1 FROM pg_catalog.pg_policy p WHERE p.polrelid = t.tgrelid AND p.polname = 'le_scope') AS scoped
-           FROM pg_catalog.pg_trigger t
-           WHERE t.tgname = 'stream_hint' AND NOT t.tgisinternal
-           ORDER BY 1`,
+           ${STREAM_TRIGGERS}
+           ORDER BY 1, 2`,
         )
       ).rows,
     );
-    const triggers = rows.map((r) => ({ table: r.tbl, scoped: r.scoped, args: r.args.toString('utf8').split('\u0000').filter((a) => a !== '') }));
+    const triggers = rows.map((r) => ({ table: `${r.tbl} ${r.name}`, scoped: r.scoped, args: r.args.toString('utf8').split('\u0000').filter((a) => a !== '') }));
+    // The scan finds the delete and update triggers of notes and to-dos, not only those named stream_hint.
+    expect(triggers.map((t) => t.table)).toEqual(
+      expect.arrayContaining(['crove_notes.note stream_hint', 'crove_notes.note stream_hint_delete', 'crove_notes.todo stream_hint_delete', 'crove_notes.todo stream_hint_update']),
+    );
     // The tables the issue names are among the scoped ones.
-    const scoped = triggers.filter((t) => t.scoped).map((t) => t.table);
+    const scoped = triggers.filter((t) => t.scoped).map((t) => t.table.split(' ')[0]);
     expect(scoped).toEqual(
       expect.arrayContaining([
         'crove_finance.journal_entry',
@@ -349,8 +359,7 @@ suite('invariant: invalidation hints honor the legal-entity scope', () => {
         await c.query<{ args: Buffer; scoped: boolean }>(
           `SELECT t.tgargs AS args,
                   EXISTS (SELECT 1 FROM pg_catalog.pg_policy p WHERE p.polrelid = t.tgrelid AND p.polname = 'le_scope') AS scoped
-           FROM pg_catalog.pg_trigger t
-           WHERE t.tgname = 'stream_hint' AND NOT t.tgisinternal`,
+           ${STREAM_TRIGGERS}`,
         )
       ).rows,
     );
