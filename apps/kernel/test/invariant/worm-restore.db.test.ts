@@ -242,19 +242,23 @@ suite('WORM verifier after a restore on PostgreSQL (#2020)', () => {
     expect(batches).toBeGreaterThanOrEqual(4);
     expect(await verifyArchive(worker, forgedStore)).toMatchObject({ ok: true, problems: [] });
 
-    // The database owner forgets batch 2 and every later one, and deletes one audit event of batch 2.
-    await client(urlOf(forgedName), async (c) => {
+    // The database owner forgets the batch of the first voucher's journal entry and every later one, and deletes that
+    // entry (the vouchers are written in SQL, so their batches hold no audit event); the later vouchers stay.
+    const seq = await client(urlOf(forgedName), async (c) => {
       await c.query('BEGIN');
       await c.query(`SET LOCAL session_replication_role = replica`);
-      const { rows } = await c.query<{ id: string }>(
-        `SELECT a.id FROM crove_kernel.audit_event a, crove_kernel.archive_batch b
-         WHERE b.seq = 2 AND a.occurred_at >= b.window_from AND a.occurred_at < b.window_to ORDER BY a.occurred_at LIMIT 1`,
+      const { rows } = await c.query<{ id: string; seq: string }>(
+        `SELECT e.id, b.seq::text AS seq FROM crove_finance.journal_entry e
+         JOIN crove_kernel.archive_batch b ON e.created_at >= b.window_from AND e.created_at < b.window_to
+         ORDER BY e.created_at LIMIT 1`,
       );
       expect(rows).toHaveLength(1);
-      await c.query('DELETE FROM crove_kernel.audit_event WHERE id = $1', [rows[0]!.id]);
-      await c.query('DELETE FROM crove_kernel.archive_batch WHERE seq >= 2');
+      await c.query('DELETE FROM crove_finance.journal_entry WHERE id = $1', [rows[0]!.id]);
+      await c.query('DELETE FROM crove_kernel.archive_batch WHERE seq >= $1', [rows[0]!.seq]);
       await c.query('COMMIT');
+      return Number(rows[0]!.seq);
     });
+    expect(seq).toBeLessThan(batches);
     const runtime = new Runtime(worker, { manifests: TEST_MANIFESTS }).register({ commands: [numberReseedCommand()] });
     const lines: string[] = [];
     // The operator gives the point of the last real backup, before the vouchers.
@@ -266,7 +270,7 @@ suite('WORM verifier after a restore on PostgreSQL (#2020)', () => {
       lastBackup,
     ]);
     expect(code).toBe(RESTORE_REPORT_EXIT.failed);
-    expect(lines.some((l) => l.startsWith('[restore-report] PROBLEM: restore_ack_mismatch in batch 2'))).toBe(true);
+    expect(lines.some((l) => l.startsWith(`[restore-report] PROBLEM: restore_ack_mismatch in batch ${seq}`))).toBe(true);
     expect(await forgedStore.list(RESTORE_ACK_PREFIX)).toEqual([]);
   });
 });
