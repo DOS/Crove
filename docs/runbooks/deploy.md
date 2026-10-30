@@ -172,6 +172,37 @@ SELECT pg_catalog.count(*) AS pending FROM crove_kernel.outbox_pending;
 ROLLBACK;
 ```
 
+### A purchase or sale document is posted once (#1928, `20261107110000_crove_finance_document_one_revision.sql` and `20261107120000_crove_finance_document_one_revision_validate.sql`)
+
+The first migration adds the CHECK `journal_entry_document_one_revision` to `crove_finance.journal_entry`: an entry whose source is a purchase or sale document (`source_type = 'finance.purchase_document'`, sales included) is revision 1. It is added `NOT VALID`, so it holds every new row at once. The second migration then validates it against the rows already there.
+
+- No code path has ever posted a document's revision 2, so the check should be empty.
+- A row it lists was written outside the posting path. Such a row would also count in the ledger while its document stays voided, out of the VAT working and the MISA exports.
+
+Run it as the database owner. `journal_entry` is under tenant row-level security, so a login role without an org context sees no rows, and the check would pass falsely. On an environment without the column `source_revision` (before `20261031000000_crove_finance_source_revision.sql`), the query fails on the missing column: every entry there is revision 1, so there is nothing to check. It must return no rows:
+
+```sql
+BEGIN READ ONLY;
+SELECT org_id, id, source_id AS document_id, source_revision, entry_date, created_at
+FROM crove_finance.journal_entry
+WHERE source_type = 'finance.purchase_document' AND source_revision > 1
+ORDER BY org_id, created_at;
+ROLLBACK;
+```
+
+If it lists rows, **stop**:
+- Do not tag the release. Raise them on #1928, with the org, the document and the entry of each row.
+- Do not delete or edit them: journal entries are append-only, and the WORM archive anchors them.
+- The books cannot clear them either, so the validation would fail again on every deploy:
+  - a reversal does not remove the row;
+  - a reversal of revision 2 would need a second void of the document, which `purchase_document_void` (one per document) refuses.
+- The way out is a decision for the owner (with the accountant, #61, for the books), then a forward migration, tracked on #1928. For example, the validation could name the rows it accepts as they are.
+
+If a release with these migrations runs anyway:
+- The first migration commits, so no new revision 2 can be written.
+- The second fails on the check violation, and the deploy stops on that migration.
+- That half state refuses every new revision 2 and loses nothing. It stays until the forward migration above lands.
+
 ## Deploy a release
 
 1. Merge to `main` and wait for CI. Run the [pre-deploy checks](#pre-deploy-checks) of every migration the release adds that has one.

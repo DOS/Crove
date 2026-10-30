@@ -22,6 +22,8 @@ export const TOAST_MS = 5000;
 // A toast with an action stays longer, so its button can be reached from the keyboard; it waits while it is hovered or
 // holds the focus (pauseToast), and starts its time again after.
 export const ACTION_TOAST_MS = 10000;
+// The key that moves the focus to the newest toast (#2026), as Radix's toast viewport does; no browser binds it.
+export const TOAST_SHORTCUT = 'F8';
 // At most this many at once: a burst of results keeps the newest.
 const MAX_TOASTS = 3;
 
@@ -99,6 +101,10 @@ export function pauseToast(id: number): void {
 export function resumeToast(id: number): void {
   if (!paused.delete(id)) return;
   if (started.has(id)) startTimer(id);
+}
+
+export function isToastShortcut(event: { key: string; altKey: boolean; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; repeat: boolean }): boolean {
+  return event.key === TOAST_SHORTCUT && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.repeat;
 }
 
 export function subscribeToasts(listener: () => void): () => void {

@@ -18,6 +18,8 @@ const healthy: HealthSnapshot = {
   dead_letter_count: 0,
   worker_heartbeat_age_seconds: 12,
   notify_queue_usage: 0,
+  archive_verify_age_seconds: null,
+  archive_lag_seconds: null,
 };
 const workerDown = { ...healthy, worker_heartbeat_age_seconds: 900 };
 const workerAndRelayDown = { ...workerDown, outbox_pending: 3, outbox_oldest_age_seconds: 1200 };
