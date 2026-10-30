@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // A deployment key kept in a file outside the database (the all-in-one container's `keys` volume): read it, or create
 // it with generate() when it is missing. Used for the credential key (ADR-0025) and the context token key (#1822).
 import { randomBytes } from 'node:crypto';

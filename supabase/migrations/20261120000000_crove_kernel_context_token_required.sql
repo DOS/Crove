@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: AGPL-3.0-only
 -- Context tokens, step 2 of 2 (#1822, ADR-0028 section 9). Step 1 (20261104230000) gave crove_app
 -- enter_user_context, which enters a user's context only from a token the kernel signs with the deployment's key, and
 -- kept enter_context for kernels without a key. This step:

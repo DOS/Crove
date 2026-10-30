@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // The context token key (#1822, ADR-0028 section 9): CROVE_CONTEXT_TOKEN_KEY wins; else the file
 // CROVE_CONTEXT_TOKEN_KEY_FILE names. The migrate step creates that file with a fresh key when it is missing, then
 // installs the key in the database; every other role only reads it, and has none while the file does not exist.
