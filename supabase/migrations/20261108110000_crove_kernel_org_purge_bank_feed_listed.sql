@@ -2,7 +2,7 @@
 -- Crove kernel (issue #2044 part 2b, ADR-0039): the org purge deletes a closing org's listed bank feed accounts.
 -- Idempotent; applied files stay untouched.
 --
--- crove_finance.bank_feed_listed_account (20261108080000) holds the accounts a bank feed connection reaches, as the
+-- crove_finance.bank_feed_listed_account (20261108100000) holds the accounts a bank feed connection reaches, as the
 -- worker listed them: working rows that go with the connections they reference, before them. Otherwise this is the
 -- body of 20261108070000 (the newest), with its signature, owner, grants and every list and step it had.
 SET LOCAL lock_timeout = '2s';
