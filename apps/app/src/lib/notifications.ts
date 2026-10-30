@@ -20,7 +20,13 @@ export function notificationKinds(modules: readonly string[]): KnownNotification
 type Underscored<K extends string> = K extends `${infer M}.${infer N}` ? `${M}_${N}` : never;
 export const kindKey = (kind: KnownNotificationKind) => kind.replace('.', '_') as Underscored<KnownNotificationKind>;
 
-export const isKnownKind = (kind: string): kind is KnownNotificationKind => Object.values(NOTIFICATION_KINDS).some((kinds) => (kinds as readonly string[]).includes(kind));
+// Kinds shown but never turned off, so not in the settings: a notice an action waits on (#1678: a personal-data erasure
+// deletes the private items it names once their authors were told).
+export const REQUIRED_NOTIFICATION_KINDS = ['kernel.personal_data_notice'] as const;
+type ShownNotificationKind = KnownNotificationKind | (typeof REQUIRED_NOTIFICATION_KINDS)[number];
+
+export const isKnownKind = (kind: string): kind is ShownNotificationKind =>
+  (REQUIRED_NOTIFICATION_KINDS as readonly string[]).includes(kind) || Object.values(NOTIFICATION_KINDS).some((kinds) => (kinds as readonly string[]).includes(kind));
 
 export type NotificationTarget =
   | { to: 'proposal'; id: string }
