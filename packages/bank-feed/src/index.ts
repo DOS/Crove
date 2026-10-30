@@ -76,6 +76,9 @@ export interface BankFeedProvider {
   verifyWebhook?(request: BankFeedWebhookRequest, now: number): string[];
 }
 
+// A control character in an id (a NUL makes the database refuse the whole batch) is not one a provider sends.
+const hasControlCharacter = (text: string): boolean => [...text].some((ch) => ch.charCodeAt(0) < 0x20 || ch.charCodeAt(0) === 0x7f);
+
 // The most accounts one notice may name.
 export const WEBHOOK_MAX_ACCOUNTS = 100;
 // A notice older (or newer) than this is refused, so a captured one cannot be replayed later.
@@ -131,9 +134,9 @@ function sandboxDay(account: string, day: string): BankFeedTransaction[] {
 }
 
 // The sandbox's notice, in the shape a real provider's is (Tingee's, as its public documentation describes it): headers
-// x-request-timestamp (milliseconds) and x-signature, the hex HMAC-SHA256 under the deployment's secret of
-// `<timestamp>:<body>`; the body is JSON {"accounts": ["SBX-001", ...]}.
-export function signSandboxWebhook(secret: string, timestamp: number, body: string): string {
+// x-request-timestamp (milliseconds, 13 digits) and x-signature, the hex HMAC-SHA256 under the deployment's secret of
+// `<timestamp>:<body>` with the timestamp as sent; the body is JSON {"accounts": ["SBX-001", ...]}.
+export function signSandboxWebhook(secret: string, timestamp: number | string, body: string): string {
   return createHmac('sha256', secret).update(`${timestamp}:${body}`).digest('hex');
 }
 
@@ -158,8 +161,8 @@ export function sandboxBankFeed(
           verifyWebhook(request: BankFeedWebhookRequest, at: number): string[] {
             const timestamp = request.headers['x-request-timestamp'] ?? '';
             const given = request.headers['x-signature'] ?? '';
-            if (!/^\d{10,16}$/.test(timestamp) || !/^[0-9a-f]{64}$/.test(given)) throw new BankFeedWebhookRejected('signature');
-            const expected = Buffer.from(signSandboxWebhook(webhookSecret, Number(timestamp), request.body), 'hex');
+            if (!/^\d{13}$/.test(timestamp) || !/^[0-9a-f]{64}$/.test(given)) throw new BankFeedWebhookRejected('signature');
+            const expected = Buffer.from(signSandboxWebhook(webhookSecret, timestamp, request.body), 'hex');
             if (!timingSafeEqual(expected, Buffer.from(given, 'hex'))) throw new BankFeedWebhookRejected('signature');
             if (Math.abs(at - Number(timestamp)) > WEBHOOK_WINDOW_MS) throw new BankFeedWebhookRejected('signature');
             let accounts: unknown;
@@ -168,7 +171,7 @@ export function sandboxBankFeed(
             } catch {
               throw new BankFeedWebhookRejected('malformed');
             }
-            if (!Array.isArray(accounts) || accounts.length === 0 || accounts.length > WEBHOOK_MAX_ACCOUNTS || !accounts.every((a) => typeof a === 'string' && a.length >= 1 && a.length <= 200)) {
+            if (!Array.isArray(accounts) || accounts.length === 0 || accounts.length > WEBHOOK_MAX_ACCOUNTS || !accounts.every((a) => typeof a === 'string' && a.length >= 1 && a.length <= 200 && !hasControlCharacter(a))) {
               throw new BankFeedWebhookRejected('malformed');
             }
             return [...new Set(accounts as string[])];

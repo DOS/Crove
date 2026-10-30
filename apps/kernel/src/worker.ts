@@ -310,6 +310,8 @@ export function sendExtractJob(boss: JobSender, row: OutboxRow, priority: number
 // The daily pull of every bank feed (ADR-0039), early morning in Vietnam; a sync retries a few times, then dead-letters.
 const BANK_FEED_SYNC_CRON = '30 5 * * *';
 const BANK_FEED_SYNC_RETRY_LIMIT = 3;
+// One sync a connection per slot for the signed notices that ask for one.
+const BANK_FEED_NOTICE_SLOT_SECONDS = 30;
 
 export interface WorkerDeps {
   connectionString: string;
@@ -1814,7 +1816,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       }
       // A bank feed provider's signed notice (ADR-0039, #2044): the connections that list an account it names get a sync.
       // Only where an adapter is on; without one the route does not exist and nothing is waiting.
-      if (finance && deps.channels?.bankFeeds && Object.keys(deps.channels.bankFeeds).length > 0) {
+      if (finance && deps.channels?.broker && deps.channels.bankFeeds && Object.keys(deps.channels.bankFeeds).length > 0) {
         const adapters = deps.channels.bankFeeds;
         for (;;) {
           const claimed = await relayBatch(deps.workerDb, boss, async (trx) => {
@@ -1828,7 +1830,11 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
               const target = { orgId: row.orgId, connectionId: row.connectionId } satisfies BankFeedSyncJob;
               return (boss: JobSender) =>
                 boss.send(QUEUES.bankFeedSync, target, {
+                  // A standard queue's singletonKey dedupes nothing by itself; a time slot per connection does: a provider's
+                  // retries of a notice, or one replayed inside its window, are one sync a slot. A pull goes on from the
+                  // cursor, so what a deduped notice announced comes with the next pull (the next notice, or the daily one).
                   singletonKey: jobKey(target.orgId, QUEUES.bankFeedSync, target.connectionId),
+                  singletonSeconds: BANK_FEED_NOTICE_SLOT_SECONDS,
                   retryLimit: BANK_FEED_SYNC_RETRY_LIMIT,
                   retryDelay: 30,
                   retryBackoff: true,

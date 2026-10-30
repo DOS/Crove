@@ -9,13 +9,18 @@
 --      API never holds a tenant context for a webhook, and the notice's body is stored nowhere (it is only a hint to
 --      pull; no transaction is read from it).
 --   2. The worker relay claims them with bank_feed_notice_claim() and queues one sync per connection that lists such an
---      account (finance-bank-feed-sync, 20261108100000). The org and the connection come from the stored listing, never
+--      account (finance-bank-feed-sync, 20261108100000), at most one a short time slot per connection. The org and the connection come from the stored listing, never
 --      from the notice, so an account no connection lists is dropped, and a notice can only ask for a pull of a
 --      connection that already exists: a sync pulls what the provider reports, as the daily sweep does.
 --
 -- bank_feed_notice_pending is a global machinery table (no org_id, nothing about an org): one row per (provider, account)
--- waiting, so a burst of notices for one account is one pull. Only the two definers below touch it.
+-- waiting until the relay claims it, and the sync it asks for is one a time slot per connection (the relay's
+-- singletonSeconds), so a burst of notices, a provider's retries or a replay is a few pulls, not one each. Only the two
+-- definers below touch it.
 SET LOCAL lock_timeout = '2s';
+
+-- The claim finds connections by the account id a notice names, across orgs.
+CREATE INDEX IF NOT EXISTS bank_feed_listed_account_external_idx ON crove_finance.bank_feed_listed_account (external_account_id);
 
 CREATE TABLE IF NOT EXISTS crove_finance.bank_feed_notice_pending (
   seq bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -71,7 +76,7 @@ LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
     RETURNING p.provider, p.external_account_id
   ),
   matched AS (
-    SELECT claimed.external_account_id AS account, c.org_id AS m_org, c.id AS m_connection, c.provider AS m_provider
+    SELECT claimed.provider AS m_claimed_provider, claimed.external_account_id AS account, c.org_id AS m_org, c.id AS m_connection, c.provider AS m_provider
     FROM claimed
     JOIN crove_finance.bank_feed_listed_account l ON l.external_account_id = claimed.external_account_id
     JOIN crove_kernel.channel_connection c ON c.org_id = l.org_id AND c.id = l.channel_connection_id AND c.provider = claimed.provider
@@ -80,7 +85,8 @@ LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
   )
   SELECT m.m_org, m.m_connection, m.m_provider FROM matched m
   UNION ALL
-  SELECT NULL::uuid, NULL::uuid, NULL::text FROM claimed WHERE NOT EXISTS (SELECT 1 FROM matched m2 WHERE m2.account = claimed.external_account_id)
+  SELECT NULL::uuid, NULL::uuid, NULL::text FROM claimed
+  WHERE NOT EXISTS (SELECT 1 FROM matched m2 WHERE m2.account = claimed.external_account_id AND m2.m_claimed_provider = claimed.provider)
 $$;
 
 REVOKE ALL ON FUNCTION crove_finance.bank_feed_notice_enqueue(text, text[]), crove_finance.bank_feed_notice_claim(integer)

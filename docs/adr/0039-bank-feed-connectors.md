@@ -90,7 +90,7 @@ The question is how API feeds fit Ludy. They must not:
   - **connect:** link an org's bank accounts, through the provider's own flow;
   - **list accounts**;
   - **pull transactions since a cursor**, returning lines and the next cursor;
-  - **verify a webhook:** check its signature and timestamp, and name the connection it is for.
+  - **verify a webhook:** check its signature and timestamp, and name the provider's accounts it is about (the worker finds the connections that list them).
 
   There is **no payment capability** in the interface. An adapter for a provider that also offers payments (Tingee's "Chi hộ") implements none of it, and review refuses one that calls such an endpoint.
 - **Connections and credentials** reuse the kernel's channel layer:
@@ -107,7 +107,10 @@ The question is how API feeds fit Ludy. They must not:
 - **Webhooks.** A public route `POST /api/bank-feed/<adapter>/webhook`:
   - is on the reasoned public list (ADR-0028 route enumeration);
   - verifies the signature through the adapter, with the deployment's secret, and refuses anything older than the adapter's window;
-  - only queues a sync for the connection it names.
+  - only asks the worker for a pull: it names the provider's accounts, never an org or a connection. The worker finds the
+    active connections of active orgs whose last listing holds an account, and queues one sync of each, at most one a
+    short time slot. The org comes from that stored listing, never from the notice, so a notice can only ask for a pull
+    of a connection that already exists, and a pull takes what the provider reports.
 
   It never stores the transaction in its body. Lines come only from a pull, so a forged or replayed webhook can at most trigger a harmless sync.
 

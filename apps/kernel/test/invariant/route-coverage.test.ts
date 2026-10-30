@@ -76,6 +76,8 @@ function app(authenticate: HttpDeps['authenticate']) {
     pool: {} as pg.Pool,
     aiEnabled: false,
     mailer: { name: 'test', enabled: true, sendRetrySafety: 'unsafe', send: unused, parseWebhook: () => [] } as unknown as NonNullable<HttpDeps['mailer']>,
+    // An adapter that takes signed notices, so the bank feed route is registered and listed (ADR-0039, #2044).
+    bankFeedWebhooks: { bank_sandbox: { id: 'bank_sandbox', hosts: [], verifyWebhook: () => [] } } as unknown as NonNullable<HttpDeps['bankFeedWebhooks']>,
     stream: { hub: { ready: false }, tickets: unused, slots: unused, recheckSeconds: 30 } as unknown as NonNullable<HttpDeps['stream']>,
   });
 }

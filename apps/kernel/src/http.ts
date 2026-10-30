@@ -97,9 +97,6 @@ import { exportAad, exportSealer } from './export-seal.ts';
 import { MAX_EMAIL_BYTES, acceptInboundEmail, secretMatches } from './inbound.ts';
 import { MAX_MAIL_WEBHOOK_BYTES, acceptMailWebhook } from './mail-events.ts';
 import { MAX_BANK_FEED_WEBHOOK_BYTES, acceptBankFeedWebhook } from './bank-feed-webhook.ts';
-
-// Signed notices one client address may post a minute: a provider posts a few per bank event, from a handful of addresses.
-const BANK_FEED_WEBHOOKS_PER_MINUTE = 120;
 import type { BankFeedProvider } from '@crove/bank-feed';
 import { createInviteMailSender } from './invite-mail.ts';
 import { pgBossSchemaVersion } from './jobs-schema.ts';
@@ -354,6 +351,8 @@ const AUTH_PUBLIC_PATHS =
   /^\/(?:token|signup|verify|recover|user|logout|otp|resend|settings|health|authorize|callback|reauthenticate|factors(?:\/[\w-]+(?:\/(?:challenge|verify))?)?|\.well-known\/jwks\.json)$/;
 // The status page re-reads the prober's file at most this often (#678).
 const STATUS_CACHE_MS = 5_000;
+// Signed notices one client address may post a minute: a provider posts a few per bank event, from a handful of addresses.
+const BANK_FEED_WEBHOOKS_PER_MINUTE = 120;
 const MAX_FILES_PER_UPLOAD = 5;
 // A Social video (#409) is one file of up to 100 MB; a batch of documents stays under 60 MB.
 const UPLOAD_BODY_LIMIT = MAX_SOCIAL_VIDEO_BYTES + 2 * 1024 * 1024;
@@ -634,7 +633,8 @@ export function createHttpApp(deps: HttpDeps) {
 
   // A bank feed provider's signed notice (ADR-0039, #2044): public like the mail provider's, checked by the adapter's
   // signature before anything else, rate limited per client address, and only queued: it asks the worker for a pull of a
-  // connection that lists the account it names. Any other provider name, or an adapter with no notices, is a 404.
+  // connection that lists the account it names. A provider name no adapter here takes notices for is a 404; with no
+  // adapter taking any, the route does not exist.
   const bankFeedWebhooks = deps.bankFeedWebhooks;
   if (bankFeedWebhooks && Object.keys(bankFeedWebhooks).length > 0 && runtime.installed('finance')) {
     const noticeLimit = deps.bankFeedWebhookLimit ?? new RateLimiter({ perMinute: BANK_FEED_WEBHOOKS_PER_MINUTE });

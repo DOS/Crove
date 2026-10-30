@@ -116,6 +116,10 @@ describe('the sandbox notice (ADR-0039)', () => {
     expect(reason(notice('{"accounts":[]}'))).toBe('malformed');
     expect(reason(notice(`{"accounts":${JSON.stringify(Array.from({ length: 101 }, (_, i) => `A${i}`))}}`))).toBe('malformed');
     expect(reason(notice('{"accounts":[1]}'))).toBe('malformed');
+    // A control character in an account id would make the database refuse it: refused as malformed instead.
+    expect(reason(notice('{"accounts":["SBX\\u0000001"]}'))).toBe('malformed');
+    // A timestamp in seconds, or padded, is not the 13 digits the provider sends.
+    expect(reason(notice(body, { timestamp: Math.floor(NOW / 1000) }))).toBe('signature');
     expect(reason(notice(body))).toBe('accepted');
   });
 });

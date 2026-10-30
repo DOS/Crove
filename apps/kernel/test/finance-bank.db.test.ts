@@ -659,7 +659,8 @@ suite('bank statement import (#326)', () => {
     // An adapter this deployment does not have, and a deployment without notices.
     expect((await notice(['SBX-001'], {}, feedApp, 'bank_nothing')).status).toBe(404);
     expect((await notice(['SBX-001'], {}, feedApp, 'constructor')).status).toBe(404);
-    expect((await notice(['SBX-001'], {}, app)).status).toBe(404);
+    // A deployment whose adapters take no notices has no such route: the POST falls to the authenticated API and is refused.
+    expect((await notice(['SBX-001'], {}, app)).status).toBe(401);
     expect(await waiting()).toBe(0);
   });
 
