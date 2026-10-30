@@ -2,8 +2,8 @@
 // reversal, then revision 2. The lists that join a source to its entry keep the latest revision only
 // (modules/finance/src/source-entry.ts), so a cash voucher posted again shows once, with its revision 2 entry. A
 // purchase or sale document is posted once (#1928): its revision 2 is refused, and it shows once, voided.
-// The entries are written by the database owner, as the posting path would leave them; the lists are read through the
-// runtime as the org's owner.
+// The entries are written by the database owner, as the posting path would leave them (one refusal also goes through
+// the posting path, in the owner's context); the lists are read through the runtime as the org's owner.
 // Set CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -178,7 +178,7 @@ suite('a re-posted source counts once in the finance lists (#1338)', () => {
     expect(await query('finance.documents.get', { id: document })).toMatchObject({ id: document, journalEntryId: first, voided: { reversalEntryId: reversal } });
     expect(await query<unknown[]>('finance.vouchers.purchases', { from: '2026-09-01', to: '2026-09-30' })).toEqual([]);
     const journal = await query<Array<{ id: string }>>('finance.journal.list', { from: '2026-09-01', to: '2026-09-30' });
-    expect(journal.map((e) => e.id).filter((id) => id === first || id === reversal).sort()).toEqual([first, reversal].sort());
+    expect(journal.map((e) => e.id).sort()).toEqual([first, reversal].sort());
     expect((await query<Array<{ format: string }>>('finance.document.exports', { documentId: document })).map((h) => h.format)).toEqual(['journal']);
   });
 
