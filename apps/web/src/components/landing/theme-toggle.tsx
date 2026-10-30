@@ -1,7 +1,7 @@
 'use client';
 
 import { Moon, Sun } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 type Theme = 'light' | 'dark';
 
@@ -13,20 +13,31 @@ function currentTheme(): Theme {
 // Flips between light and dark and remembers the choice; until the visitor picks, the page is light.
 export function ThemeToggle({ toLight, toDark }: { toLight: string; toDark: string }) {
   const [theme, setTheme] = useState<Theme | null>(null);
+  // The theme the last click asked for, which the page may not show yet (see flip).
+  const wanted = useRef<Theme | null>(null);
 
   useEffect(() => {
-    setTheme(currentTheme());
+    // A click before this effect ran already chose the theme, which the page may not show yet (see flip).
+    setTheme(wanted.current ?? currentTheme());
   }, []);
 
   const flip = () => {
-    const next: Theme = currentTheme() === 'dark' ? 'light' : 'dark';
-    document.documentElement.setAttribute('data-theme', next);
+    const next: Theme = (wanted.current ?? currentTheme()) === 'dark' ? 'light' : 'dark';
+    wanted.current = next;
     try {
       localStorage.setItem('crove-theme', next);
     } catch {
       // Storage may be blocked; the choice then lasts for this page view.
     }
     setTheme(next);
+    // The new theme restyles every element of the page, which takes 100 ms and more on a slow phone (#1668). The
+    // button's own icon answers the click first; the page follows in the task after the next paint, so the click is
+    // not held up by the restyle.
+    requestAnimationFrame(() =>
+      setTimeout(() => {
+        if (wanted.current === next) document.documentElement.setAttribute('data-theme', next);
+      }, 0),
+    );
   };
 
   const label = theme === 'dark' ? toLight : toDark;
