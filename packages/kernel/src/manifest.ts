@@ -69,7 +69,7 @@ export const kernelManifest = defineModule({
       role_permission: columns(['role_key', 'permission']),
       security_event: columns(['id', 'window_start', 'caller', 'command', 'code', 'target_org', 'overflow', 'refusals', 'first_at', 'last_at']),
       security_signal_seen: columns(['signal', 'subject', 'alerted_at']),
-      task: columns(['org_id', 'id', 'title', 'description', 'kind', 'assignee_position_id', 'parent_task_id', 'source', 'source_ref', 'source_event_id', 'created_by_type', 'created_by_id', 'created_by_run', 'status', 'due', 'request_depth', 'tainted', 'checkout_run_id', 'lock_expires_at', 'fence', 'created_at', 'updated_at', 'legal_entity_id'], { pending_draft: 'pii' }),
+      task: columns(['org_id', 'id', 'kind', 'assignee_position_id', 'parent_task_id', 'source', 'source_ref', 'source_event_id', 'created_by_type', 'created_by_id', 'created_by_run', 'status', 'due', 'request_depth', 'tainted', 'checkout_run_id', 'lock_expires_at', 'fence', 'created_at', 'updated_at', 'legal_entity_id'], { title: 'pii', description: 'pii', pending_draft: 'pii' }),
       task_comment: columns(['org_id', 'id', 'task_id', 'author_type', 'author_id', 'run_id', 'tainted', 'created_at'], { body: 'pii' }),
       tax_obligation_done: columns(['org_id', 'id', 'obligation', 'period', 'done_by', 'done_at', 'legal_entity_id']),
       tax_profile: columns(['org_id', 'id', 'obligations', 'pit_filing_period', 'fiscal_year_end_month', 'updated_by', 'created_at', 'updated_at']),

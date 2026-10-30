@@ -15,7 +15,7 @@ How an owner of an org answers a person who asks to see or to erase the data the
 3. **Tải JSON** downloads the rows found. Send the file to the person through a channel that only they can open. It holds their data and nobody else's, but check it before sending.
 4. **Notes and to-dos** (#1678): the search also looks inside their text, for the whole address or the digits however they are spaced. A shared note that holds the value is listed with its text. Members' private notes and to-dos are only counted, per author ("2 ghi chú riêng của 1 thành viên"), never shown, not even your own: only their author reads them. Ask those members to look at them; the person's request may cover them.
 
-The search covers the columns listed in `packages/kernel/src/personal-data.ts`. An invariant test keeps that list complete for columns whose name looks like personal data (emails, phones, addresses, tax codes, names of people, recipients). It also searches free text for the value anywhere inside it (#1948): activity lines, task comments, journal entry descriptions, and the reasons written on phiếu thu, phiếu chi and journal vouchers. A phone number is found however it is spelled, but never inside a longer number. See section 5 for what it does not search.
+The search covers the columns listed in `packages/kernel/src/personal-data.ts`. An invariant test keeps that list complete for columns whose name looks like personal data (emails, phones, addresses, tax codes, names of people, recipients). It also searches free text for the value anywhere inside it (#1948, #1961): activity lines, task titles, descriptions and comments, journal entry descriptions and journal line memos, the reasons written on phiếu thu, phiếu chi and journal vouchers, and imported bank statement lines. A phone number is found however it is spelled, but never inside a longer number. See section 5 for what it does not search.
 
 ## 3. Erase on request
 
@@ -28,14 +28,15 @@ The search covers the columns listed in `packages/kernel/src/personal-data.ts`. 
      - the recipient of mails Ludy sent;
      - the org's contact email;
      - the address in Social report schedules (a schedule left with nobody to mail is deleted);
-     - the value wherever an activity line quotes it: it is replaced by "[đã xóa]" inside the line, and the line itself stays (#1948). A number of 8 or 9 digits (an old ID card number) is not replaced in activity lines, since it may as well be an amount or a voucher number there: the result lists those lines with that reason, for you to check.
+     - the value wherever an activity line, or a task's title or description, quotes it: it is replaced by "[đã xóa]" inside the text, and the line or the task itself stays (#1948, #1961). A number of 8 or 9 digits (an old ID card number) is not replaced in activity lines or tasks, since it may as well be an amount or a voucher number there: the result lists them with that reason, for you to check.
 
      A party that no recorded invoice, voucher or journal line names also loses its tax code, and its name becomes "Đã xóa theo yêu cầu".
    - **Kept by law** (Accounting Law 88/2015, Art. 41: at least 10 years):
      - the name and tax code of a party on recorded invoices, vouchers or journal lines;
      - the name and tax code of a legal entity the org keeps books for (**Cài đặt > Pháp nhân**): a client company, a branch, or a household business, whose 12-digit code is its owner's national ID number (#1312). The org's default entity is the org itself and is reported as the org's own. The org purge keeps every entity until the lawyer decides otherwise (#1315);
      - the payer or payee named on a phiếu thu or phiếu chi;
-     - the description of a journal entry and the reason written on a phiếu thu, phiếu chi or journal voucher that quotes the value (#1948);
+     - the description of a journal entry, the memo of a journal line and the reason written on a phiếu thu, phiếu chi or journal voucher that quotes the value (#1948, #1961);
+     - an imported bank statement line that quotes the value, as the bank wrote it (#1961);
      - the tax portal's invoice lists;
      - the original files of posted invoices that name the party (`crove_kernel.file`), with the date their retention hold runs to: erasure clears data in the database only and never deletes a stored file (#1009, `docs/runbooks/evidence-holds.md`).
    - **Kept in a record:**
