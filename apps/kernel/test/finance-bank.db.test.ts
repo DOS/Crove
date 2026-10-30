@@ -408,7 +408,7 @@ suite('bank statement import (#326)', () => {
     const lines = [feedLine('2026-11-15', '10000', 'FT9200')];
     const legalEntityId = await defaultEntity();
     // On the API's runtime, where an owner's context opens: the command itself refuses anyone but the system.
-    await expect(api.execute('finance.bank.ingest', { bankAccount: '1121.VCB', legalEntityId, source: 'sandbox', lines }, { actor: { type: 'user', userId: owner.userId, aal: 'aal2' }, orgId })).rejects.toMatchObject({
+    await expect(api.execute('finance.bank.ingest', { bankAccount: '1121.VCB', legalEntityId, source: 'sandbox', lines }, { actor: { type: 'user', userId: owner.userId, aal: 'aal2', sessionId: owner.session, mfaAt: null }, orgId })).rejects.toMatchObject({
       code: 'FORBIDDEN',
       message: 'Không có quyền thực hiện',
     });
