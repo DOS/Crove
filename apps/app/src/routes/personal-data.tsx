@@ -2,7 +2,8 @@
 // code or national ID, see every row of the org that holds it and what an erasure would do to each, and download the
 // rows as JSON for the person's request to see their data. An owner can then erase it (R3: a fresh second factor),
 // after confirming; the result lists what was erased and what the law or a record keeps. Members' private notes and
-// to-dos that mention the value are only counted, per author, never shown (#1678, ADR-0037).
+// to-dos that mention the value are only counted, per author, never shown (#1678, ADR-0037): the owner tells their
+// authors first, and the erasure then deletes the ones a notice named and edits the value out of shared notes.
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslations } from 'use-intl';
@@ -35,7 +36,17 @@ export function PersonalDataPage() {
   const canRead = org.data?.role === 'owner' || org.data?.role === 'admin';
   const [draft, setDraft] = useState('');
   const [value, setValue] = useState('');
-  const found = useQuery({ ...orpc.org.personalData.queryOptions({ input: { value } }), enabled: canRead && value.length >= 3, retry: false });
+  // Each search is a command that leaves an audit row (#1678): run on each submit, not again on focus; an erasure, an
+  // access change or a resync of the stream runs it again, which leaves another row. An answer no longer shown is
+  // dropped (gcTime 0), so searching a value again asks the server again.
+  const found = useQuery({
+    ...orpc.org.personalData.queryOptions({ input: { value } }),
+    enabled: canRead && value.length >= 3,
+    retry: false,
+    staleTime: Infinity,
+    gcTime: 0,
+    refetchOnWindowFocus: false,
+  });
   const isOwner = org.data?.role === 'owner';
   const [confirming, setConfirming] = useState(false);
   // One key per confirmed erasure: a retry after the second factor returns the same result.
@@ -49,9 +60,13 @@ export function PersonalDataPage() {
     }),
   );
   const eraseNow = () => erase.mutate({ value, idempotencyKey });
-  // Notes are not erased yet (#1678): a match only in a note offers no erasure.
-  const hasErasable = found.data?.matches.some((m) => m.handling === 'erase' && !m.column.startsWith('crove_notes.')) ?? false;
-  const hasAny = (found.data?.matches.length ?? 0) > 0 || (found.data?.privateItems.length ?? 0) > 0;
+  // The notice to the authors of private items, with a key of its own: a retry tells nobody twice.
+  const [noticeKey, setNoticeKey] = useState(() => crypto.randomUUID());
+  const notify = useMutation(orpc.org.personalDataNotify.mutationOptions());
+  const privateItems = found.data?.privateItems ?? [];
+  const hasPrivate = privateItems.length > 0;
+  const hasErasable = (found.data?.matches.some((m) => m.handling === 'erase') ?? false) || hasPrivate;
+  const hasAny = (found.data?.matches.length ?? 0) > 0 || hasPrivate;
   const nameOf = (userId: string) => {
     const member = org.data?.members.find((m) => m.userId === userId);
     return member ? (member.displayName ?? member.email) : t('formerMember');
@@ -70,10 +85,14 @@ export function PersonalDataPage() {
         className="mb-4 flex max-w-xl flex-wrap gap-2"
         onSubmit={(event) => {
           event.preventDefault();
+          // The same value again: search again (the key does not change, so the query would not run).
+          if (draft.trim() === value) void found.refetch();
           setValue(draft.trim());
           erase.reset();
+          notify.reset();
           setConfirming(false);
           setIdempotencyKey(crypto.randomUUID());
+          setNoticeKey(crypto.randomUUID());
         }}
       >
         <Input className="min-w-64 flex-1" placeholder={t('placeholder')} aria-label={t('placeholder')} value={draft} onChange={(e) => setDraft(e.target.value)} />
@@ -139,23 +158,35 @@ export function PersonalDataPage() {
         <Empty title={t('none')} />
       ) : (
         <>
-          {found.data.privateItems.length > 0 && (
+          {found.data.privateItems === null && <p className="mb-4 max-w-3xl text-xs text-muted-foreground">{t('privateOwnersOnly')}</p>}
+          {privateItems.length > 0 && (
             <div className="mb-4 max-w-3xl space-y-1 rounded-lg border p-3 text-sm" data-testid="private-items">
               <p className="font-medium text-foreground">
                 {t('privateSummary', {
                   items: items(
-                    found.data.privateItems.reduce((sum, p) => sum + p.notes, 0),
-                    found.data.privateItems.reduce((sum, p) => sum + p.todos, 0),
+                    privateItems.reduce((sum, p) => sum + p.notes, 0),
+                    privateItems.reduce((sum, p) => sum + p.todos, 0),
                   ),
-                  authors: found.data.privateItems.length,
+                  authors: privateItems.length,
                 })}
               </p>
-              {found.data.privateItems.map((p) => (
+              {privateItems.map((p) => (
                 <p key={p.authorUserId} className="text-xs text-muted-foreground">
                   {t('privateAuthor', { name: nameOf(p.authorUserId), items: items(p.notes, p.todos) })}
                 </p>
               ))}
               <p className="pt-1 text-xs text-muted-foreground">{t('privateHint')}</p>
+              {isOwner && !erase.data && (
+                <div className="flex flex-wrap items-center gap-2 pt-2">
+                  <Button variant="outline" size="sm" disabled={notify.isPending || notify.isSuccess} onClick={() => notify.mutate({ value, idempotencyKey: noticeKey })}>
+                    {notify.isPending ? <Spinner className="text-current" /> : null}
+                    {t('notify')}
+                  </Button>
+                  {notify.data && <span className="text-xs text-foreground">{t('notified', { authors: notify.data.told })}</span>}
+                  {notify.error && <ErrorText>{errorMessage(notify.error)}</ErrorText>}
+                </div>
+              )}
+              {isOwner && <p className="text-xs text-muted-foreground">{t('notifyHint')}</p>}
             </div>
           )}
           {found.data.truncated && <p className="mb-2 text-sm text-warning">{t('truncated')}</p>}

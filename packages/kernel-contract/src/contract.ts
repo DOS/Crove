@@ -230,7 +230,7 @@ import { zBankImportPreview, zBankImportResult, zBankLineVoucher, zBankLines, zB
 import { zTimeline } from './timeline.ts';
 import { zMisaCode, zMisaGoodsCode } from './misa-goods.ts';
 import { zAuditCursor, zAuditExport, zAuditFilter, zAuditPage } from './audit.ts';
-import { zPersonalDataErasure, zPersonalDataQuery, zPersonalDataResult } from './personal-data.ts';
+import { zPersonalDataErasure, zPersonalDataNotice, zPersonalDataQuery, zPersonalDataResult } from './personal-data.ts';
 
 // Proposal reminders (issue #676): days before the approvers are reminded and before the owners are told; and expiry
 // (#876): days after which a proposal still pending expires. Expiry needs the escalation and comes after it.
@@ -298,6 +298,9 @@ export const contract = {
     // Owners only (issue #923). R3: needs fresh MFA. Erases the person's data the finder shows as "erase" and lists
     // what it kept and why. A retry with the same idempotencyKey returns the first result.
     personalDataErase: oc.input(zPersonalDataQuery.extend({ idempotencyKey: zId })).output(zPersonalDataErasure),
+    // Owners only (issue #1678, ADR-0037 section 5): tells the authors of private notes and to-dos that mention the value
+    // how many of theirs do, before an erasure, which deletes only what a notice named.
+    personalDataNotify: oc.input(zPersonalDataQuery.extend({ idempotencyKey: zId })).output(zPersonalDataNotice),
     // Owners and admins (admins cannot invite admins). R3: needs fresh MFA. Nobody becomes a member until the
     // invitee accepts (invites.accept). The answer is the same whether or not the email has an account.
     // An owner may scope the invite to legal entities (#1281): the invitee joins as a member or viewer holding the
