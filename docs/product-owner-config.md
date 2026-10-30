@@ -44,17 +44,19 @@ turn on `sprint_review` with `line_scopes`.
 
 | Line | Label | Product Line option id | PO session |
 | --- | --- | --- | --- |
-| Accounting (Ludy Kế toán: ledger, VAT, invoices, bank feeds, MISA, `modules/finance`) | `line:accounting` | `562aca23` | `Accounting Product Owner` |
-| Frontend (UI/UX: the app in `apps/app`, `packages/ui`, the landing page ludy.vn in `apps/web`, the logo) | `line:frontend` | `282ba7ab` | `Frontend Product Owner` |
-| Notes & CRM (notes, to-dos, bookings and calendar) | `line:notes-crm` | `74c4de31` | `Notes & CRM Product Owner` |
-| Social Management (`modules/social`) | `line:social-management` | `5fea8aae` | `Social Management Product Owner` |
+| Accounting (Ludy Kế toán: ledger, VAT, invoices, bank feeds, MISA, `modules/finance`) | `line:accounting` | `c6def6cf` | `Accounting Product Owner` |
+| Frontend (UI/UX: the app in `apps/app`, `packages/ui`, the landing page ludy.vn in `apps/web`, the logo) | `line:frontend` | `b395d36d` | `Frontend Product Owner` |
+| Notes & CRM (notes, to-dos, bookings and calendar) | `line:notes-crm` | `b8743ac2` | `Notes & CRM Product Owner` |
+| Social Management (`modules/social`) | `line:social-management` | `735657ce` | `Social Management Product Owner` |
+| Platform (the shared backend core: kernel, database, tenancy, authentication and sessions, the command runtime, the WORM archive; architecture and ADRs; security reviews; CI, deploy and operations) | `line:platform` | `3d3f0729` | `0: Điều phối` (the coordinator session) |
 
 - Social is paused (decision D5): its PO starts work only once JOY reopens
   it (the open question on #236).
-- Kernel, security, authentication, the WORM archive, CI, deploy and
-  operations have no line of their own. The coordinator session (`0: Điều
-  phối`, AGENTS.md) keeps them and runs the security review of every
-  protected-path PR.
+- Platform owns what every line builds on, not the features: a line's own
+  feature stays with that line even when it adds a migration or a kernel
+  command. Platform owns the shared core itself, the architecture (ADRs),
+  CI, deploy and operations. Its PO, the coordinator session, also runs the
+  Opus security review of every protected-path PR from any line.
 - Each line owns its feature's behavior and data; Frontend owns presentation
   and UX across the apps.
 
