@@ -1,9 +1,10 @@
-// HTTP face of crove-extract. One endpoint: POST /extract?kind=<einvoice_xml|pdf_text|mime> with the raw bytes
+// HTTP face of crove-extract. One endpoint: POST /extract?kind=<one of EXTRACT_KINDS> with the raw bytes
 // as the body; the answer is the JSON of @crove/extract-contract. Only the worker calls it, over an internal
 // network; the service holds no credentials, so it has nothing to authenticate with and nothing to leak.
 import { Hono, type Context } from 'hono';
 import {
   EXTRACT_ERROR_STATUS,
+  EXTRACT_KINDS,
   EXTRACT_TIMING,
   maxRequestBytes,
   zExtractKind,
@@ -149,7 +150,7 @@ export function createExtractApp(options: ExtractAppOptions = {}) {
 
   app.post('/extract', async (c) => {
     const kind = zExtractKind.safeParse(c.req.query('kind'));
-    if (!kind.success) return answer(c, failure('bad_request', 'kind must be one of einvoice_xml, pdf_text, mime, zip'));
+    if (!kind.success) return answer(c, failure('bad_request', `kind must be one of ${EXTRACT_KINDS.join(', ')}`));
     const max = maxRequestBytes(kind.data);
     const tooLarge = failure('too_large', `input is larger than ${max} bytes`);
     const declared = Number(c.req.header('content-length') ?? Number.NaN);

@@ -58,6 +58,33 @@ describe('the Ludy logo (#2052)', () => {
     }
   });
 
+  it('letters "Ludy" the same in the light and the dark wordmark, in a box as high as the mark (#2059)', () => {
+    const wordmark = (file: string) => {
+      const text = read(`${BRAND}/${file}`);
+      const paths = [...text.matchAll(/<path fill="[^"]+" d="([^"]+)"\/>/g)].map((m) => m[1] ?? '');
+      return { lettering: paths[2] ?? '', box: /viewBox="(0 0 \d+ \d+)"/.exec(text)?.[1] };
+    };
+    const light = wordmark('ludy-wordmark.svg');
+    const dark = wordmark('ludy-wordmark-dark.svg');
+    expect(light.lettering).toMatch(/^M\d/);
+    expect(dark).toEqual(light);
+    expect(light.box).toMatch(/^0 0 \d+ 92$/);
+    // The lettering stays inside the box. Every command of the path (M, L, Q) has absolute coordinate pairs, so the
+    // numbers alternate x, y.
+    const [, width] = /^0 0 (\d+) /.exec(light.box ?? '') ?? [];
+    const numbers = (light.lettering.match(/-?\d+(?:\.\d+)?/g) ?? []).map(Number);
+    expect(Math.max(...numbers.filter((_, i) => i % 2 === 0))).toBeLessThanOrEqual(Number(width));
+    expect(Math.max(...numbers.filter((_, i) => i % 2 === 1))).toBeLessThanOrEqual(92);
+    expect(Math.min(...numbers)).toBeGreaterThanOrEqual(0);
+  });
+
+  it('serves one Apple touch icon from the landing page and the app, a full white square with no alpha (#2059)', () => {
+    const appIcon = readFileSync(join(ROOT, 'apps/app/public/assets/icon-maskable-512.png'));
+    expect(appIcon.equals(readFileSync(join(ROOT, `${BRAND}/apple-touch-icon.png`)))).toBe(true);
+    // PNG color type 2 is RGB: iOS fills the transparent corners of an icon with black.
+    expect(appIcon[25]).toBe(2);
+  });
+
   it('serves one favicon from the landing page and the app', () => {
     expect(read('apps/app/public/favicon.svg')).toBe(read('apps/web/public/favicon.svg'));
   });

@@ -13,6 +13,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@crove/ui/components/t
 import { cn } from '@crove/ui/lib/utils';
 import { UploadEntityPicker, useChosenEntity, useLegalEntity } from '../components/entity-switcher.tsx';
 import { IntakePanel, useIntake } from '../components/intake.tsx';
+import { ProposalBadges } from '../components/proposal-badges.tsx';
 import { StepUpPrompt } from '../components/two-factor.tsx';
 import { DataTable, Empty, ErrorText, PageHeader, Spinner, TableSkeleton } from '../components/ui.tsx';
 import { client, errorMessage, isStepUpRequired, orpc, queryClient } from '../lib/api.ts';
@@ -33,7 +34,6 @@ import {
   planBatches,
   proposalName,
   sendBatches,
-  showMatched,
   steppedIndex,
   type BulkBatch,
   type BulkProgress,
@@ -367,7 +367,7 @@ export function InboxPage() {
     links[at]?.scrollIntoView({ block: 'nearest' });
   };
   useReviewShortcuts({ next: () => moveFocus(1), previous: () => moveFocus(-1) });
-  // The bulk checkbox and the check badges of one proposal, for the table and the phone's blocks alike (#1270).
+  // The bulk checkbox of one proposal, for the table and the phone's blocks alike (#1270); its badges are ProposalBadges.
   const selectBox = (item: InboxItem) =>
     bulkSelectable(item, REVERSAL_KIND) ? (
       <Checkbox
@@ -386,23 +386,6 @@ export function InboxPage() {
     ) : (
       <Checkbox checked={false} disabled aria-label={t('bulk.notSelectable')} title={t('bulk.notSelectable')} />
     );
-  const checkBadges = (item: InboxItem) => (
-    <div className="flex flex-wrap gap-1">
-      {/* A reversal a user asked for has no invoice checks; its card shows the entry it reverses. */}
-      {item.kind === REVERSAL_KIND && <Badge variant="secondary">{t('reversalKind')}</Badge>}
-      {item.kind === VOUCHER_KIND && <Badge variant="secondary">{t('voucherKind')}</Badge>}
-      {item.kind === JOURNAL_VOUCHER_KIND && <Badge variant="secondary">{t('journalVoucherKind')}</Badge>}
-      {item.direction === 'sale' && <Badge variant="secondary">{t('saleKind')}</Badge>}
-      {item.duplicateOf && <Badge variant="warning">{t('maybeDuplicate')}</Badge>}
-      {item.signatureStatus === 'unverified' && <Badge variant="destructive">{t('signatureUnverified')}</Badge>}
-      {item.failedChecks > 0 && <Badge variant="destructive">{t('failedChecks', { count: item.failedChecks })}</Badge>}
-      {item.warnChecks > 0 && <Badge variant="warning">{t('warnChecks', { count: item.warnChecks })}</Badge>}
-      {item.requestedByAgent && <Badge variant="proposal">{t('agentProposed', { name: item.requestedByAgent.name })}</Badge>}
-      {showMatched(item, REVERSAL_KIND, VOUCHER_KIND, JOURNAL_VOUCHER_KIND) && (
-        <Badge variant="success">{t('matched')}</Badge>
-      )}
-    </div>
-  );
 
   // The browser may refuse the clipboard: say so, and the address stays on screen to select (#1384).
   const copyAddress = (address: string) =>
@@ -704,7 +687,7 @@ export function InboxPage() {
                   <TableCell className="px-4 py-3 text-right text-foreground tabular-nums">{f.money(item.total)}</TableCell>
                   {showEntity && <TableCell className="px-4 py-3 text-muted-foreground">{entityOf(item)}</TableCell>}
                   <TableCell className="px-4 py-3">
-                    {checkBadges(item)}
+                    <ProposalBadges item={item} />
                   </TableCell>
                   <TableCell className="px-4 py-3 text-xs text-subtle-foreground">{f.dateTime(item.createdAt)}</TableCell>
                 </TableRow>
@@ -728,7 +711,7 @@ export function InboxPage() {
                     {item.status === 'expired' && item.expiredAfterDays !== null && (
                       <p className="text-xs text-warning">{t('expiredReason', { days: item.expiredAfterDays })}</p>
                     )}
-                    {checkBadges(item)}
+                    <ProposalBadges item={item} />
                   </div>
                 </li>
               ))}

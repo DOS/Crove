@@ -5,6 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- The icon iOS puts on the home screen (issue #2059): the maskable install icon, a full white square with the mark
+         inside, since iOS fills the transparent corners of the other icons with black. Under /assets, which the kernel
+         serves. -->
+    <link rel="apple-touch-icon" sizes="512x512" href="/assets/icon-maskable-512.png" />
     <!-- The installable app and its share target (issue #1235); under /assets, which the kernel serves, like theme-boot.js. -->
     <link rel="manifest" href="/assets/manifest.webmanifest" />
     <!-- Applies the stored theme before the first paint (issue #484); under /assets because the kernel serves only that

@@ -216,7 +216,7 @@ describe('the web app manifest', () => {
     start_url: string;
     scope: string;
     display: string;
-    icons: Array<{ src: string }>;
+    icons: Array<{ src: string; purpose?: string }>;
     share_target: { action: string; method: string; params: Record<string, string> };
   };
 
@@ -230,5 +230,13 @@ describe('the web app manifest', () => {
   it('uses icons the app ships, and is linked from index.html under /assets, which the kernel serves', () => {
     for (const icon of manifest.icons) expect(existsSync(join(app, 'public', icon.src))).toBe(true);
     expect(readFileSync(join(app, 'index.html'), 'utf8')).toContain('<link rel="manifest" href="/assets/manifest.webmanifest" />');
+  });
+
+  it('links the maskable install icon as the Apple touch icon, a file the app ships (#2059)', () => {
+    const html = readFileSync(join(app, 'index.html'), 'utf8');
+    const link = /<link rel="apple-touch-icon"[^>]*href="([^"]+)"/.exec(html);
+    expect(link?.[1]).toBe('/assets/icon-maskable-512.png');
+    expect(existsSync(join(app, 'public', link?.[1] ?? ''))).toBe(true);
+    expect(manifest.icons).toContainEqual(expect.objectContaining({ src: link?.[1], purpose: 'maskable' }));
   });
 });
