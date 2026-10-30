@@ -18,8 +18,10 @@ ALTER TABLE crove_kernel.task ADD COLUMN IF NOT EXISTS pending_draft jsonb;
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint WHERE conname = 'task_pending_draft_shape' AND conrelid = 'crove_kernel.task'::regclass) THEN
+    -- The command holds the payload to 64 KiB of compact JSON (MAX_DRAFT_PAYLOAD_BYTES); jsonb's text form adds spaces,
+    -- so this is a backstop at four times that.
     ALTER TABLE crove_kernel.task ADD CONSTRAINT task_pending_draft_shape
-      CHECK (pending_draft IS NULL OR (pg_catalog.jsonb_typeof(pending_draft) = 'object' AND pg_catalog.octet_length(pending_draft::text) <= 72000));
+      CHECK (pending_draft IS NULL OR (pg_catalog.jsonb_typeof(pending_draft) = 'object' AND pg_catalog.octet_length(pending_draft::text) <= 262144));
   END IF;
 END $$;
 

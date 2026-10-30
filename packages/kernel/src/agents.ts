@@ -1766,6 +1766,9 @@ export const createAgentProposal = defineCommand({
     }
     // The draft the request names, taken off its task whatever comes next (#1949): no draft stays on a task once its
     // request is answered. Gone or replaced by a later request on the task, it asks for nothing.
+    // A request already answered with a proposal is a duplicate, though its draft has left the task.
+    const existing = await ctx.trx.selectFrom('crove_kernel.proposal').select('id').where('org_id', '=', ctx.orgId).where('request_event_id', '=', event.id).executeTakeFirst();
+    if (existing) return { proposalId: null, reason: 'duplicate' as const };
     let draft: z.infer<typeof zPrepared>;
     if ('draft' in event.data) {
       draft = event.data.draft;
