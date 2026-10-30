@@ -249,6 +249,9 @@ const schema = z.object({
   CREDENTIAL_KEY_PREVIOUS: optional,
   // The offline sandbox channel (Social plan §3.5): connect and publish without any platform account.
   CHANNEL_SANDBOX: z.enum(['true', 'false']).default('true'),
+  // The offline sandbox bank feed (ADR-0039, #2044): off unless asked for, so a deployment shows no bank feed until it
+  // has one.
+  BANK_FEED_SANDBOX: z.enum(['true', 'false']).default('false'),
   // Bluesky (S9): accounts connect with an app password, no app of the deployment's own is needed. On unless false.
   CHANNEL_BLUESKY: z.enum(['true', 'false']).default('true'),
   // Telegram channels (#747): a bot the shop makes with @BotFather posts to its channel; no app of the deployment's own is

@@ -1,7 +1,8 @@
 // oRPC implementation of @crove/kernel-contract. Handlers only call the runtime (execute/query).
 import { implement, ORPCError } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
-import { OAUTH_MAX_ACCOUNTS_PER_GRANT, contract } from '@crove/kernel-contract';
+import { OAUTH_MAX_ACCOUNTS_PER_GRANT, contract, isBankFeedProviderId, zChannelConnection } from '@crove/kernel-contract';
+import { sandboxBankFeed } from '@crove/bank-feed';
 import { BlueskyError, ConnectorError, blueskyLogin, connectBluesky, connectDiscord, connectMastodon, connectTelegram, connectWordPress, discordLogin, mastodonLogin, telegramLogin, wordpressLogin, newOAuthAttempt, oauthStateHash, sandbox, type OAuthConnector } from '@crove/channel';
 import {
   ALT_TEXT_IMAGE_MAX_BYTES,
@@ -205,6 +206,8 @@ export interface RpcChannels {
   broker: CredentialBroker;
   // The offline sandbox channel is enabled (CHANNEL_SANDBOX).
   sandbox: boolean;
+  // The offline sandbox bank feed is enabled (BANK_FEED_SANDBOX, ADR-0039).
+  bankFeedSandbox?: boolean;
   // Bluesky accounts may connect with an app password (CHANNEL_BLUESKY).
   bluesky?: boolean;
   // Telegram channels may connect with a bot token (CHANNEL_TELEGRAM).
@@ -1217,7 +1220,12 @@ export function createRpcHandler(
       },
     },
     channels: {
-      list: os.channels.list.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.query('kernel.channel.list', input, { actor, orgId }))),
+      // Social and messaging channels: a bank feed's connection is the finance screens' (bankFeeds), not a channel to post to.
+      list: os.channels.list.handler(({ context, input }) =>
+        inOrg(context, async (orgId, actor) =>
+          (await runtime.query<Array<z.infer<typeof zChannelConnection>>>('kernel.channel.list', input, { actor, orgId })).filter((c) => !isBankFeedProviderId(c.provider)),
+        ),
+      ),
       // The token is made and sealed here and only the envelope reaches the command. No idempotency key: every seal
       // differs, and connecting the same sandbox key again is already a reconnect of the same account.
       connectSandbox: os.channels.connectSandbox.handler(({ context, input }) =>
@@ -1830,6 +1838,44 @@ export function createRpcHandler(
       ),
       openLines: os.bank.openLines.handler(({ context, input }) =>
         inFinance(context, (orgId, actor) => runtime.query('finance.bank.open_lines', input ?? {}, { actor, orgId })),
+      ),
+    },
+    // Bank feeds (ADR-0039, #2044). The sandbox's secret is made and sealed here, and its accounts listed with it before
+    // it is sealed: the API never opens a credential. The commands check the role again.
+    bankFeeds: {
+      accounts: os.bankFeeds.accounts.handler(({ context }) => inFinance(context, (orgId, actor) => runtime.query('finance.bank_feed.accounts', {}, { actor, orgId }))),
+      connectSandbox: os.bankFeeds.connectSandbox.handler(({ context, input }) =>
+        inFinance(context, async (orgId, actor) => {
+          const { role } = await resolveMembership(runtime, context.user, context.orgSlug);
+          if (role !== 'owner' && role !== 'admin') throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu hoặc quản trị viên mới kết nối được nguồn giao dịch ngân hàng');
+          if (!channels?.bankFeedSandbox) throw new DomainError('BANK_FEED_DISABLED', 404, 'Nguồn giao dịch ngân hàng thử nghiệm chưa được bật');
+          const feed = sandboxBankFeed();
+          const login = feed.connect(input.displayName);
+          const accounts = await feed.accounts(login.secret);
+          const sealed = channels.broker.seal(login.secret, { orgId, provider: login.provider, externalAccountId: login.externalAccountId });
+          const command: ChannelConnectInput = {
+            provider: login.provider,
+            externalAccountId: login.externalAccountId,
+            displayName: login.displayName,
+            scopes: [],
+            expiresAt: null,
+            credential: { keyId: sealed.keyId, envelope: sealed.envelope.toString('base64') },
+          };
+          const { connectionId } = await runtime.execute<{ connectionId: string }>('kernel.channel.connect', command, { actor, orgId });
+          return { connectionId, accounts };
+        }),
+      ),
+      map: os.bankFeeds.map.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => {
+          const { idempotencyKey, ...rest } = input;
+          return runtime.execute('finance.bank_feed.map', rest, { actor, orgId, idempotencyKey });
+        }),
+      ),
+      unmap: os.bankFeeds.unmap.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => {
+          const { idempotencyKey, ...rest } = input;
+          return runtime.execute('finance.bank_feed.unmap', rest, { actor, orgId, idempotencyKey });
+        }),
       ),
     },
     // AI agents (ADR-0029). The kernel module owns them; a template of a module that is off answers MODULE_DISABLED.
