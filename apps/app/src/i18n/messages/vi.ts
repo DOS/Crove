@@ -5415,6 +5415,7 @@ export const vi = {
       REVISION_OUT_OF_ORDER: 'Chứng từ này chỉ ghi sổ lại được bằng lần ghi kế tiếp, không bỏ qua hay ghi lùi lần nào',
       SOURCE_STILL_POSTED: 'Bút toán trước của chứng từ này vẫn còn trên sổ; hãy đảo bút toán đó trước rồi mới ghi sổ lại',
       REVERSAL_REVISION: 'Bút toán đảo chỉ ghi sổ một lần, như lần ghi đầu tiên của nó; không ghi lại bút toán đảo được',
+      DOCUMENT_REPOST: 'Hóa đơn đã ghi sổ một lần thì không ghi sổ lại được. Nếu hóa đơn sai, hãy đảo bút toán của nó và ghi hóa đơn thay thế hoặc điều chỉnh như một chứng từ mới',
       LEGAL_ENTITY_REQUIRED: 'Hãy chọn pháp nhân trước khi xem hoặc ghi sổ',
       LEGAL_ENTITY_NOT_ALLOWED: 'Bạn không có quyền với sổ sách của pháp nhân này',
       SOURCE_LEGAL_ENTITY: 'Chứng từ này đã ghi sổ ở một pháp nhân khác; không ghi lại sang pháp nhân khác được',
