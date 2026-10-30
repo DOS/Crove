@@ -151,6 +151,9 @@ suite('finding a person in the org (#923)', () => {
       expect(await check(c.text, probe.kind, value), c.name).toEqual({ found: c.redacted !== c.text, edited: c.redacted });
     }
     expect(await check(null, 'email', 'a@x.com')).toEqual({ found: false, edited: null });
+    // The mark is taken literally: an & or a backslash in it never brings the value back (#1678 review).
+    const marked = await admin(async (c) => (await c.query<{ edited: string }>(`SELECT crove_kernel.text_redact('mail a@x.com.', 'email', 'a@x.com', $1) AS edited`, ['R&D \\1 \\&'])).rows[0]?.edited);
+    expect(marked).toBe('mail R&D \\1 \\&.');
     // A value of another shape, or another kind, raises instead of matching nothing.
     for (const [kind, value] of [['email', 'A@X.com'], ['email', 'not an email'], ['digits', '1234'], ['name', 'Nguyễn']]) {
       await expect(check('x', kind as string, value as string), `${kind} ${value}`).rejects.toMatchObject({ code: '22023' });

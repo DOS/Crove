@@ -37,6 +37,15 @@ export const PII_TEXT_CASES: readonly PiiTextCase[] = [
   { name: 'an email at the end of a sentence', text: 'Gửi a.b@x.com.', value: 'a.b@x.com', redacted: `Gửi ${R}.` },
   { name: 'a branch tax code', text: 'MST 0101234567-001', value: '0101234567001', redacted: `MST ${R}` },
   { name: 'a phone written both ways', text: '(028) 3829.1234 hoặc +84 28 3829 1234', value: '02838291234', redacted: `${R} hoặc ${R}` },
+  // Not inside a longer address or number, however it is written (#1678 review).
+  { name: 'not after an apostrophe of a longer local part', text: "o'brien@example.com", value: 'brien@example.com', redacted: "o'brien@example.com" },
+  { name: 'not after a # of a longer local part', text: 'tag#alice@example.com', value: 'alice@example.com', redacted: 'tag#alice@example.com' },
+  { name: 'not inside a longer number in groups', text: 'CCCD 001 091 777 665', value: '091777665', redacted: 'CCCD 001 091 777 665' },
+  { name: 'a national ID is not a phone', text: 'Mã 8401091777665', value: '001091777665', redacted: 'Mã 8401091777665' },
+  { name: 'a short value is not a phone', text: 'Mã 0123456', value: '84123456', redacted: 'Mã 0123456' },
+  // But a list still finds each number.
+  { name: 'a numbered list', text: '1. 0912 345 678', value: '0912345678', redacted: `1. ${R}` },
+  { name: 'one number a line', text: '0912345678\n0987654321', value: '0912345678', redacted: `${R}\n0987654321` },
   // Not a value: nothing matches.
   { name: 'a name is not a value', text: 'Nguyễn Văn A', value: 'Nguyễn Văn A', redacted: 'Nguyễn Văn A' },
   { name: 'too few digits', text: 'Phòng 1234567', value: '1234567', redacted: 'Phòng 1234567' },

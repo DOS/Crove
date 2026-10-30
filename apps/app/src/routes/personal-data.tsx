@@ -17,8 +17,10 @@ import { errorMessage, isStepUpRequired, orpc, queryClient } from '../lib/api.ts
 
 const HANDLING_BADGE = { erase: 'warning', keep_legal: 'secondary', keep_org: 'secondary', keep_record: 'secondary' } as const;
 
+// The file goes to the person who asked: their rows only, never how many private items members keep (#1678).
 function download(value: string, result: PersonalDataResult) {
-  const url = URL.createObjectURL(new Blob([JSON.stringify({ value, ...result }, null, 2)], { type: 'application/json' }));
+  const { privateItems: _counts, ...rows } = result;
+  const url = URL.createObjectURL(new Blob([JSON.stringify({ value, ...rows }, null, 2)], { type: 'application/json' }));
   const a = document.createElement('a');
   a.href = url;
   a.download = `personal-data-${new Date().toISOString().slice(0, 10)}.json`;
@@ -47,7 +49,8 @@ export function PersonalDataPage() {
     }),
   );
   const eraseNow = () => erase.mutate({ value, idempotencyKey });
-  const hasErasable = found.data?.matches.some((m) => m.handling === 'erase') ?? false;
+  // Notes are not erased yet (#1678): a match only in a note offers no erasure.
+  const hasErasable = found.data?.matches.some((m) => m.handling === 'erase' && !m.column.startsWith('crove_notes.')) ?? false;
   const hasAny = (found.data?.matches.length ?? 0) > 0 || (found.data?.privateItems.length ?? 0) > 0;
   const nameOf = (userId: string) => {
     const member = org.data?.members.find((m) => m.userId === userId);
@@ -77,7 +80,7 @@ export function PersonalDataPage() {
         <Button type="submit" disabled={draft.trim().length < 3}>
           {t('search')}
         </Button>
-        {found.data && hasAny && (
+        {found.data && found.data.matches.length > 0 && (
           <Button type="button" variant="outline" onClick={() => download(value, found.data)}>
             {t('download')}
           </Button>

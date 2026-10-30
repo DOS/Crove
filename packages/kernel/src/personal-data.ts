@@ -45,6 +45,8 @@ export interface PersonalDataColumn {
   // Private items (ADR-0037): the finder lists a row only when it is shared ('unless_shared': its visibility is 'org'),
   // or never ('always'); private ones are counted per author through crove_notes.private_matches instead, with no text.
   privateRows?: 'unless_shared' | 'always';
+  // A text[] column searched as its items joined by a space, as crove_notes.private_matches reads a note's tags.
+  list?: true;
 }
 
 // Keyed by schema.table.column.
@@ -134,9 +136,9 @@ export const PERSONAL_DATA_COLUMNS = {
   // Notes and to-dos (#1678, notes step N9, ADR-0037 section 5): free text a member wrote, which may name or describe a
   // person. A shared note is listed with its text; a private note and every to-do (always private) are counted per
   // author, never shown. The folded search words are rebuilt from the text, so they are not searched themselves.
-  'crove_notes.note.title': { kind: 'free_text', handling: 'erase', reason: 'Free text of a note; a private note is counted per author, never shown', privateRows: 'unless_shared' },
-  'crove_notes.note.body': { kind: 'free_text', handling: 'erase', reason: 'Free text of a note; a private note is counted per author, never shown', privateRows: 'unless_shared' },
-  'crove_notes.note.tags': { kind: 'free_text', handling: 'erase', reason: 'Tags of a note; a private note is counted per author, never shown', privateRows: 'unless_shared' },
+  'crove_notes.note.title': { kind: 'free_text', handling: 'erase', reason: 'A shared note; the erasure does not change notes yet (#1678): ask its author to edit it, or archive or delete it', privateRows: 'unless_shared' },
+  'crove_notes.note.body': { kind: 'free_text', handling: 'erase', reason: 'A shared note; the erasure does not change notes yet (#1678): ask its author to edit it, or archive or delete it', privateRows: 'unless_shared' },
+  'crove_notes.note.tags': { kind: 'free_text', handling: 'erase', reason: 'A shared note; the erasure does not change notes yet (#1678): ask its author to edit it, or archive or delete it', privateRows: 'unless_shared', list: true },
   'crove_notes.note.search': { kind: 'other', handling: 'erase', reason: "The folded search words of a note's title, tags and body, rebuilt from them" },
   'crove_notes.todo.title': { kind: 'free_text', handling: 'erase', reason: 'Free text of a to-do, private to its owner: counted per owner, never shown', privateRows: 'always' },
   'crove_notes.todo.details': { kind: 'free_text', handling: 'erase', reason: 'Free text of a to-do, private to its owner: counted per owner, never shown', privateRows: 'always' },
@@ -235,7 +237,8 @@ async function findPersonalData(trx: QueryContext['trx'], orgId: string, probe: 
     if (!searchable(entry.handling)) continue;
     if (entry.privateRows === 'always') continue;
     const [schema, table, column] = key.split('.') as [string, string, string];
-    const match = columnMatch(entry.kind, probe, sql.ref(`t.${column}`));
+    const ref = sql.ref(`t.${column}`);
+    const match = columnMatch(entry.kind, probe, entry.list ? sql`pg_catalog.array_to_string(${ref}, ' ')` : ref);
     if (!match) continue;
     // Row security already hides other members' private notes; the finder's own private ones are counted below too,
     // not listed, so every author's are reported alike.

@@ -8,13 +8,14 @@
 -- crove_kernel.text_redact(text, kind, value, mark)    the text with every mention replaced by mark
 --
 -- kind and value are what the finder's probe holds (packages/kernel/src/personal-data.ts, personalDataProbe):
---   - 'email': the address in lower case. Matched without regard to case, as a whole address: no letter, digit or
---     . _ % + - just before it, and no letter, digit, _ or - just after it, nor a dot that a letter or digit follows,
---     so ab@x.com is not found in cab@x.com or in ab@x.com.vn, and is found at the end of a sentence ("... ab@x.com.").
+--   - 'email': the address in lower case. Matched without regard to case, as a whole address: nothing an address's
+--     local part may hold just before it, and no letter, digit, _ or - just after it, nor a dot that a letter or digit
+--     follows, so ab@x.com is not found in cab@x.com, o'ab@x.com or ab@x.com.vn, and is found at the end of a sentence
+--     ("... ab@x.com.").
 --   - 'digits': 8 to 15 digits (a phone number, a tax code or a national ID). Found with up to three of space . ( ) -
 --     between any two digits, as people write them ("0901 234 567", "(028) 3829.1234", "0101234567-001"), an opening
---     bracket just before them, and no digit just before or after. A phone number is found with or without Vietnam's
---     +84 in place of the leading 0.
+--     bracket just before them, and no digit next to either end (nor one a single space, dot or dash away). A phone
+--     number (10 or 11 digits) is found with or without Vietnam's +84 in place of the leading 0.
 -- Any other kind or a value of another shape raises (22023) instead of matching nothing, so a caller's mistake is
 -- never read as "not found". The value is escaped, never read as a pattern. Invoker functions without side effects,
 -- for the tenant role: they read nothing but their arguments.
@@ -32,16 +33,24 @@ BEGIN
       RAISE EXCEPTION 'TEXT_MENTION_VALUE' USING ERRCODE = '22023';
     END IF;
     -- Every character but a letter, a digit and @ escaped: a backslash before one of them is always that character.
-    RETURN '(?<![a-z0-9._%+-])' || pg_catalog.regexp_replace(p_value, '([^a-z0-9@])', '\\\1', 'g') || '(?![a-z0-9_-])(?!\.[a-z0-9])';
+    -- Nothing an address's local part may hold just before it (RFC 5322 atext and the dot), so brien@x.com is not found
+    -- in o'brien@x.com or tag#brien@x.com.
+    RETURN '(?<![a-z0-9!#$%&''*+/=?^_`{|}~.-])' || pg_catalog.regexp_replace(p_value, '([^a-z0-9@])', '\\\1', 'g') || '(?![a-z0-9_-])(?!\.[a-z0-9])';
   ELSIF p_kind = 'digits' THEN
     IF p_value IS NULL OR p_value !~ '^[0-9]{8,15}$' THEN
       RAISE EXCEPTION 'TEXT_MENTION_VALUE' USING ERRCODE = '22023';
     END IF;
-    v_local := CASE WHEN p_value LIKE '84%' THEN '0' || pg_catalog.substr(p_value, 3) ELSE p_value END;
-    v_intl := CASE WHEN v_local LIKE '0%' THEN '84' || pg_catalog.substr(v_local, 2) ELSE v_local END;
+    -- A phone (10 or 11 digits from a leading 0, as Vietnam writes them) is also found with 84 in place of the 0, and
+    -- a value given with 84 also with the 0. Any other value (a 12-digit national ID, a 13-digit branch tax code) is
+    -- found only as it is: 001091777665 is not 8401091777665.
+    v_local := CASE WHEN p_value ~ '^84[0-9]{9,10}$' THEN '0' || pg_catalog.substr(p_value, 3) ELSE p_value END;
+    v_intl := CASE WHEN v_local ~ '^0[0-9]{9,10}$' THEN '84' || pg_catalog.substr(v_local, 2) ELSE v_local END;
     -- An opening bracket just before the digits is part of the number ("(028) 3829 1234"), so an edit leaves none.
-    RETURN '(?<![0-9])(\(?' || pg_catalog.array_to_string(pg_catalog.regexp_split_to_array(v_local, ''), v_sep)
-      || '|\+?' || pg_catalog.array_to_string(pg_catalog.regexp_split_to_array(v_intl, ''), v_sep) || ')(?![0-9])';
+    -- No digit just before or after, nor one a single space, dot or dash away, so the value is not found inside a
+    -- longer number written in groups (001 091 777 665); a line break or two separators part two numbers, so a list
+    -- ("1. 0912 345 678", one number a line) still finds each.
+    RETURN '(?<![0-9][ .-]?)(?:\(?' || pg_catalog.array_to_string(pg_catalog.regexp_split_to_array(v_local, ''), v_sep)
+      || '|\+?' || pg_catalog.array_to_string(pg_catalog.regexp_split_to_array(v_intl, ''), v_sep) || ')(?![ .-]?[0-9])';
   END IF;
   RAISE EXCEPTION 'TEXT_MENTION_KIND' USING ERRCODE = '22023';
 END $$;
@@ -58,7 +67,8 @@ END $$;
 REVOKE ALL ON FUNCTION crove_kernel.text_mentions(text, text, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION crove_kernel.text_mentions(text, text, text) TO crove_tenant;
 
--- The mark replaces the whole mention; a backslash or & in it is taken literally.
+-- The mark replaces the whole mention and is taken literally: in a replacement a backslash starts an escape (\1, \&
+-- for the match), so each one is doubled; a bare & is already literal.
 CREATE OR REPLACE FUNCTION crove_kernel.text_redact(p_text text, p_kind text, p_value text, p_mark text)
 RETURNS text LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
@@ -67,7 +77,7 @@ BEGIN
   IF p_text IS NULL THEN
     RETURN NULL;
   END IF;
-  RETURN pg_catalog.regexp_replace(p_text, v_pattern, pg_catalog.regexp_replace(COALESCE(p_mark, ''), '([\\&])', '\\\1', 'g'), 'gi');
+  RETURN pg_catalog.regexp_replace(p_text, v_pattern, pg_catalog.replace(COALESCE(p_mark, ''), '\', '\\'), 'gi');
 END $$;
 REVOKE ALL ON FUNCTION crove_kernel.text_redact(text, text, text, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION crove_kernel.text_redact(text, text, text, text) TO crove_tenant;
