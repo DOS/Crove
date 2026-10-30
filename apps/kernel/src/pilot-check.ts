@@ -345,7 +345,7 @@ export function checkEnv(env: Env): CheckResult[] {
     {
       item: 'RLS matrix',
       status: 'manual',
-      message: 'confirm the CI db job and the invariant suite (rls-matrix.db.test.ts, T8) are green on the commit you deploy',
+      message: `${RLS_MANUAL} (with --url, pilot-check reads them from GitHub)`,
     },
     ...(backupKey
       ? []
@@ -559,6 +559,76 @@ export function formatResults(unordered: readonly CheckResult[]): string {
   return lines.join('\n');
 }
 
+// The source repository whose CI ran the commit a deployment reports (#1995): DOS/Ludy unless CROVE_SOURCE_REPO names a
+// fork, as owner/name.
+export const DEFAULT_SOURCE_REPO = 'DOS/Ludy';
+// The checks of the ci workflow that hold the RLS matrix and the rest of the database tests (T8), and the gate that
+// gathers them with lint, typecheck and the unit tests; on main they run on every push.
+const DATABASE_CHECKS = /^Database tests\b/;
+const GATE_CHECK = 'Lint, typecheck, test';
+const RLS_MANUAL = 'confirm the CI db job and the invariant suite (rls-matrix.db.test.ts, T8) are green on the commit you deploy';
+
+interface CheckRun {
+  name: string;
+  status: string;
+  conclusion: string | null;
+}
+
+/**
+ * Whether CI passed on the build the deployment runs (#1995): the commit /version reports, the ci workflow's database
+ * tests (the RLS matrix among them) and its gate, read from GitHub's API for the source repository. PASS when all
+ * finished green, FAIL naming the ones that did not, MANUAL when it cannot tell (no build id, a commit GitHub does not
+ * know, checks still running, the API out of reach): the person checks by hand, as before. GITHUB_TOKEN, when set,
+ * raises the API's rate limit; a public repository needs none.
+ */
+export async function probeBuildChecks(origin: string, env: Env, fetchFn: Fetch = fetch): Promise<CheckResult> {
+  const manual = (why: string): CheckResult => ({ item: 'RLS matrix', status: 'manual', message: `${why}: ${RLS_MANUAL}` });
+  const init = (extra: RequestInit = {}): RequestInit => ({ signal: AbortSignal.timeout(PROBE_TIMEOUT_MS), ...extra });
+  const repo = value(env, 'CROVE_SOURCE_REPO') ?? DEFAULT_SOURCE_REPO;
+  if (!/^(?!\.{1,2}\/)[A-Za-z0-9_.-]{1,100}\/(?!\.{1,2}$)[A-Za-z0-9_.-]{1,100}$/.test(repo)) return { item: 'RLS matrix', status: 'fail', message: `CROVE_SOURCE_REPO is owner/name of a GitHub repository, not ${repo}` };
+  let build: string;
+  try {
+    // A 503 (the database is down) still names the build. What the instance answers is never printed: only a commit id
+    // that matches is used.
+    const response = await fetchFn(`${origin}/version`, init({ redirect: 'error' }));
+    const answer = (await response.json().catch(() => ({}))) as { build?: unknown };
+    if (typeof answer.build !== 'string' || !/^[0-9a-f]{40}$/.test(answer.build)) {
+      return manual(response.ok ? 'the instance reports no commit id as its build (a local build)' : `${origin}/version answered ${response.status} without a commit id`);
+    }
+    build = answer.build;
+  } catch (error) {
+    return manual(`${origin}/version failed: ${reason(error)}`);
+  }
+  const short = build.slice(0, 12);
+  const token = value(env, 'GITHUB_TOKEN');
+  let runs: CheckRun[];
+  try {
+    const response = await fetchFn(
+      `https://api.github.com/repos/${repo}/commits/${build}/check-runs?per_page=100`,
+      init({ redirect: 'error', headers: { accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28', ...(token ? { authorization: `Bearer ${token}` } : {}) } }),
+    );
+    if (!response.ok) {
+      const limited = response.status === 429 || (response.status === 403 && response.headers.get('x-ratelimit-remaining') === '0');
+      return manual(`GitHub answered ${response.status} for the checks of ${repo}@${short}${limited ? ' (rate limited: export GITHUB_TOKEN and run again)' : ''}`);
+    }
+    const page = (await response.json()) as { total_count?: number; check_runs?: CheckRun[] };
+    runs = page.check_runs ?? [];
+    if (typeof page.total_count === 'number' && page.total_count > runs.length) {
+      return manual(`${repo}@${short} has ${page.total_count} checks, more than one page of GitHub's answer`);
+    }
+  } catch (error) {
+    return manual(`could not read the checks of ${repo}@${short} from GitHub: ${reason(error)}`);
+  }
+  const wanted = runs.filter((r) => DATABASE_CHECKS.test(r.name) || r.name === GATE_CHECK);
+  if (!wanted.some((r) => r.name === GATE_CHECK) || !wanted.some((r) => DATABASE_CHECKS.test(r.name))) {
+    return manual(`${repo}@${short} has no ${GATE_CHECK} or database-test check (a commit CI never ran)`);
+  }
+  const failed = wanted.filter((r) => r.status === 'completed' && r.conclusion !== 'success').map((r) => `${r.name} (${r.conclusion ?? 'no conclusion'})`);
+  if (failed.length > 0) return { item: 'RLS matrix', status: 'fail', message: `CI did not pass on the deployed build ${repo}@${short}: ${[...new Set(failed)].sort().join(', ')}` };
+  if (wanted.some((r) => r.status !== 'completed')) return manual(`CI is still running on the deployed build ${repo}@${short}`);
+  return { item: 'RLS matrix', status: 'pass', message: `CI passed on the deployed build ${repo}@${short}: ${[...new Set(wanted.map((r) => r.name))].sort().join(', ')}` };
+}
+
 export async function runPilotCheck(
   argv: readonly string[],
   env: Env = process.env,
@@ -572,8 +642,13 @@ export async function runPilotCheck(
     print(`[pilot-check] ${error instanceof Error ? error.message : String(error)}`);
     return PILOT_EXIT.error;
   }
-  const results = checkEnv(env);
-  if (args.url) results.push(...(await probeDeployment(args.url, fetchFn)));
+  let results = checkEnv(env);
+  if (args.url) {
+    results.push(...(await probeDeployment(args.url, fetchFn)));
+    // The CI of the deployed build (#1995) replaces the manual RLS matrix line.
+    const ci = await probeBuildChecks(args.url, env, fetchFn);
+    results = [...results.filter((r) => !(r.item === 'RLS matrix' && r.status === 'manual')), ci];
+  }
   print(formatResults(results));
   return results.some((r) => r.status === 'fail') ? PILOT_EXIT.failed : PILOT_EXIT.ok;
 }
