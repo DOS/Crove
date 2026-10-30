@@ -23,6 +23,9 @@ export type PersonalDataMatch = z.infer<typeof zPersonalDataMatch>;
 export const zPersonalDataResult = z.object({
   kind: z.enum(['email', 'digits']),
   matches: z.array(zPersonalDataMatch),
+  // Private notes and to-dos that mention the value (#1678, ADR-0037): how many each author has, never which or their
+  // text, so the owner can tell the authors before an erasure.
+  privateItems: z.array(z.object({ authorUserId: z.string(), notes: z.number().int(), todos: z.number().int() })),
   // A column had more matching rows than the finder returns.
   truncated: z.boolean(),
 });

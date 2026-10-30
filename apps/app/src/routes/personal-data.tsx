@@ -1,7 +1,8 @@
 // A person's data under the PDPL (#923), for owners and admins: look up an email address, a phone number, or a tax
 // code or national ID, see every row of the org that holds it and what an erasure would do to each, and download the
 // rows as JSON for the person's request to see their data. An owner can then erase it (R3: a fresh second factor),
-// after confirming; the result lists what was erased and what the law or a record keeps.
+// after confirming; the result lists what was erased and what the law or a record keeps. Members' private notes and
+// to-dos that mention the value are only counted, per author, never shown (#1678, ADR-0037).
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslations } from 'use-intl';
@@ -16,8 +17,10 @@ import { errorMessage, isStepUpRequired, orpc, queryClient } from '../lib/api.ts
 
 const HANDLING_BADGE = { erase: 'warning', keep_legal: 'secondary', keep_org: 'secondary', keep_record: 'secondary' } as const;
 
+// The file goes to the person who asked: their rows only, never how many private items members keep (#1678).
 function download(value: string, result: PersonalDataResult) {
-  const url = URL.createObjectURL(new Blob([JSON.stringify({ value, ...result }, null, 2)], { type: 'application/json' }));
+  const { privateItems: _counts, ...rows } = result;
+  const url = URL.createObjectURL(new Blob([JSON.stringify({ value, ...rows }, null, 2)], { type: 'application/json' }));
   const a = document.createElement('a');
   a.href = url;
   a.download = `personal-data-${new Date().toISOString().slice(0, 10)}.json`;
@@ -46,7 +49,15 @@ export function PersonalDataPage() {
     }),
   );
   const eraseNow = () => erase.mutate({ value, idempotencyKey });
-  const hasErasable = found.data?.matches.some((m) => m.handling === 'erase') ?? false;
+  // Notes are not erased yet (#1678): a match only in a note offers no erasure.
+  const hasErasable = found.data?.matches.some((m) => m.handling === 'erase' && !m.column.startsWith('crove_notes.')) ?? false;
+  const hasAny = (found.data?.matches.length ?? 0) > 0 || (found.data?.privateItems.length ?? 0) > 0;
+  const nameOf = (userId: string) => {
+    const member = org.data?.members.find((m) => m.userId === userId);
+    return member ? (member.displayName ?? member.email) : t('formerMember');
+  };
+  const items = (notes: number, todos: number) =>
+    [notes > 0 ? t('privateNotes', { count: notes }) : null, todos > 0 ? t('privateTodos', { count: todos }) : null].filter(Boolean).join(` ${t('and')} `);
 
   if (org.isLoading) return <Spinner />;
   if (org.error) return <ErrorText>{errorMessage(org.error)}</ErrorText>;
@@ -124,23 +135,44 @@ export function PersonalDataPage() {
         <Spinner />
       ) : found.error ? (
         <ErrorText>{errorMessage(found.error)}</ErrorText>
-      ) : !found.data ? null : found.data.matches.length === 0 ? (
+      ) : !found.data ? null : !hasAny ? (
         <Empty title={t('none')} />
       ) : (
         <>
+          {found.data.privateItems.length > 0 && (
+            <div className="mb-4 max-w-3xl space-y-1 rounded-lg border p-3 text-sm" data-testid="private-items">
+              <p className="font-medium text-foreground">
+                {t('privateSummary', {
+                  items: items(
+                    found.data.privateItems.reduce((sum, p) => sum + p.notes, 0),
+                    found.data.privateItems.reduce((sum, p) => sum + p.todos, 0),
+                  ),
+                  authors: found.data.privateItems.length,
+                })}
+              </p>
+              {found.data.privateItems.map((p) => (
+                <p key={p.authorUserId} className="text-xs text-muted-foreground">
+                  {t('privateAuthor', { name: nameOf(p.authorUserId), items: items(p.notes, p.todos) })}
+                </p>
+              ))}
+              <p className="pt-1 text-xs text-muted-foreground">{t('privateHint')}</p>
+            </div>
+          )}
           {found.data.truncated && <p className="mb-2 text-sm text-warning">{t('truncated')}</p>}
-          <DataTable head={[t('columns.where'), t('columns.handling'), t('columns.reason'), t('columns.row')]}>
-            {found.data.matches.map((m, i) => (
-              <TableRow key={`${m.column}-${m.rowId ?? i}`}>
-                <TableCell className="px-4 py-3 font-mono text-xs text-foreground">{m.column}</TableCell>
-                <TableCell className="px-4 py-3">
-                  <Badge variant={HANDLING_BADGE[m.handling]}>{t(`handling.${m.handling}`)}</Badge>
-                </TableCell>
-                <TableCell className="px-4 py-3 text-xs text-muted-foreground">{m.reason}</TableCell>
-                <TableCell className="px-4 py-3 font-mono text-xs text-subtle-foreground">{m.rowId ?? '-'}</TableCell>
-              </TableRow>
-            ))}
-          </DataTable>
+          {found.data.matches.length > 0 && (
+            <DataTable head={[t('columns.where'), t('columns.handling'), t('columns.reason'), t('columns.row')]}>
+              {found.data.matches.map((m, i) => (
+                <TableRow key={`${m.column}-${m.rowId ?? i}`}>
+                  <TableCell className="px-4 py-3 font-mono text-xs text-foreground">{m.column}</TableCell>
+                  <TableCell className="px-4 py-3">
+                    <Badge variant={HANDLING_BADGE[m.handling]}>{t(`handling.${m.handling}`)}</Badge>
+                  </TableCell>
+                  <TableCell className="px-4 py-3 text-xs text-muted-foreground">{m.reason}</TableCell>
+                  <TableCell className="px-4 py-3 font-mono text-xs text-subtle-foreground">{m.rowId ?? '-'}</TableCell>
+                </TableRow>
+              ))}
+            </DataTable>
+          )}
         </>
       )}
     </>
