@@ -31,6 +31,9 @@ CREATE TABLE IF NOT EXISTS crove_finance.bank_feed_account (
 CREATE INDEX IF NOT EXISTS bank_feed_account_entity_idx ON crove_finance.bank_feed_account (org_id, legal_entity_id);
 
 SELECT crove_kernel.apply_tenant_rls('crove_finance.bank_feed_account');
+-- A mapping is made and removed whole; a pull moves its cursor, and an owner or admin may point it at another bank account.
+REVOKE UPDATE ON crove_finance.bank_feed_account FROM crove_tenant;
+GRANT UPDATE (bank_account, cursor, last_synced_at) ON crove_finance.bank_feed_account TO crove_tenant;
 
 DROP TRIGGER IF EXISTS b_legal_entity ON crove_finance.bank_feed_account;
 CREATE TRIGGER b_legal_entity BEFORE INSERT OR UPDATE OF legal_entity_id ON crove_finance.bank_feed_account
