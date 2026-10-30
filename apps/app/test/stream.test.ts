@@ -36,6 +36,7 @@ function seeded() {
     detail1: orpc.inbox.get.queryKey({ input: { id: P1 } }),
     detail2: orpc.inbox.get.queryKey({ input: { id: P2 } }),
     files: orpc.files.recent.queryKey(),
+    batch: orpc.files.batch.queryKey({ input: { ids: [FILE] } }),
     journal: orpc.journal.list.queryKey({ input: {} }),
     entry: orpc.journal.get.queryKey({ input: { id: ENTRY } }),
     documents: orpc.documents.list.queryKey({ input: {} }),
@@ -66,10 +67,11 @@ function seeded() {
 }
 
 describe('invalidateHint', () => {
-  it('proposal: the inbox lists, the files list and that proposal only', async () => {
+  it('proposal: the inbox lists, the files lists and that proposal only', async () => {
     const { qc, stale } = seeded();
     await invalidateHint(qc, { type: 'proposal', id: P1 });
-    expect(stale()).toEqual(['detail1', 'files', 'inboxDone', 'inboxPending']);
+    // batch: the intake list's files, whose chips follow their proposal (#2009).
+    expect(stale()).toEqual(['batch', 'detail1', 'files', 'inboxDone', 'inboxPending']);
   });
 
   it('file and extraction: the lists and the proposal that shows the file', async () => {

@@ -39,6 +39,8 @@ test('upload a ZIP of e-invoices with loose files and follow each file to its pr
     await expect(panel.getByText('Không mở ZIP nằm trong ZIP; hãy tải riêng tệp đó')).toBeVisible();
     await expect(panel.getByText('Không phải tệp XML, PDF, JPG, PNG hoặc WEBP')).toBeVisible();
     await expect(panel.locator('[data-testid=intake-item][data-state=proposed]')).toHaveCount(4);
+    // Each says its proposal waits for a person (#2009), not only that it has one.
+    for (const item of await panel.locator('[data-testid=intake-item][data-state=proposed]').all()) await expect(item).toContainText('Chờ duyệt');
   });
 
   await test.step('the four invoices wait for approval, each read from its own file', async () => {

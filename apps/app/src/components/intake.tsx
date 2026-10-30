@@ -3,6 +3,7 @@
 import { useQueries } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslations } from 'use-intl';
+import { MAX_BATCH_FILES } from '@crove/kernel-contract';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
@@ -19,11 +20,12 @@ import {
   pollGroups,
   precheck,
   summarize,
+  undecidedIds,
   uploaded,
+  withProposalStatuses,
   type IntakeItem,
-  type IntakeState,
 } from '../lib/intake.ts';
-import { FILE_STATE_VARIANT, type ChipVariant } from '../lib/status.ts';
+import { fileChipVariant, fileProposal } from '../lib/status.ts';
 import { useChosenEntity } from './entity-switcher.tsx';
 
 // Waits after a RATE_LIMITED refusal before the same upload is tried again, and how many times.
@@ -139,6 +141,22 @@ export function useIntake(): Intake {
     if (answers.length > 0) setItems((list) => applyBatch(list, answers));
   }, [stamp]);
 
+  // Files read into a proposal still to be decided (#2009): asked about again when a proposal changes (the stream's
+  // proposal hint), not polled, so the chip follows the approval or the rejection made in the Inbox.
+  const undecided = undecidedIds(items);
+  const watched = useQueries({
+    queries: Array.from({ length: Math.ceil(undecided.length / MAX_BATCH_FILES) }, (_, i) =>
+      orpc.files.batch.queryOptions({ input: { ids: undecided.slice(i * MAX_BATCH_FILES, (i + 1) * MAX_BATCH_FILES) } }),
+    ),
+  });
+  const decided = watched.map((query) => query.dataUpdatedAt).join(',');
+  const watchedLatest = useRef(watched);
+  watchedLatest.current = watched;
+  useEffect(() => {
+    const answers = watchedLatest.current.flatMap((query) => query.data ?? []);
+    if (answers.length > 0) setItems((list) => withProposalStatuses(list, answers));
+  }, [decided]);
+
   const clear = useCallback(() => {
     setItems([]);
     setRefused(null);
@@ -147,11 +165,12 @@ export function useIntake(): Intake {
   return { items, uploading, start, clear, refused };
 }
 
-// The chips of the Inbox's files (lib/status.ts, #2000): the same state looks the same on both lists.
-const VARIANT: Record<IntakeState, ChipVariant> = FILE_STATE_VARIANT;
-
 function Row({ item, nested = false }: { item: IntakeItem; nested?: boolean }) {
   const t = useTranslations('inbox.intake');
+  const proposalWords = useTranslations('inboxDetail.status');
+  // The chips of the Inbox's files (lib/status.ts, #2000): the same state looks the same on both lists, and a proposed
+  // file as its proposal (#2009).
+  const proposal = fileProposal(item.state, item.proposalStatus);
   const why =
     item.state === 'upload_failed'
       ? errorMessage(item.uploadError)
@@ -168,8 +187,8 @@ function Row({ item, nested = false }: { item: IntakeItem; nested?: boolean }) {
         <span className="min-w-0 flex-1 truncate text-muted-foreground" title={item.name}>
           {item.name}
         </span>
-        <Badge variant={VARIANT[item.state]}>
-          {item.state === 'expanded' ? t('expandedCount', { count: item.entries.length }) : t(`states.${item.state}`)}
+        <Badge variant={fileChipVariant(item.state, item.proposalStatus)}>
+          {item.state === 'expanded' ? t('expandedCount', { count: item.entries.length }) : proposal ? proposalWords(proposal) : t(`states.${item.state}`)}
         </Badge>
       </div>
       {why && <p className="pb-1 text-xs break-words text-destructive">{why}</p>}
