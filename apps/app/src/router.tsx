@@ -48,6 +48,7 @@ import { parseTasksSearch } from './lib/agents.ts';
 import { parseNotesSearch } from './lib/notes.ts';
 import { parseLedgerSearch } from './lib/ledger.ts';
 import { parseInboxSearch } from './lib/review.ts';
+import { parseAuditSearch } from './lib/audit.ts';
 import { parsePeriodSearch } from './lib/vat.ts';
 import { parseVouchersSearch } from './lib/vouchers.ts';
 import { SocialChannelsPage } from './routes/social-channels.tsx';
@@ -408,7 +409,8 @@ const settingsRoute = createRoute({
   component: SettingsPage,
 });
 // The audit log (#672): owners and admins only, which the page checks and the server enforces.
-const auditRoute = createRoute({ getParentRoute: () => orgRoute, path: 'audit', component: AuditPage });
+// ?targetType=&targetId= (and the other filters) open it filtered: a decided proposal links here (#1445).
+const auditRoute = createRoute({ getParentRoute: () => orgRoute, path: 'audit', validateSearch: parseAuditSearch, component: AuditPage });
 const personalDataRoute = createRoute({ getParentRoute: () => orgRoute, path: 'personal-data', component: PersonalDataPage });
 // AI agents and tasks (ADR-0029) belong to the kernel, so every deployment has them.
 // In-app notifications of the kernel and finance (#671).

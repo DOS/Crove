@@ -90,6 +90,20 @@ test('sign up, upload an e-invoice, approve it, then find it in the lists, the e
     await expect(page.getByRole('link', { name: SELLER })).toBeVisible();
   });
 
+  await test.step('the decided proposal links to its audit rows (DESIGN.md §5.1, #1445)', async () => {
+    await page.getByRole('link', { name: SELLER }).click();
+    await page.getByRole('link', { name: 'Xem nhật ký' }).click();
+    await expect(page).toHaveURL(new RegExp(`/o/${slug}/audit[?].*targetType=kernel[.]proposal`));
+    await expect(page.getByText('Chỉ các dòng có đối tượng loại kernel.proposal')).toBeVisible();
+    // The rows whose object is this proposal: its creation, the refused approval without a fresh second factor, and the
+    // approval. Each names the proposal, and nothing else is listed.
+    const rows = page.getByRole('row').filter({ has: page.getByRole('cell') });
+    await expect(rows.filter({ hasText: 'kernel.proposal.approve' }).first()).toBeVisible();
+    await expect(rows.filter({ hasNotText: 'kernel.proposal' })).toHaveCount(0);
+    await page.goBack();
+    await page.goBack();
+  });
+
   await test.step('vendor, document and entry lists', async () => {
     const nav = page.getByRole('navigation');
 
