@@ -4,13 +4,15 @@
 -- crove_kernel.text_mention_pattern (20261106200000) bounded an address by ASCII only: nothing of [a-z0-9] and the
 -- local part's punctuation just before it, no [a-z0-9_-] just after it. So ab@x.example was found inside
 -- đab@x.example, an address of its own (RFC 6531 allows letters outside ASCII), and the erasure (#1678, part 2) would
--- have edited a fragment out of it. The letters of most scripts now count as part of an address on both sides:
--- U+00C0 to U+1FFF (Latin with diacritics, Vietnamese included, combining marks, Greek, Cyrillic and the scripts after
--- them), U+2C00 to U+2FFF and U+3040 to U+D7FF (more letters, kana, CJK, Hangul). Named as ranges rather than
--- [[:alpha:]], whose reach depends on the database's locale (a C locale knows ASCII only). Left out, so they still part
--- an address from the text around it: general punctuation and symbols (U+2000 to U+2BFF: curly quotes, the ellipsis,
--- dashes, no-break and zero-width spaces), CJK punctuation (U+3000 to U+303F) and everything above U+D7FF (emoji
--- among them). The phone and ID pattern is unchanged.
+-- have edited a fragment out of it. Latin letters with diacritics now count as part of an address on both sides:
+-- U+00C0 to U+024F but the signs × and ÷ (Latin-1 letters, Latin Extended-A and -B), the combining diacritical marks
+-- U+0300 to U+036F (Vietnamese written decomposed) and Latin Extended Additional U+1E00 to U+1EFF (the Vietnamese
+-- letters with two marks). Named as ranges rather than [[:alpha:]], whose reach depends on the database's locale (a C
+-- locale knows ASCII only). Only Latin: the blocks of other scripts mix letters with their punctuation (the Arabic
+-- question mark U+061F after an address must still end it), and a miss is worse than a rare match next to a letter of
+-- another script, since the erasure acts only on what is found. Everything else (curly quotes, the ellipsis, «», no-break
+-- spaces, CJK punctuation, emoji) still parts an address from the text around it. The phone and ID pattern is
+-- unchanged.
 SET LOCAL lock_timeout = '2s';
 
 CREATE OR REPLACE FUNCTION crove_kernel.text_mention_pattern(p_kind text, p_value text)
@@ -23,9 +25,11 @@ DECLARE
   -- The same on one line: what may part two digits of one number at a number's edge (a line break parts two numbers).
   v_inline constant text := ' ' || pg_catalog.chr(160) || pg_catalog.chr(8199) || pg_catalog.chr(8239) || pg_catalog.chr(65279);
   v_sep constant text := '[' || v_space || '.()-]{0,3}';
-  -- Letters outside ASCII, as ranges inside a bracket expression (see above).
-  v_letters constant text := pg_catalog.chr(192) || '-' || pg_catalog.chr(8191) || pg_catalog.chr(11264) || '-' || pg_catalog.chr(12287)
-    || pg_catalog.chr(12352) || '-' || pg_catalog.chr(55295);
+  -- Latin letters outside ASCII, as ranges inside a bracket expression (see above): U+00C0-U+00D6, U+00D8-U+00F6,
+  -- U+00F8-U+024F, U+0300-U+036F and U+1E00-U+1EFF.
+  v_letters constant text := pg_catalog.chr(192) || '-' || pg_catalog.chr(214) || pg_catalog.chr(216) || '-' || pg_catalog.chr(246)
+    || pg_catalog.chr(248) || '-' || pg_catalog.chr(591) || pg_catalog.chr(768) || '-' || pg_catalog.chr(879)
+    || pg_catalog.chr(7680) || '-' || pg_catalog.chr(7935);
   v_local text;
   v_intl text;
 BEGIN

@@ -55,6 +55,7 @@ export const PII_TEXT_CASES: readonly PiiTextCase[] = [
   // A letter outside ASCII is part of an address on either side (#1955 review), punctuation outside it is not.
   { name: 'not after a letter outside ASCII', text: 'Gửi đab@x.example và Ăab@x.example', value: 'ab@x.example', redacted: 'Gửi đab@x.example và Ăab@x.example' },
   { name: 'not before a letter outside ASCII', text: 'ab@x.exampleđ và ab@x.example.đông', value: 'ab@x.example', redacted: 'ab@x.exampleđ và ab@x.example.đông' },
+  { name: "before another script's punctuation", text: 'Hỏi ab@x.example؟ rồi ab@x.example。', value: 'ab@x.example', redacted: `Hỏi ${R}؟ rồi ${R}。` },
   { name: 'in curly quotes and before an ellipsis', text: 'Gửi “ab@x.example”, «ab@x.example» và ab@x.example…', value: 'ab@x.example', redacted: `Gửi “${R}”, «${R}» và ${R}…` },
   // But a list still finds each number.
   { name: 'a numbered list', text: '1. 0912 345 678', value: '0912345678', redacted: `1. ${R}` },
