@@ -58,6 +58,19 @@ describe('the Ludy logo (#2052)', () => {
     }
   });
 
+  it('letters "Ludy" the same in the light and the dark wordmark, in a box as high as the mark (#2059)', () => {
+    const wordmark = (file: string) => {
+      const text = read(`${BRAND}/${file}`);
+      const paths = [...text.matchAll(/<path fill="[^"]+" d="([^"]+)"\/>/g)].map((m) => m[1] ?? '');
+      return { lettering: paths[2] ?? '', box: /viewBox="(0 0 \d+ \d+)"/.exec(text)?.[1] };
+    };
+    const light = wordmark('ludy-wordmark.svg');
+    const dark = wordmark('ludy-wordmark-dark.svg');
+    expect(light.lettering).toMatch(/^M\d/);
+    expect(dark).toEqual(light);
+    expect(light.box).toMatch(/^0 0 \d+ 92$/);
+  });
+
   it('serves one favicon from the landing page and the app', () => {
     expect(read('apps/app/public/favicon.svg')).toBe(read('apps/web/public/favicon.svg'));
   });

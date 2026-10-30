@@ -231,4 +231,12 @@ describe('the web app manifest', () => {
     for (const icon of manifest.icons) expect(existsSync(join(app, 'public', icon.src))).toBe(true);
     expect(readFileSync(join(app, 'index.html'), 'utf8')).toContain('<link rel="manifest" href="/assets/manifest.webmanifest" />');
   });
+
+  it('links the maskable install icon as the Apple touch icon, a file the app ships (#2059)', () => {
+    const html = readFileSync(join(app, 'index.html'), 'utf8');
+    const link = /<link rel="apple-touch-icon"[^>]*href="([^"]+)"/.exec(html);
+    expect(link?.[1]).toBe('/assets/icon-maskable-512.png');
+    expect(existsSync(join(app, 'public', link?.[1] ?? ''))).toBe(true);
+    expect(manifest.icons.map((icon) => icon.src)).toContain(link?.[1]);
+  });
 });
