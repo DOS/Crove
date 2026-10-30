@@ -2,7 +2,7 @@
 // The license header check for new source files (#1953): which files it reads, the line it accepts, and the line it asks
 // for.
 import { describe, expect, it } from 'vitest';
-import { checkedPaths, escapeData, escapeProperty, hasHeader, headerFor, missingHeaders } from '../ci/spdx-header.mjs';
+import { HEADER_LINE, IDENTIFIER, checkedPaths, escapeData, escapeProperty, hasHeader, headerFor, missingHeaders } from '../ci/spdx-header.mjs';
 
 describe('SPDX header check', () => {
   it('reads new TypeScript, JavaScript and SQL sources, but not third-party files or other kinds', () => {
@@ -22,6 +22,8 @@ describe('SPDX header check', () => {
   });
 
   it('accepts the AGPL-3.0-only line near the top, in the file kind\'s comment', () => {
+    // The pattern names the identifier the check asks for.
+    expect(HEADER_LINE.test(`// SPDX-License-Identifier: ${IDENTIFIER}`)).toBe(true);
     expect(hasHeader('// SPDX-License-Identifier: AGPL-3.0-only\n// The module.\nexport {};\n')).toBe(true);
     expect(hasHeader('#!/usr/bin/env node\n// SPDX-License-Identifier: AGPL-3.0-only\n')).toBe(true);
     expect(hasHeader('-- SPDX-License-Identifier: AGPL-3.0-only\r\n-- Crove kernel (issue #1).\r\n')).toBe(true);

@@ -34,10 +34,12 @@ export function headerFor(path) {
   return `${commentOf(path)} SPDX-License-Identifier: ${IDENTIFIER}`;
 }
 
+// The SPDX line for IDENTIFIER in a `//`, `--`, `/* */` or ` * ` comment (the unit test holds it to IDENTIFIER).
+export const HEADER_LINE = /^\s*(?:\/\/|--|\/\*|\*)\s*SPDX-License-Identifier:\s*AGPL-3\.0-only\s*(?:\*\/)?\s*$/;
+
 // Whether a source file's text carries the SPDX line for Ludy's license in its first lines.
 export function hasHeader(text) {
-  const pattern = new RegExp(`^\\s*(?://|--|/\\*|\\*)\\s*SPDX-License-Identifier:\\s*${IDENTIFIER.replace(/[.-]/g, '\\$&')}\\s*(?:\\*/)?\\s*$`);
-  return text.split('\n', HEADER_LINES).some((line) => pattern.test(line.replace(/\r$/, '')));
+  return text.split('\n', HEADER_LINES).some((line) => HEADER_LINE.test(line));
 }
 
 // The paths among `added` that the check reads: source files that are not third-party.
