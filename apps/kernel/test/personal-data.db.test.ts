@@ -307,6 +307,18 @@ suite('finding a person in the org (#923)', () => {
     expect(events).toHaveLength(1);
     expect(audit[0]?.detail.event).toBe(events[0]?.id);
     expect(audit[0]?.detail.key).toMatch(/^k1:[0-9a-f]{64}$/);
+    // One key per value however a phone is spelled (with 84 or its leading 0), another per value and per org.
+    const keys = (
+      await admin((c) =>
+        c.query<{ same: boolean; other: boolean; org: boolean }>(
+          `SELECT crove_notes.private_notice_key_of($1, 'digits', '84912345678') = crove_notes.private_notice_key_of($1, 'digits', '0912345678') AS same,
+                  crove_notes.private_notice_key_of($1, 'email', 'thu.ky@khach.example') = crove_notes.private_notice_key_of($1, 'email', 'khac@khach.example') AS other,
+                  crove_notes.private_notice_key_of($1, 'email', 'thu.ky@khach.example') = crove_notes.private_notice_key_of($2, 'email', 'thu.ky@khach.example') AS org`,
+          [org.orgId, other.orgId],
+        ),
+      )
+    ).rows[0];
+    expect(keys).toEqual({ same: true, other: false, org: false });
     for (const secret of ['thu.ky', 'Riêng', 'Gọi thư ký', 'Hồ sơ']) {
       expect(JSON.stringify(audit), secret).not.toContain(secret);
       expect(JSON.stringify(events), secret).not.toContain(secret);

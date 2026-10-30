@@ -45,15 +45,19 @@ RETURNS text LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catal
 DECLARE
   v_ipad bytea;
   v_opad bytea;
+  v_value text;
 BEGIN
   -- The kind is 'email' or 'digits' and the value has no chr(31): text_mention_pattern refused anything else first.
+  -- A phone given with 84 is keyed as with its leading 0, as the pattern matches both: a notice sent for
+  -- '+84 912 345 678' covers an erasure of '0912 345 678'.
+  v_value := CASE WHEN p_kind = 'digits' AND p_value ~ '^84[0-9]{9,10}$' THEN '0' || pg_catalog.substr(p_value, 3) ELSE p_value END;
   SELECT k.k_ipad, k.k_opad INTO v_ipad, v_opad FROM crove_kernel.mail_hash_key k WHERE k.id = 1;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'MAIL_HASH_KEY_MISSING' USING ERRCODE = '55000';
   END IF;
   RETURN 'k1:' || pg_catalog.encode(
     pg_catalog.sha256(v_opad || pg_catalog.sha256(v_ipad || pg_catalog.convert_to(
-      'crove.notes.notice.v1' || pg_catalog.chr(31) || p_org::text || pg_catalog.chr(31) || p_kind || pg_catalog.chr(31) || p_value, 'UTF8'))),
+      'crove.notes.notice.v1' || pg_catalog.chr(31) || p_org::text || pg_catalog.chr(31) || p_kind || pg_catalog.chr(31) || v_value, 'UTF8'))),
     'hex');
 END $$;
 REVOKE ALL ON FUNCTION crove_notes.private_notice_key_of(uuid, text, text) FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant;

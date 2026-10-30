@@ -36,7 +36,8 @@ export function PersonalDataPage() {
   const canRead = org.data?.role === 'owner' || org.data?.role === 'admin';
   const [draft, setDraft] = useState('');
   const [value, setValue] = useState('');
-  // Each search is a command that leaves an audit row (#1678): run once per value, never again on focus or by itself.
+  // Each search is a command that leaves an audit row (#1678): run once per value, not again on focus; an erasure, an
+  // access change or a resync of the stream runs it again, which leaves another row.
   const found = useQuery({
     ...orpc.org.personalData.queryOptions({ input: { value } }),
     enabled: canRead && value.length >= 3,

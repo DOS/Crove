@@ -68,7 +68,7 @@ A private note or to-do is read and changed only in a context whose user is its 
     - `former_members_due(limit)`: for the nightly sweep (section 4), the former members with private items past that delay, ids only, each marked whether the audit trail records their removal;
   - callable in a user context, checked inside to be an owner or admin of the context's org (the members screen and the personal-data screen run as that user, not as the worker):
     - `private_counts()`: items per author, for the removal warning;
-    - `private_matches(kind, value)`: per author, how many private items contain a value, for the finder (section 5), which asks it for owners only and records every search (section 3);
+    - `private_matches(kind, value)`: per author, how many private items contain a value, for the finder (section 5), which asks it for owners only and records every search (section 3); a raw call in an admin's context still gets an answer until #1972 narrows the definer;
     - `private_notice_items(kind, value)`: the ids and authors of the private items that contain a value, owner only, for the owner's notice to the authors (#1678), which records the ids in its audit row;
     - `private_erase(kind, value)`: deletes the private items that contain the value and that an earlier notice's audit row names at their current revision, once its author got that notice's notification (or sent it, or left the org), owner only, from the R3 erasure command; it counts the others per author.
   The org purge (`crove_kernel.org_purge`) runs as the table owner, which row-level security does not bind here, and deletes `crove_notes` by org before the kernel's tasks.
