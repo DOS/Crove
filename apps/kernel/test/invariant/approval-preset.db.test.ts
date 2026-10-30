@@ -75,7 +75,7 @@ suite('approval policy presets on PostgreSQL (#1402)', () => {
     return rows.map((r) => r.pid);
   }
 
-  // Polls `probe` until it answers, at most 10 seconds.
+  // Polls `probe` until it answers, at most 400 times, 25 ms apart (each probe opens its own admin connection).
   async function until<T>(what: string, probe: () => Promise<T | undefined>): Promise<T> {
     for (let tries = 0; ; tries++) {
       const value = await probe();
@@ -420,6 +420,8 @@ suite('approval policy presets on PostgreSQL (#1402)', () => {
       await hold.query('LOCK TABLE crove_kernel.activity IN EXCLUSIVE MODE');
       await remover.query('SELECT crove_kernel.enter_user_context($1::uuid, $2::text)', [o.orgId, contextToken(o.owner, o.orgId)]);
       const switching = o.setPreset(asMfa(o.owner), 'accountant');
+      // Awaited below; on a run that fails before, its refusal is not reported a second time as unhandled.
+      switching.catch(() => {});
       // The switch, by its own pid: the session the held activity table blocks.
       const switchPid = await until('the switch never reached its activity row', async () => (await blockedBy(holdPid))[0]);
       // It holds the tenant row: a lock that conflicts with its FOR UPDATE is refused at once.
