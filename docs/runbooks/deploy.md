@@ -203,6 +203,19 @@ If a release with these migrations runs anyway:
 - The second fails on the check violation, and the deploy stops on that migration.
 - That half state refuses every new revision 2 and loses nothing. It stays until the forward migration above lands.
 
+## Upgrade notes
+
+Settings whose meaning changes between releases, to read before tagging the first release that contains the change. Nothing here changes data.
+
+### The prober reads the archive with a key of its own, or says so (#2098, #2108)
+
+Affects only a deployment with `ARCHIVE_STORE=s3` whose prober has no `PROBER_ARCHIVE_S3_ACCESS_KEY_ID` and `PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY` and so read the archive bucket through the SDK's default credential chain (an instance or task role). A local archive (`ARCHIVE_STORE=local`, the default) is not affected.
+
+- From this release the default chain is opt-in. Without a pair and without `PROBER_ARCHIVE_S3_DEFAULT_CHAIN=true`, the prober's verification marker check is disabled and it reports `archive_marker` on every probe until one of them is set. The other checks, the backup alerts and the test alert are not affected.
+- Before the release, set one of them in the stack's env file: a read-only key pair (`PROBER_ARCHIVE_S3_ACCESS_KEY_ID` and `PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY`: list and list versions on the bucket, get on `verify/*` and `chain/*`, [worm-archive.md](worm-archive.md)), or `PROBER_ARCHIVE_S3_DEFAULT_CHAIN=true` with the prober running under a role that only reads. On a host where the worker and the prober share the default chain, the opt-in gives the prober the worker's role, which writes the archive: prefer the pair. Never the worker's own `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY`.
+- Check: `pnpm pilot:check` reports a prober with neither, and asks you to confirm the role when the worker and the prober share the default chain. The prober's start line says `with the prober's own key` or `with the default credential chain`.
+- Also from this release, an empty prober limit in the env file (for example `PROBER_MAX_OUTBOX_AGE_SECONDS=`) is the default, where it used to read 0 and turn that check off. Write `0` to turn a check off.
+
 ## Deploy a release
 
 1. Merge to `main` and wait for CI. Run the [pre-deploy checks](#pre-deploy-checks) of every migration the release adds that has one.

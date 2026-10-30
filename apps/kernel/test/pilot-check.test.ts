@@ -141,6 +141,24 @@ describe('pilot-check settings', () => {
     expect(failing({ ...READY, ARCHIVE_STORE: 's3', ARCHIVE_S3_BUCKET: 'crove-archive', ...worker, PROBER_ARCHIVE_S3_ACCESS_KEY_ID: fake('reader'), PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY: fake('reader-secret') })).toEqual([]);
   });
 
+  it("asks a person to confirm the prober's role when it shares the worker's default credential chain (#2109)", () => {
+    const manual = (env: Env) => checkEnv(env).filter((r) => r.item === 'Alerts' && r.status === 'manual').map((r) => r.message);
+    const shared = { ...READY, ARCHIVE_STORE: 's3', ARCHIVE_S3_BUCKET: 'crove-archive', S3_ACCESS_KEY_ID: undefined, PROBER_ARCHIVE_S3_DEFAULT_CHAIN: 'true' };
+    // A warning, not a failure: the deployment may give the prober a role of its own on a host of its own.
+    expect(failing(shared)).toEqual([]);
+    expect(manual(shared)).toEqual([
+      expect.stringContaining('PUBLIC_URL/healthz every 5 minutes'),
+      expect.stringContaining("ARCHIVE_STORE=s3 with no S3_ACCESS_KEY_ID (the worker reads and writes the archive on the SDK's default credential chain) and PROBER_ARCHIVE_S3_DEFAULT_CHAIN=true"),
+    ]);
+    // An empty S3_ACCESS_KEY_ID is the same as none, as the compose file passes it.
+    expect(manual({ ...shared, S3_ACCESS_KEY_ID: '' })).toHaveLength(2);
+    // Not when the worker has a static key (the prober's chain is then not the worker's), no opt-in, or another store.
+    expect(manual({ ...shared, S3_ACCESS_KEY_ID: fake('worker-key') })).toHaveLength(1);
+    expect(manual({ ...shared, PROBER_ARCHIVE_S3_DEFAULT_CHAIN: undefined })).toHaveLength(1);
+    expect(manual({ ...shared, PROBER_ARCHIVE_S3_DEFAULT_CHAIN: 'false' })).toHaveLength(1);
+    expect(manual({ ...shared, ARCHIVE_STORE: 'local' })).toHaveLength(1);
+  });
+
   it('requires backups in a second location over https, apart from the files bucket (issues #307, #351)', () => {
     expect(checkEnv(READY).find((r) => r.item === 'Backups' && r.status === 'pass')?.message).toBe(
       'backups go to backups.storage.example, bucket crove-backups, sealed with BACKUP_ENCRYPTION_KEY',

@@ -328,6 +328,19 @@ export function checkEnv(env: Env): CheckResult[] {
             message: 'PROBER_HEARTBEAT_URL is unset: nothing pages the owner when the prober itself stops or cannot deliver; set it (docs/runbooks/alerts.md) or accept that',
           },
         ]),
+    // The worker on the SDK's default credential chain (no S3_ACCESS_KEY_ID) and the prober opted in to the same chain
+    // (#2109): on one host that almost certainly means the prober runs under the worker's role, which writes the archive.
+    ...(value(env, 'ARCHIVE_STORE') === 's3' && value(env, 'S3_ACCESS_KEY_ID') === undefined && value(env, 'PROBER_ARCHIVE_S3_DEFAULT_CHAIN') === 'true'
+      ? [
+          {
+            item: 'Alerts',
+            status: 'manual' as const,
+            message:
+              "ARCHIVE_STORE=s3 with no S3_ACCESS_KEY_ID (the worker reads and writes the archive on the SDK's default credential chain) and PROBER_ARCHIVE_S3_DEFAULT_CHAIN=true: " +
+              "on one host the prober then runs under the worker's role, which writes. Confirm the prober's role only reads the archive bucket, or give it a read-only PROBER_ARCHIVE_S3_* key pair (docs/runbooks/worm-archive.md)",
+          },
+        ]
+      : []),
     // A rotation of the inbound secret left half done keeps the old value working (#1214).
     ...(inboundPrevious === undefined
       ? []
