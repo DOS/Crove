@@ -6,7 +6,10 @@
 --     'crove-worker:<instance>', the instance its heartbeat names (crove_kernel.worker_beat), so the row and the
 --     heartbeat agree. Only a crove_worker session enters a system context (enter_system_context), so no tenant role
 --     can write a system row, and so none can forge the name. The worker itself is trusted, as for every system row.
---     An empty application_name leaves the key out.
+--     An empty application_name leaves the key out. Other worker-login processes stamp their own fixed names
+--     ('crove-restore', 'crove-operator'). Behind a transaction-mode pooler that does not track application_name per
+--     client, the server connection may carry another client's name; direct connections, the default, are exact.
+--     The org's audit log never shows the key (auditDetailLine): it is for the deployment's alerts.
 --   - a user or an agent context: detail.workerInstance is removed, so no member's or agent's row claims a worker.
 -- The key is inside detail, which the WORM stream already hashes in every batch version (archive_row_hashes), so the
 -- name is anchored with the row and no new archive version is needed. Staff rows are still left as written. The

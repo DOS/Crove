@@ -468,8 +468,9 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
 
       if (worker && workerUrl && extractUrl) {
         console.log(`[extract] parsing in crove-extract at ${new URL(extractUrl).host}`);
-        // The instance the heartbeat names is in every system audit row this worker writes (#1951).
-        const instance = hostname();
+        // The instance the heartbeat names is in every system audit row this worker writes (#1951), cut to what fits in
+        // the connections' application_name, so both name it alike.
+        const instance = hostname().slice(0, 50);
         const { pool, db, runtime } = buildRuntime(workerUrl, workerApplicationName(instance));
         stops.push(() => pool.end());
         await assertRlsEnforced(pool);
