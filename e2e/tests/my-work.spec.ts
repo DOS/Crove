@@ -51,6 +51,15 @@ test('a member adds, completes and reorders their own to-dos, which nobody else 
     await expect.poll(titles).toEqual(['Nộp tờ khai thuế', 'Kiểm tra hóa đơn nhà cung cấp']);
   });
 
+  await test.step('completing a to-do says so, and its undo opens it again (#2003)', async () => {
+    await page.getByRole('checkbox', { name: 'Đánh dấu xong: Kiểm tra hóa đơn nhà cung cấp' }).click();
+    await expect.poll(titles).toEqual(['Nộp tờ khai thuế']);
+    const done = page.getByRole('status').filter({ hasText: 'Đã đánh dấu xong: Kiểm tra hóa đơn nhà cung cấp' });
+    await done.getByRole('button', { name: 'Hoàn tác' }).click();
+    await expect(page.getByRole('status').filter({ hasText: 'Đã đưa việc trở lại: Kiểm tra hóa đơn nhà cung cấp' })).toBeVisible();
+    await expect(rows.filter({ hasText: 'Kiểm tra hóa đơn nhà cung cấp' })).toBeVisible();
+  });
+
   await test.step('another member of the org sees none of them', async () => {
     const otherEmail = newEmail('my-work-other');
     const other = await browser.newPage({ timezoneId: 'Asia/Ho_Chi_Minh' });
