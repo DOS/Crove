@@ -222,11 +222,15 @@ suite('prober privileges', () => {
     try {
       await admin.query('GRANT EXECUTE ON FUNCTION crove_kernel.worker_beat(text) TO crove_app');
       await admin.query('GRANT EXECUTE ON FUNCTION crove_kernel.worker_beat(text, text[]) TO crove_app');
+      // #1952: the beat with the worker's build.
+      await admin.query('GRANT EXECUTE ON FUNCTION crove_kernel.worker_beat(text, text[], text, timestamptz) TO crove_app');
       await admin.query('SET SESSION AUTHORIZATION crove_app');
       await admin.query('SAVEPOINT beat');
       await expect(admin.query("SELECT crove_kernel.worker_beat('fake')")).rejects.toMatchObject({ code: '42501', message: 'WORKER_ONLY' });
       await admin.query('ROLLBACK TO SAVEPOINT beat');
       await expect(admin.query("SELECT crove_kernel.worker_beat('fake', ARRAY['kernel'])")).rejects.toMatchObject({ code: '42501', message: 'WORKER_ONLY' });
+      await admin.query('ROLLBACK TO SAVEPOINT beat');
+      await expect(admin.query("SELECT crove_kernel.worker_beat('fake', ARRAY['kernel'], 'abc', now())")).rejects.toMatchObject({ code: '42501', message: 'WORKER_ONLY' });
     } finally {
       await admin.query('ROLLBACK');
     }
