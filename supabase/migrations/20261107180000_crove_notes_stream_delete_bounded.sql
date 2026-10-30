@@ -1,5 +1,5 @@
 -- SPDX-License-Identifier: AGPL-3.0-only
--- Crove kernel (issue #1992, from the review of #1987): a bulk delete of notes or to-dos sends one stream hint per
+-- Crove notes (issue #1992, from the review of #1987): a bulk delete of notes or to-dos sends one stream hint per
 -- audience, not one per row. Idempotent; applied files stay untouched.
 --
 -- Since #1973 (20261107030000, 20261107040000) the stream_hint trigger of crove_notes.note and crove_notes.todo fires
@@ -9,7 +9,7 @@
 --
 -- The app reads a to-do or note hint by its type alone (apps/app/src/lib/stream.ts: every notes.* or notes.todos.*
 -- query reads again), so one hint per audience carries all a bulk delete has to say. A delete now fires a statement
--- trigger with the deleted rows as a transition table, and crove_kernel.stream_notify_deleted sends one hint per org
+-- trigger with the deleted rows as a transition table, and crove_notes.stream_notify_deleted sends one hint per org
 -- and audience, with the same routing as crove_kernel.stream_notify (20261104000000_crove_kernel_stream_notes_
 -- audience.sql, ADR-0037): a to-do to its owner's streams (`@<owner_user_id>`), a note to its author's
 -- (`@<author_user_id>`), a shared note (visibility 'org') also to the streams that read shared notes (`+shared`).
@@ -21,7 +21,7 @@
 -- stream_hint triggers (stream-legal-entity.db.test.ts) still see both tables with their org-wide arguments.
 SET LOCAL lock_timeout = '2s';
 
-CREATE OR REPLACE FUNCTION crove_kernel.stream_notify_deleted() RETURNS trigger
+CREATE OR REPLACE FUNCTION crove_notes.stream_notify_deleted() RETURNS trigger
 LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
   v_hint record;
@@ -57,7 +57,7 @@ BEGIN
   END IF;
   RETURN NULL;
 END $$;
-REVOKE ALL ON FUNCTION crove_kernel.stream_notify_deleted() FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant, crove_prober;
+REVOKE ALL ON FUNCTION crove_notes.stream_notify_deleted() FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant, crove_prober;
 
 -- The row trigger on INSERT and UPDATE only (as before 20261107040000), and the statement trigger on DELETE.
 DROP TRIGGER IF EXISTS stream_hint ON crove_notes.note;
@@ -66,7 +66,7 @@ CREATE TRIGGER stream_hint AFTER INSERT OR UPDATE ON crove_notes.note
 DROP TRIGGER IF EXISTS stream_hint_delete ON crove_notes.note;
 CREATE TRIGGER stream_hint_delete AFTER DELETE ON crove_notes.note
   REFERENCING OLD TABLE AS gone
-  FOR EACH STATEMENT EXECUTE FUNCTION crove_kernel.stream_notify_deleted('note', 'id');
+  FOR EACH STATEMENT EXECUTE FUNCTION crove_notes.stream_notify_deleted('note', 'id');
 
 DROP TRIGGER IF EXISTS stream_hint ON crove_notes.todo;
 CREATE TRIGGER stream_hint AFTER INSERT OR UPDATE ON crove_notes.todo
@@ -74,4 +74,4 @@ CREATE TRIGGER stream_hint AFTER INSERT OR UPDATE ON crove_notes.todo
 DROP TRIGGER IF EXISTS stream_hint_delete ON crove_notes.todo;
 CREATE TRIGGER stream_hint_delete AFTER DELETE ON crove_notes.todo
   REFERENCING OLD TABLE AS gone
-  FOR EACH STATEMENT EXECUTE FUNCTION crove_kernel.stream_notify_deleted('todo', 'id');
+  FOR EACH STATEMENT EXECUTE FUNCTION crove_notes.stream_notify_deleted('todo', 'id');

@@ -180,7 +180,7 @@ suite('stream hints of a bulk delete (#1992)', () => {
           await c.query<{ role: string }>(
             `SELECT r.rolname AS role FROM pg_catalog.pg_roles r
              WHERE r.rolname = ANY (ARRAY['crove_tenant', 'crove_app', 'crove_worker', 'crove_definer_tenant', 'crove_prober'])
-               AND pg_catalog.has_function_privilege(r.oid, 'crove_kernel.stream_notify_deleted()', 'EXECUTE')`,
+               AND pg_catalog.has_function_privilege(r.oid, 'crove_notes.stream_notify_deleted()', 'EXECUTE')`,
           )
         ).rows,
     );
