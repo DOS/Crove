@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // One chip per state (DESIGN.md §4.4, #2000): small, text plus a semantic color, and the same state looks the same on
 // every screen. A proposal waiting for a person has the proposal hue (DESIGN.md §2), never the success green of work
 // that is done.
