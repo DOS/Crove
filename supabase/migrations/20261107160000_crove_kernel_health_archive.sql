@@ -10,7 +10,8 @@
 --                               when every row is anchored.
 -- Both are aggregates over tables that hold no tenant data in what is returned (times only). Each is one index lookup
 -- (archive_verification_time_idx, archive_batch's primary key, audit_event_occurred_idx) or a BRIN range scan from the
--- newest batch's end (journal_entry_created_brin), so health() stays fast.
+-- newest batch's end (journal_entry_created_brin), whose cost grows only with the rows not yet archived (the same scan
+-- the archiver runs every minute), so health() stays fast.
 --
 -- A function's result columns cannot change in place, so it is dropped and created again, with the same grant:
 -- EXECUTE for crove_prober alone. The invariant suite accepts both column lists since #2024 (step 1).

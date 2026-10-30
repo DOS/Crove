@@ -177,6 +177,9 @@ describe('prober configuration', () => {
       deadLetterWindowSeconds: 600,
     });
     expect(loadProberConfig({}).thresholds).toMatchObject({ archiveVerifyAgeSeconds: 93_600, archiveLagSeconds: 3600 });
+    // The archiver's own wait raises the default lag limit, so a long ARCHIVE_LAG_SECONDS never pages forever.
+    expect(loadProberConfig({ ARCHIVE_LAG_SECONDS: '7200' }).thresholds.archiveLagSeconds).toBe(8100);
+    expect(loadProberConfig({ ARCHIVE_LAG_SECONDS: '7200', PROBER_MAX_ARCHIVE_LAG_SECONDS: '600' }).thresholds.archiveLagSeconds).toBe(600);
   });
 
   // #1894: the modules the deployment runs, which health() counts in the job age whatever the workers record.

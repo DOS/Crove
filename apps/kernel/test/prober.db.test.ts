@@ -2,6 +2,7 @@
 // heartbeat, and a probe that delivers its alert to a real HTTP webhook. The privilege checks are in the invariant
 // suite (test/invariant/prober.db.test.ts). Set CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops
 // its own database.
+import { randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
@@ -149,19 +150,40 @@ suite('prober on PostgreSQL', () => {
     expect(before.archive_verify_age_seconds).toBeNull();
     expect(before.archive_lag_seconds).toBeGreaterThanOrEqual(0);
     const hash = 'a'.repeat(64);
+    const archive = { ...limits, archiveVerifyAgeSeconds: 93_600, archiveLagSeconds: 3600 };
     await admin(async (c) => {
-      // A first batch written two days ago whose window reaches past now: every row anchored.
+      // A first batch written two days ago, whose window ended three hours ago, and an audit event of two hours ago
+      // after it (backdated, its stamp trigger set aside for this one insert): the archive is two hours behind.
       await c.query(
         `INSERT INTO crove_kernel.archive_batch (seq, window_from, window_to, row_count, batch_sha256, chain_sha256, object_key, written_at)
-         VALUES (1, '-infinity', now() + interval '1 hour', 0, $1, $1, 'chain/v1/000000000001.json', now() - interval '2 days')`,
+         VALUES (1, '-infinity', now() - interval '3 hours', 0, $1, $1, 'chain/v1/000000000001.json', now() - interval '2 days')`,
         [hash],
       );
+      await c.query('BEGIN');
+      await c.query('SET LOCAL session_replication_role = replica');
+      await c.query(
+        `INSERT INTO crove_kernel.audit_event (org_id, occurred_at, actor_type, command, command_id, outcome, input_sha256)
+         VALUES ($1, now() - interval '2 hours', 'system', 'test.backdated', $2, 'ok', $3)`,
+        [orgId, randomUUID(), hash],
+      );
+      await c.query('COMMIT');
     });
+    const behind = await readHealth(proberUrl, 3600);
+    expect(behind.archive_lag_seconds).toBeGreaterThan(7100);
+    expect(behind.archive_lag_seconds).toBeLessThan(7300);
+    expect(evaluateHealth(behind, archive, 3600).map((f) => f.check)).toContain('archive_lag');
+    await admin((c) =>
+      // The next batch reaches past now: every row anchored.
+      c.query(
+        `INSERT INTO crove_kernel.archive_batch (seq, window_from, window_to, row_count, batch_sha256, chain_sha256, object_key, written_at)
+         SELECT 2, b.window_to, now() + interval '1 hour', 1, $1, $1, 'chain/v1/000000000002.json', now() FROM crove_kernel.archive_batch b WHERE b.seq = 1`,
+        [hash],
+      ),
+    );
     const anchored = await readHealth(proberUrl, 3600);
     expect(anchored.archive_lag_seconds).toBeNull();
     // Never verified: aged from the first batch, two days, over a 26-hour limit.
     expect(anchored.archive_verify_age_seconds).toBeGreaterThan(2 * 86_400 - 60);
-    const archive = { ...limits, archiveVerifyAgeSeconds: 93_600, archiveLagSeconds: 3600 };
     expect(evaluateHealth(anchored, archive, 3600).map((f) => f.check)).toContain('archive_verify');
     await admin((c) => c.query(`INSERT INTO crove_kernel.archive_verification (ok, batches, rows_checked, verified_at) VALUES (true, 1, 0, now() - interval '1 hour')`));
     const verified = await readHealth(proberUrl, 3600);

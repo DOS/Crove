@@ -68,10 +68,12 @@ const schema = z.object({
   // the tables that send stream hints. PostgreSQL itself starts warning in its log at 50.
   PROBER_MAX_NOTIFY_QUEUE_PERCENT: z.coerce.number().int().min(0).max(100).default(50),
   // The WORM archive (#1997): the nightly verification older than this (26 h: a day and the slack of one late run), or
-  // the oldest audit event or journal entry not yet archived older than this (the archiver keeps ARCHIVE_LAG_SECONDS,
-  // 600 s by default, on purpose). 0 turns either check off.
+  // the oldest audit event or journal entry not yet archived older than this. The archiver keeps ARCHIVE_LAG_SECONDS
+  // (the worker's value, 600 s by default) on purpose, so the lag limit defaults to the larger of 3600 s and that plus
+  // 15 minutes. 0 turns either check off.
   PROBER_MAX_ARCHIVE_VERIFY_AGE_SECONDS: seconds(93_600),
-  PROBER_MAX_ARCHIVE_LAG_SECONDS: seconds(3600),
+  PROBER_MAX_ARCHIVE_LAG_SECONDS: optional.pipe(z.coerce.number<string | undefined>().int().min(0).max(604_800).optional()),
+  ARCHIVE_LAG_SECONDS: optional.pipe(z.coerce.number<string | undefined>().int().min(60).max(86_400).optional()),
   // Failed jobs count for this long. Default: the probe interval plus 60 s with --every (each dead letter alerts
   // once, or twice when it lands in the overlap, never zero times), 3600 otherwise. With cron, set it to the
   // cron interval plus 60.
@@ -153,7 +155,7 @@ export function loadProberConfig(env: NodeJS.ProcessEnv = process.env, everySeco
       deadLetters: raw.PROBER_MAX_DEAD_LETTERS,
       notifyQueuePercent: raw.PROBER_MAX_NOTIFY_QUEUE_PERCENT,
       archiveVerifyAgeSeconds: raw.PROBER_MAX_ARCHIVE_VERIFY_AGE_SECONDS,
-      archiveLagSeconds: raw.PROBER_MAX_ARCHIVE_LAG_SECONDS,
+      archiveLagSeconds: raw.PROBER_MAX_ARCHIVE_LAG_SECONDS ?? Math.max(3600, (raw.ARCHIVE_LAG_SECONDS ?? 600) + 900),
     },
     deadLetterWindowSeconds: raw.PROBER_DEAD_LETTER_WINDOW_SECONDS ?? (everySeconds === null ? 3600 : Math.min(everySeconds + 60, 604_800)),
     heartbeatUrl: raw.PROBER_HEARTBEAT_URL,
@@ -213,7 +215,8 @@ export interface HealthSnapshot {
   // login may call. Read beside health() rather than through it.
   notify_queue_usage: number;
   // The WORM archive (#1997): since the newest verification run (or the first batch, before any run), and the age of the
-  // oldest row not yet archived; null with no batch, or with every row archived.
+  // oldest row not yet archived (every row's, before the first batch); null with no batch for the first, and with every
+  // row archived for the second.
   archive_verify_age_seconds: number | null;
   archive_lag_seconds: number | null;
 }
