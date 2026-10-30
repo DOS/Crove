@@ -2,9 +2,9 @@
 // conformance suite cannot trigger on demand (429, 5xx) are covered in every CI run.
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { generateText } from 'ai';
+import { generateText, NoObjectGeneratedError } from 'ai';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { chatModel, classifyAiError, type AiErrorInfo } from '../src/index.ts';
+import { aiDocumentFailure, chatModel, classifyAiError, type AiErrorInfo } from '../src/index.ts';
 
 let server: Server;
 let baseURL: string;
@@ -31,6 +31,10 @@ beforeAll(async () => {
 afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
 
 async function failure(model: string, options: { maxRetries?: number; timeoutMs?: number; url?: string } = {}): Promise<AiErrorInfo> {
+  return classifyAiError(await thrown(model, options));
+}
+
+async function thrown(model: string, options: { maxRetries?: number; timeoutMs?: number; url?: string } = {}): Promise<unknown> {
   try {
     await generateText({
       model: chatModel({ baseURL: options.url ?? baseURL, apiKey: 'test-key', model }),
@@ -40,7 +44,7 @@ async function failure(model: string, options: { maxRetries?: number; timeoutMs?
       ...(options.timeoutMs ? { abortSignal: AbortSignal.timeout(options.timeoutMs) } : {}),
     });
   } catch (error) {
-    return classifyAiError(error);
+    return error;
   }
   throw new Error('expected the call to fail');
 }
@@ -78,5 +82,25 @@ describe('AI error mapping', () => {
 
   it('maps anything else to unknown', () => {
     expect(classifyAiError(new Error('boom'))).toEqual({ kind: 'unknown', retryable: false, status: null, retryAfterMs: null });
+  });
+
+  it('tells a document the AI refuses from a reading service that fails (#1998)', async () => {
+    // The document's failure: the endpoint rejects the request itself, or the answer never fits the schema.
+    expect(aiDocumentFailure(await thrown('status-400'))).toBe(true);
+    expect(aiDocumentFailure(await thrown('status-404'))).toBe(true);
+    const unfit = new NoObjectGeneratedError({
+      text: '{}',
+      response: { id: 'r', timestamp: new Date(0), modelId: 'm' },
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } as never,
+      finishReason: 'stop',
+    });
+    expect(aiDocumentFailure(unfit)).toBe(true);
+    // The service's: auth, rate limit, an endpoint down, network, timeout, and errors that are not the AI's.
+    expect(aiDocumentFailure(await thrown('status-401'))).toBe(false);
+    expect(aiDocumentFailure(await thrown('status-429', { maxRetries: 1 }))).toBe(false);
+    expect(aiDocumentFailure(await thrown('status-503'))).toBe(false);
+    expect(aiDocumentFailure(await thrown('status-200', { url: 'http://127.0.0.1:1/v1' }))).toBe(false);
+    expect(aiDocumentFailure(new Error('sandbox down'))).toBe(false);
+    expect(aiDocumentFailure(undefined)).toBe(false);
   });
 });

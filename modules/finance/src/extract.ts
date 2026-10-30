@@ -380,13 +380,21 @@ interface ExtractionFile {
 
 // Marks a run as unreadable so the file leaves the "processing" state: the first extraction (no version) if the
 // file has none yet, or the pending re-extraction `version`. A no-op once that run has a result.
-export async function recordExtractionFailure(runtime: Runtime, orgId: string, fileId: string, message: string, version?: number): Promise<void> {
+export async function recordExtractionFailure(
+  runtime: Runtime,
+  orgId: string,
+  fileId: string,
+  message: string,
+  version?: number,
+  // `service` when the reading service kept failing (#1998); the prober counts those.
+  failure: 'service' | 'document' = 'document',
+): Promise<void> {
   const actor = { type: 'system' as const, component: 'finance.extract' };
   const file = await runtime.query<ExtractionFile | null>('finance.extraction.file', { fileId, version }, { actor, orgId });
   if (!file || !file.due) return;
   await runtime.execute(
     'kernel.extraction.record',
-    { fileId, version, method: 'unsupported', status: 'failed', result: null, checks: [], error: message, proposal: null },
+    { fileId, version, method: 'unsupported', status: 'failed', result: null, checks: [], error: message, proposal: null, failure },
     { actor, orgId },
   );
 }

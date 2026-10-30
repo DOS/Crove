@@ -30,6 +30,8 @@ describe('status view', () => {
     expect(workerDown.overall).toBe('problem');
     expect(states(workerDown)).toEqual({ database: 'ok', documents: 'problem', email: 'problem', updates: 'ok', signin: 'unknown' });
     expect(states(statusView(probeStatus(minutesAgo(1), ['outbox', 'notify_queue']), NOW))).toMatchObject({ updates: 'problem', documents: 'ok' });
+    // Readings failing at the AI provider or the parser (#1998): uploaded documents are not processed.
+    expect(states(statusView(probeStatus(minutesAgo(1), ['extraction']), NOW))).toMatchObject({ documents: 'problem', email: 'ok', updates: 'ok' });
     // Supabase Auth not answering (#1994): signing in is down, nothing else; answering: fine. Without the check (off, or
     // an older prober), the line says nothing is known.
     expect(states(statusView(probeStatus(minutesAgo(1), ['auth'], true), NOW))).toEqual({ database: 'ok', documents: 'ok', email: 'ok', updates: 'ok', signin: 'problem' });
@@ -101,6 +103,8 @@ describe('prober', () => {
     notify_queue_usage: 0,
     archive_verify_age_seconds: null,
     archive_lag_seconds: null,
+    extraction_service_failures: 0,
+    extraction_document_failures: 0,
   };
   const config = (overrides: Partial<ProberConfig> = {}): ProberConfig => ({
     databaseUrl: 'postgres://crove_prober:pw@db:5432/postgres',

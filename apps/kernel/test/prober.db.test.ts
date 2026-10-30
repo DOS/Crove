@@ -144,6 +144,30 @@ suite('prober on PostgreSQL', () => {
     }
   });
 
+  it('counts the document readings that failed at the service and those whose document could not be read (#1998)', async () => {
+    const event = (reason: string | null, age: string) =>
+      admin((c) =>
+        c.query(
+          `INSERT INTO crove_kernel.outbox_event (org_id, type, payload, created_at)
+           VALUES ($1, 'kernel.file.read_failed', $2::jsonb, now() - $3::interval)`,
+          [orgId, JSON.stringify(reason === null ? { fileId: randomUUID(), version: 1 } : { fileId: randomUUID(), version: 1, reason }), age],
+        ),
+      );
+    // Two service failures and a document one in the window, an older service failure outside it, and an event written
+    // before #1998 (no reason), which counts as a document failure.
+    await event('service', '10 minutes');
+    await event('service', '20 minutes');
+    await event('document', '5 minutes');
+    await event(null, '1 minute');
+    await event('service', '2 hours');
+    const health = await readHealth(proberUrl, 3600, [], 3600);
+    expect(health).toMatchObject({ extraction_service_failures: 2, extraction_document_failures: 2 });
+    const extraction = { ...limits, extractionFailures: 1, extractionWindowSeconds: 3600 };
+    expect(evaluateHealth(health, extraction, 3600).map((f) => f.check)).toContain('extraction');
+    // A wider window takes in the older one.
+    expect((await readHealth(proberUrl, 3600, [], 3 * 3600)).extraction_service_failures).toBe(3);
+  });
+
   it('measures the WORM archive: since its last verification (or first batch) and the oldest row not yet archived (#1997)', async () => {
     // Audit events of the org setup, and no batch yet: nothing to verify, every row waiting.
     const before = await readHealth(proberUrl, 3600);
@@ -354,6 +378,8 @@ suite('prober on PostgreSQL', () => {
       'archive_verify_age_seconds',
       'checked_at',
       'dead_letter_count',
+      'extraction_document_failures',
+      'extraction_service_failures',
       'inbound_oldest_age_seconds',
       'inbound_pending',
       'job_oldest_queued_age_seconds',

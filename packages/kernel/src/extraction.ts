@@ -280,6 +280,10 @@ export const recordExtraction = defineCommand({
     checks: z.array(zCheck),
     error: z.string().max(2000).nullable(),
     proposal: zProposalDraft.nullable(),
+    // Why a failed run failed (#1998): `service` when the reading service itself kept failing (the AI provider refused
+    // or did not answer, the parser sandbox was down) after every retry, which the operator must see; `document`
+    // (the default) when the document could not be read. A code in kernel.file.read_failed, which the prober counts.
+    failure: z.enum(['service', 'document']).optional(),
   }),
   risk: 'R1',
   sideEffect: 'internal',
@@ -357,7 +361,7 @@ export const recordExtraction = defineCommand({
     if (!input.proposal) {
       await ctx.activity('kernel.file', input.fileId, 'extraction.failed', input.error ?? 'Không đọc được chứng từ');
       // Whoever is waiting for this reading is told (#671, kernel.notification.dispatch).
-      if (input.status === 'failed') await ctx.emit('kernel.file.read_failed', { fileId: input.fileId, version: run.version });
+      if (input.status === 'failed') await ctx.emit('kernel.file.read_failed', { fileId: input.fileId, version: run.version, reason: input.failure ?? 'document' });
       if (applies && current?.status === 'pending') {
         await ctx.activity('kernel.proposal', current.id, 'proposal.reextract_failed', `Đọc lại không thành công (lần đọc ${run.version}); đề xuất giữ nguyên bản ${current.revision}`);
       }

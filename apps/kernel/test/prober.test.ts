@@ -23,6 +23,8 @@ const healthy: HealthSnapshot = {
   notify_queue_usage: 0,
   archive_verify_age_seconds: null,
   archive_lag_seconds: null,
+  extraction_service_failures: 0,
+  extraction_document_failures: 0,
 };
 const limits = { outboxAgeSeconds: 300, jobAgeSeconds: 900, heartbeatAgeSeconds: 120, deadLetters: 0, notifyQueuePercent: 50 };
 
@@ -131,6 +133,43 @@ describe('health thresholds', () => {
     expect(evaluateHealth(healthy, archive, 300)).toEqual([]);
   });
 
+  it('reports document readings that failed at the reading service, never documents that could not be read (#1998)', () => {
+    const extraction = { ...limits, extractionFailures: 2, extractionWindowSeconds: 3600 };
+    expect(evaluateHealth({ ...healthy, extraction_service_failures: 2, extraction_document_failures: 50 }, extraction, 300)).toEqual([]);
+    expect(evaluateHealth({ ...healthy, extraction_service_failures: 3, extraction_document_failures: 0 }, extraction, 300)).toEqual([
+      {
+        check: 'extraction',
+        value: 3,
+        threshold: 2,
+        message:
+          '3 document reading(s) failed every attempt in the last 3600 s (limit 2): the AI provider refuses or does not answer, or the parser sandbox is down (docs/runbooks/incidents.md)',
+      },
+    ]);
+    // 0 turns it off.
+    expect(evaluateHealth({ ...healthy, extraction_service_failures: 30 }, { ...extraction, extractionFailures: 0 }, 300)).toEqual([]);
+    expect(loadProberConfig({}).thresholds).toMatchObject({ extractionFailures: 2, extractionWindowSeconds: 3600 });
+  });
+
+  it('alerts once while readings keep failing at the service, and sends a recovery when they stop (#1998)', async () => {
+    const io = capture();
+    const hook = webhook();
+    const cfg = config({ thresholds: { ...limits, extractionFailures: 2, extractionWindowSeconds: 3600 } });
+    const failing = { ...healthy, extraction_service_failures: 4 };
+    let window: number | undefined;
+    const read = (h: typeof healthy) => async (_url: string, _dl: number, _m?: readonly string[], w?: number) => {
+      window = w;
+      return h;
+    };
+    expect(await probeOnce(cfg, { ...io, fetch: hook.fetch, readHealth: read(failing) })).toBe(EXIT.unhealthy);
+    expect(await probeOnce(cfg, { ...io, fetch: hook.fetch, readHealth: read(failing) })).toBe(EXIT.unhealthy);
+    expect(hook.calls).toHaveLength(1);
+    expect(window).toBe(3600);
+    expect(hook.body(0).crove.findings).toEqual([expect.objectContaining({ check: 'extraction', value: 4, threshold: 2 })]);
+    expect(await probeOnce(cfg, { ...io, fetch: hook.fetch, readHealth: read({ ...healthy, extraction_document_failures: 9 }) })).toBe(EXIT.ok);
+    expect(hook.calls).toHaveLength(2);
+    expect(hook.body(1).crove).toMatchObject({ kind: 'resolved', previous: ['extraction'] });
+  });
+
   it('alerts once when the archive falls behind, and sends a recovery when it catches up (#1997)', async () => {
     const io = capture();
     const hook = webhook();
@@ -191,7 +230,7 @@ describe('prober configuration', () => {
     const readHealth = vi.fn(async () => healthy);
     const config = { ...loadProberConfig({ CROVE_MODULES: 'finance' }), databaseUrl: 'postgres://prober@db.test/crove' };
     await probeOnce(config, { log: () => {}, error: () => {}, readHealth });
-    expect(readHealth).toHaveBeenCalledWith('postgres://prober@db.test/crove', 3600, ['kernel', 'finance']);
+    expect(readHealth).toHaveBeenCalledWith('postgres://prober@db.test/crove', 3600, ['kernel', 'finance'], 3600);
   });
 
   it('counts dead letters over the --every interval plus 60 s unless the window is set', () => {

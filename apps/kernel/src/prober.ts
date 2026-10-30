@@ -74,6 +74,11 @@ const schema = z.object({
   PROBER_MAX_ARCHIVE_VERIFY_AGE_SECONDS: seconds(93_600),
   PROBER_MAX_ARCHIVE_LAG_SECONDS: optional.pipe(z.coerce.number<string | undefined>().int().min(0).max(604_800).optional()),
   ARCHIVE_LAG_SECONDS: optional.pipe(z.coerce.number<string | undefined>().int().min(60).max(86_400).optional()),
+  // AI document extraction (#1998): more than this many readings in PROBER_EXTRACTION_WINDOW_SECONDS whose every
+  // attempt failed (the AI provider refused or did not answer, the parser sandbox was down) alert; a document that
+  // cannot be read never does. 0 turns the check off.
+  PROBER_MAX_EXTRACTION_FAILURES: z.coerce.number().int().min(0).max(10_000).default(2),
+  PROBER_EXTRACTION_WINDOW_SECONDS: z.coerce.number().int().min(60).max(86_400).default(3600),
   // Failed jobs count for this long. Default: the probe interval plus 60 s with --every (each dead letter alerts
   // once, or twice when it lands in the overlap, never zero times), 3600 otherwise. With cron, set it to the
   // cron interval plus 60.
@@ -131,6 +136,9 @@ export interface Thresholds {
   // The WORM archive (#1997); 0: not checked. Left out of thresholds built by hand: not checked.
   archiveVerifyAgeSeconds?: number;
   archiveLagSeconds?: number;
+  // AI document extraction (#1998): failed readings of the reading service in the window; 0 or left out: not checked.
+  extractionFailures?: number;
+  extractionWindowSeconds?: number;
 }
 
 export function loadProberConfig(env: NodeJS.ProcessEnv = process.env, everySeconds: number | null = null): ProberConfig {
@@ -156,6 +164,8 @@ export function loadProberConfig(env: NodeJS.ProcessEnv = process.env, everySeco
       notifyQueuePercent: raw.PROBER_MAX_NOTIFY_QUEUE_PERCENT,
       archiveVerifyAgeSeconds: raw.PROBER_MAX_ARCHIVE_VERIFY_AGE_SECONDS,
       archiveLagSeconds: raw.PROBER_MAX_ARCHIVE_LAG_SECONDS ?? Math.max(3600, (raw.ARCHIVE_LAG_SECONDS ?? 600) + 900),
+      extractionFailures: raw.PROBER_MAX_EXTRACTION_FAILURES,
+      extractionWindowSeconds: raw.PROBER_EXTRACTION_WINDOW_SECONDS,
     },
     deadLetterWindowSeconds: raw.PROBER_DEAD_LETTER_WINDOW_SECONDS ?? (everySeconds === null ? 3600 : Math.min(everySeconds + 60, 604_800)),
     heartbeatUrl: raw.PROBER_HEARTBEAT_URL,
@@ -219,6 +229,10 @@ export interface HealthSnapshot {
   // row archived for the second.
   archive_verify_age_seconds: number | null;
   archive_lag_seconds: number | null;
+  // AI document extraction (#1998): readings of the window whose every attempt failed (the service), and those whose
+  // document could not be read.
+  extraction_service_failures: number;
+  extraction_document_failures: number;
 }
 
 const s = (n: number) => `${Math.round(n)} s`;
@@ -291,6 +305,15 @@ export function evaluateHealth(h: HealthSnapshot, t: Thresholds, deadLetterWindo
       message: `the oldest audit event not yet in the WORM archive is ${s(h.archive_lag_seconds)} old (limit ${s(lagLimit)}): the archiver is behind or stopped (docs/runbooks/worm-archive.md)`,
     });
   }
+  const extractionLimit = t.extractionFailures ?? 0;
+  if (extractionLimit > 0 && h.extraction_service_failures > extractionLimit) {
+    findings.push({
+      check: 'extraction',
+      value: h.extraction_service_failures,
+      threshold: extractionLimit,
+      message: `${h.extraction_service_failures} document reading(s) failed every attempt in the last ${s(t.extractionWindowSeconds ?? 3600)} (limit ${extractionLimit}): the AI provider refuses or does not answer, or the parser sandbox is down (docs/runbooks/incidents.md)`,
+    });
+  }
   if (h.notify_queue_usage * 100 > t.notifyQueuePercent) {
     findings.push({
       check: 'notify_queue',
@@ -307,7 +330,7 @@ export function evaluateHealth(h: HealthSnapshot, t: Thresholds, deadLetterWindo
  * the deployment runs, reach health() as the session setting crove.prober_modules: their queues count in the job age
  * whatever the workers record (#1894).
  */
-export async function readHealth(databaseUrl: string, deadLetterWindowSeconds: number, modules: readonly string[] = []): Promise<HealthSnapshot> {
+export async function readHealth(databaseUrl: string, deadLetterWindowSeconds: number, modules: readonly string[] = [], extractionWindowSeconds = 3600): Promise<HealthSnapshot> {
   const client = new pg.Client({
     connectionString: databaseUrl,
     application_name: 'crove-prober',
@@ -327,7 +350,9 @@ export async function readHealth(databaseUrl: string, deadLetterWindowSeconds: n
     // both statements on one server connection and leaves nothing set on it (#1894 review).
     await client.query('BEGIN READ ONLY');
     await client.query(`SELECT pg_catalog.set_config('crove.prober_modules', $1, true)`, [modules.join(',')]);
-    const { rows } = await client.query<Omit<HealthSnapshot, 'notify_queue_usage' | 'archive_verify_age_seconds' | 'archive_lag_seconds'>>(
+    const { rows } = await client.query<
+      Omit<HealthSnapshot, 'notify_queue_usage' | 'archive_verify_age_seconds' | 'archive_lag_seconds' | 'extraction_service_failures' | 'extraction_document_failures'>
+    >(
       `SELECT checked_at::text AS checked_at, outbox_pending, outbox_oldest_age_seconds, inbound_pending, inbound_oldest_age_seconds,
               jobs_schema_present, jobs_queued, job_oldest_queued_age_seconds, dead_letter_count, worker_heartbeat_age_seconds
        FROM crove_kernel.health($1::int)`,
@@ -339,6 +364,11 @@ export async function readHealth(databaseUrl: string, deadLetterWindowSeconds: n
     const { rows: archive } = await client.query<Pick<HealthSnapshot, 'archive_verify_age_seconds' | 'archive_lag_seconds'>>(
       'SELECT archive_verify_age_seconds, archive_lag_seconds FROM crove_kernel.archive_health()',
     );
+    // Failed document readings of the window (#1998), from a function of their own too.
+    const { rows: extraction } = await client.query<{ service_failures: number; document_failures: number }>(
+      'SELECT service_failures, document_failures FROM crove_kernel.extraction_health($1::int)',
+      [extractionWindowSeconds],
+    );
     const { rows: queue } = await client.query<{ usage: number }>('SELECT pg_catalog.pg_notification_queue_usage() AS usage');
     await client.query('COMMIT');
     return {
@@ -346,6 +376,8 @@ export async function readHealth(databaseUrl: string, deadLetterWindowSeconds: n
       notify_queue_usage: Number(queue[0]?.usage ?? 0),
       archive_verify_age_seconds: archive[0]?.archive_verify_age_seconds ?? null,
       archive_lag_seconds: archive[0]?.archive_lag_seconds ?? null,
+      extraction_service_failures: Number(extraction[0]?.service_failures ?? 0),
+      extraction_document_failures: Number(extraction[0]?.document_failures ?? 0),
     };
   } finally {
     await client.end().catch(() => {});
@@ -552,7 +584,7 @@ async function probe(config: ProberConfig, deps: ProbeDeps): Promise<{ code: num
   if (auth && !auth.ok && !authFinding) error(`[prober] Supabase Auth did not answer (${auth.reason}); ${authState.misses} of ${authLimit} misses before it alerts`);
   let health: HealthSnapshot;
   try {
-    health = await (deps.readHealth ?? readHealth)(config.databaseUrl, config.deadLetterWindowSeconds, config.modules);
+    health = await (deps.readHealth ?? readHealth)(config.databaseUrl, config.deadLetterWindowSeconds, config.modules, config.thresholds.extractionWindowSeconds);
   } catch (e) {
     // The database itself is unreachable or health() is refused: that is an outage too, so it alerts. Its state
     // cannot be kept in the database, so the in-process gate de-duplicates it.
