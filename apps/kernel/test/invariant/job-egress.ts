@@ -69,6 +69,9 @@ export const DEPS_REACH: Readonly<Record<string, readonly Reach[]>> = {
   'channels.broker': [],
   'channels.publishers': ['publishers'],
   'channels.refreshers': ['provider:channel'],
+  // The bank feed adapters (ADR-0039, #2044): the offline sandbox reaches nothing; a real adapter is classified here,
+  // with its provider, before it is added.
+  'channels.bankFeeds': [],
   publicUrl: [],
   brand: [],
   mail: ['provider:mail'],
