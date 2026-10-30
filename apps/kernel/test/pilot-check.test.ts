@@ -115,6 +115,13 @@ describe('pilot-check settings', () => {
     expect(failing({ ...READY, ARCHIVE_STORE: 's3', ARCHIVE_S3_BUCKET: 'crove-archive', S3_ENDPOINT: 'not a url' })).toEqual([
       'Alerts: the prober would not check the WORM verification marker: invalid archive settings: S3_ENDPOINT (docs/runbooks/worm-archive.md)',
     ]);
+    // A bucket that is missing and a half pair of the prober's own key are reported as well.
+    expect(failing({ ...READY, ARCHIVE_STORE: 's3' })).toEqual([
+      'Alerts: the prober would not check the WORM verification marker: ARCHIVE_STORE=s3 needs ARCHIVE_S3_BUCKET (docs/runbooks/worm-archive.md)',
+    ]);
+    expect(failing({ ...READY, ARCHIVE_STORE: 's3', ARCHIVE_S3_BUCKET: 'crove-archive', PROBER_ARCHIVE_S3_ACCESS_KEY_ID: fake('reader') })).toEqual([
+      expect.stringContaining('set both PROBER_ARCHIVE_S3_ACCESS_KEY_ID and PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY, or neither'),
+    ]);
     // The worker's own key in the shared .env is no problem: Compose never passes it to the prober.
     expect(failing({ ...READY, ARCHIVE_STORE: 's3', ARCHIVE_S3_BUCKET: 'crove-archive', S3_ACCESS_KEY_ID: fake('worker-key'), S3_SECRET_ACCESS_KEY: fake('worker-secret') })).toEqual([]);
   });

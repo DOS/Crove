@@ -380,6 +380,7 @@ describe('S3 client timeouts (#2094)', () => {
     if (!address || typeof address === 'string') throw new Error('no port');
     return {
       endpoint: `http://127.0.0.1:${address.port}`,
+      accepted: () => sockets.length,
       close: async () => {
         for (const socket of sockets) socket.destroy();
         await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -392,8 +393,13 @@ describe('S3 client timeouts (#2094)', () => {
     try {
       const client = createS3Client({ ...credentials, endpoint: silent.endpoint }, undefined, { connectionTimeoutMs: 500, requestTimeoutMs: 200, maxAttempts: 1 });
       const started = Date.now();
-      await expect(client.send(new ListObjectsV2Command({ Bucket: 'b' }))).rejects.toThrow();
+      await expect(client.send(new ListObjectsV2Command({ Bucket: 'b' }))).rejects.toMatchObject({ name: 'TimeoutError' });
       expect(Date.now() - started).toBeLessThan(4000);
+      // It reached the server, which took the connection: the timeout is the request's, not a failure to connect.
+      expect(silent.accepted()).toBeGreaterThan(0);
+      // And the handler was given what was asked for, the connection timeout included.
+      const configured = await (client.config.requestHandler as { httpHandlerConfigs: () => Record<string, unknown> }).httpHandlerConfigs();
+      expect(configured).toMatchObject({ connectionTimeout: 500, requestTimeout: 200, throwOnRequestTimeout: true });
     } finally {
       await silent.close();
     }

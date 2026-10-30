@@ -845,6 +845,39 @@ describe('WORM verification marker (#2082)', () => {
     expect(calls[0]?.signal?.aborted).toBe(true);
   });
 
+  it('hands the deadline signal to every call of the marker read, the body of the marker included (#2094)', async () => {
+    const s3 = { maxAgeSeconds: 93_600, store: { kind: 's3' as const, bucket: 'archive', region: 'us-east-1', endpoint: undefined, forcePathStyle: false, accessKeyId: undefined, secretAccessKey: undefined } };
+    const key = 'verify/v1/20261030T020000Z.json';
+    const signals: Array<{ command: string; signal: AbortSignal | undefined }> = [];
+    let bodyAborted = false;
+    // The listings answer; the marker's body never arrives until the signal of its own call aborts.
+    const stalled: ArchiveS3Sender = {
+      send: (async (command: object, options?: { abortSignal?: AbortSignal }) => {
+        const name = command.constructor.name;
+        signals.push({ command: name, signal: options?.abortSignal });
+        if (name === 'ListObjectsV2Command') return { Contents: [{ Key: key }], IsTruncated: false };
+        if (name === 'ListObjectVersionsCommand') return { Versions: [{ Key: key, LastModified: new Date(now.getTime() - 3_600_000) }], IsTruncated: false };
+        return {
+          Body: {
+            transformToByteArray: () =>
+              new Promise<Uint8Array>((_, reject) => {
+                options?.abortSignal?.addEventListener('abort', () => {
+                  bodyAborted = true;
+                  reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+                });
+              }),
+          },
+        };
+      }) as ArchiveS3Sender['send'],
+    };
+    const finding = await checkVerifyMarker(s3, { archiveClient: stalled, markerTimeoutMs: 20 }, now);
+    expect(finding?.message).toBe('the prober could not read the verification marker from the WORM archive store: no answer within 0 s (docs/runbooks/worm-archive.md)');
+    expect(signals.map((s) => s.command)).toEqual(['ListObjectsV2Command', 'ListObjectVersionsCommand', 'ListObjectVersionsCommand', 'GetObjectCommand']);
+    // One signal for the whole read, and it is the one that aborted the body.
+    expect(new Set(signals.map((s) => s.signal)).size).toBe(1);
+    expect(bodyAborted).toBe(true);
+  });
+
   it("builds its S3 client with timeouts and attempts, once per settings, and never takes the worker's key (#2094)", () => {
     const settings = { kind: 's3' as const, bucket: 'archive', region: 'us-east-1', endpoint: 'http://127.0.0.1:9', forcePathStyle: true, accessKeyId: 'reader', secretAccessKey: 'r' };
     vi.mocked(createS3Client).mockClear();

@@ -155,7 +155,9 @@ export interface ProberConfig {
   authTimeoutSeconds?: number;
   // The verification marker check (#2082); unset: off. A setting the check cannot use (error) disables the check, which
   // then reports it on every probe: it never stops the other probes or the backup and test alerts (#2094).
-  archiveMarker?: ({ maxAgeSeconds: number } & ({ store: ArchiveStoreSettings } | { error: string })) | undefined;
+  // workerKey: the error is the worker's key in a shared environment, which a deployment's .env always has (the pilot
+  // preflight leaves it out).
+  archiveMarker?: ({ maxAgeSeconds: number } & ({ store: ArchiveStoreSettings } | { error: string; workerKey?: true })) | undefined;
 }
 
 export type ArchiveStoreSettings =
@@ -252,6 +254,7 @@ function archiveMarkerSettings(env: NodeJS.ProcessEnv): ProberConfig['archiveMar
     if (!own && raw.S3_ACCESS_KEY_ID) {
       return {
         maxAgeSeconds,
+        workerKey: true,
         error:
           "ARCHIVE_STORE=s3 and S3_ACCESS_KEY_ID (the worker's key) is set, but the prober's own PROBER_ARCHIVE_S3_ACCESS_KEY_ID and PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY are not: " +
           "set them to a read-only key, or unset S3_ACCESS_KEY_ID in the prober's environment to use the default credential chain",

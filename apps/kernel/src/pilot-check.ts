@@ -249,9 +249,10 @@ export function checkEnv(env: Env): CheckResult[] {
   if (!alerts.some((p) => p !== null)) {
     try {
       const prober = loadProberConfig({ ...env });
-      // A malformed archive setting disables only the marker check (#2094), so the load no longer throws: say so here. Not
-      // the refusal over S3_ACCESS_KEY_ID, which the shared .env always has and Compose never passes to the prober.
-      if (prober.archiveMarker && 'error' in prober.archiveMarker && prober.archiveMarker.error.startsWith('invalid archive settings')) {
+      // A setting the marker check cannot use disables only that check (#2094), so the load no longer throws: say so here.
+      // Not the refusal over the worker's S3_ACCESS_KEY_ID, which the shared .env always has and Compose never passes to
+      // the prober.
+      if (prober.archiveMarker && 'error' in prober.archiveMarker && !prober.archiveMarker.workerKey) {
         alerts.push(`the prober would not check the WORM verification marker: ${prober.archiveMarker.error} (docs/runbooks/worm-archive.md)`);
       }
     } catch (error) {
