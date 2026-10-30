@@ -31,16 +31,17 @@ export type Profile = {
 };
 
 // Lighthouse's two profiles as DevTools throttling applies them: a mid-range phone on slow 4G with a 4x slower CPU,
-// and a desktop on a fast line. INP is held to the budget on the desktop, where the CPU runs at the runner's own speed;
-// on the phone it is only reported: a 4x slowdown of a CI runner is not a calibrated phone, and the theme toggle
-// restyles the whole page, which there lands near the 200 ms line from one run to the next.
+// and a desktop on a fast line. INP is held to the budget on both. The theme toggle restyles the whole page, which on
+// the phone landed near the 200 ms line from one run to the next; since #1668 the click answers with the button's own
+// icon and the page restyles in the task after that paint (theme-toggle.tsx). The restyle costs the same main-thread
+// time as before; INP no longer counts it, since it is not part of the click's answer.
 export const PROFILES: Profile[] = [
   {
     name: 'mobile',
     context: { viewport: { width: 412, height: 823 }, deviceScaleFactor: 1.75, isMobile: true, hasTouch: true, userAgent: devices['Moto G4'].userAgent },
     network: { latencyMs: 562.5, downloadKbps: 1474.56, uploadKbps: 675 },
     cpuSlowdown: 4,
-    checksInp: false,
+    checksInp: true,
   },
   {
     name: 'desktop',
