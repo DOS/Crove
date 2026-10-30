@@ -483,7 +483,7 @@ export const zInboxItem = z.object({
   extracted: z.boolean(),
   // An expired proposal (#876): the whole days it waited for approval before it expired, its reason; null otherwise.
   expiredAfterDays: z.number().int().nonnegative().nullable(),
-  // An executed purchase whose document was voided by reversing its journal entry (#165): no longer in the books, so the
+  // An executed invoice (a purchase or a sale) whose document was voided by reversing its journal entry (#165): no longer in the books, so the
   // list does not show it as posted (#2054), and its file may be read again and the invoice recorded anew. False for any
   // other proposal.
   voided: z.boolean(),

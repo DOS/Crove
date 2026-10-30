@@ -55,7 +55,7 @@ describe('the badges of an Inbox row', () => {
     }
   });
 
-  it('words it as the proposal page and the file do', () => {
+  it("words it as the file's chip does", () => {
     expect(catalog('vi').inbox.voided).toBe('Đã hủy (đảo bút toán)');
     expect(catalog('vi').inbox.voided).toBe(catalog('vi').inbox.fileStatus.voided);
     expect(catalog('en').inbox.voided).toBe(catalog('en').inbox.fileStatus.voided);

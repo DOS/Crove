@@ -313,7 +313,7 @@ suite('journal reversal through the API, and voided purchase documents (#165)', 
       voided: false,
     });
     const listed = await rpc('inbox/list', await tokenFor(owner), { status: 'pending' });
-    expect(listed.body).toEqual([expect.objectContaining({ id: proposalId, kind: 'finance.journal_reversal', sellerName: null, total: null })]);
+    expect(listed.body).toEqual([expect.objectContaining({ id: proposalId, kind: 'finance.journal_reversal', sellerName: null, total: null, voided: false })]);
     expect((await rpc('journal/get', await tokenFor(viewer), { id: firstEntry })).body).toMatchObject({
       id: firstEntry,
       reverses: null,
@@ -354,8 +354,10 @@ suite('journal reversal through the API, and voided purchase documents (#165)', 
     expect(posted.find((i) => i.id === firstProposal)).toMatchObject({ voided: true });
     expect(posted.find((i) => i.kind === 'finance.journal_reversal')).toMatchObject({ voided: false });
     expect(posted.filter((i) => i.voided).map((i) => i.id)).toEqual([firstProposal]);
-    // Only the posted ones can be voided: a decided or waiting proposal is never.
-    expect(((await rpc('inbox/list', await tokenFor(viewer), { status: 'rejected' })).body as Array<{ voided: boolean }>).every((i) => !i.voided)).toBe(true);
+    // Only the posted ones can be voided: a rejected proposal says false, not nothing.
+    const refused = (await rpc('inbox/list', await tokenFor(viewer), { status: 'rejected' })).body as Array<{ voided: boolean }>;
+    expect(refused.length).toBeGreaterThan(0);
+    expect(refused.every((i) => i.voided === false)).toBe(true);
 
     const documents = await rpc('documents/list', await tokenFor(viewer), {});
     expect(documents.body).toEqual([

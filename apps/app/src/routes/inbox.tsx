@@ -367,7 +367,7 @@ export function InboxPage() {
     links[at]?.scrollIntoView({ block: 'nearest' });
   };
   useReviewShortcuts({ next: () => moveFocus(1), previous: () => moveFocus(-1) });
-  // The bulk checkbox and the check badges of one proposal, for the table and the phone's blocks alike (#1270).
+  // The bulk checkbox of one proposal, for the table and the phone's blocks alike (#1270); its badges are ProposalBadges.
   const selectBox = (item: InboxItem) =>
     bulkSelectable(item, REVERSAL_KIND) ? (
       <Checkbox
