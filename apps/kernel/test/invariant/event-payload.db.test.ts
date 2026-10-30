@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Invariant suite (Decision 7): every event the outbox takes carries ids and codes only, whoever writes it (#1949,
 // #1970, ADR-0017 section 1). An event row is append-only and the outbox archive keeps payloads as plain JSON for 400
 // days, so no erasure reaches a value once it is in one. ctx.emit checks the payload in TypeScript; the database holds

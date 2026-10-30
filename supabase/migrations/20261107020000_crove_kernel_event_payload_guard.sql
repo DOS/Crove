@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: AGPL-3.0-only
 -- Crove kernel (issue #1970, ADR-0017 section 1): every event the outbox takes carries ids and codes only, whoever
 -- writes it. Idempotent; applied files stay untouched.
 --
