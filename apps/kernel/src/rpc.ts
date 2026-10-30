@@ -1835,18 +1835,17 @@ export function createRpcHandler(
         inFinance(context, (orgId, actor) => runtime.query('finance.bank.open_lines', input ?? {}, { actor, orgId })),
       ),
     },
-    // Bank feeds (ADR-0039, #2044). The sandbox's secret is made and sealed here, and its accounts listed with it before
-    // it is sealed: the API never opens a credential. The commands check the role again.
+    // Bank feeds (ADR-0039, #2044). The sandbox's secret is made and sealed here; the worker opens it and lists the
+    // accounts the login reaches (part 2b), so the API never uses a credential. The commands check the role again.
     bankFeeds: {
       accounts: os.bankFeeds.accounts.handler(({ context }) => inFinance(context, (orgId, actor) => runtime.query('finance.bank_feed.accounts', {}, { actor, orgId }))),
+      listed: os.bankFeeds.listed.handler(({ context, input }) => inFinance(context, (orgId, actor) => runtime.query('finance.bank_feed.listed', input, { actor, orgId }))),
       connectSandbox: os.bankFeeds.connectSandbox.handler(({ context, input }) =>
         inFinance(context, async (orgId, actor) => {
           const { role } = await resolveMembership(runtime, context.user, context.orgSlug);
           if (role !== 'owner' && role !== 'admin') throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu hoặc quản trị viên mới kết nối được nguồn giao dịch ngân hàng');
           if (!channels?.bankFeedSandbox) throw new DomainError('BANK_FEED_DISABLED', 404, 'Nguồn giao dịch ngân hàng thử nghiệm chưa được bật');
-          const feed = sandboxBankFeed();
-          const login = feed.connect(input.displayName);
-          const accounts = await feed.accounts(login.secret);
+          const login = sandboxBankFeed().connect(input.displayName);
           const sealed = channels.broker.seal(login.secret, { orgId, provider: login.provider, externalAccountId: login.externalAccountId });
           const command: ChannelConnectInput = {
             provider: login.provider,
@@ -1857,7 +1856,7 @@ export function createRpcHandler(
             credential: { keyId: sealed.keyId, envelope: sealed.envelope.toString('base64') },
           };
           const { connectionId } = await runtime.execute<{ connectionId: string }>('kernel.channel.connect', command, { actor, orgId });
-          return { connectionId, accounts };
+          return { connectionId };
         }),
       ),
       map: os.bankFeeds.map.handler(({ context, input }) =>

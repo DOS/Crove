@@ -1473,11 +1473,13 @@ export const contract = {
   // money.
   bankFeeds: {
     accounts: oc.output(z.array(zBankFeedAccountView)),
-    // The offline sandbox feed, when the deployment enables it (BANK_FEED_SANDBOX): a login of its own each time, and
-    // the accounts it reaches, to map.
-    connectSandbox: oc
-      .input(z.object({ displayName: z.string().trim().min(1).max(200) }))
-      .output(z.object({ connectionId: zId, accounts: z.array(z.object({ externalAccountId: z.string(), displayName: z.string() })) })),
+    // The offline sandbox feed, when the deployment enables it (BANK_FEED_SANDBOX): a login of its own each time. The
+    // worker lists the accounts it reaches (listed), to map.
+    connectSandbox: oc.input(z.object({ displayName: z.string().trim().min(1).max(200) })).output(z.object({ connectionId: zId })),
+    // The accounts a connection reaches, as the worker last listed them.
+    listed: oc
+      .input(z.object({ connectionId: zId }))
+      .output(z.array(z.object({ externalAccountId: z.string(), displayName: z.string(), listedAt: z.string() }))),
     map: oc.input(zBankFeedMap.extend({ idempotencyKey: zId })).output(z.object({ feedAccountId: zId })),
     unmap: oc.input(z.object({ feedAccountId: zId, idempotencyKey: zId })).output(z.object({ feedAccountId: zId })),
   },

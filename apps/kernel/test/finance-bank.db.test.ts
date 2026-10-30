@@ -20,6 +20,8 @@ import { financeCommands, financeQueries } from '@crove/mod-finance';
 import { createAuthenticator } from '../src/auth.ts';
 import { loadConfig } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
+import { runBankFeedSync } from '../src/bank-feed-sync.ts';
+import { bankFeedProviders } from '@crove/bank-feed';
 import { createSessionStatusSource } from '../src/sessions.ts';
 import { TEST_MANIFESTS } from './manifests.ts';
 
@@ -60,6 +62,7 @@ suite('bank statement import (#326)', () => {
   let app: ReturnType<typeof createHttpApp>;
   // With the sandbox bank feed on (ADR-0039, #2044), and a credential key to seal its secret.
   let feedApp: ReturnType<typeof createHttpApp>;
+  let vault: CredentialVault;
   // The API's runtime, and the worker's, which runs feed jobs as the system.
   let api: Runtime;
   let worker: Runtime;
@@ -162,7 +165,7 @@ suite('bank statement import (#326)', () => {
     });
     app = createHttpApp({ config, runtime, store: new MemoryStore(), authenticate: createAuthenticator(config, db), pool, aiEnabled: false });
     api = runtime;
-    const vault = new CredentialVault([parseVaultKey(randomBytes(32).toString('base64'))]);
+    vault = new CredentialVault([parseVaultKey(randomBytes(32).toString('base64'))]);
     feedApp = createHttpApp({
       config,
       runtime,
@@ -431,6 +434,8 @@ suite('bank statement import (#326)', () => {
 
   // ADR-0039, #2044 part 2a: a bank feed connection's accounts mapped to the org's bank accounts.
   const feed = async (path: string, who: Account, input?: unknown) => rpc(`bankFeeds/${path}`, await tokenFor(who), input, slug, feedApp);
+  // Part 2b: the worker's sync of a connection, with the sandbox adapter and the vault the API sealed with.
+  const sync = (connectionId: string, org = orgId) => runBankFeedSync({ runtime: worker, broker: vault, providers: bankFeedProviders({ sandbox: true }) }, { orgId: org, connectionId });
 
   it('offers the sandbox bank feed only where the deployment turns it on', async () => {
     expect(((await (await feedApp.request('/api/config')).json()) as { bankFeeds: unknown }).bankFeeds).toEqual({ sandbox: true });
@@ -442,8 +447,11 @@ suite('bank statement import (#326)', () => {
     expect((await feed('connectSandbox', member, { displayName: 'Ngân hàng thử' })).status).toBe(403);
     const connected = await feed('connectSandbox', owner, { displayName: 'Ngân hàng thử' });
     expect(connected.status).toBe(200);
-    expect(connected.body.accounts.map((a: { externalAccountId: string }) => a.externalAccountId)).toEqual(['SBX-001', 'SBX-002']);
     const connectionId = String(connected.body.connectionId);
+    // The API sealed the login and listed nothing: the worker's sync opens it and records the accounts it reaches.
+    expect((await feed('listed', owner, { connectionId })).body).toEqual([]);
+    expect(await sync(connectionId)).toMatchObject({ accounts: 2, pages: 0 });
+    expect((await feed('listed', viewer, { connectionId })).body.map((a: { externalAccountId: string }) => a.externalAccountId)).toEqual(['SBX-001', 'SBX-002']);
     // Sealed like any channel's: a credential row holds it, and no audit row or answer carries a sandbox secret.
     const stored = await admin(async (c) => (await c.query<{ provider: string }>('SELECT provider FROM crove_kernel.channel_connection WHERE org_id = $1 AND id = $2', [orgId, connectionId])).rows);
     expect(stored).toEqual([{ provider: 'bank_sandbox' }]);
@@ -458,6 +466,7 @@ suite('bank statement import (#326)', () => {
     expect((await map(member, {})).status).toBe(403);
     expect((await map(viewer, {})).status).toBe(403);
     expect(await map(owner, { bankAccount: '331' })).toMatchObject({ status: 422, body: { code: 'NOT_A_BANK_ACCOUNT' } });
+    expect(await map(owner, { externalAccountId: 'SBX-999' })).toMatchObject({ status: 422, body: { code: 'BANK_FEED_ACCOUNT_UNKNOWN' } });
     expect(await map(owner, { bankAccount: '1121.OLD' })).toMatchObject({ status: 422, body: { code: 'ACCOUNT_INACTIVE' } });
     const mapped = await map(owner, {});
     expect(mapped.status).toBe(200);
@@ -508,5 +517,39 @@ suite('bank statement import (#326)', () => {
       status: 422,
       body: { code: 'BANK_FEED_INACTIVE' },
     });
+  });
+
+  // Part 2b: the sync stores a mapped account's lines once, however often it runs, and moves the cursor with them.
+  it("pulls a mapped account's lines into its bank account once, and moves its cursor", async () => {
+    const connectionId = String((await feed('connectSandbox', owner, { displayName: 'Ngân hàng đồng bộ' })).body.connectionId);
+    await sync(connectionId);
+    const mapped = await feed('map', owner, { connectionId, externalAccountId: 'SBX-002', bankAccount: '1121', idempotencyKey: randomUUID() });
+    expect(mapped.status).toBe(200);
+    const before = (await stored('1121')).length;
+    const first = await sync(connectionId);
+    expect(first.pages).toBe(1);
+    expect(first.stored).toBeGreaterThan(0);
+    const lines = await stored('1121');
+    expect(lines.length - before).toBe(first.stored);
+    expect(lines.filter((l) => l.dedupe_key?.startsWith('ref:SBX-002-')).length).toBe(first.stored);
+    const account = (await feed('accounts', owner)).body.find((a: { id: string }) => a.id === mapped.body.feedAccountId);
+    expect(account.lastSyncedAt).not.toBeNull();
+    // Again: the cursor is at yesterday, so nothing new; and a pull from the start again stores nothing twice.
+    expect((await sync(connectionId)).stored).toBe(0);
+    await admin((c) => c.query('UPDATE crove_finance.bank_feed_account SET cursor = NULL WHERE org_id = $1 AND id = $2', [orgId, mapped.body.feedAccountId]));
+    expect((await sync(connectionId)).stored).toBe(0);
+    expect((await stored('1121')).length).toBe(lines.length);
+    // The pull takes the mapping's account and entity, never the job's: a page for an unknown mapping is refused.
+    await expect(worker.execute('finance.bank_feed.record_pull', { feedAccountId: randomUUID(), lines: [], cursor: '2026-11-01' }, { actor: SYSTEM, orgId })).rejects.toMatchObject({
+      code: 'BANK_FEED_ACCOUNT_NOT_FOUND',
+    });
+  });
+
+  it('stops syncing once the member who connected the feed may no longer use it', async () => {
+    const connectionId = String((await feed('connectSandbox', owner, { displayName: 'Ngân hàng của chủ cũ' })).body.connectionId);
+    await sync(connectionId);
+    // The connector is no longer an owner or admin: the channel layer no longer opens the credential for the worker.
+    await admin((c) => c.query(`UPDATE crove_kernel.channel_connection SET connected_by = $3 WHERE org_id = $1 AND id = $2`, [orgId, connectionId, viewer.userId]));
+    await expect(sync(connectionId)).rejects.toBeTruthy();
   });
 });

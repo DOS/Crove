@@ -96,6 +96,7 @@ import { configureOpsAlerts, flushOpsAlerts } from './ops-alert.ts';
 const STOP_FLUSH_MS = 5_000;
 import { createPushSender, loadVapidKeys } from './web-push.ts';
 import { WORKER_LAG_EXIT_MS, WORKER_LAG_SUSTAIN_MS, startLagWatchdog } from './back-pressure.ts';
+import { bankFeedProviders } from '@crove/bank-feed';
 
 // Identity (ADR-0027, ADR-0028): who the caller is and whether their session still holds. When
 // sessions.liveCheckForR3 is true, the authenticator must set confirmLive on each user, or every R3 command fails
@@ -517,7 +518,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
             exportSealer: exportSealer(config),
             exportRetentionDays: config.EXPORT_RETENTION_DAYS,
             evidenceLockDays: config.EVIDENCE_LOCK_DAYS,
-            channels: { broker: resolved.broker, publishers: channelPublishers(config), refreshers: channelRefreshers(config) },
+            channels: { broker: resolved.broker, publishers: channelPublishers(config), refreshers: channelRefreshers(config), bankFeeds: bankFeedProviders({ sandbox: config.BANK_FEED_SANDBOX === 'true' }) },
             publicUrl: config.PUBLIC_URL,
             brand: config.BRAND_NAME,
             // Bounce reports reach this deployment only with both inbound settings (as for the invite mail).
