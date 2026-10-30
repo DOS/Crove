@@ -174,8 +174,8 @@ describe('crove-extract HTTP service', () => {
     expect(unknown.status).toBe(400);
     const refusal = await answer(unknown);
     expect(refusal).toMatchObject({ code: 'bad_request' });
-    // The message names every kind the service takes, so it cannot fall behind EXTRACT_KINDS.
-    for (const kind of EXTRACT_KINDS) expect(refusal).toMatchObject({ message: expect.stringContaining(kind) });
+    // The message lists exactly the kinds the service takes, so it cannot fall behind EXTRACT_KINDS.
+    expect((refusal as { message: string }).message.replace(/^kind must be one of /, '').split(', ')).toEqual([...EXTRACT_KINDS]);
     const empty = await post(app, 'einvoice_xml', new Uint8Array(0));
     expect(empty.status).toBe(422);
     expect(await answer(empty)).toMatchObject({ code: 'invalid' });
