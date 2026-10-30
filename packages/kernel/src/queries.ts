@@ -22,7 +22,7 @@ import {
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineQuery } from '@crove/kernel-runtime';
 import { EDITOR_ROLES, decideApproval, proposalEditable } from './approval.ts';
-import { MAX_EXTRACTION_VERSIONS, executedButVoided, latestExtraction } from './extraction.ts';
+import { MAX_EXTRACTION_VERSIONS, executedButVoided, latestExtraction, voidedProposals } from './extraction.ts';
 import { archiveQueries } from './archives.ts';
 import { fileStatuses } from './file-status.ts';
 import { agentQueries } from './agents.ts';
@@ -165,6 +165,8 @@ function payloadKey(payload: unknown, key: string): unknown {
   return payload !== null && typeof payload === 'object' && !Array.isArray(payload) ? (payload as Record<string, unknown>)[key] : undefined;
 }
 
+// The item the list and the detail share. `voided` is not here: the finance module answers it, for a page in the list and
+// for the one proposal in the detail, which each add it.
 function toInboxItem(row: {
   id: string;
   kind: string;
@@ -257,7 +259,15 @@ export const inboxList = defineQuery({
       .orderBy('created_at', 'desc')
       .limit(200);
     if (input.status) query = query.where('status', '=', input.status);
-    return (await query.execute()).map((row) => ({
+    const rows = await query.execute();
+    // The posted ones whose recorded document a reversal voided (#165), asked of the finance module once for the page
+    // (#2054), as kernel.inbox.get asks for one: the list must not show them as posted. The page holds at most 200 rows,
+    // within the query's 1000 ids.
+    const voided = await voidedProposals(
+      ctx,
+      rows.filter((row) => row.status === 'executed').map((row) => row.id),
+    );
+    return rows.map((row) => ({
       id: row.id,
       kind: row.kind,
       status: row.status,
@@ -276,6 +286,7 @@ export const inboxList = defineQuery({
       duplicateOf: row.duplicate_of,
       createdAt: row.created_at.toISOString(),
       expiredAfterDays: expiredAfterDays(row),
+      voided: voided.has(row.id),
       ...agentFields(row, row.agent_name),
     }));
   },

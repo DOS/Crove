@@ -40,13 +40,15 @@ export function bulkSelectable(item: { status: string; failedChecks: number; kin
 
 // Whether a list row shows the "matched" success badge: only when invoice checks ran and none failed or warned. A
 // reversal and a voucher carry no checks, and an agent's proposal that no extraction read (#435) ran none either, so
-// "matched" would claim a verification that never happened.
+// "matched" would claim a verification that never happened. A posting a reversal voided (#2054) is no longer in the books:
+// its row says so, and no success badge sits beside it.
 export function showMatched(
-  item: { kind: string; failedChecks: number; warnChecks: number; duplicateOf: string | null; requestedByAgent: unknown; extracted: boolean },
+  item: { kind: string; failedChecks: number; warnChecks: number; duplicateOf: string | null; requestedByAgent: unknown; extracted: boolean; voided?: boolean },
   // The kinds approved as shown, with no checks: a reversal, a cash or bank voucher, a general journal voucher (#888).
   ...plainKinds: string[]
 ): boolean {
   if (plainKinds.includes(item.kind)) return false;
+  if (item.voided) return false;
   if (item.requestedByAgent && !item.extracted) return false;
   return item.failedChecks === 0 && item.warnChecks === 0 && !item.duplicateOf;
 }

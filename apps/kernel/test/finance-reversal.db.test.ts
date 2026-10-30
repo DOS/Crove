@@ -237,6 +237,9 @@ suite('journal reversal through the API, and voided purchase documents (#165)', 
       runtime.execute('kernel.file.reextract', { fileId }, { actor: asUser(owner.userId), orgId: org.orgId, idempotencyKey: randomUUID() }),
     ).rejects.toMatchObject({ code: 'PROPOSAL_DECIDED' });
     expect((await rpc('inbox/get', await tokenFor(owner), { id: firstProposal })).body).toMatchObject({ voided: false, canReextract: false });
+    // Posted and standing: the list of posted proposals says so too (#2054).
+    const standing = (await rpc('inbox/list', await tokenFor(viewer), { status: 'executed' })).body as Array<{ id: string; voided: boolean }>;
+    expect(standing.find((i) => i.id === firstProposal)).toMatchObject({ voided: false });
     // Posted and standing: the file says posted, not voided (#2032).
     const posted = (await rpc('files/recent', await tokenFor(owner), undefined)).body as Array<{ id: string; proposalStatus: string | null; voided: boolean }>;
     expect(posted.find((f) => f.id === fileId)).toMatchObject({ proposalStatus: 'executed', voided: false });
@@ -310,7 +313,7 @@ suite('journal reversal through the API, and voided purchase documents (#165)', 
       voided: false,
     });
     const listed = await rpc('inbox/list', await tokenFor(owner), { status: 'pending' });
-    expect(listed.body).toEqual([expect.objectContaining({ id: proposalId, kind: 'finance.journal_reversal', sellerName: null, total: null })]);
+    expect(listed.body).toEqual([expect.objectContaining({ id: proposalId, kind: 'finance.journal_reversal', sellerName: null, total: null, voided: false })]);
     expect((await rpc('journal/get', await tokenFor(viewer), { id: firstEntry })).body).toMatchObject({
       id: firstEntry,
       reverses: null,
@@ -344,6 +347,17 @@ suite('journal reversal through the API, and voided purchase documents (#165)', 
     });
     expect(byId.get(reversalEntry)).toMatchObject({ reverses: { id: firstEntry, entryDate: '2026-09-15' }, reversedBy: null, sourceType: 'kernel.proposal' });
     expect(byId.get(reversalEntry)).not.toHaveProperty('document');
+
+    // The Inbox's posted tab (#2054): the purchase whose document was voided says so, for every member, and the
+    // reversal that voided it, itself posted, does not.
+    const posted = (await rpc('inbox/list', await tokenFor(viewer), { status: 'executed' })).body as Array<{ id: string; kind: string; voided: boolean }>;
+    expect(posted.find((i) => i.id === firstProposal)).toMatchObject({ voided: true });
+    expect(posted.find((i) => i.kind === 'finance.journal_reversal')).toMatchObject({ voided: false });
+    expect(posted.filter((i) => i.voided).map((i) => i.id)).toEqual([firstProposal]);
+    // Only the posted ones can be voided: a rejected proposal says false, not nothing.
+    const refused = (await rpc('inbox/list', await tokenFor(viewer), { status: 'rejected' })).body as Array<{ voided: boolean }>;
+    expect(refused.length).toBeGreaterThan(0);
+    expect(refused.every((i) => i.voided === false)).toBe(true);
 
     const documents = await rpc('documents/list', await tokenFor(viewer), {});
     expect(documents.body).toEqual([
