@@ -74,6 +74,8 @@ async function appScreens(page: Page): Promise<string[]> {
   const sidebar = page.getByRole('complementary');
   const apps = sidebar.getByRole('list', { name: 'Ứng dụng' });
   const links = new Set<string>();
+  // The switcher fills once the org and its modules load: count only then, or a slow load counts none.
+  await expect(apps.getByRole('link').nth(1)).toBeVisible();
   const appCount = await apps.getByRole('link').count();
   expect(appCount).toBeGreaterThan(1);
   for (let i = 0; i < appCount; i++) {

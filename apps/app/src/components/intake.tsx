@@ -23,6 +23,7 @@ import {
   type IntakeItem,
   type IntakeState,
 } from '../lib/intake.ts';
+import { FILE_STATE_VARIANT, type ChipVariant } from '../lib/status.ts';
 import { useChosenEntity } from './entity-switcher.tsx';
 
 // Waits after a RATE_LIMITED refusal before the same upload is tried again, and how many times.
@@ -146,18 +147,8 @@ export function useIntake(): Intake {
   return { items, uploading, start, clear, refused };
 }
 
-const VARIANT: Record<IntakeState, 'secondary' | 'brand' | 'success' | 'warning' | 'destructive'> = {
-  queued: 'secondary',
-  uploading: 'brand',
-  upload_failed: 'destructive',
-  processing: 'brand',
-  waiting: 'warning',
-  proposed: 'success',
-  duplicate: 'warning',
-  failed: 'destructive',
-  expanded: 'success',
-  rejected: 'destructive',
-};
+// The chips of the Inbox's files (lib/status.ts, #2000): the same state looks the same on both lists.
+const VARIANT: Record<IntakeState, ChipVariant> = FILE_STATE_VARIANT;
 
 function Row({ item, nested = false }: { item: IntakeItem; nested?: boolean }) {
   const t = useTranslations('inbox.intake');
