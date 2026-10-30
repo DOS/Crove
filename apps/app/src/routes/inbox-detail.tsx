@@ -364,6 +364,9 @@ function InboxDetail({ slug, id, split }: { slug: string; id: string; split: boo
   // The chart of accounts is the finance module's; without it (CROVE_MODULES) the screen does not ask for it.
   const finance = getConfig().modules.includes('finance');
   const accounts = useQuery({ ...orpc.accounts.list.queryOptions(), enabled: finance });
+  // The audit log is for owners and admins (kernel.audit.list), so only they get the link to a decision's rows (#1445).
+  const org = useQuery(orpc.org.get.queryOptions());
+  const canReadAudit = org.data?.role === 'owner' || org.data?.role === 'admin';
   const [lineAccounts, setLineAccounts] = useState<Record<number, string>>({});
   const [idempotencyKey] = useState(() => crypto.randomUUID());
   // The rate typed for a foreign-currency invoice read without one (#918).
@@ -693,6 +696,18 @@ function InboxDetail({ slug, id, split }: { slug: string; id: string; split: boo
                 : item.status}
         </Badge>
         {item.voided && <Badge variant="destructive">{t('voidedBadge')}</Badge>}
+        {/* DESIGN.md §5.1: every decision links to its audit log entry. By id alone, the log lists the decision (the
+            proposal as object) and what it ran (the rows that name the proposal), as kernel.audit.list matches it. */}
+        {canReadAudit && (
+          <Link
+            to="/o/$slug/audit"
+            params={{ slug }}
+            search={{ targetId: id }}
+            className="inline-flex min-h-11 items-center text-sm text-link hover:underline"
+          >
+            {t('auditLink')}
+          </Link>
+        )}
       </>
     )
   );
