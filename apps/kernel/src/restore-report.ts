@@ -138,7 +138,8 @@ export function parseRestoreReportArgs(argv: readonly string[]): RestoreReportAr
       if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/.test(value) || !Number.isFinite(Date.parse(value))) {
         throw new Error('--backup-point needs a UTC time such as 2026-10-30T02:00:00Z');
       }
-      args.backupPoint = new Date(value).toISOString();
+      // As given, to the microsecond (backup.sh writes SNAPSHOT_AT so): rounding it would move the point.
+      args.backupPoint = value;
     }
     else if (arg === '--floor') {
       const match = FLOOR.exec((argv[++i] ?? '').trim().toLowerCase());

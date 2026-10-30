@@ -844,9 +844,14 @@ describe('series highs and the restore report (#2007)', () => {
     // check refuses it, so nothing is acknowledged.
     const forged = await restoreReport(holding(batches, 1, [1, 3, 4, 5]), writableStore(batches), { backupPoint: at(1) });
     expect(forged.problems).toEqual([{ code: 'restore_ack_mismatch', seq: 2 }]);
-    // Without a backup point nothing is acknowledged at all.
+    // Without a backup point nothing is acknowledged at all, also when an older acknowledgement covers part of the rows.
     const pointless = await restoreReport(holding(batches, 1, [1]), writableStore(batches));
     await expect(acknowledgeRestore(fakeDb(() => []), writableStore(batches), pointless)).rejects.toThrow(/--backup-point/);
+    const older = writableStore(batches, { [restoreAckKey(1)]: ackOf(1, [[2, entryOf(batches, 2)[0]![0]]], [[2, 2, at(1)]], 1, 2) });
+    const partial = await restoreReport(holding(batches, 1, [1]), older);
+    expect(partial.latestAck?.sequence).toBe(1);
+    await expect(acknowledgeRestore(fakeDb(() => []), older, partial)).rejects.toThrow(/--backup-point/);
+    expect(await older.list(RESTORE_ACK_PREFIX)).toEqual([restoreAckKey(1)]);
     await expect(acknowledgeRestore(fakeDb(() => []), writableStore(batches), forged)).rejects.toThrow(/nothing is acknowledged/);
     // An acknowledgement written straight to the store naming it excuses nothing either.
     const ack = ackOf(1, [deletedRef], [[2, 5, at(1)]], 1, 5);

@@ -611,7 +611,8 @@ async function restoreHolds(db: Db, [first, last, point]: RestoreInterval, windo
   if (!Number.isFinite(at) || !firstWindow || !lastWindow) return false;
   if (Date.parse(firstWindow.to) <= at - RESTORE_SLACK_MS) return false;
   if (Date.parse(lastWindow.to) <= at) return true;
-  const from = new Date(at).toISOString();
+  // The point as given, to the microsecond: PostgreSQL reads it, Date.parse would round it to the millisecond.
+  const from = point;
   const kept = await rowHashes(db, {
     version: 7,
     window: { from, to: lastWindow.to },
@@ -994,9 +995,9 @@ export async function restoreReport(db: Db, store: ArchiveStore, options: { back
   for (const r of missingRecorded) if (!carried.has(refKey(r))) problems.push({ code: r[1].startsWith('number_high:') ? 'row_changed' : 'row_missing', seq: r[0], ref: r[1] });
   const first = lostRefs.reduce((min, [s]) => Math.min(min, s), Number.POSITIVE_INFINITY);
   const intervals = [...carriedIntervals];
-  const point = options.backupPoint ? Date.parse(options.backupPoint) : Number.NaN;
-  if (Number.isFinite(first) && Number.isFinite(point)) {
-    const own: RestoreInterval = [first, seq, new Date(point).toISOString()];
+  const point = options.backupPoint ?? null;
+  if (Number.isFinite(first) && point !== null && Number.isFinite(Date.parse(point))) {
+    const own: RestoreInterval = [first, seq, point];
     if (!(await restoreHolds(db, own, windows))) problems.push({ code: 'restore_ack_mismatch', seq: first });
     if (!intervals.some((i) => JSON.stringify(i) === JSON.stringify(own))) intervals.push(own);
   }
@@ -1064,9 +1065,11 @@ export async function restoreReport(db: Db, store: ArchiveStore, options: { back
 // Returns the key of the acknowledgement in force, or null.
 export async function acknowledgeRestore(db: Db, store: ArchiveStore, report: RestoreReport, now: Date = new Date()): Promise<string | null> {
   if (report.problems.length > 0) throw new Error('the archive does not match the restored database; nothing is acknowledged');
-  if (report.lostRefs.length > 0 && !report.acknowledgedIntervals.some(([first]) => report.lostRefs.some(([s]) => s === first))) {
-    throw new Error("rows were lost, but the report had no backup point to read the restore by; give the backup's (--backup-point)");
-  }
+  // Every row this restore lost, and every row carried, must lie in a restore of the acknowledgement: an object the
+  // verifier could not read would stay in a locked store for its whole retention.
+  const covered = (r: [number, string]) => report.acknowledgedIntervals.some(([a, b]) => r[0] >= a && r[0] <= b);
+  if (!report.lostRefs.every(covered)) throw new Error("rows were lost, but the report had no backup point to read the restore by; give the backup's (--backup-point)");
+  if (!report.acknowledgedRefs.every(covered)) throw new Error('the acknowledgement would name rows outside its restores; nothing is acknowledged');
   report.beyond.forEach((b, i) => {
     if (b.seq !== report.recorded + 1 + i) throw new Error(`batch ${b.seq} is not the next after the restored database's ${report.recorded}; nothing is acknowledged`);
   });
@@ -1089,8 +1092,10 @@ export async function acknowledgeRestore(db: Db, store: ArchiveStore, report: Re
       refs: report.acknowledgedRefs,
     };
     key = restoreAckKey(ack.sequence);
+    const body = new TextEncoder().encode(JSON.stringify(ack));
+    if (!parseRestoreAck(body)) throw new Error('the acknowledgement does not read back as one; nothing is acknowledged');
     try {
-      await store.put(key, new TextEncoder().encode(JSON.stringify(ack)));
+      await store.put(key, body);
     } catch (error) {
       if (error instanceof ArchiveObjectExistsError) throw new Error(`${key} was written by another run meanwhile; run the restore check again`);
       throw error;

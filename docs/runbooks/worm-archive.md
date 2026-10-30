@@ -146,7 +146,8 @@ A restore brings the database back to its backup point. The archive store is not
     - The acknowledgement names each row excused from then on, with its batch:
       - the rows this restore lost: those the restored database lacks, and the series highs that it holds with another hash;
       - the rows of the previous acknowledgement that this database still lacks. A row a later restore brought back is excused no more.
-    - It carries each restore with its interval of batches (the first batch with a row it lost, to the newest batch then) and its **backup point**: the backup's snapshot time, from the backup run's `meta.env` (`SNAPSHOT_AT`; `FINISHED_AT` for a run made before it was recorded). That is evidence the database does not hold. `restore.sh` passes it (`--backup-point`); a check run by hand needs it.
+    - It carries each restore with its interval of batches (the first batch with a row it lost, to the newest batch then) and its **backup point**: the backup's snapshot time, from the backup run's `meta.env` (`SNAPSHOT_AT`; `FINISHED_AT` for a run made before it was recorded). That is evidence the database does not hold. `restore.sh` passes it (`--backup-point`), unless `RESTORE_BACKUP_POINT` is set on its command; a check run by hand needs it.
+      - A run without `SNAPSHOT_AT` whose dump took long is refused with its `FINISHED_AT` (`restore_ack_mismatch`). Then set `RESTORE_BACKUP_POINT` to the dump's start, from the backup log, and restore again.
     - It is written create-only, like a batch, and with `s3` under Object Lock. Only the store holds it, so no database role can write or change one.
     - **A restore loses a suffix in time:** every archived row stamped at or after its backup point. So the check refuses to acknowledge a restore, and the verifier excuses nothing of one (`restore_ack_mismatch`), when:
       - the database holds any archived row stamped from the backup point to the end of the restore's batches; or

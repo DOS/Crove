@@ -74,7 +74,8 @@ async function run(given: RestoreReport, argv: string[], refuse: (input: unknown
 describe('restore-report arguments', () => {
   it('reads --reseed, --json, floors named by org, entity, doc type and period, and the orgs whose floors are complete', () => {
     expect(parseRestoreReportArgs([])).toEqual({ reseed: false, json: false, floors: [], floorsComplete: [], acknowledge: false, backupPoint: null });
-    expect(parseRestoreReportArgs(['--acknowledge', '--backup-point', '2026-10-30T02:00:00Z']).backupPoint).toBe('2026-10-30T02:00:00.000Z');
+    expect(parseRestoreReportArgs(['--acknowledge', '--backup-point', '2026-10-30T02:00:00Z']).backupPoint).toBe('2026-10-30T02:00:00Z');
+    expect(parseRestoreReportArgs(['--acknowledge', '--backup-point', '2026-10-30T02:00:00.123900Z']).backupPoint).toBe('2026-10-30T02:00:00.123900Z');
     expect(() => parseRestoreReportArgs(['--backup-point', 'yesterday'])).toThrow(/--backup-point needs a UTC time/);
     expect(
       parseRestoreReportArgs(['--reseed', '--json', '--floor', `${ORG}:${ENTITY}:finance.cash_voucher.pt:2026=41`, '--floors-complete', ORG, '--acknowledge']),

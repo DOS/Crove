@@ -76,6 +76,8 @@ SOURCE="$1"
 # Taken from the command's own environment only, never from .env, where a forgotten line would switch the downgrade
 # check off for good.
 ALLOW_UNSEALED="${RESTORE_ALLOW_UNSEALED:-}"
+# Also from the command only: the backup point of a run made before SNAPSHOT_AT was recorded (#2020).
+BACKUP_POINT_OVERRIDE="${RESTORE_BACKUP_POINT:-}"
 STEP="reading $CROVE_DIR/.env"
 load_env_file "$CROVE_DIR/.env"
 
@@ -464,9 +466,11 @@ archive_lost=0
 if [ "$RESTORE_ARCHIVE" = check ]; then
   STEP="checking against the WORM archive (main.ts restore-report --reseed --acknowledge)"
   archive_status=0
-  # The backup's snapshot time, which the acknowledgement reads the restore by (#2020); a run made before SNAPSHOT_AT was
-  # recorded gives its finish time, a later point that is still sound.
-  backup_point="$(meta_value SNAPSHOT_AT "$RUN/meta.env" 2>/dev/null || true)"
+  # The backup's snapshot time, which the acknowledgement reads the restore by (#2020). A run made before SNAPSHOT_AT was
+  # recorded gives its finish time, a later point that is still sound but may be refused after a long dump: then set
+  # RESTORE_BACKUP_POINT on the command (never in .env) to the dump's start (the "database dump" line of the backup log).
+  backup_point="$BACKUP_POINT_OVERRIDE"
+  [ -n "$backup_point" ] || backup_point="$(meta_value SNAPSHOT_AT "$RUN/meta.env" 2>/dev/null || true)"
   [ -n "$backup_point" ] || backup_point="$finished_at"
   dc run --rm --no-deps -T "$worker" restore-report --reseed --acknowledge --backup-point "$backup_point" --json </dev/null >"$WORK/archive-report.json" || archive_status=$?
   case "$archive_status" in
