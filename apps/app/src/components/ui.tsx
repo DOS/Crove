@@ -5,7 +5,7 @@ import { Empty as EmptyRoot, EmptyContent, EmptyDescription, EmptyHeader, EmptyT
 import { Label } from '@crove/ui/components/label';
 import { Skeleton } from '@crove/ui/components/skeleton';
 import { Spinner as SpinnerIcon } from '@crove/ui/components/spinner';
-import { Table, TableBody, TableHead, TableHeader, TableRow } from '@crove/ui/components/table';
+import { Table, TableBody, TableFooter, TableHead, TableHeader, TableRow } from '@crove/ui/components/table';
 import { cn } from '@crove/ui/lib/utils';
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { flushSync } from 'react-dom';
@@ -245,7 +245,12 @@ export function ListSkeleton({ rows = 3 }: { rows?: number }) {
 // A list's table (DESIGN.md §4.3). Its header stays in view (#1444): a table taller than the window scrolls inside its
 // card, under a pinned header, and only then becomes a tab stop, so the keyboard can scroll it too. The same when it
 // scrolls sideways, as on a phone, where the table is wider than the screen (#1517).
-export function DataTable({ head, numeric = [], children }: { head: string[]; numeric?: number[]; children: ReactNode }) {
+// A total's top rule: twice the hairline between rows and darker, so a total is set apart by more than its weight or a
+// color (DESIGN.md §4.3, #2002). The foreground token keeps it visible in both themes.
+export const TOTAL_RULE = 'border-t-2 border-t-foreground/40';
+
+// `foot` holds the table's totals rows: a <tfoot>, which screen readers announce as the table's footer, under the rule.
+export function DataTable({ head, numeric = [], foot, children }: { head: string[]; numeric?: number[]; foot?: ReactNode; children: ReactNode }) {
   const scroller = useRef<HTMLDivElement>(null);
   // The header row is pinned inside the scroll box: a row the keyboard focuses stops below it (#1575).
   const header = useRef<HTMLTableSectionElement>(null);
@@ -278,6 +283,7 @@ export function DataTable({ head, numeric = [], children }: { head: string[]; nu
           </TableRow>
         </TableHeader>
         <TableBody>{children}</TableBody>
+        {foot && <TableFooter className={cn(TOTAL_RULE, '[&_tr]:hover:bg-transparent')}>{foot}</TableFooter>}
       </Table>
     </div>
   );

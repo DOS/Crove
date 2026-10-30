@@ -14,7 +14,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@crove/ui/components/t
 import { useChosenEntity } from '../components/entity-switcher.tsx';
 import { PeriodLockPanel } from '../components/period-lock.tsx';
 import { YearArchivePanel } from '../components/year-archive.tsx';
-import { DataTable, Empty, ErrorText, Notice, PageHeader, Spinner, TableSkeleton } from '../components/ui.tsx';
+import { DataTable, Empty, ErrorText, Notice, PageHeader, Spinner, TOTAL_RULE, TableSkeleton } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { apiFetch, errorMessage, getCurrentOrg, orpc } from '../lib/api.ts';
 import { exportQuery } from '../lib/legal-entity-choice.ts';
@@ -83,7 +83,19 @@ function PartyTable({ ledger, partyLabel, customers = false }: { ledger: PartyLe
   const { slug } = useParams({ strict: false }) as { slug: string };
   if (ledger.rows.length === 0) return <Empty title={t('partiesEmpty')} hint={t('partiesEmptyHint')} />;
   return (
-    <DataTable numeric={[2, 3, 4, 5]} head={[t('columns.taxCode'), partyLabel, t('columns.opening'), t('columns.increase'), t('columns.decrease'), t('columns.closing')]}>
+    <DataTable
+      numeric={[2, 3, 4, 5]}
+      head={[t('columns.taxCode'), partyLabel, t('columns.opening'), t('columns.increase'), t('columns.decrease'), t('columns.closing')]}
+      foot={
+        <TableRow>
+          <TableCell className="px-4 py-3" />
+          <TableCell className="px-4 py-3 text-foreground">{t('total')}</TableCell>
+          <TableCell className={NUM}>{f.money(ledger.totals.opening)}</TableCell>
+          <TableCell className={NUM}>{f.money(ledger.totals.increase)}</TableCell>
+          <TableCell className={NUM}>{f.money(ledger.totals.decrease)}</TableCell>
+          <TableCell className={NUM}>{f.money(ledger.totals.closing)}</TableCell>
+        </TableRow>
+      }>
       {ledger.rows.map((row) => (
         <TableRow key={row.partyId ?? 'none'}>
           <TableCell className="px-4 py-3 font-mono text-xs text-muted-foreground">{row.partyTaxCode ?? ''}</TableCell>
@@ -104,14 +116,6 @@ function PartyTable({ ledger, partyLabel, customers = false }: { ledger: PartyLe
           <TableCell className={`${NUM} font-medium text-foreground`}>{f.money(row.closing)}</TableCell>
         </TableRow>
       ))}
-      <TableRow className="font-medium">
-        <TableCell className="px-4 py-3" />
-        <TableCell className="px-4 py-3 text-foreground">{t('total')}</TableCell>
-        <TableCell className={NUM}>{f.money(ledger.totals.opening)}</TableCell>
-        <TableCell className={NUM}>{f.money(ledger.totals.increase)}</TableCell>
-        <TableCell className={NUM}>{f.money(ledger.totals.decrease)}</TableCell>
-        <TableCell className={NUM}>{f.money(ledger.totals.closing)}</TableCell>
-      </TableRow>
     </DataTable>
   );
 }
@@ -233,7 +237,8 @@ function StatementTable({ title, lines, unmapped }: { title: string; lines: Stat
       )}
       <DataTable numeric={[2]} head={[t('columns.item'), t('columns.lineCode'), t('columns.amount')]}>
         {lines.map((line) => (
-          <TableRow key={line.code} className={line.total ? 'font-medium' : ''}>
+          // A total adds up the lines above it and stays in place, with the totals' rule over it (#2002).
+          <TableRow key={line.code} className={line.total ? `font-medium ${TOTAL_RULE}` : ''}>
             <TableCell className="px-4 py-3 text-foreground">{line.label}</TableCell>
             <TableCell className="px-4 py-3 font-mono text-xs text-muted-foreground">{line.code}</TableCell>
             <TableCell className={NUM}>{f.money(line.amount)}</TableCell>
@@ -474,7 +479,19 @@ export function LedgerPage() {
                     t('columns.credit'),
                     t('columns.closingDebit'),
                     t('columns.closingCredit'),
-                  ]}>
+                  ]}
+                  foot={
+                    <TableRow className="font-semibold">
+                      <TableCell className="px-4 py-3" />
+                      <TableCell className="px-4 py-3 text-foreground">{t('total')}</TableCell>
+                      <TableCell className={NUM}>{f.money(data.trialBalance.totals.openingDebit)}</TableCell>
+                      <TableCell className={NUM}>{f.money(data.trialBalance.totals.openingCredit)}</TableCell>
+                      <TableCell className={NUM}>{f.money(data.trialBalance.totals.debit)}</TableCell>
+                      <TableCell className={NUM}>{f.money(data.trialBalance.totals.credit)}</TableCell>
+                      <TableCell className={NUM}>{f.money(data.trialBalance.totals.closingDebit)}</TableCell>
+                      <TableCell className={NUM}>{f.money(data.trialBalance.totals.closingCredit)}</TableCell>
+                    </TableRow>
+                  }>
                   {rows.map((row) => (
                     <TableRow key={row.accountCode} className={row.level === 0 ? 'font-medium' : ''}>
                       <TableCell className="px-4 py-3 font-mono text-xs text-foreground">{row.accountCode}</TableCell>
@@ -489,16 +506,6 @@ export function LedgerPage() {
                       <TableCell className={NUM}>{f.money(row.closingCredit)}</TableCell>
                     </TableRow>
                   ))}
-                  <TableRow className="font-semibold">
-                    <TableCell className="px-4 py-3" />
-                    <TableCell className="px-4 py-3 text-foreground">{t('total')}</TableCell>
-                    <TableCell className={NUM}>{f.money(data.trialBalance.totals.openingDebit)}</TableCell>
-                    <TableCell className={NUM}>{f.money(data.trialBalance.totals.openingCredit)}</TableCell>
-                    <TableCell className={NUM}>{f.money(data.trialBalance.totals.debit)}</TableCell>
-                    <TableCell className={NUM}>{f.money(data.trialBalance.totals.credit)}</TableCell>
-                    <TableCell className={NUM}>{f.money(data.trialBalance.totals.closingDebit)}</TableCell>
-                    <TableCell className={NUM}>{f.money(data.trialBalance.totals.closingCredit)}</TableCell>
-                  </TableRow>
                 </DataTable>
               )}
             </>
