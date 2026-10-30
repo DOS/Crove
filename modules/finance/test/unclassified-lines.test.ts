@@ -16,10 +16,10 @@ const SHA256 = sha256Hex(BYTES);
 const parsed = JSON.parse(readFileSync(new URL('../../../packages/l10n-vn/test/fixtures/einvoice-basic.parsed.json', import.meta.url), 'utf8')) as ParsedInvoice;
 
 // An invoice read from a PDF by AI whose lines are `descriptions`, each worth 1,000,000 before 10% VAT.
-function invoiceOf(descriptions: string[]): ParsedInvoice {
+function invoiceOf(descriptions: string[], natures: Record<number, 'discount'> = {}): ParsedInvoice {
   const copy = structuredClone(parsed);
   copy.source = 'ai';
-  copy.lines = descriptions.map((description, i) => ({ ...parsed.lines[0]!, lineNo: i + 1, description, amount: '1000000', vatRate: '10%', quantity: null, unitPrice: null }));
+  copy.lines = descriptions.map((description, i) => ({ ...parsed.lines[0]!, lineNo: i + 1, nature: natures[i + 1] ?? parsed.lines[0]!.nature, description, amount: '1000000', vatRate: '10%', quantity: null, unitPrice: null }));
   const subtotal = descriptions.length * 1000000;
   copy.subtotal = String(subtotal);
   copy.vatTotal = String(subtotal / 10);
@@ -28,7 +28,11 @@ function invoiceOf(descriptions: string[]): ParsedInvoice {
   return copy;
 }
 
-async function propose(descriptions: string[], lookup: { vendorDefault?: string | null; learnedRules?: LearnedRule[] } = {}): Promise<PurchaseProposal> {
+async function propose(
+  descriptions: string[],
+  lookup: { vendorDefault?: string | null; learnedRules?: LearnedRule[] } = {},
+  natures: Record<number, 'discount'> = {},
+): Promise<PurchaseProposal> {
   const seen: { payload: PurchaseProposal | undefined } = { payload: undefined };
   const runtime = {
     query: async (name: string) =>
@@ -42,7 +46,7 @@ async function propose(descriptions: string[], lookup: { vendorDefault?: string 
   } as unknown as Runtime;
   const store = { get: async () => BYTES } as unknown as BlobStore;
   const extract: ExtractClient = { extract: async () => ({ ok: true, kind: 'pdf_text', text: 'x'.repeat(100), pages: 1 }) as never };
-  const extractor = { fromText: async () => invoiceOf(descriptions), fromImage: async () => null };
+  const extractor = { fromText: async () => invoiceOf(descriptions, natures), fromImage: async () => null };
   await extractAndPropose({ runtime, store, extractor: extractor as never, extract, today: () => '2026-10-13' }, ORG, FILE);
   const payload = seen.payload;
   if (!payload) throw new Error('no proposal was recorded')
@@ -79,6 +83,17 @@ describe('unclassified invoice lines (#2091)', () => {
       ['6422', 'builtin'],
     ]);
     expect(payload.checks.some((c) => c.id === 'accounts')).toBe(false);
+  });
+
+  // The e-invoice fixture's line 3 ("Chiết khấu thương mại", TChat 3) matches no keyword: the invoice itself declares it a
+  // discount, so it keeps its built-in 6422 and the invoice stays approvable (the invariant suite approves that fixture).
+  it('keeps a declared discount line on its built-in 6422, classified', async () => {
+    const payload = await propose(['Phí quảng cáo Google', 'Chiết khấu thương mại'], {}, { 2: 'discount' });
+    expect(payload.lines[1]).toMatchObject({ debitAccount: '6422', accountRule: { source: 'builtin' } });
+    expect(payload.checks.some((c) => c.id === 'accounts')).toBe(false);
+    // The same words on a line the invoice does not declare a discount are unclassified.
+    const plain = await propose(['Phí quảng cáo Google', 'Chiết khấu thương mại']);
+    expect(plain.lines[1]).toMatchObject({ debitAccount: UNCLASSIFIED_ACCOUNT_CODE, accountRule: { source: 'unclassified' } });
   });
 
   it('keeps learned rules and the vendor default working: they classify the line', async () => {

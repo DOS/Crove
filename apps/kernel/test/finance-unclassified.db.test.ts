@@ -260,6 +260,15 @@ suite('unclassified invoice lines (#2091)', () => {
     expect(learned).toEqual([{ match_text: 'khoan khong ro', debit_account: '6421' }]);
   });
 
+  // The fixture's line 3 is a declared discount ("Chiết khấu thương mại"): it keeps its built-in 6422, so the invoice is
+  // approvable as proposed.
+  it('approves an invoice whose only non-keyword line is a declared discount, as proposed', async () => {
+    const { payload, unclassifiedLines, revision } = await detail(classified);
+    expect(unclassifiedLines).toBe(0);
+    expect(lineOf(payload.lines, 'Chiết khấu')).toMatchObject({ debitAccount: '6422', accountRule: { source: 'builtin' } });
+    await expect(approve(classified, revision)).resolves.toMatchObject({ documentId: expect.any(String) });
+  });
+
   it('proposes the same item by the learned rule next time, classified', async () => {
     const id = await propose('9303', 'Khoản không rõ');
     const { payload, unclassifiedLines } = await detail(id);
