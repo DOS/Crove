@@ -12,6 +12,7 @@ import type { MailAttachment, MailErrorKind, MailProvider, OutboundMail, SendRes
 import { bounceAddress } from './invite-mail.ts';
 import { DEFAULT_BRAND_NAME } from './config.ts';
 import { jobKey } from './job-keys.ts';
+import { opsAlert } from './ops-alert.ts';
 
 export const MAIL_SEND_QUEUE = 'kernel-mail-send';
 export const MAIL_BULK_QUEUE = 'kernel-mail-bulk';
@@ -223,7 +224,7 @@ export async function purgeMail(workerDb: Db, batch = 10_000, maxBatches = 100):
     for (const row of rows) cleared[row.store] = (cleared[row.store] ?? 0) + row.deleted;
     const stuck = rows.filter((r) => r.more && r.deleted === 0).map((r) => r.store);
     if (stuck.length > 0) {
-      console.error(`[retention] ALERT mail purge cleared 0 rows while old ones remain: ${stuck.join(', ')}`);
+      opsAlert(`[retention] ALERT mail purge cleared 0 rows while old ones remain: ${stuck.join(', ')}`);
       break;
     }
     if (!rows.some((r) => r.more)) break;
