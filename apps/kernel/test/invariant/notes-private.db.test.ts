@@ -319,7 +319,7 @@ suite('private notes on PostgreSQL (#1671, ADR-0037)', () => {
   });
 
   // The personal-data finder (#1678, ADR-0037 section 5): per author, how many private notes and to-dos mention a value,
-  // for owners and admins in their own context only; never which ones or their text.
+  // for owners in their own context only (#1972); never which ones or their text.
   it('counts the private items that mention a value for owners only, with no text (#1678, #1972)', async () => {
     const mention = randomUUID();
     await admin((c) =>

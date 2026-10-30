@@ -66,7 +66,7 @@ A private note or to-do is read and changed only in a context whose user is its 
     - `trash_empty(org, before)`: deletes items in the trash since before `before`, and never one there for less than 30 days (#1733): the floor stops it removing more, and `before` can only make it remove fewer; returns counts;
     - `member_items_purge(org, user)`: deletes a former member's private items when the user is still not a member and was not removed from the org (`kernel.member.remove` in the audit trail) in the last 30 days (#1733), returns counts;
     - `former_members_due(limit)`: for the nightly sweep (section 4), the former members with private items past that delay, ids only, each marked whether the audit trail records their removal;
-  - callable in a user context, checked inside to be an owner of the context's org, or for `private_counts` an owner or admin, (the members screen and the personal-data screen run as that user, not as the worker):
+  - callable in a user context, checked inside to be an owner of the context's org, or for `private_counts` an owner or admin (the members screen and the personal-data screen run as that user, not as the worker):
     - `private_counts()`: items per author, for the removal warning;
     - `private_matches(kind, value)`: per author, how many private items contain a value, for the finder (section 5), owners only (#1972; the finder also records every search, section 3);
     - `private_notice_items(kind, value)`: the ids and authors of the private items that contain a value, owner only, for the owner's notice to the authors (#1678), which records the ids in its audit row;
