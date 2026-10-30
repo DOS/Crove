@@ -9,7 +9,8 @@
 --     An empty application_name leaves the key out. Other worker-login processes stamp their own fixed names
 --     ('crove-restore', 'crove-operator'). Behind a transaction-mode pooler that does not track application_name per
 --     client, the server connection may carry another client's name; direct connections, the default, are exact.
---     The org's audit log never shows the key (auditDetailLine): it is for the deployment's alerts.
+--     Neither the org's audit log (auditDetailLine) nor its data export (kernel.org.export.snapshot) shows the key: it
+--     is for the deployment's alerts.
 --   - a user or an agent context: detail.workerInstance is removed, so no member's or agent's row claims a worker.
 -- The key is inside detail, which the WORM stream already hashes in every batch version (archive_row_hashes), so the
 -- name is anchored with the row and no new archive version is needed. Staff rows are still left as written. The

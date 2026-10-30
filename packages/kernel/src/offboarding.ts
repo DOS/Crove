@@ -244,10 +244,16 @@ export const exportSnapshot = defineQuery({
     for (const table of tables) {
       const spec = EXPORT_TABLES[table];
       const omit = spec.omit as readonly string[];
+      // The worker process a system audit row names (detail.workerInstance, #1951) is the deployment's, never the org's:
+      // a host or pod name, left out of the org's copy as the audit log leaves it out (auditDetailLine).
+      const scrub =
+        table === 'kernel.audit_event'
+          ? sql`|| pg_catalog.jsonb_build_object('detail', CASE WHEN pg_catalog.jsonb_typeof(t.detail) = 'object' THEN t.detail - 'workerInstance' ELSE t.detail END)`
+          : sql``;
       // spec.from is one of the constant names above, never input.
       await sql`
         DECLARE crove_org_export NO SCROLL CURSOR FOR
-        SELECT (to_jsonb(t) - ${sql.val([...omit])}::text[])::text AS line
+        SELECT ((to_jsonb(t) - ${sql.val([...omit])}::text[]) ${scrub})::text AS line
         FROM ${sql.raw(spec.from)} t
         WHERE t.org_id = ${ctx.orgId}::uuid`.execute(ctx.trx);
       for (;;) {
