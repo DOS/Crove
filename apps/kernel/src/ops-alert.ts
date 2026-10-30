@@ -55,6 +55,8 @@ export function configureOpsAlerts(config: OpsAlertConfig | null): void {
 export function alertKind(line: string): string {
   return line
     .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '<id>')
+    // A session's prefix (sign-out lines) is an id even when it holds no digit (deadbeef).
+    .replace(/\bsession [0-9a-f]{6,}\b/gi, 'session <id>')
     .replace(/\b(?=[0-9a-f]*\d)[0-9a-f]{6,}\b/gi, '<id>')
     .replace(/\d+/g, '#')
     .slice(0, 300);

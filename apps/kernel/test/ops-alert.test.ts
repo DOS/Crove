@@ -119,7 +119,8 @@ describe('opsAlert (#1993)', () => {
     expect(alertKind('[year-archive] ALERT archive of org 0b0d6f1e-3c1a-4d2e-9f00-0123456789ab year 2025 failed after 3 attempts')).toBe(
       '[year-archive] ALERT archive of org <id> year # failed after # attempts',
     );
-    expect(alertKind('[signout] ALERT user sign-out of session 3fa9b2c1: failed')).toBe(alertKind('[signout] ALERT user sign-out of session e9ab540d: failed'));
+    const signOut = (prefix: string) => alertKind(`[signout] ALERT user sign-out of session ${prefix}: failed`);
+    for (const prefix of ['e9ab540d', 'deadbeef', 'abcdefab']) expect(signOut(prefix), prefix).toBe(signOut('3fa9b2c1'));
     expect(alertKind(`key org/0b0d6f1e-3c1a-4d2e-9f00-0123456789ab/${'ab12'.repeat(16)} (generation 7)`)).toBe('key org/<id>/<id> (generation #)');
   });
 });
