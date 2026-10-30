@@ -13,10 +13,11 @@ import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
-import { createOrg, kernelCommands, kernelQueries, PERSONAL_DATA_COLUMNS, upsertIdentity, type PersonalDataColumn } from '@crove/kernel';
+import { createOrg, kernelCommands, kernelQueries, PERSONAL_DATA_COLUMNS, personalDataProbe, upsertIdentity, type PersonalDataColumn } from '@crove/kernel';
 import type { PersonalDataErasure, PersonalDataResult } from '@crove/kernel-contract';
 import { Runtime } from '@crove/kernel-runtime';
 import { TEST_MANIFESTS } from './manifests.ts';
+import { PII_TEXT_CASES } from './pii-text-cases.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -139,21 +140,17 @@ suite('finding a person in the org (#923)', () => {
         `SELECT crove_kernel.text_mentions($1, $2, $3) AS found, crove_kernel.text_redact($1, $2, $3, '[đã xóa]') AS edited`,
         [text, kind, value],
       )).rows[0]);
-    const cases: Array<[string | null, string, string, boolean, string | null]> = [
-      ['Gửi A.B@X.com hôm nay', 'email', 'a.b@x.com', true, 'Gửi [đã xóa] hôm nay'],
-      ['a.b@x.com.vn', 'email', 'a.b@x.com', false, 'a.b@x.com.vn'],
-      ['xa.b@x.com', 'email', 'a.b@x.com', false, 'xa.b@x.com'],
-      // A dot in the value is a dot, not any character.
-      ['aXb@x.com', 'email', 'a.b@x.com', false, 'aXb@x.com'],
-      ['a+b@x.com, a+b@x.com.', 'email', 'a+b@x.com', true, '[đã xóa], [đã xóa].'],
-      ['(028) 3829.1234 hoặc +84 28 3829 1234', 'digits', '02838291234', true, '[đã xóa] hoặc [đã xóa]'],
-      ['MST 0101234567-001', 'digits', '0101234567001', true, 'MST [đã xóa]'],
-      ['10917776655', 'digits', '0917776655', false, '10917776655'],
-      [null, 'email', 'a@x.com', false, null],
-    ];
-    for (const [text, kind, value, found, edited] of cases) {
-      expect(await check(text, kind, value), `${text} / ${value}`).toEqual({ found, edited });
+    // The shared table (pii-text-cases.ts), each value read as the finder reads it.
+    for (const c of PII_TEXT_CASES) {
+      const probe = personalDataProbe(c.value);
+      if (!probe) {
+        expect(c.redacted, c.name).toBe(c.text);
+        continue;
+      }
+      const value = probe.kind === 'email' ? probe.email : probe.digits;
+      expect(await check(c.text, probe.kind, value), c.name).toEqual({ found: c.redacted !== c.text, edited: c.redacted });
     }
+    expect(await check(null, 'email', 'a@x.com')).toEqual({ found: false, edited: null });
     // A value of another shape, or another kind, raises instead of matching nothing.
     for (const [kind, value] of [['email', 'A@X.com'], ['email', 'not an email'], ['digits', '1234'], ['name', 'Nguyễn']]) {
       await expect(check('x', kind as string, value as string), `${kind} ${value}`).rejects.toMatchObject({ code: '22023' });
