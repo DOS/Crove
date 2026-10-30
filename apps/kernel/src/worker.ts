@@ -397,6 +397,18 @@ export async function sweepSocialPublishing(boss: PgBoss, workerDb: Db, provider
 }
 
 /**
+ * The application_name of this worker's database connections (#1951): 'crove-worker:' and the instance its heartbeat
+ * names, which audit_event_stamp writes into every system-context audit row (detail.workerInstance), so an alert can
+ * tie one process's work across orgs together. PostgreSQL keeps 63 bytes of it, so the composition root cuts the
+ * instance to 50 characters for both (kernel.ts). Behind a transaction-mode pooler that does not track
+ * application_name per client, the server connection running a transaction may carry another worker's name; direct
+ * connections, the default, are exact.
+ */
+export function workerApplicationName(instance: string): string {
+  return `crove-worker:${instance}`.slice(0, 63);
+}
+
+/**
  * Records that this worker is alive and the modules whose queues it works (crove_kernel.worker_beat, crove_worker
  * only): the prober ages only those queues, so a module left out does not read as stuck workers (#1877).
  */
