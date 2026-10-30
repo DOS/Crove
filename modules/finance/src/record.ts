@@ -18,6 +18,8 @@ import {
   RECEIVABLE_ACCOUNT,
   buildPurchaseJournal,
   buildSalesJournal,
+  classificationCheck,
+  isUnclassifiedLine,
   journalIsBalanced,
   money,
   parseTaxCode,
@@ -285,6 +287,19 @@ function assertDirectionAccounts(direction: DocumentDirection, lines: ReadonlyAr
   }
 }
 
+// An invoice goes to the books only with an account on every line (#2091): a line no rule matched carries a placeholder
+// no chart holds, and the reviewer names the line to classify.
+function assertClassified(lines: ReadonlyArray<Pick<ProposedLine, 'lineNo' | 'debitAccount' | 'accountRule'>>): void {
+  const waiting = lines.filter(isUnclassifiedLine).map((l) => l.lineNo);
+  if (waiting.length === 0) return;
+  throw new DomainError(
+    'ACCOUNT_UNCLASSIFIED',
+    422,
+    `Còn ${waiting.length} dòng chưa phân loại (dòng ${waiting.slice(0, 20).join(', ')}${waiting.length > 20 ? ', ...' : ''}): không khớp quy tắc nào; hãy chọn tài khoản cho từng dòng khi sửa đề xuất rồi duyệt lại`,
+    { lines: waiting.slice(0, 20), count: waiting.length },
+  );
+}
+
 export const revisePurchase = defineCommand({
   name: 'finance.purchase.revise',
   input: z.object({
@@ -319,7 +334,11 @@ export const revisePurchase = defineCommand({
     // The accounts the user picked now; the others are checked again when the proposal is approved.
     assertDirectionAccounts(directionOf(payload), chosen);
     await assertUsableAccounts(ctx, chosen.map((l) => l.debitAccount));
-    const revised = { ...payload, lines, journal: invoiceJournal(directionOf(payload), lines, payload.invoice.vatTotal, journalMemo(payload)) };
+    // The accounts check (#2091) names the lines still waiting for an account, so it follows the picks: the
+    // proposal carries one only when extraction found a line no rule matched.
+    const classification = payload.checks.some((c) => c.id === 'accounts') ? classificationCheck(lines) : null;
+    const checks = classification ? payload.checks.map((c) => (c.id === 'accounts' ? classification : c)) : payload.checks;
+    const revised = { ...payload, lines, checks, journal: invoiceJournal(directionOf(payload), lines, payload.invoice.vatTotal, journalMemo(payload)) };
     return { changed: true as const, payload: revised };
   },
 });
@@ -410,6 +429,9 @@ export const recordPurchase = defineCommand({
     if (failed.length > 0 && !acceptFailedChecks) {
       throw new DomainError('CHECKS_FAILED', 422, `Còn ${failed.length} kiểm tra không đạt; hãy xác nhận đã đối chiếu chứng từ gốc`);
     }
+    // A line no rule matched has no account until a reviewer picks one (#2091). The warning check does not decide this:
+    // the lines do, so a proposal whose check was edited away is held here too.
+    assertClassified(payload.lines);
     await assertDirection(ctx, payload);
     // Line accounts come from the approved revision; changing them is an edit (kernel.proposal.edit). A sub-account
     // deactivated since the proposal was made is refused here, with its code.

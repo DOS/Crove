@@ -15,6 +15,7 @@ import { rulesForSuggestion } from './categorization.ts';
 import { resolveLegalEntity } from './legal-entity.ts';
 import {
   bookableLines,
+  classificationCheck,
   bookableSaleLines,
   buildPurchaseJournal,
   buildSalesJournal,
@@ -491,6 +492,11 @@ export async function extractAndPropose(
   const sale = lookup.direction === 'sale';
   const lines = sale ? bookableSaleLines(booked) : bookableLines(booked, lookup.vendorDefault, lookup.learnedRules ?? []);
   if (lines.length === 0) return fail('Hóa đơn không có dòng hàng hóa, dịch vụ để hạch toán', checks);
+  // A purchase line no rule matched has no account yet (#2091): a warning names those lines, and recording refuses them
+  // until a reviewer picks the account. A sale's lines are all revenue, so it has none. Nothing is added when every
+  // line has its account; the check is replaced by its pass when a revision classifies the last line.
+  const classification = sale ? null : classificationCheck(lines);
+  if (classification?.status === 'warn') checks.push(classification);
 
   const seller = { ...invoice.seller, taxCode: sellerTaxCode ?? invoice.seller.taxCode };
   const buyer = sale ? { ...invoice.buyer, taxCode: parseTaxCode(invoice.buyer.taxCode)?.normalized ?? invoice.buyer.taxCode } : invoice.buyer;

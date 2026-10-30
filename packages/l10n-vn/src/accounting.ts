@@ -1,6 +1,6 @@
 // TT133/2016 suggestions for purchase invoices: debit account per line, VAT input account, payable.
 import { money, sum, toMoney, type Money } from './money.ts';
-import { lineContribution, type InvoiceLine, type ParsedInvoice } from './invoice.ts';
+import { lineContribution, type InvoiceCheck, type InvoiceLine, type ParsedInvoice } from './invoice.ts';
 import { parseVatRate } from './vat-rate.ts';
 
 export const PAYABLE_ACCOUNT = '331';
@@ -14,8 +14,10 @@ export function isFixedAssetAccount(code: string): boolean {
 export const FIXED_ASSET_THRESHOLD = '30000000';
 
 // What chose a line's account (#1399), shown on the line: a learned rule (crove_finance.categorization_rule), the
-// vendor's default account, the built-in keyword list, or a user who picked it on a revision.
-const ACCOUNT_RULE_SOURCES = ['learned', 'vendor_default', 'builtin', 'user'] as const;
+// vendor's default account, the built-in keyword list, or a user who picked it on a revision. A line no rule matched
+// has none of these and is 'unclassified' (#2091).
+// 'unclassified' (#2091) is no source of an account: it marks a line that no rule matched, which a reviewer must classify.
+const ACCOUNT_RULE_SOURCES = ['learned', 'vendor_default', 'builtin', 'user', 'unclassified'] as const;
 export type AccountRuleSource = (typeof ACCOUNT_RULE_SOURCES)[number];
 const RULE_MATCH_KINDS = ['description', 'keyword'] as const;
 export type RuleMatchKind = (typeof RULE_MATCH_KINDS)[number];
@@ -152,8 +154,51 @@ export function suggestDebitAccount(line: InvoiceLine, vendorDefault: string | n
   for (const rule of RULES) {
     if (rule.pattern.test(line.description)) return { account: rule.account, reason: rule.reason, rule: builtin };
   }
-  return { account: '6422', reason: 'Mặc định chi phí quản lý doanh nghiệp', rule: builtin };
+  // A line the invoice itself declares a discount (TChat 3) is not a guess: it keeps the built-in account it always had,
+  // shown as built-in on the line, for the reviewer to change.
+  if (line.nature === 'discount') return { account: '6422', reason: 'Chiết khấu ghi giảm chi phí quản lý doanh nghiệp', rule: builtin };
+  // No rule matched: never a guessed account (#2091). The line carries a placeholder no chart holds, which finance
+  // refuses to post, so a reviewer has to choose the account. AI never picks it.
+  return { account: UNCLASSIFIED_ACCOUNT, reason: UNCLASSIFIED_REASON, rule: { source: 'unclassified' } };
 }
+
+// The account of a line no rule matched (#2091): a placeholder that satisfies the account code shape but is in no chart
+// (TT133's off-balance accounts are 001 to 008), so posting it is refused twice: by the line's own mark and by the
+// account check. The proposal's journal draft shows it until a reviewer picks the real account.
+export const UNCLASSIFIED_ACCOUNT = '000';
+export const UNCLASSIFIED_REASON = 'Chưa phân loại: không khớp quy tắc nào, cần chọn tài khoản';
+
+// Whether a proposed line still waits for its account (#2091): marked by the suggestion, or carrying the placeholder.
+export function isUnclassifiedLine(line: { debitAccount: string; accountRule?: { source: string } | undefined }): boolean {
+  return line.accountRule?.source === 'unclassified' || line.debitAccount === UNCLASSIFIED_ACCOUNT;
+}
+
+// The line numbers still waiting for an account, in line order.
+export function unclassifiedLineNos(lines: ReadonlyArray<{ lineNo: number; debitAccount: string; accountRule?: { source: string } | undefined }>): number[] {
+  return lines.filter(isUnclassifiedLine).map((l) => l.lineNo);
+}
+
+// The deterministic check on the account of every line (#2091), id 'accounts': a warning naming the lines no rule
+// matched, a pass once every line has its account (a reviewer picked the rest), and nothing for a proposal with no
+// lines. The warning does not decide: finance.purchase.record refuses an unclassified line whatever the check says.
+export function classificationCheck(lines: ReadonlyArray<{ lineNo: number; debitAccount: string; accountRule?: { source: string } | undefined }>): InvoiceCheck | null {
+  if (lines.length === 0) return null;
+  const waiting = unclassifiedLineNos(lines);
+  if (waiting.length === 0) {
+    return { id: 'accounts', status: 'pass', code: 'accounts.classified', message: 'Mọi dòng đã có tài khoản hạch toán' };
+  }
+  // At most CHECK_LINES_SHOWN numbers are named (params hold 200 characters); the count stays whole.
+  const shown = waiting.slice(0, CHECK_LINES_SHOWN).join(', ');
+  const list = waiting.length > CHECK_LINES_SHOWN ? `${shown}, ...` : shown;
+  return {
+    id: 'accounts',
+    status: 'warn',
+    code: 'accounts.unclassified',
+    params: { count: String(waiting.length), lines: list },
+    message: `Chưa phân loại ${waiting.length} dòng (dòng ${list}): không khớp quy tắc nào, hãy chọn tài khoản trước khi duyệt`,
+  };
+}
+const CHECK_LINES_SHOWN = 20;
 
 export interface ProposedLine {
   lineNo: number;

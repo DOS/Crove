@@ -1889,10 +1889,19 @@ export const en = {
     voucherKind: 'Cash or bank voucher',
     journalVoucherKind: 'Journal voucher',
     saleKind: 'Sale',
+    // Invoice lines no rule matched (#2091): the badge on a proposal's row and the filter above the list.
+    unclassifiedBadge: '{count, plural, one {# line unclassified} other {# lines unclassified}}',
+    filter: {
+      label: 'Filter the proposals',
+      all: 'All ({count, number})',
+      unclassified: 'Unclassified ({count, number})',
+      unclassifiedHint: 'Proposals with a line no account rule matched; open one and choose the account of each such line.',
+      unclassifiedEmpty: 'No proposal has an unclassified line',
+    },
     bulk: {
       selectAll: 'Select all that can be approved together ({count, number})',
       select: 'Select {name}',
-      notSelectable: 'Review this one on its own: it has a failed check, may be a duplicate, or is a reversal',
+      notSelectable: 'Review this one on its own: it has a failed check, may be a duplicate, is a reversal, or has a line with no account yet',
       selected: '{count, number} selected',
       approve: '{count, plural, one {Approve # proposal} other {Approve # proposals}}',
       clear: 'Clear selection',
@@ -2024,7 +2033,11 @@ export const en = {
       vendor_default: 'Vendor default',
       builtin: 'Built-in keywords',
       user: 'Chosen by a user',
+      unclassified: 'Unclassified',
     },
+    pickAccount: 'Choose an account',
+    unclassifiedAccount: 'Unclassified, waiting for an account',
+    unclassifiedNotice: '{count, plural, one {# line matched no account rule and has no account yet.} other {# lines matched no account rule and have no account yet.}} Choose the account of each, save, then approve.',
     sellerOwn: 'Seller (your organization)',
     customer: 'Customer',
     saleNotice:
@@ -5255,6 +5268,10 @@ export const en = {
     },
     source: { ai: 'Read by AI from a photo or PDF; a person must check it' },
     duplicate: { found: 'This invoice is already in the Inbox or in the books' },
+    accounts: {
+      unclassified: 'No account rule matched {count} line(s) (line {lines}): choose their accounts before approving',
+      classified: 'Every line has its account',
+    },
     related: {
       replaces: 'Replaces invoice {invoice}: on approval, {brand} reverses its entry and voids its document',
       adjusts: 'Adjusts invoice {invoice}: the difference is recorded and linked to the original',
@@ -5338,6 +5355,7 @@ export const en = {
       OWN_INVOICE: 'The seller is your own organization, so this is a sales invoice. Read the file again to post it as a sale.',
       NOT_REVENUE_ACCOUNT: 'A sales line goes to a revenue account (511, 515, 711, 3387 or one of their sub-accounts).',
       REVENUE_ACCOUNT_ON_PURCHASE: 'A purchase line cannot go to a revenue account. Choose an expense, inventory or asset account.',
+      ACCOUNT_UNCLASSIFIED: 'Some lines matched no account rule and have no account yet. Choose the account of each line, save, then approve.',
       INVALID_TAX_CODE: 'Not a valid tax code: 10 digits, 10 digits and a 3-digit dependent unit, or 12 digits.',
       TAX_CODE_NOT_FOUND: 'This tax code is not in the lookup data; enter the name and address.',
       TAX_LOOKUP_UNAVAILABLE: 'The tax code lookup is not answering; enter the name and address, or try again later.',

@@ -1,7 +1,12 @@
 // Learned account rules (#1399): the normalized text rules match on, and the order a line's account is chosen in.
 import { describe, expect, it } from 'vitest';
 import {
+  bookableLines,
   bookableSaleLines,
+  classificationCheck,
+  isUnclassifiedLine,
+  unclassifiedLineNos,
+  UNCLASSIFIED_ACCOUNT,
   descriptionRuleText,
   keywordRuleText,
   matchLearnedRule,
@@ -107,10 +112,57 @@ describe('suggestDebitAccount order (#1399)', () => {
     expect(suggestDebitAccount(line('Dịch vụ lạ'), null)).toMatchObject({ account: '6422', rule: { source: 'builtin' } });
   });
 
+  it('marks a line no rule matches as unclassified, never as 6422 (#2091)', () => {
+    const suggestion = suggestDebitAccount(line('Khoản không rõ'), null);
+    expect(suggestion).toMatchObject({ account: UNCLASSIFIED_ACCOUNT, rule: { source: 'unclassified' } });
+    expect(suggestion.reason).toContain('Chưa phân loại');
+    // A line the invoice declares a discount is not a guess: it keeps its built-in 6422.
+    expect(suggestDebitAccount({ ...line('Chiết khấu thương mại'), nature: 'discount' }, null)).toMatchObject({ account: '6422', rule: { source: 'builtin' } });
+    // A learned rule, the vendor default and a built-in keyword still win over it, unchanged.
+    expect(suggestDebitAccount(line('Khoản không rõ'), '156').rule.source).toBe('vendor_default');
+    expect(suggestDebitAccount(line('Khoản không rõ'), null, [rule({ id: 'k', kind: 'keyword', text: 'khong ro', account: '5211' })]).rule.source).toBe('learned');
+    expect(suggestDebitAccount(line('Phí vận chuyển'), null).rule.source).toBe('builtin');
+  });
+
   it('marks sale lines as proposed by the built-in rule', () => {
     const invoice = {
       lines: [line('Dịch vụ tư vấn')],
     } as unknown as ParsedInvoice;
     expect(bookableSaleLines(invoice)[0]).toMatchObject({ debitAccount: '511', accountRule: { source: 'builtin' } });
+  });
+});
+
+describe('classification check (#2091)', () => {
+  const invoice = (descriptions: string[]) =>
+    ({ lines: descriptions.map((d, i) => ({ ...line(d), lineNo: i + 1 })) }) as unknown as ParsedInvoice;
+
+  it('warns with the lines no rule matched and passes when every line has an account', () => {
+    const lines = bookableLines(invoice(['Khoản không rõ', 'Phí quảng cáo Google', 'Khoản khác']), null);
+    expect(lines.map(isUnclassifiedLine)).toEqual([true, false, true]);
+    expect(unclassifiedLineNos(lines)).toEqual([1, 3]);
+    expect(classificationCheck(lines)).toMatchObject({ id: 'accounts', status: 'warn', code: 'accounts.unclassified', params: { count: '2', lines: '1, 3' } });
+    // A reviewer picked the accounts: the lines are classified (source 'user') and the check passes.
+    const picked = lines.map((l) => (isUnclassifiedLine(l) ? { ...l, debitAccount: '6422', accountRule: { source: 'user' as const } } : l));
+    expect(unclassifiedLineNos(picked)).toEqual([]);
+    expect(classificationCheck(picked)).toMatchObject({ id: 'accounts', status: 'pass', code: 'accounts.classified' });
+    expect(classificationCheck([])).toBeNull();
+  });
+
+  it('treats the placeholder account as unclassified even without its mark', () => {
+    expect(isUnclassifiedLine({ debitAccount: UNCLASSIFIED_ACCOUNT })).toBe(true);
+    expect(isUnclassifiedLine({ debitAccount: '6422', accountRule: { source: 'builtin' } })).toBe(false);
+  });
+
+  it('names at most 20 lines and keeps the count whole', () => {
+    const lines = Array.from({ length: 30 }, (_, i) => ({ lineNo: i + 1, debitAccount: UNCLASSIFIED_ACCOUNT }));
+    const check = classificationCheck(lines);
+    expect(check?.params?.count).toBe('30');
+    expect((check?.params?.lines ?? '').endsWith(', ...')).toBe(true);
+    expect((check?.params?.lines ?? '').length).toBeLessThanOrEqual(200);
+  });
+
+  it('leaves a sale untouched: its lines are built-in revenue', () => {
+    const lines = bookableSaleLines(invoice(['Khoản lạ']));
+    expect(unclassifiedLineNos(lines)).toEqual([]);
   });
 });

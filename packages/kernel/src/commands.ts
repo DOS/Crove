@@ -823,6 +823,8 @@ export const BULK_ITEM_REFUSALS: ReadonlySet<string> = new Set([
   // A line's account against its direction (#430): revenue on a sale line only.
   'NOT_REVENUE_ACCOUNT',
   'REVENUE_ACCOUNT_ON_PURCHASE',
+  // A purchase line no rule matched, with no account chosen yet (#2091).
+  'ACCOUNT_UNCLASSIFIED',
   'UNKNOWN_ACCOUNT',
   'ACCOUNT_INACTIVE',
   'PARENT_TAGGED',

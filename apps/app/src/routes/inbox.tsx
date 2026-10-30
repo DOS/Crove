@@ -30,6 +30,8 @@ import { VOUCHER_KIND } from '../lib/vouchers.ts';
 import {
   INBOX_TABS,
   bulkSelectable,
+  countUnclassified,
+  hasUnclassifiedLines,
   canApproveProposals,
   planBatches,
   proposalName,
@@ -279,6 +281,12 @@ export function InboxPage() {
   });
   const items = useQuery({ ...orpc.inbox.list.queryOptions({ input: { status: tab } }), refetchInterval: pollEvery(live, 5000, SAFETY_POLL_MS) });
 
+  // The "Chưa phân loại" filter (#2091): only the pending proposals with a line no rule matched, with how many there are.
+  const [unclassifiedOnly, setUnclassifiedOnly] = useState(false);
+  const unclassifiedCount = countUnclassified(items.data ?? []);
+  const unclassifiedFilter = tab === 'pending' && unclassifiedOnly;
+  const listed = unclassifiedFilter ? (items.data ?? []).filter(hasUnclassifiedLines) : (items.data ?? []);
+
   // Many documents or ZIP archives at once, each file uploaded and followed on its own (#314).
   const intake = useIntake();
   // Reads a file that could not be read again (for example after AI was configured).
@@ -298,7 +306,7 @@ export function InboxPage() {
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
   const [bulk, setBulk] = useState<BulkRun | null>(null);
   const bulkEnabled = tab === 'pending' && canApproveProposals(org.data?.role, org.data?.permissions);
-  const selectable = bulkEnabled ? (items.data ?? []).filter((item) => bulkSelectable(item, REVERSAL_KIND)) : [];
+  const selectable = bulkEnabled ? listed.filter((item) => bulkSelectable(item, REVERSAL_KIND)) : [];
   const chosen = selectable.filter((item) => selected.has(item.id));
   const sending = bulk?.sending ?? false;
   // Invoices whose digital signature is unverified (#674): approving them, in bulk as one by one, asks the approver to
@@ -637,12 +645,29 @@ export function InboxPage() {
             <p className="w-full text-xs text-subtle-foreground">{t('bulk.hint')}</p>
           </div>
         )}
+        {tab === 'pending' && config.modules.includes('finance') && (
+          <div className="mb-3 flex flex-wrap items-center gap-2" role="group" aria-label={t('filter.label')}>
+            <Button variant={unclassifiedOnly ? 'outline' : 'secondary'} size="sm" aria-pressed={!unclassifiedOnly} onClick={() => setUnclassifiedOnly(false)}>
+              {t('filter.all', { count: items.data?.length ?? 0 })}
+            </Button>
+            <Button
+              variant={unclassifiedOnly ? 'secondary' : 'outline'}
+              size="sm"
+              aria-pressed={unclassifiedOnly}
+              data-testid="filter-unclassified"
+              onClick={() => setUnclassifiedOnly(true)}
+            >
+              {t('filter.unclassified', { count: unclassifiedCount })}
+            </Button>
+            {unclassifiedOnly && <span className="text-xs text-subtle-foreground">{t('filter.unclassifiedHint')}</span>}
+          </div>
+        )}
         {items.isLoading ? (
           <TableSkeleton columns={5} />
-        ) : (items.data?.length ?? 0) === 0 ? (
+        ) : listed.length === 0 ? (
           <Empty
-            title={tab === 'pending' ? t('emptyPending') : t('emptyOther')}
-            hint={tab === 'pending' ? t('emptyPendingHint') : undefined}
+            title={unclassifiedFilter ? t('filter.unclassifiedEmpty') : tab === 'pending' ? t('emptyPending') : t('emptyOther')}
+            hint={tab === 'pending' && !unclassifiedFilter ? t('emptyPendingHint') : undefined}
             action={
               tab === 'pending' && config.modules.includes('finance') ? (
                 <Link to="/o/$slug/guide" params={{ slug }} className="text-sm text-link hover:underline">
@@ -667,7 +692,7 @@ export function InboxPage() {
                 t('columns.received'),
               ]}
             >
-              {items.data?.map((item) => (
+              {listed.map((item) => (
                 <TableRow key={item.id}>
                   {bulkEnabled && (
                     <TableCell className="w-10 px-4 py-3">
@@ -695,7 +720,7 @@ export function InboxPage() {
             </DataTable>
           ) : (
             <ul className="space-y-2">
-              {items.data?.map((item) => (
+              {listed.map((item) => (
                 <li key={item.id} className="flex gap-3 rounded-xl border bg-card p-3">
                   {bulkEnabled && <div className="pt-0.5">{selectBox(item)}</div>}
                   <div className="min-w-0 flex-1 space-y-1">
@@ -718,7 +743,7 @@ export function InboxPage() {
             </ul>
           )
         )}
-        {(items.data?.length ?? 0) > 0 && <p className="mt-3 text-xs text-subtle-foreground">{t('listShortcuts')}</p>}
+        {listed.length > 0 && <p className="mt-3 text-xs text-subtle-foreground">{t('listShortcuts')}</p>}
       </TabsContent>
       </Tabs>
     </>

@@ -83,6 +83,9 @@ export const INVOICE_CHECK_CODES = [
   'related.adjusts',
   'related.replaces_missing',
   'related.adjusts_missing',
+  // The account of every line (#2091): a warning naming the lines no rule matched, a pass once each has its account.
+  'accounts.unclassified',
+  'accounts.classified',
 ] as const;
 export type InvoiceCheckCode = (typeof INVOICE_CHECK_CODES)[number];
 
@@ -104,7 +107,11 @@ export const zPartyRef = z.object({
   phone: z.string().max(50).nullable(),
 });
 
-export const ACCOUNT_RULE_SOURCES = ['learned', 'vendor_default', 'builtin', 'user'] as const;
+// 'unclassified' (#2091): no rule matched the line, so it has no account yet and cannot be approved as it is.
+// The placeholder account of such a line, in no chart; the same value as UNCLASSIFIED_ACCOUNT in @crove/l10n-vn, which
+// does not depend on this package (modules/finance/test checks they stay equal).
+export const UNCLASSIFIED_ACCOUNT_CODE = '000';
+export const ACCOUNT_RULE_SOURCES = ['learned', 'vendor_default', 'builtin', 'user', 'unclassified'] as const;
 export const RULE_MATCH_KINDS = ['description', 'keyword'] as const;
 export const zRuleMatchKind = z.enum(RULE_MATCH_KINDS);
 export const zAccountRule = z.object({
@@ -473,6 +480,9 @@ export const zInboxItem = z.object({
   issueDate: zLocalDate.nullable(),
   failedChecks: z.number().int(),
   warnChecks: z.number().int(),
+  // How many lines of an invoice proposal still wait for an account because no rule matched them (#2091); 0 for any
+  // other kind. The Inbox's "Chưa phân loại" filter lists the proposals with at least one.
+  unclassifiedLines: z.number().int().nonnegative(),
   // The invoice's signature verification (#674); null for other kinds and for invoices read before it.
   signatureStatus: zSignatureStatus.nullable(),
   duplicateOf: zId.nullable(),
