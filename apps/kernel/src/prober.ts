@@ -144,7 +144,8 @@ export interface ProberConfig {
   authMisses?: number;
   authTimeoutSeconds?: number;
   // The verification marker check (#2082); unset: off.
-  archiveMarker?: { maxAgeSeconds: number; store: ArchiveStoreSettings } | undefined;
+  // A setting the check cannot use (error) makes it report, never stops the prober: its backup and test alerts must go out.
+  archiveMarker?: ({ maxAgeSeconds: number } & ({ store: ArchiveStoreSettings } | { error: string })) | undefined;
 }
 
 export type ArchiveStoreSettings =
@@ -217,13 +218,14 @@ function archiveMarkerSettings(raw: z.infer<typeof schema>): ProberConfig['archi
   const maxAgeSeconds = raw.PROBER_MAX_ARCHIVE_MARKER_AGE_SECONDS;
   if (maxAgeSeconds === 0) return undefined;
   if (raw.ARCHIVE_STORE === 's3') {
-    if (!raw.ARCHIVE_S3_BUCKET) throw new Error('invalid prober configuration: ARCHIVE_STORE=s3 needs ARCHIVE_S3_BUCKET');
+    if (!raw.ARCHIVE_S3_BUCKET) return { maxAgeSeconds, error: 'ARCHIVE_STORE=s3 needs ARCHIVE_S3_BUCKET' };
     const own = raw.PROBER_ARCHIVE_S3_ACCESS_KEY_ID !== undefined || raw.PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY !== undefined;
+    if (own && (!raw.PROBER_ARCHIVE_S3_ACCESS_KEY_ID || !raw.PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY)) {
+      return { maxAgeSeconds, error: 'set both PROBER_ARCHIVE_S3_ACCESS_KEY_ID and PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY, or neither' };
+    }
+    // As for the worker (createS3Client): half of the S3_* pair means the default credential chain.
     const accessKeyId = own ? raw.PROBER_ARCHIVE_S3_ACCESS_KEY_ID : raw.S3_ACCESS_KEY_ID;
     const secretAccessKey = own ? raw.PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY : raw.S3_SECRET_ACCESS_KEY;
-    if (Boolean(accessKeyId) !== Boolean(secretAccessKey)) {
-      throw new Error('invalid prober configuration: set both PROBER_ARCHIVE_S3_ACCESS_KEY_ID and PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY, or neither');
-    }
     return {
       maxAgeSeconds,
       store: {
@@ -481,6 +483,8 @@ export interface ProbeDeps {
   // The marker check's own alert state, kept in the process like outageGate, never in the database (whose owner the
   // check is about). runProber keeps one across --every probes; default: a fresh one.
   markerGate?: AlertGate;
+  // How long the marker read may take before it counts as unreadable (default MARKER_TIMEOUT_MS; tests).
+  markerTimeoutMs?: number;
   // When the probe loop started (runProber): with no marker in the store yet, the check waits the marker limit from then,
   // so the first nightly run after an upgrade can write one.
   startedAt?: Date;
@@ -727,17 +731,32 @@ async function probe(config: ProberConfig, deps: ProbeDeps): Promise<{ code: num
   return { code: failing.length === 0 ? EXIT.ok : EXIT.unhealthy, failing, at: now };
 }
 
+// A store that accepts the connection and never answers must not hold up the probe: the database checks, the alerts and
+// the status file all wait on it.
+const MARKER_TIMEOUT_MS = 30_000;
+const MAX_STORE_REASON = 300;
+
 // The verification marker check (#2082): null when the newest marker is recent and names a chain hash the store's batch
 // holds, or when there is nothing to verify yet.
 export async function checkVerifyMarker(settings: NonNullable<ProberConfig['archiveMarker']>, deps: ProbeDeps, now: Date): Promise<Finding | null> {
   const limit = settings.maxAgeSeconds;
   const finding = (value: number | null, message: string): Finding => ({ check: 'archive_marker', value, threshold: limit, message: `${message} (docs/runbooks/worm-archive.md)` });
+  if ('error' in settings) return finding(null, `the prober cannot check the WORM verification marker: ${settings.error}`);
   let state;
+  let timer: NodeJS.Timeout | undefined;
   try {
-    state = await readVerifyMarker(deps.archiveStore ?? proberArchiveStore(settings.store));
+    const timeoutMs = deps.markerTimeoutMs ?? MARKER_TIMEOUT_MS;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`no answer within ${Math.round(timeoutMs / 1000)} s`)), timeoutMs);
+    });
+    const store = deps.archiveStore ?? proberArchiveStore(settings.store);
+    state = await Promise.race([readVerifyMarker(store), timeout]);
   } catch (e) {
-    const reason = (e instanceof Error ? e.message : String(e)).replace(/\s+/g, ' ').trim();
+    // One line, and short: a store's error text can run long.
+    const reason = (e instanceof Error ? e.message : String(e)).replace(/\s+/g, ' ').trim().slice(0, MAX_STORE_REASON);
     return finding(null, `the prober could not read the verification marker from the WORM archive store: ${reason}`);
+  } finally {
+    clearTimeout(timer);
   }
   if (state.problem) return finding(null, `the newest WORM verification marker ${state.key} cannot be trusted: ${state.problem}`);
   if (state.key && !state.writtenAt) return finding(null, `the WORM archive store cannot tell when it wrote the verification marker ${state.key}`);
@@ -861,12 +880,19 @@ export async function runProber(argv: readonly string[], env: NodeJS.ProcessEnv 
     authState: deps.authState ?? initialAuthState(config),
     markerGate: deps.markerGate ?? memoryAlertGate(config.repeatSeconds),
     startedAt: deps.startedAt ?? (deps.now ?? (() => new Date()))(),
-    ...(config.archiveMarker && !deps.archiveStore ? { archiveStore: proberArchiveStore(config.archiveMarker.store) } : {}),
+    ...(config.archiveMarker && 'store' in config.archiveMarker && !deps.archiveStore ? { archiveStore: proberArchiveStore(config.archiveMarker.store) } : {}),
   };
   // Under Docker this is PID 1, which gets no default SIGTERM handling: stop between probes at once.
   process.once('SIGTERM', () => process.exit(EXIT.ok));
   const heartbeat = config.heartbeatUrl ? `, heartbeat to ${describeHeartbeat(config.heartbeatUrl)}` : '';
-  (deps.log ?? console.log)(`[prober] probing every ${every} s, alerts to ${alertSink(config, deps).describe()}${heartbeat}`);
+  // Where the verification marker is read from (#2082): a prober pointed at the wrong store sees no batch and no marker,
+  // which reads as nothing to verify yet, so the log says which store it reads.
+  const marker = !config.archiveMarker
+    ? ', verification marker check off'
+    : 'error' in config.archiveMarker
+      ? `, verification marker check misconfigured: ${config.archiveMarker.error}`
+      : `, verification markers from ${looping.archiveStore?.describe() ?? 'the archive store'}`;
+  (deps.log ?? console.log)(`[prober] probing every ${every} s, alerts to ${alertSink(config, deps).describe()}${heartbeat}${marker}`);
   for (;;) {
     await probeOnce(config, looping);
     await new Promise((resolve) => setTimeout(resolve, every * 1000));

@@ -141,6 +141,18 @@ describe('S3 archive store versions (#2020)', () => {
         ['restores/v1/000000000002.json', 1],
       ]),
     );
+    // Every key's write time from one listing (#2082): its oldest version, a key with only a delete marker left out.
+    sent.length = 0;
+    expect(await store.writtenTimes('restores/v1/')).toEqual(
+      new Map([
+        ['restores/v1/000000000001.json', at(10)],
+        ['restores/v1/000000000001.json.bak', at(1)],
+      ]),
+    );
+    expect(sent.map((s) => s.input)).toEqual([
+      { Bucket: 'b', Prefix: 'restores/v1/', KeyMarker: undefined, VersionIdMarker: undefined },
+      { Bucket: 'b', Prefix: 'restores/v1/', KeyMarker: 'k', VersionIdMarker: 'v' },
+    ]);
     // A key with no version has no write time.
     const empty = new S3ArchiveStore({ client: fakeS3(() => ({ Versions: [], IsTruncated: false })).client, bucket: 'b', lockMode: 'COMPLIANCE', retentionDays: 1 });
     expect(await empty.writtenAt('chain/v1/000000000009.json')).toBeNull();

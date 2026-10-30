@@ -78,6 +78,8 @@ export interface ArchiveStore {
   // When the store wrote the object, by its own clock, or null when there is none: S3's LastModified, which the writer
   // cannot set, or the file's modification time. The restore acknowledgements are checked against it (#2020).
   writtenAt?(key: string): Promise<Date | null>;
+  // writtenAt of every key under the prefix, in one listing where the store can (#2082).
+  writtenTimes?(prefix: string): Promise<Map<string, Date>>;
   // How many versions each key under the prefix has, delete markers included, where the store keeps versions (S3 with
   // Object Lock). A WORM object has exactly one: a second means a PUT over it, or a delete (#2020).
   versionCounts?(prefix: string): Promise<Map<string, number>>;
@@ -138,6 +140,15 @@ export class LocalArchiveStore implements ArchiveStore {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
       throw error;
     }
+  }
+
+  async writtenTimes(prefix: string): Promise<Map<string, Date>> {
+    const times = new Map<string, Date>();
+    for (const key of await this.list(prefix)) {
+      const at = await this.writtenAt(key);
+      if (at) times.set(key, at);
+    }
+    return times;
   }
 
   describe(): string {
@@ -243,6 +254,23 @@ export class S3ArchiveStore implements ArchiveStore {
       [keyMarker, versionMarker] = page.IsTruncated ? [page.NextKeyMarker, page.NextVersionIdMarker] : [undefined, undefined];
     } while (keyMarker !== undefined);
     return oldest;
+  }
+
+  // writtenAt of every key under the prefix, from one listing of its versions.
+  async writtenTimes(prefix: string): Promise<Map<string, Date>> {
+    const times = new Map<string, Date>();
+    let keyMarker: string | undefined;
+    let versionMarker: string | undefined;
+    do {
+      const page = await this.client.send(new ListObjectVersionsCommand({ Bucket: this.bucket, Prefix: prefix, KeyMarker: keyMarker, VersionIdMarker: versionMarker }));
+      for (const v of page.Versions ?? []) {
+        if (!v.Key || !v.LastModified) continue;
+        const known = times.get(v.Key);
+        if (!known || v.LastModified < known) times.set(v.Key, v.LastModified);
+      }
+      [keyMarker, versionMarker] = page.IsTruncated ? [page.NextKeyMarker, page.NextVersionIdMarker] : [undefined, undefined];
+    } while (keyMarker !== undefined);
+    return times;
   }
 
   describe(): string {
@@ -1004,11 +1032,28 @@ export interface VerifyMarkerState {
   firstBatchAt: Date | null;
 }
 
-// The newest verification marker in the store, read from the store alone (#2082): the prober's out-of-band check.
+// The newest verification marker in the store, read from the store alone (#2082): the prober's out-of-band check. Newest
+// by the store's own write time, not by key: a key names the worker's clock, and one marker written while that clock ran
+// ahead (or every marker while it runs behind) would otherwise stay "newest" for as long as it is kept.
 export async function readVerifyMarker(store: ArchiveStore): Promise<VerifyMarkerState> {
   const writtenAt = async (key: string) => (store.writtenAt ? await store.writtenAt(key) : null);
-  const key = (await store.list(VERIFY_MARKER_PREFIX)).at(-1) ?? null;
-  if (!key) return { key: null, writtenAt: null, problem: null, firstBatchAt: await writtenAt(archiveKey(1)) };
+  const keys = await store.list(VERIFY_MARKER_PREFIX);
+  if (keys.length === 0) return { key: null, writtenAt: null, problem: null, firstBatchAt: await writtenAt(archiveKey(1)) };
+  const times = new Map<string, Date>();
+  if (store.writtenTimes) for (const [k, at] of await store.writtenTimes(VERIFY_MARKER_PREFIX)) times.set(k, at);
+  else if (store.writtenAt) {
+    for (const k of keys) {
+      const at = await store.writtenAt(k);
+      if (at) times.set(k, at);
+    }
+  }
+  // With no write time at all, the last key, which the check then reports as one the store cannot date.
+  let key = keys.at(-1)!;
+  let newest: Date | null = null;
+  for (const k of keys) {
+    const at = times.get(k);
+    if (at && (!newest || at >= newest)) [key, newest] = [k, at];
+  }
   const bytes = await store.get(key);
   const marker = bytes ? parseVerifyMarker(bytes) : null;
   let problem: string | null = marker ? null : 'it does not read as a verification marker';
@@ -1017,7 +1062,7 @@ export async function readVerifyMarker(store: ArchiveStore): Promise<VerifyMarke
     const batch = batchBytes ? parseBatch(batchBytes) : null;
     if (!batch || batch.chainSha256 !== marker.chainSha256) problem = `it names a chain hash that batch ${marker.batches} in the store does not hold`;
   }
-  return { key, writtenAt: await writtenAt(key), problem, firstBatchAt: null };
+  return { key, writtenAt: newest, problem, firstBatchAt: null };
 }
 
 // What the worker alerts before a verification run reads the database (#2020): the newest object under restores/v1/, by
