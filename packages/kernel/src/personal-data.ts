@@ -351,11 +351,13 @@ export const ERASED_PARTY_NAME = 'Đã xóa theo yêu cầu';
 // - the org's contact email;
 // - the visitor's name, email, phone and note on bookings from a public booking page;
 // - the address in Social report schedules (a schedule left with nobody to mail is deleted);
-// - the value wherever an activity line quotes it (#1948), replaced inside the line.
+// - the value wherever an activity line (#1948) or a task's title or description (#1961) quotes it, replaced inside the
+//   text; a number under 10 digits is left there and listed (it may be an amount or a voucher number).
 // What the law or an append-only record keeps (the names and tax codes of parties in the books and of the legal entities
 // the org keeps books for, #1312, cash vouchers, the tax portal's lists, invites, review feedback, task comments and the
-// descriptions of journal entries and vouchers that quote the value, #1948, and the original files of posted invoices
-// naming the party, under their retention hold, #1009) is left as it is and listed with its reason.
+// descriptions of journal entries and vouchers that quote the value, #1948, bank statement lines and journal line
+// memos, #1961, and the original files of posted invoices naming the party, under their retention hold, #1009) is left
+// as it is and listed with its reason.
 // The audit row holds counts only, never the value or the rows.
 export const personalDataErase = defineCommand({
   name: 'kernel.personal_data.erase',
@@ -470,8 +472,9 @@ export const personalDataErase = defineCommand({
       add('crove_kernel.activity.summary', Number(redacted[0]?.rows ?? 0));
 
       // Tasks that quote the person (#1961): the value is replaced in the title and the description, as the owner (an
-      // owner's update passes the task guards, which hold agents; taint, lease, status and entity stay as they are).
-      // The lengths stay within the columns' limits, in case the mark is longer than a short address.
+      // owner's update passes the task guards, which hold agents; taint, lease, status and entity stay as they are, and
+      // updated_at moves to now). Through the command's own transaction: the tenant role may update tasks, so no definer
+      // is needed. The lengths stay within the columns' limits, in case the mark is longer than a short address.
       const title = freeTextMatch(probe, sql.ref('t.title'));
       const description = freeTextMatch(probe, sql.ref('t.description'));
       const { rows: tasks } = await sql<{ title: boolean; description: boolean }>`
