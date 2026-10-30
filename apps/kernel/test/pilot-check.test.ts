@@ -519,7 +519,31 @@ describe('pilot-check evidence holds (#1996)', () => {
     expect(await probeEvidenceHolds({ ...S3, EVIDENCE_LOCK_DAYS: '0' }, asked)).toBeNull();
     expect(await probeEvidenceHolds({ ...S3, STORAGE: 'local' }, asked)).toBeNull();
     expect(await probeEvidenceHolds({}, asked)).toBeNull();
+    expect(await probeEvidenceHolds({ ...S3, S3_BUCKET: '' }, asked)).toBeNull();
     expect(asked).not.toHaveBeenCalled();
+  });
+
+  it('names the network code of an unreachable bucket, and the permission only when the call is refused', async () => {
+    const unreachable = Object.assign(new Error('getaddrinfo ENOTFOUND minio'), { cause: { code: 'ENOTFOUND' } });
+    const result = await probeEvidenceHolds(S3, async () => {
+      throw unreachable;
+    });
+    expect(result).toMatchObject({ status: 'manual' });
+    expect(result?.message).toContain('(Error (ENOTFOUND))');
+    expect(result?.message).not.toContain('s3:GetBucketObjectLockConfiguration');
+  });
+
+  it('gives up on a bucket that does not answer within the probe timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = probeEvidenceHolds(S3, () => new Promise<boolean>(() => {}));
+      await vi.advanceTimersByTimeAsync(10_000);
+      const result = await pending;
+      expect(result).toMatchObject({ status: 'manual' });
+      expect(result?.message).toContain('(Timeout)');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   // A fake S3 client: answers GetObjectLockConfiguration as told and records every command it is sent.
@@ -557,7 +581,7 @@ describe('pilot-check evidence holds (#1996)', () => {
     const denied = await run(fakeS3(() => {
       throw s3Error('AccessDenied', 403);
     }).client);
-    expect(denied).toMatch(/^MANUAL +Evidence holds +could not read the Object Lock of the files bucket crove-files \(AccessDenied \(403\); the keys need s3:GetBucketObjectLockConfiguration\)/m);
+    expect(denied).toMatch(/^MANUAL +Evidence holds +could not read the Object Lock of the files bucket crove-files \(AccessDenied \(403\); the keys need s3:GetBucketObjectLockConfiguration on it\)/m);
     expect(denied).not.toContain('AKIA');
     // A missing bucket is no answer either, not "no Object Lock".
     expect(await run(fakeS3(() => {

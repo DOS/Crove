@@ -1,6 +1,6 @@
 // The `pilot-check` image role (issue #308, backlog review 2026-10-17 M1-8): a preflight for a deployment that a
-// consenting design partner will use. It reads the deployment's settings (the .env that docker compose reads) and,
-// with --url, probes the running instance. It fails loudly on anything the pilot readiness checklist forbids and lists
+// consenting design partner will use. It reads the deployment's settings (the .env that docker compose reads), asks the
+// files bucket for its Object Lock when evidence holds are on, and, with --url, probes the running instance. It fails loudly on anything the pilot readiness checklist forbids and lists
 // the items only a person can confirm (docs/runbooks/pilot-readiness.md).
 //
 //   pilot-check [--url https://crove.example.com]
@@ -654,11 +654,22 @@ export function objectLockProbe(client?: S3Sender): ObjectLockProbe {
 
 export const filesBucketObjectLock: ObjectLockProbe = objectLockProbe();
 
-// The name and HTTP status of an S3 error, never its message (which may quote the request).
+type S3Failure = { name?: unknown; code?: unknown; cause?: { code?: unknown }; $metadata?: { httpStatusCode?: unknown } };
+
+// The name of an S3 error with its HTTP status, or the system code of a network one (ENOTFOUND), never its message
+// (which may quote the request).
 function s3Reason(error: unknown): string {
-  const named = error as { name?: unknown; $metadata?: { httpStatusCode?: unknown } };
-  const status = typeof named.$metadata?.httpStatusCode === 'number' ? ` (${named.$metadata.httpStatusCode})` : '';
-  return `${typeof named.name === 'string' ? named.name : 'error'}${status}`;
+  const failure = (error ?? {}) as S3Failure;
+  const status = failure.$metadata?.httpStatusCode;
+  const code = typeof failure.code === 'string' ? failure.code : failure.cause?.code;
+  const detail = typeof status === 'number' ? ` (${status})` : typeof code === 'string' ? ` (${code})` : '';
+  return `${typeof failure.name === 'string' ? failure.name : 'error'}${detail}`;
+}
+
+// A refused call: the keys lack the permission, rather than the bucket being out of reach.
+function s3Refused(error: unknown): boolean {
+  const failure = (error ?? {}) as S3Failure;
+  return failure.$metadata?.httpStatusCode === 403 || failure.name === 'AccessDenied';
 }
 
 /**
@@ -682,12 +693,19 @@ export async function probeEvidenceHolds(env: Env, probe: ObjectLockProbe = file
       item: 'Evidence holds',
       status: 'manual',
       message:
-        `could not read the Object Lock of the files bucket ${bucket} (${s3Reason(error)}; the keys need s3:GetBucketObjectLockConfiguration): ` +
+        `could not read the Object Lock of the files bucket ${bucket} (${s3Reason(error)}` +
+        `${s3Refused(error) ? '; the keys need s3:GetBucketObjectLockConfiguration on it' : ''}): ` +
         'confirm the files bucket has Object Lock enabled and the worker log shows no "[evidence-hold] ALERT" (docs/runbooks/evidence-holds.md)',
     };
   }
   return enabled
-    ? { item: 'Evidence holds', status: 'pass', message: `the files bucket ${bucket} has Object Lock enabled: posted invoice files get their retention hold` }
+    ? {
+        item: 'Evidence holds',
+        status: 'pass',
+        message:
+          `the files bucket ${bucket} has Object Lock enabled, so the worker can hold posted invoice files; ` +
+          'a hold that fails (keys without s3:PutObjectRetention) logs "[evidence-hold] ALERT", posted to ALERT_WEBHOOK_URL when set',
+      }
     : {
         item: 'Evidence holds',
         status: 'fail',
