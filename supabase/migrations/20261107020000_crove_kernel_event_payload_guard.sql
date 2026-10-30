@@ -6,7 +6,8 @@
 -- packages/kernel-runtime/src/event-payload.ts); definers that insert into outbox_event directly (Social's review
 -- answers, CRM's bookings) went past that check. This holds every insert to the same rule.
 --
--- crove_kernel.event_payload_problem(p_type, p_value)  The rule of eventPayloadProblem, in SQL: the first value that
+-- crove_kernel.event_payload_problem(p_type, p_value)  The rule of eventPayloadProblem, in SQL (for one release, below,
+--     it also takes what the previous release emits): the first value that
 --     is not an id (a uuid), a code (no space, no @, ASCII only, at most 200 characters), a number, a boolean or null,
 --     and any value under a key that names personal data, as '<path>: <why>'; null when every value is allowed. The
 --     one text an event may carry is its type's agent task title, a module's fixed template:
@@ -32,7 +33,7 @@ BEGIN
   IF p_value IS NULL OR pg_catalog.jsonb_typeof(p_value) IN ('null', 'boolean') THEN
     RETURN NULL;
   END IF;
-  IF pg_catalog.lower(pg_catalog.regexp_replace(v_key, '[^A-Za-z]', '', 'g'))
+  IF pg_catalog.regexp_replace(pg_catalog.lower(v_key), '[^a-z]', '', 'g')
      ~ '(email|phone|address|taxcode|nationalid|idnumber|recipient|personname|fullname|displayname|birthdate)s?$' THEN
     RETURN p_path || ': a key that names personal data';
   END IF;
@@ -47,6 +48,15 @@ BEGIN
     IF p_path = 'payload.agent_task.title' AND (
          (p_type = 'social.post.submitted' AND v_text ~ '^Rà soát bài gửi duyệt: [0-9]{1,4} kênh$')
          OR (p_type = 'crm.booking.cancelled' AND v_text = 'Khách hủy lịch hẹn')) THEN
+      RETURN NULL;
+    END IF;
+    -- For one release only, what the previous release still emits, since a rollback restores its images with this
+    -- database (tools/deploy/deploy.sh: every migration keeps the previous release working): its CRM cancel title,
+    -- which names the event type's title after the template, and its session revoke's identity provider subject.
+    -- ctx.emit already refuses both in this release; #1980 drops this branch.
+    IF (p_path = 'payload.agent_task.title' AND p_type = 'crm.booking.cancelled' AND v_text ~ '^Khách hủy lịch hẹn: '
+        AND pg_catalog.length(v_text) <= 300)
+       OR (p_path = 'payload.subject' AND p_type = 'kernel.session.revoked' AND pg_catalog.length(v_text) <= 255) THEN
       RETURN NULL;
     END IF;
     IF pg_catalog.length(v_text) > 200 THEN

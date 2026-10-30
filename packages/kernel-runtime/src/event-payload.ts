@@ -47,7 +47,7 @@ export function normalizeEventPayload(value: unknown, key = '', depth = 0): unkn
 // The first value of the payload of an event of `type` that is not an id, a code, a number, a boolean or null (or the
 // type's task title), as "<path>: <why>"; null when every value is allowed. The value itself is never named.
 export function eventPayloadProblem(value: unknown, type = ''): string | null {
-  return walk(value, 'payload', 0, TASK_TITLES[type] ?? null);
+  return walk(value, 'payload', 0, Object.hasOwn(TASK_TITLES, type) ? (TASK_TITLES[type] ?? null) : null);
 }
 
 function walk(value: unknown, path: string, depth: number, title: RegExp | null): string | null {

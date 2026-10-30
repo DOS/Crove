@@ -687,9 +687,19 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   await boss.work<SignOutJob>(QUEUES.signOut, { batchSize: 1 }, async ([job]) => {
     if (!job) return;
     const { sessionId, scope } = job.data;
-    const subject = job.data.subject ?? (job.data.userId ? await authSubject(deps.workerDb, job.data.userId) : null);
+    const label = `${scope} sign-out of session ${sessionId.slice(0, 8)}`;
+    let subject: string | null;
+    try {
+      // A job the previous release's relay made from an event of this one has the subject `undefined`: none.
+      const given = job.data.subject === 'undefined' ? undefined : job.data.subject;
+      subject = given ?? (job.data.userId ? await authSubject(deps.workerDb, job.data.userId) : null);
+    } catch (error) {
+      if (job.retryCount < SIGN_OUT_RETRY_LIMIT) throw error;
+      console.error(`[signout] ALERT ${label}: the account's subject could not be read after ${job.retryCount + 1} attempts; revoked in Crove only`, error);
+      return;
+    }
     if (!subject) {
-      console.warn(`[signout] ${scope} sign-out of session ${sessionId.slice(0, 8)}: the account has no identity provider subject; revoked in Crove only`);
+      console.warn(`[signout] ${label}: the account has no identity provider subject; revoked in Crove only`);
       return;
     }
     await runSignOut(deps.revoker, { subject, sessionId, scope }, job.retryCount);

@@ -22,16 +22,16 @@ const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', impo
 const ID = '0193a3f4-5b6c-7d8e-9f01-23456789abcd';
 const ROLES = ['crove_app', 'crove_worker', 'crove_tenant', 'crove_definer_tenant', 'crove_auth_reader', 'crove_prober', 'crove_reporter'];
 
-// Payloads either rule must judge alike: allowed ones, and one of each refusal.
+// Payloads either rule must judge alike: allowed ones, and one of each refusal. One problem each: with two, the rules
+// may name different ones (jsonb orders keys by length), though both refuse.
 const CORPUS: Array<[string, unknown]> = [
   ['kernel.proposal.created', { proposalId: ID, kind: 'finance.purchase' }],
   ['kernel.channel.expired', { connection_id: ID, provider: 'facebook', reason: 'token_expired' }],
   ['finance.bank.imported', { bankAccount: '112100001', amount: '-1250000.5000', count: 3, held: false, at: '2026-10-30T19:00:00+07:00', none: null }],
   ['social.post.submitted', { post_id: ID, variant_ids: [ID], agent_task: { title: 'Rà soát bài gửi duyệt: 2 kênh', ref: { type: 'social.post', id: ID }, tainted: false } }],
   ['crm.booking.cancelled', { booking_id: ID, agent_task: { title: 'Khách hủy lịch hẹn', ref: { type: 'crm.booking', id: ID }, tainted: true } }],
-  ['crm.booking.cancelled', { booking_id: ID, agent_task: { title: 'Khách hủy lịch hẹn: Tư vấn với chị Lan', ref: { type: 'crm.booking', id: ID } } }],
   ['social.post.created', { agent_task: { title: 'Rà soát bài gửi duyệt: 2 kênh' } }],
-  ['kernel.session.revoked', { userId: ID, subject: 'auth0|abc', sessionId: ID, scope: 'local' }],
+  ['kernel.session.revoked', { userId: ID, actor: 'auth0|abc', sessionId: ID, scope: 'local' }],
   ['kernel.test', { note: 'Nguyễn Văn A' }],
   ['kernel.test', { to: 'ketoan@example.com' }],
   ['kernel.test', { party: { phone: '0901234567' } }],
@@ -105,6 +105,22 @@ suite('event payloads: ids and codes only, in TypeScript and in the database (#1
     // The corpus holds both outcomes, so agreement says something.
     expect(sqlProblems.filter((p) => p === null).length).toBeGreaterThanOrEqual(5);
     expect(sqlProblems.filter((p) => p !== null).length).toBeGreaterThanOrEqual(9);
+  });
+
+  // The one difference, for one release (#1980 drops it): what the previous release emits, which a rollback may bring
+  // back, still passes the database while ctx.emit refuses it: its CRM cancel title and its session revoke's subject.
+  it("still lets the previous release's CRM cancel title and revoke subject through the database only", async () => {
+    const legacy: Array<[string, unknown, string]> = [
+      ['crm.booking.cancelled', { booking_id: ID, agent_task: { title: 'Khách hủy lịch hẹn: Tư vấn thuế', ref: { type: 'crm.booking', id: ID } } }, 'payload.agent_task.title'],
+      ['kernel.session.revoked', { userId: ID, subject: 'auth0|abc', sessionId: ID, scope: 'local' }, 'payload.subject'],
+    ];
+    for (const [type, payload, path] of legacy) {
+      expect(eventPayloadProblem(payload, type)).toBe(`${path}: a string that is neither an id nor a code`);
+      const sqlProblem = await withClient(adminUrl, async (c) =>
+        (await c.query<{ p: string | null }>('SELECT crove_kernel.event_payload_problem($1, $2::jsonb) AS p', [type, JSON.stringify(payload)])).rows[0]?.p,
+      );
+      expect(sqlProblem, type).toBeNull();
+    }
   });
 
   it('refuses a personal value from a tenant session that writes an event past ctx.emit, and takes a clean one', async () => {
