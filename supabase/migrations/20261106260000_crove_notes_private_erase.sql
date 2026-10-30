@@ -28,8 +28,8 @@
 --     moved) was not seen by that notice;
 --   - and its author was told: a kernel.personal_data_notice notification for the author with that notice's event
 --     (kernel.notification.dispatch writes it from the event the notice emitted, detail.event), or the author is the
---     owner who sent the notice (never notified of their own action), or the author is no longer a member (nobody can
---     tell them, nobody reads their items, and the 30-day purge of ADR-0037 section 4 deletes them anyway).
+--     owner who sent the notice (never notified of their own action). A former member gets no notification, so their
+--     items stay until the 30-day purge of ADR-0037 section 4 (no exemption here, which a re-add could race).
 -- A notice whose notifications were never written (the worker down) or were pruned (30 days after being read, 90
 -- unread) deletes nothing: the owner sends another. Only the runtime writes audit rows, from the command's own facts,
 -- and only system commands write notifications; a row forged with raw SQL on the API connection is the residual the
@@ -111,12 +111,11 @@ END $$;
 REVOKE ALL ON FUNCTION crove_notes.private_notice_items(text, text) FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant;
 GRANT EXECUTE ON FUNCTION crove_notes.private_notice_items(text, text) TO crove_tenant;
 
--- Whether a notice reached an author (above): the owner who sent it, a former member, or a member with the notice's
--- notification. A helper of private_erase, executable by no login role.
+-- Whether a notice reached an author (above): the owner who sent it, or a member with the notice's notification. A
+-- helper of private_erase, executable by no login role.
 CREATE OR REPLACE FUNCTION crove_notes.private_notice_told(p_org uuid, p_author uuid, p_sender uuid, p_event text)
 RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
   SELECT p_author = p_sender
-      OR NOT EXISTS (SELECT 1 FROM crove_kernel.tenant_member m WHERE m.org_id = p_org AND m.user_id = p_author)
       OR (p_event IS NOT NULL AND EXISTS (
             SELECT 1 FROM crove_kernel.notification x
              WHERE x.org_id = p_org AND x.user_id = p_author AND x.kind = 'kernel.personal_data_notice'
@@ -148,7 +147,7 @@ BEGIN
          AND pg_catalog.jsonb_typeof(a.detail) = 'object' AND a.detail ->> 'key' = v_key
     ),
     note_found AS (
-      SELECT n.id, n.author_user_id AS author,
+      SELECT n.id, n.revision, n.author_user_id AS author,
              EXISTS (SELECT 1 FROM told
                       WHERE pg_catalog.jsonb_typeof(told.detail -> 'notes') = 'array' AND (told.detail -> 'notes') ? (n.id::text || ':' || n.revision::text)
                         AND crove_notes.private_notice_told(v_org, n.author_user_id, told.actor_id, told.detail ->> 'event')) AS named
@@ -159,7 +158,7 @@ BEGIN
               OR crove_kernel.text_mentions(pg_catalog.array_to_string(n.tags, ' '), p_kind, p_value))
     ),
     todo_found AS (
-      SELECT t.id, t.owner_user_id AS author,
+      SELECT t.id, t.revision, t.owner_user_id AS author,
              EXISTS (SELECT 1 FROM told
                       WHERE pg_catalog.jsonb_typeof(told.detail -> 'todos') = 'array' AND (told.detail -> 'todos') ? (t.id::text || ':' || t.revision::text)
                         AND crove_notes.private_notice_told(v_org, t.owner_user_id, told.actor_id, told.detail ->> 'event')) AS named
@@ -170,20 +169,22 @@ BEGIN
               OR crove_kernel.text_mentions(t.checklist::text, p_kind, p_value))
     ),
     note_gone AS (
+      -- The revision again on the row deleted: one an author changes while this runs (the DELETE waits for their
+      -- commit and reads the row anew) is not the one the notice named, and stays.
       DELETE FROM crove_notes.note n USING note_found f
-       WHERE n.org_id = v_org AND n.id = f.id AND f.named
-      RETURNING f.author
+       WHERE n.org_id = v_org AND n.id = f.id AND n.revision = f.revision AND f.named
+      RETURNING n.id, f.author
     ),
     todo_gone AS (
       DELETE FROM crove_notes.todo t USING todo_found f
-       WHERE t.org_id = v_org AND t.id = f.id AND f.named
-      RETURNING f.author
+       WHERE t.org_id = v_org AND t.id = f.id AND t.revision = f.revision AND f.named
+      RETURNING t.id, f.author
     ),
     counted AS (
       SELECT g.author, 1 AS note, 0 AS todo, 0 AS untold_note, 0 AS untold_todo FROM note_gone g
       UNION ALL SELECT g.author, 0, 1, 0, 0 FROM todo_gone g
-      UNION ALL SELECT f.author, 0, 0, 1, 0 FROM note_found f WHERE NOT f.named
-      UNION ALL SELECT f.author, 0, 0, 0, 1 FROM todo_found f WHERE NOT f.named
+      UNION ALL SELECT f.author, 0, 0, 1, 0 FROM note_found f WHERE NOT EXISTS (SELECT 1 FROM note_gone g WHERE g.id = f.id)
+      UNION ALL SELECT f.author, 0, 0, 0, 1 FROM todo_found f WHERE NOT EXISTS (SELECT 1 FROM todo_gone g WHERE g.id = f.id)
     )
     SELECT c.author, pg_catalog.sum(c.note)::bigint, pg_catalog.sum(c.todo)::bigint,
            pg_catalog.sum(c.untold_note)::bigint, pg_catalog.sum(c.untold_todo)::bigint

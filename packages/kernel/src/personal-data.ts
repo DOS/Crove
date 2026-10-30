@@ -314,7 +314,7 @@ export const UNTOLD_PRIVATE_REASON = 'A private item whose author was not told y
 // the value are told how many of theirs do, so they know before the erasure deletes them. Nobody but the author reads
 // a private item: crove_notes.private_notice_items answers their ids and authors only, the audit row records the ids
 // with the value's keyed notice key (which the erasure checks, crove_notes.private_erase: it deletes only what a notice
-// for the same value named, and only once its author got the notification), and the event
+// for the same value named, at its current revision, and only once its author got the notification), and the event
 // kernel.personal_data.notified carries the authors and counts, which kernel.notification.dispatch turns into one
 // notification each, sent even when the author turned that kind off. The value itself is in neither.
 export const personalDataNotify = defineCommand({

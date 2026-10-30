@@ -36,13 +36,15 @@ export function PersonalDataPage() {
   const canRead = org.data?.role === 'owner' || org.data?.role === 'admin';
   const [draft, setDraft] = useState('');
   const [value, setValue] = useState('');
-  // Each search is a command that leaves an audit row (#1678): run once per value, not again on focus; an erasure, an
-  // access change or a resync of the stream runs it again, which leaves another row.
+  // Each search is a command that leaves an audit row (#1678): run on each submit, not again on focus; an erasure, an
+  // access change or a resync of the stream runs it again, which leaves another row. An answer no longer shown is
+  // dropped (gcTime 0), so searching a value again asks the server again.
   const found = useQuery({
     ...orpc.org.personalData.queryOptions({ input: { value } }),
     enabled: canRead && value.length >= 3,
     retry: false,
     staleTime: Infinity,
+    gcTime: 0,
     refetchOnWindowFocus: false,
   });
   const isOwner = org.data?.role === 'owner';
@@ -83,6 +85,8 @@ export function PersonalDataPage() {
         className="mb-4 flex max-w-xl flex-wrap gap-2"
         onSubmit={(event) => {
           event.preventDefault();
+          // The same value again: search again (the key does not change, so the query would not run).
+          if (draft.trim() === value) void found.refetch();
           setValue(draft.trim());
           erase.reset();
           notify.reset();
