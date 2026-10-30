@@ -42,9 +42,11 @@ interface CommandPolicy {
 }
 
 // The permission that approves a proposal that posts to the ledger (finance.chief_accountant holds it). Only an
-// org-wide assignment grants it: no proposal names a legal entity yet, so an entity-scoped assignment could not be
-// checked against the proposal's entity, and it grants nothing here (fail closed). When proposals carry
-// legal_entity_id, eligibility becomes "holds the permission for the proposal's entity".
+// org-wide assignment grants it: finance.chief_accountant is an org role (role_assignment's foreign key on
+// (role_key, scope) keeps it from naming an entity), and no entity-scoped role holds an approval permission (#1507;
+// roles.db.test.ts pins the table). So its holders cover every legal entity a proposal names (#1538, #2060). Should an
+// entity role ever hold it, eligibility must first become "holds it for the proposal's entity", here and in the
+// database's gate (crove_kernel.proposal_approve, #1793).
 export const LEDGER_APPROVE_PERMISSION = 'finance.proposal.approve';
 
 // Approval policy per proposal command. Every proposal command today is R3 and posts to the ledger, so the roles that
