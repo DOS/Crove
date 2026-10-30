@@ -14,7 +14,7 @@
 -- audience.sql, ADR-0037): a to-do to its owner's streams (`@<owner_user_id>`), a note to its author's
 -- (`@<author_user_id>`), a shared note (visibility 'org') also to the streams that read shared notes (`+shared`).
 -- Private and shared notes of one author are separate audiences, so a private note never rides on a `+shared` hint.
--- The hint names one of the group's deleted ids (the lowest), ids only as before. The NOTIFYs of a statement are
+-- The hint names one of the group's deleted ids (the first as text), ids only as before. The NOTIFYs of a statement are
 -- bounded by its orgs and members, not by its rows; a delete of one row sends exactly the hint it sent before.
 --
 -- INSERT and UPDATE keep the row trigger (stream_hint, crove_kernel.stream_notify unchanged), so the scans of

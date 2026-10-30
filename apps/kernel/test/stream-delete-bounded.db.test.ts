@@ -60,7 +60,10 @@ suite('stream hints of a bulk delete (#1992)', () => {
     try {
       await admin(statements);
       await admin((c) => c.query(`SELECT pg_catalog.pg_notify('crove_stream', $1)`, [DONE]));
-      await Promise.race([finished, new Promise((_, reject) => setTimeout(() => reject(new Error(`timed out; ${payloads.length} payloads`)), 10_000))]);
+      let timer: NodeJS.Timeout | undefined;
+      await Promise.race([finished, new Promise((_, reject) => (timer = setTimeout(() => reject(new Error(`timed out; ${payloads.length} payloads`)), 10_000)))]).finally(() =>
+        clearTimeout(timer),
+      );
       return payloads;
     } finally {
       await listener.end();
