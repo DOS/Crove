@@ -341,8 +341,10 @@ export const ERASED_TEXT_MARK = '[đã xóa]';
 // refused, never named in part.
 export const PERSONAL_DATA_NOTICE_ITEMS = 1000;
 // Why an erasure keeps a private item that mentions the value: no notice named it as it is now (written or changed since
-// the last one), or the notice's notification has not reached its author yet, so the author does not know yet.
-export const UNTOLD_PRIVATE_REASON = 'A private item whose author was not told yet (written or changed since the last notice, or its notification not sent yet): send the notice, wait, then erase again';
+// the last one), or the notice's notification has not reached its author yet or did less than 24 hours ago, so the
+// author has not had the time to read it and take their items (crove_notes.private_erase).
+export const UNTOLD_PRIVATE_REASON =
+  'A private item whose author was not told at least 24 hours ago (written or changed since the last notice, its notification not sent yet, or sent less than 24 hours ago): send the notice if needed, wait 24 hours, then erase again';
 
 // The owner's notice before an erasure (#1678, ADR-0037 section 5): the authors of private notes and to-dos that mention
 // the value are told how many of theirs do, so they know before the erasure deletes them. Nobody but the author reads
@@ -535,8 +537,8 @@ export const personalDataErase = defineCommand({
     add('crove_notes.note.title', notes.filter((n) => n.title).length);
     add('crove_notes.note.body', notes.filter((n) => n.body).length);
     add('crove_notes.note.tags', notes.filter((n) => n.tags).length);
-    const { rows: privateRows } = await sql<{ notes: string; todos: string; untold_notes: string; untold_todos: string }>`
-      SELECT notes, todos, untold_notes, untold_todos FROM crove_notes.private_erase(${probe.kind}, ${probeValue(probe)})`.execute(ctx.trx);
+    const { rows: privateRows } = await sql<{ notes: string; todos: string; untold_notes: string; untold_todos: string; note_ids: string[]; todo_ids: string[] }>`
+      SELECT notes, todos, untold_notes, untold_todos, note_ids, todo_ids FROM crove_notes.private_erase(${probe.kind}, ${probeValue(probe)})`.execute(ctx.trx);
     const sum = (key: 'notes' | 'todos' | 'untold_notes' | 'untold_todos') => privateRows.reduce((n, r) => n + Number(r[key]), 0);
     const privateDeleted = { notes: sum('notes'), todos: sum('todos') };
     const untold = { notes: sum('untold_notes'), todos: sum('untold_todos') };
@@ -591,8 +593,8 @@ export const personalDataErase = defineCommand({
       erased: [...erased].map(([column, rows]) => ({ column, rows })),
       kept: [...kept.values()].map((k) => ({ column: k.column, rows: k.rows, reason: k.reason })),
     };
-    // Counts only: the value and the rows never reach the audit log.
-    ctx.audit({ kind: probe.kind, erased: Object.fromEntries(erased), kept: Object.fromEntries(keptRows), kept_parties: keptParties });
+    // Counts and ids only: the value and the text never reach the audit log.
+    ctx.audit({ kind: probe.kind, erased: Object.fromEntries(erased), kept: Object.fromEntries(keptRows), kept_parties: keptParties, private_deleted: { notes: privateRows.flatMap((r) => r.note_ids), todos: privateRows.flatMap((r) => r.todo_ids) } });
     return result;
   },
 });

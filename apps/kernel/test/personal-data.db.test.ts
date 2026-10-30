@@ -353,6 +353,21 @@ suite('finding a person in the org (#923)', () => {
         { user_id: org.admin, detail: { notes: '0', todos: '1' }, subject_id: null },
       ].sort((a, b) => a.user_id.localeCompare(b.user_id)),
     );
+    // Told just now: the erasure waits 24 hours, so the authors can read the notice and take their items first.
+    expect((await erase(value)).kept.filter((k) => k.column.startsWith('crove_notes.'))).toEqual([
+      { column: 'crove_notes.note', rows: 2, reason: UNTOLD_PRIVATE_REASON },
+      { column: 'crove_notes.todo', rows: 2, reason: UNTOLD_PRIVATE_REASON },
+    ]);
+    expect(await privateLeft()).toEqual([...memberNotes, unrelated, memberTodo, adminTodo].sort());
+    // A day later: the notice's audit row and its notifications moved 25 hours back (the audit trail is append-only,
+    // so its trigger is set aside for this one transaction).
+    await admin(async (c) => {
+      await c.query('BEGIN');
+      await c.query('SET LOCAL session_replication_role = replica');
+      await c.query(`UPDATE crove_kernel.audit_event SET occurred_at = occurred_at - interval '25 hours' WHERE org_id = $1 AND command = 'kernel.personal_data.notify'`, [org.orgId]);
+      await c.query(`UPDATE crove_kernel.notification SET created_at = created_at - interval '25 hours' WHERE org_id = $1 AND kind = 'kernel.personal_data_notice'`, [org.orgId]);
+      await c.query('COMMIT');
+    });
 
     // A private note written after the notice was not named, and a to-do changed since it was named at an older
     // revision: the erasure keeps both, and deletes the others.
@@ -382,7 +397,12 @@ suite('finding a person in the org (#923)', () => {
         ]),
       )
     ).rows[0];
-    expect(erasedAudit?.detail).toMatchObject({ erased: { 'crove_notes.note': 2, 'crove_notes.todo': 1 }, kept: { 'crove_notes.note': 1, 'crove_notes.todo': 1 } });
+    expect(erasedAudit?.detail).toMatchObject({
+      erased: { 'crove_notes.note': 2, 'crove_notes.todo': 1 },
+      kept: { 'crove_notes.note': 1, 'crove_notes.todo': 1 },
+      // The deleted items, by id only.
+      private_deleted: { notes: [...memberNotes].sort(), todos: [adminTodo] },
+    });
     expect(JSON.stringify(erasedAudit)).not.toContain('thu.ky');
   });
 

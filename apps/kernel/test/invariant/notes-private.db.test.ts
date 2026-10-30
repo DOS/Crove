@@ -404,7 +404,25 @@ suite('private notes on PostgreSQL (#1671, ADR-0037)', () => {
           `personal_data_notice:${event}`,
         ]),
       );
-      expect(await erase(owner)).toMatchObject({ ok: true, value: { rows: [{ author_user_id: users.author, notes: '1', todos: '0', untold_notes: '1', untold_todos: '0' }] } });
+      // Told, but less than 24 hours ago: still kept, so the author can read the notice and take their items.
+      expect(await erase(owner)).toMatchObject(untold);
+      // Moves this org's rows of one table back 25 hours, its append-only trigger set aside for that transaction.
+      const age = (sql: string) =>
+        admin(async (c) => {
+          await c.query('BEGIN');
+          await c.query('SET LOCAL session_replication_role = replica');
+          await c.query(sql, [orgId]);
+          await c.query('COMMIT');
+        });
+      // The notice a day old, its notification still fresh: kept.
+      await age(`UPDATE crove_kernel.audit_event SET occurred_at = occurred_at - interval '25 hours' WHERE org_id = $1 AND command LIKE 'kernel.personal_data.%'`);
+      expect(await erase(owner)).toMatchObject(untold);
+      // Both a day old: the named item goes, by id.
+      await age(`UPDATE crove_kernel.notification SET created_at = created_at - interval '25 hours' WHERE org_id = $1 AND kind = 'kernel.personal_data_notice'`);
+      expect(await erase(owner)).toMatchObject({
+        ok: true,
+        value: { rows: [{ author_user_id: users.author, notes: '1', todos: '0', untold_notes: '1', untold_todos: '0', note_ids: [named], todo_ids: [] }] },
+      });
       for (const actor of [member('an admin', () => users.admin), author, member('another member', () => users.member), member('a viewer', () => users.viewer), agentActor, system]) {
         expect(await items(actor), actor.name).toMatchObject({ ok: false, code: '42501' });
         expect(await erase(actor), actor.name).toMatchObject({ ok: false, code: '42501' });
