@@ -247,8 +247,9 @@ export async function decideApproval(
   // row, and a demoted one or one whose assignment was revoked no longer approves, so neither is eligible nor counts
   // toward the two that four-eyes (P10) needs. Whether they can enter the org now does not matter (#2064): while it
   // offboards only owners can, and an admin or chief accountant still counts, so a closing org's last postings keep
-  // their second pair of eyes. The owner who wrote one rejects it, or demotes the others (audited) first; the database
-  // gate (crove_kernel.proposal_approval_decide) counts the same way.
+  // their second pair of eyes. The owner who wrote one rejects it or, under the founder preset, first demotes the others
+  // or revokes their approval role (audited); under the accountant preset an author never approves a ledger proposal.
+  // The database gate (crove_kernel.proposal_approval_decide) counts the same way.
   const eligible = new Set(live.filter((m) => policy.roles.includes(m.role) || holders.has(m.user_id)).map((m) => m.user_id));
   if (!eligible.has(actor.userId)) return deny('not_eligible', eligible.size);
 

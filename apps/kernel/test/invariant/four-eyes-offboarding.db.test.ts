@@ -5,7 +5,10 @@
 // closed). The owner who wrote the proposal is refused FOUR_EYES_REQUIRED, the same answer from decideApproval and the
 // database gate. The ways on are both audited: reject it, or demote the admin (kernel.member.change_role, whose audit
 // row names the roles, #88), after which the owner is the sole eligible approver and approves it flagged
-// self_approved. Set CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
+// self_approved (under the founder preset; under the accountant preset an author never approves a ledger proposal, so
+// the owner rejects it). Part of the invariant suite: a change that narrows the count to who can enter now turns the
+// base copy red. Keep it self-contained (package code under test, fixtures/ only). Set CROVE_TEST_ADMIN_URL to a
+// superuser URL; the run creates and drops its own database.
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
@@ -15,11 +18,11 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, decideApproval, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
 import { sql } from 'kysely';
-import { TEST_MANIFESTS } from './manifests.ts';
-import { contextToken } from './context-token.ts';
+import { TEST_MANIFESTS } from './fixtures/manifests.ts';
+import { contextToken } from './fixtures/context-token.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
-const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
+const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
 const LEDGER_COMMAND = 'finance.voucher.record';
 const suite = ADMIN ? describe : describe.skip;
 
@@ -64,13 +67,13 @@ suite('four-eyes while an org is offboarding (#2064)', () => {
   }
 
   // A pending ledger proposal the owner wrote, with the owner and the admin in its eligible snapshot.
-  const proposal = () =>
+  const proposal = (author = owner) =>
     admin(async (c) =>
       (
         await c.query<{ id: string }>(
           `INSERT INTO crove_kernel.proposal (org_id, kind, command, title, payload, eligible_approvers, authors)
            VALUES ($1, 't2064', $2, 'T2064', '{}', $3::uuid[], $4) RETURNING id`,
-          [orgId, LEDGER_COMMAND, [owner, second], JSON.stringify([{ type: 'user', id: owner }])],
+          [orgId, LEDGER_COMMAND, [owner, second], JSON.stringify([{ type: 'user', id: author }])],
         )
       ).rows[0]?.id as string,
     );
@@ -116,6 +119,8 @@ suite('four-eyes while an org is offboarding (#2064)', () => {
   });
 
   it('keeps counting an admin who cannot enter the offboarding org, so the owner who wrote a proposal needs another way', async () => {
+    // The normal path is untouched: a proposal the admin wrote, the owner approves.
+    await expect(asMember(owner, gate(await proposal(second)))).resolves.toMatchObject({ ok: true, value: { fourEyes: 'pass', selfApproved: false, eligibleCount: 2 } });
     const id = await proposal();
     // The admin cannot enter the org while it offboards; the owner can.
     await expect(asMember(second, async () => 'entered')).resolves.toMatchObject({ ok: false, code: '42501', message: 'NOT_A_MEMBER' });
