@@ -8,14 +8,14 @@
 -- to-do linked to a deleted note, however bounded the note's own delete hint is (#1992, 20261107180000).
 --
 -- 1. The to-do's UPDATE hint skips exactly that cascade: an update that sets source_note_id from a note to NULL inside
---    a trigger. An AFTER trigger's WHEN is evaluated as the row changes, so for the foreign key's action, which its
---    own trigger runs, pg_trigger_depth() is 1; a statement or a definer's update outside any trigger sees 0. The deleted
---    note's own hint already reads every notes.* query again in the apps that may read it (apps/app/src/lib/stream.ts:
---    a note hint covers notes.todos.* too): the note's author, who is the to-do's owner for a private note, and for a
---    shared note also the members who read shared notes, the to-do's owner among them while they may still read it.
---    A to-do whose owner can no longer read the shared note it came from shows the stale link until the app's next
---    read (its safety poll). Every other update, a direct one that clears source_note_id included, sends its hint as
---    before. Skipping a hint never widens an audience.
+--    a trigger and leaves the revision as it was. An AFTER trigger's WHEN is evaluated as the row changes, so for the
+--    foreign key's action, which its own trigger runs, pg_trigger_depth() is 1; a statement or a definer's update
+--    outside any trigger sees 0. Every command that changes a to-do raises its revision, and the foreign key's action
+--    changes source_note_id alone. The skipped hint had nothing to say: no to-do query returns source_note_id
+--    (modules/notes/src/todos.ts reads it only for the export), so no screen of the to-do's owner changes. When a to-do
+--    query returns the note it came from (plan N7), revisit this: the deleted note's own hint reaches the to-do's owner
+--    only while they are in the note's audience. Every other update, a direct one that clears source_note_id included,
+--    sends its hint as before. Skipping a hint never widens an audience.
 --    The row trigger stream_hint keeps INSERT (its name and arguments, which the scans of stream_hint triggers read),
 --    and the UPDATE hint moves to stream_hint_update, since a trigger's WHEN can read OLD only on UPDATE.
 -- 2. member_items_purge deletes the former member's to-dos before their private notes, so the note delete finds no
@@ -29,7 +29,7 @@ CREATE TRIGGER stream_hint AFTER INSERT ON crove_notes.todo
 DROP TRIGGER IF EXISTS stream_hint_update ON crove_notes.todo;
 CREATE TRIGGER stream_hint_update AFTER UPDATE ON crove_notes.todo
   FOR EACH ROW
-  WHEN (NOT (pg_catalog.pg_trigger_depth() > 0 AND OLD.source_note_id IS NOT NULL AND NEW.source_note_id IS NULL))
+  WHEN (NOT (pg_catalog.pg_trigger_depth() > 0 AND OLD.source_note_id IS NOT NULL AND NEW.source_note_id IS NULL AND OLD.revision = NEW.revision))
   EXECUTE FUNCTION crove_kernel.stream_notify('todo', 'id');
 
 -- Removes a former member's private notes and every to-do of theirs from the context's org, unless they are a member

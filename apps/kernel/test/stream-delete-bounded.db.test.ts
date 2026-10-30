@@ -234,9 +234,9 @@ suite('stream hints of a bulk delete (#1992)', () => {
     const rows = await admin(
       async (c) =>
         (
-          await c.query<{ tbl: string; name: string; statement: boolean; on_delete: boolean; on_insert: boolean }>(
+          await c.query<{ tbl: string; name: string; statement: boolean; on_delete: boolean; on_insert: boolean; on_update: boolean }>(
             `SELECT t.tgrelid::regclass::text AS tbl, t.tgname AS name, (t.tgtype & 1) = 0 AS statement,
-                    (t.tgtype & 8) <> 0 AS on_delete, (t.tgtype & 4) <> 0 AS on_insert
+                    (t.tgtype & 8) <> 0 AS on_delete, (t.tgtype & 4) <> 0 AS on_insert, (t.tgtype & 16) <> 0 AS on_update
              FROM pg_catalog.pg_trigger t
              WHERE t.tgrelid IN ('crove_notes.note'::regclass, 'crove_notes.todo'::regclass) AND t.tgname LIKE 'stream\\_hint%'
              ORDER BY 1, 2`,
@@ -244,11 +244,11 @@ suite('stream hints of a bulk delete (#1992)', () => {
         ).rows,
     );
     expect(rows).toEqual([
-      { tbl: 'crove_notes.note', name: 'stream_hint', statement: false, on_delete: false, on_insert: true },
-      { tbl: 'crove_notes.note', name: 'stream_hint_delete', statement: true, on_delete: true, on_insert: false },
-      { tbl: 'crove_notes.todo', name: 'stream_hint', statement: false, on_delete: false, on_insert: true },
-      { tbl: 'crove_notes.todo', name: 'stream_hint_delete', statement: true, on_delete: true, on_insert: false },
-      { tbl: 'crove_notes.todo', name: 'stream_hint_update', statement: false, on_delete: false, on_insert: false },
+      { tbl: 'crove_notes.note', name: 'stream_hint', statement: false, on_delete: false, on_insert: true, on_update: true },
+      { tbl: 'crove_notes.note', name: 'stream_hint_delete', statement: true, on_delete: true, on_insert: false, on_update: false },
+      { tbl: 'crove_notes.todo', name: 'stream_hint', statement: false, on_delete: false, on_insert: true, on_update: false },
+      { tbl: 'crove_notes.todo', name: 'stream_hint_delete', statement: true, on_delete: true, on_insert: false, on_update: false },
+      { tbl: 'crove_notes.todo', name: 'stream_hint_update', statement: false, on_delete: false, on_insert: false, on_update: true },
     ]);
     const callers = await admin(
       async (c) =>
