@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: AGPL-3.0-only
 -- Crove kernel (issue #1977, ADR-0017 section 1): a notification no longer keeps a copy of its subject's title or file
 -- name. Idempotent; applied files stay untouched.
 --
