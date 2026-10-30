@@ -8,6 +8,9 @@
 // - kernel.number.policy.set (R2, owners and admins): the reset policy of a document type in a legal entity: 'yearly'
 //   (the default), 'monthly' or 'never', chosen before the document type's first number; once it has numbers, its
 //   reset stays (CONFLICT), so no period is numbered from 1 again beside numbers it already holds.
+// - kernel.number.policy.schedule (R2, owners and admins, #1595): a switch of that reset from 1 January of a future
+//   year, for a document type that has numbers too, as long as none is dated then or later (CONFLICT). A document dated
+//   before the switch keeps the old reset; a second switch from the same date replaces the first.
 // - kernel.number.allocations: the numbers of one series, newest first, each with its record and its void, if any.
 import { sql } from 'kysely';
 import { z } from 'zod';
@@ -120,6 +123,44 @@ export const numberPolicySet = defineCommand({
   },
 });
 
+export const numberPolicySchedule = defineCommand({
+  name: 'kernel.number.policy.schedule',
+  input: z.strictObject({
+    legalEntityId: z.uuid().nullable().optional(),
+    docType: zDocType,
+    reset: z.enum(NUMBER_RESETS),
+    // The first day of a year: the reset changes at a year boundary only.
+    from: z.iso.date().regex(/^\d{4}-01-01$/),
+  }),
+  risk: 'R2',
+  // Internal (#1563): it records a fact in the numbering tables and changes no document, posting or outside system.
+  sideEffect: 'internal',
+  access: ADMINS,
+  handler: async (ctx, input): Promise<{ legalEntityId: string; docType: string; reset: NumberReset; from: string; previous: NumberReset }> => {
+    if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
+    const legalEntityId = await entityOf(ctx, input.legalEntityId);
+    const { rows } = await sql<{ previous: NumberReset }>`
+      SELECT crove_kernel.number_series_policy_schedule(${legalEntityId}::uuid, ${input.docType}::text, ${input.reset}::text, ${input.from}::date) AS previous`
+      .execute(ctx.trx)
+      .catch((error: { code?: string; message?: string }) => {
+        if (error?.code === '22023' && error.message === 'NUMBER_RESET_FROM_PAST') {
+          throw new DomainError('VALIDATION', 422, 'Chỉ đổi được cách đánh số lại từ ngày 1 tháng 1 của một năm chưa tới', { field: 'from' });
+        }
+        if (error?.code === '22023' && error.message === 'NUMBER_RESET_FROM_INVALID') {
+          throw new DomainError('VALIDATION', 422, 'Cách đánh số lại chỉ đổi từ ngày 1 tháng 1', { field: 'from' });
+        }
+        // A number of the document type is already dated on or after that day.
+        if (error?.code === '55000' && error.message === 'NUMBER_RESET_PERIOD_IN_USE') {
+          throw new DomainError('CONFLICT', 409, 'Loại chứng từ này đã có số cấp cho chứng từ từ ngày đó trở đi; hãy chọn một năm sau');
+        }
+        throw error;
+      });
+    const previous = rows[0]?.previous ?? 'yearly';
+    ctx.audit({ legalEntityId, docType: input.docType, reset: input.reset, from: input.from, previous });
+    return { legalEntityId, docType: input.docType, reset: input.reset, from: input.from, previous };
+  },
+});
+
 export interface NumberAllocationView {
   allocationId: string;
   number: number;
@@ -192,5 +233,5 @@ export const numberAllocations = defineQuery({
   },
 });
 
-export const numberingCommands = [numberVoid, numberPolicySet];
+export const numberingCommands = [numberVoid, numberPolicySet, numberPolicySchedule];
 export const numberingQueries = [numberAllocations];
