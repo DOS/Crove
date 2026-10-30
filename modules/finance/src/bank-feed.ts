@@ -24,6 +24,9 @@ import { resolveLegalEntity } from './legal-entity.ts';
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const MANAGERS: readonly MemberRole[] = ['owner', 'admin'];
 
+// One answer for a mapping in another entity, whether the caller can read that mapping or row security hides it (#2079).
+const accountMapped = () => new DomainError('BANK_FEED_ACCOUNT_MAPPED', 409, 'Tài khoản này đã gắn với một pháp nhân khác; hãy gỡ liên kết trước');
+
 export const bankFeedMap = defineCommand({
   name: 'finance.bank_feed.map',
   input: zBankFeedMap,
@@ -65,14 +68,12 @@ export const bankFeedMap = defineCommand({
     let feedAccountId: string;
     if (existing) {
       // Its lines are already in that entity's books: another entity takes an unmap first.
-      if (existing.legal_entity_id !== legalEntityId) {
-        throw new DomainError('BANK_FEED_ACCOUNT_MAPPED', 409, 'Tài khoản này đã gắn với một pháp nhân khác; hãy gỡ liên kết trước');
-      }
+      if (existing.legal_entity_id !== legalEntityId) throw accountMapped();
       await ctx.trx.updateTable('crove_finance.bank_feed_account').set({ bank_account: input.bankAccount }).where('org_id', '=', ctx.orgId).where('id', '=', existing.id).execute();
       feedAccountId = existing.id;
     } else {
       // Under the account's lock the lookup above has seen every mapping the caller may read. A conflict here is a
-      // mapping row row security hides from the caller (in another entity's books): the same answer as a visible one in
+      // mapping that row security hides from the caller (in another entity's books): the same answer as a visible one in
       // another entity, never a generic conflict, and nothing says which entity holds it (#2079).
       const inserted = await ctx.trx
         .insertInto('crove_finance.bank_feed_account')
@@ -87,7 +88,7 @@ export const bankFeedMap = defineCommand({
         .onConflict((oc) => oc.columns(['org_id', 'channel_connection_id', 'external_account_id']).doNothing())
         .returning('id')
         .executeTakeFirst();
-      if (!inserted) throw new DomainError('BANK_FEED_ACCOUNT_MAPPED', 409, 'Tài khoản này đã gắn với một pháp nhân khác; hãy gỡ liên kết trước');
+      if (!inserted) throw accountMapped();
       feedAccountId = inserted.id;
     }
     ctx.audit({ feedAccountId, connectionId: connection.id, provider: connection.provider, bankAccount: input.bankAccount, legalEntityId, remapped: Boolean(existing) });
