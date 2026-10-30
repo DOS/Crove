@@ -17,7 +17,7 @@ import { z } from 'zod';
 import type { CellResolver } from '@crove/db';
 import { kernelManifest } from '@crove/kernel';
 import { DATA_CLASSES, defineModule, tableWrite, type ModuleManifest } from '@crove/kernel-contract';
-import { Runtime, WRITE_DATA_CLASSES, defineCommand, type AgentApprovers, type CommandDef, type CommandWrite, type ManifestTables } from '@crove/kernel-runtime';
+import { P04_CLEAN_EVENTS, Runtime, WRITE_DATA_CLASSES, defineCommand, type AgentApprovers, type CommandDef, type CommandWrite, type ManifestTables } from '@crove/kernel-runtime';
 import { financeManifest } from '@crove/mod-finance';
 import { loadConfig } from '../../src/config.ts';
 import { moduleDefinitions, moduleManifests, serverRuntime } from '../../src/kernel.ts';
@@ -613,6 +613,27 @@ describe('declared command writes against the manifests (#1697, #1710)', () => {
     expect(proposals.length).toBeGreaterThan(0);
     const clean = proposals.filter((c) => runtime.commandInfo(c.name)?.contactOrPayment === false).map((c) => c.name);
     expect(clean.filter((name) => !PROPOSALS_WITHOUT_P04.includes(name))).toEqual([]);
+  });
+
+  it('lets a proposal command declared free of contact and payment writes emit only reviewed events, none yet (#1710)', () => {
+    // An event's handlers (a job, the outbox relay) run later under their own declarations, so the proposal's declaration
+    // says nothing about what they write. Deny by default: an event goes on this list only with a review of every handler
+    // it reaches, in a change to this file, which a protected-path review sees.
+    expect(P04_CLEAN_EVENTS).toEqual([]);
+    expect(Object.isFrozen(P04_CLEAN_EVENTS)).toBe(true);
+  });
+
+  it('refuses a command that declares the outbox, since events are the runtime\u2019s (#1710)', () => {
+    const declaresOutbox = defineCommand({
+      sideEffect: 'none',
+      name: 'tevents.declares_outbox',
+      input: z.object({}),
+      risk: 'R1',
+      access: 'system',
+      writes: [tableWrite(kernelManifest.tables, 'crove_kernel', 'outbox_event', ['type'])],
+      handler: async () => ({}),
+    }) as CommandDef<unknown, unknown>;
+    expect(() => new Runtime(cells, { manifests: manifests() }).register({ commands: [declaresOutbox] })).toThrow(/events are the runtime's/);
   });
 
   it('keeps every contact and payment column of the manifests', () => {

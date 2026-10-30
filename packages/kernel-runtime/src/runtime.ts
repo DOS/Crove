@@ -171,8 +171,9 @@ export interface CommandDef<I = unknown, O = unknown> {
   // (nothing says it writes none). A proposal command whose declared writes have no such column may run, as a nested
   // command at any depth, only commands that declare none either: the runtime refuses any other at execution, so a
   // nested write cannot escape P04. Events it emits are not writes: a command that handles them runs on its own, under
-  // its own declaration (a proposal command declared free of contact and payment writes must not emit one whose handler
-  // writes such a column, #1710).
+  // its own declaration, so such a proposal command emits, itself or through a nested command, only the events on
+  // P04_CLEAN_EVENTS, whose handlers were reviewed to write no contact or payment column (#1710); no command declares
+  // the outbox table (crove_kernel.outbox_event), events are the runtime's.
   writes?: readonly CommandWrite[];
   // access 'proposal' only, R1 or R2 only (ADR-0029 section 6): the role keys of positions whose agents may approve
   // a proposal of this command, within their max_risk and only when the proposal's outcome names none of P03 to
@@ -207,6 +208,16 @@ export interface CommandWrite {
 export const WRITE_DATA_CLASSES = Object.freeze(['internal', 'pii', 'contact', 'payment', 'national_id', 'national_id_if_individual', 'sensitive'] as const);
 // The classes whose write is policy P04 (plan §4.7: changing a payee, bank account or contact point).
 const P04_DATA_CLASSES: readonly string[] = ['contact', 'payment'];
+
+// The events a proposal command declared free of contact and payment writes may emit, itself or through a command it
+// runs at any depth (P04, #1710). An event is not a write of the command that emits it: its handlers (a job, the outbox
+// relay) run later under their own declarations, so nothing in the proposal's declaration says they write no contact or
+// payment column. Deny by default: such a command emits none until an event is listed here, and an event is listed only
+// with a review of every handler it reaches (the invariant suite pins this list, so a change to it is a protected-path
+// change). Empty: no proposal command declares its writes yet. A frozen array, read into a set once, so nothing can add
+// an event at run time.
+export const P04_CLEAN_EVENTS: readonly string[] = Object.freeze([]);
+const CLEAN_EVENTS: ReadonlySet<string> = new Set(P04_CLEAN_EVENTS);
 
 // What a handler may learn about a registered command (ADR-0029 section 6): enough to judge a proposal of it.
 export interface CommandInfo {
@@ -769,6 +780,8 @@ function checkedWrites(command: string, writes: readonly CommandWrite[], manifes
       refuse(`name a table as <schema>.<table> of a crove_* schema (${String((w as Partial<CommandWrite> | null)?.table)})`);
     }
     if (tables.has(w.table)) refuse(`list ${w.table} twice`);
+    // Events are the runtime's (ctx.emit): a command that declared the outbox could emit past the P04 gate on them.
+    if (w.table === 'crove_kernel.outbox_event') refuse('name crove_kernel.outbox_event: events are the runtime\'s (ctx.emit), never a command\'s declared write');
     tables.add(w.table);
     if (typeof w.classes !== 'object' || w.classes === null || Array.isArray(w.classes)) refuse(`of ${w.table} carry no column classes`);
     // One copy of the own enumerable classes, read once: every check below and the P04 answer use it, so a getter or
@@ -1776,6 +1789,11 @@ export class Runtime {
         pending(async () => {
           refuseClosed('ctx.emit');
           if (!type.startsWith(`${def.name.split('.')[0]}.`)) throw new Error(`command ${def.name} cannot emit ${type}`);
+          // A proposal command declared free of contact and payment writes, or a command it runs, emits only the events
+          // whose handlers were reviewed to write none (P04_CLEAN_EVENTS).
+          if (cleanRoot !== undefined && !CLEAN_EVENTS.has(type)) {
+            throw new Error(`command ${cleanRoot}: declares no contact or payment write (P04), so it cannot emit ${type}, whose handlers are not reviewed to write none (P04_CLEAN_EVENTS)`);
+          }
           // Ids and codes only (#1949): an event outlives every erasure, in the outbox and its archive.
           // Checked as it will be stored: as its JSON (a value's toJSON decides what the database sees).
           const checked = normalizeEventPayload(JSON.parse(JSON.stringify(payload)));
