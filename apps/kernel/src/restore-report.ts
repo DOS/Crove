@@ -5,7 +5,7 @@
 // login is the only role that may read the archive hashes and run the reseed):
 //
 //   restore-report [--reseed] [--floor <org id>:<legal entity id>:<doc type>:<period key>=<next number>]...
-//                  [--floors-complete <org id>]... [--json]
+//                  [--floors-complete <org id>]... [--acknowledge] [--json]
 //
 // The report (worm.ts, restoreReport) names, per org, the journal entries, vouchers, document voids, number
 // allocations, number voids and series the archive holds and the database lacks, the batches written after the backup
@@ -19,6 +19,9 @@
 // done only with a floor for every series the restored database has for it, and --floors-complete <org id>, by which
 // the operator confirms that every series it numbered after the backup point (made since, so in the vouchers only) has
 // one too.
+// --acknowledge (#2020), once every series is safe: writes the acknowledgement of the restore to the archive store, the
+// rows the report names as lost, which the nightly verifier then excuses and nothing else, and records the batches
+// written after the backup point in the restored database (worm.ts, acknowledgeRestore). restore.sh passes it.
 // --json prints the report as JSON on stdout and the summary on stderr.
 // Exit codes: 0 the archive and the database agree; 2 rows were lost and every series is above the archive (the
 // report names what to reconcile); 3 a series is still behind, or an org needs a floor: keep writes closed; 1 the
@@ -28,7 +31,7 @@ import { sql } from 'kysely';
 import { z } from 'zod';
 import type { Db } from '@crove/db';
 import { DomainError, defineCommand, type Actor, type CommandDef, type Runtime } from '@crove/kernel-runtime';
-import { restoreReport, type ArchiveStore, type RestoreReport, type RestoreSeries, type UncoveredSeries } from './worm.ts';
+import { acknowledgeRestore, restoreReport, type ArchiveStore, type RestoreReport, type RestoreSeries, type UncoveredSeries } from './worm.ts';
 
 export const RESTORE_REPORT_EXIT = { ok: 0, failed: 1, lost: 2, behind: 3 } as const;
 const OPERATOR: Actor = { type: 'system', component: 'operator' };
@@ -113,18 +116,20 @@ export interface RestoreReportArgs {
   floors: RestoreFloor[];
   // The orgs whose floors the operator confirms complete: every series they numbered after the backup point has one.
   floorsComplete: string[];
+  acknowledge: boolean;
 }
 
 const ORG_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const FLOOR = /^([0-9a-f-]{36}):([0-9a-f-]{36}):([a-z][a-z0-9_.]*):([0-9]{4}(?:-(?:0[1-9]|1[0-2]))?|-)=([1-9][0-9]{0,17})$/;
 
 export function parseRestoreReportArgs(argv: readonly string[]): RestoreReportArgs {
-  const args: RestoreReportArgs = { reseed: false, json: false, floors: [], floorsComplete: [] };
+  const args: RestoreReportArgs = { reseed: false, json: false, floors: [], floorsComplete: [], acknowledge: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--') continue;
     if (arg === '--reseed') args.reseed = true;
     else if (arg === '--json') args.json = true;
+    else if (arg === '--acknowledge') args.acknowledge = true;
     else if (arg === '--floor') {
       const match = FLOOR.exec((argv[++i] ?? '').trim().toLowerCase());
       if (!match) throw new Error('--floor needs <org id>:<legal entity id>:<doc type>:<period key>=<next number>');
@@ -136,7 +141,7 @@ export function parseRestoreReportArgs(argv: readonly string[]): RestoreReportAr
       args.floorsComplete.push(orgId);
     } else {
       throw new Error(
-        `unknown argument ${arg}; use [--reseed] [--floor <org id>:<legal entity id>:<doc type>:<period key>=<next number>]... [--floors-complete <org id>]... [--json]`,
+        `unknown argument ${arg}; use [--reseed] [--floor <org id>:<legal entity id>:<doc type>:<period key>=<next number>]... [--floors-complete <org id>]... [--acknowledge] [--json]`,
       );
     }
   }
@@ -165,6 +170,8 @@ export interface RestoreReportOutcome {
   needFloor: string[];
   missingFloors: UncoveredSeries[];
   unconfirmed: string[];
+  // The key of the acknowledgement written (or found) with --acknowledge; null when none was.
+  acknowledged: string | null;
 }
 
 const ids = (list: string[]) => (list.length <= SHOWN ? list.join(' ') : `${list.slice(0, SHOWN).join(' ')} and ${list.length - SHOWN} more`);
@@ -222,7 +229,11 @@ export async function restoreCheck(deps: RestoreReportDeps, args: RestoreReportA
   const confirmed = new Set(trusted ? args.floorsComplete : []);
   const unconfirmed = report.uncovered.filter((org) => !confirmed.has(org));
   const needFloor = report.uncovered.filter((org) => unconfirmed.includes(org) || missingFloors.some((s) => s.orgId === org));
-  return { report, reseeded, behind, failedFloors, needFloor, missingFloors, unconfirmed };
+  // The acknowledgement only once nothing can give out an archived number again: it lets the verifier pass, and the
+  // archiver go on from the store's newest batch.
+  const safe = report.problems.length === 0 && behind.length === 0 && failedFloors.length === 0 && needFloor.length === 0;
+  const acknowledged = args.acknowledge && safe ? await acknowledgeRestore(deps.db, deps.store, report) : null;
+  return { report, reseeded, behind, failedFloors, needFloor, missingFloors, unconfirmed, acknowledged };
 }
 
 export function restoreReportLines(outcome: RestoreReportOutcome): string[] {
@@ -277,6 +288,12 @@ export function restoreReportLines(outcome: RestoreReportOutcome): string[] {
     lines.push(
       `NEEDS A FLOOR: org ${org} lost number allocations that no version 7 batch covers; once every series it numbered after the backup point has a --floor ` +
         `(those made since are in the issued vouchers only), pass --floors-complete ${org}`,
+    );
+  }
+  if (outcome.acknowledged) {
+    lines.push(
+      `acknowledged: ${report.lostRefs.length} row(s) lost from batches ${report.recorded + 1} to ${report.batches} in ${outcome.acknowledged}; ` +
+        'the nightly verification excuses them, and those batches are recorded',
     );
   }
   lines.push('provider-issued numbers (e-invoices) are not in the archive: reconcile them with the provider (docs/runbooks/ledger-after-restore.md)');

@@ -25,8 +25,9 @@
 #      the hardening guard); after a restore into a new bucket, re-record each org's export with the restored object
 #      versions before the worker starts (main.ts exports-rebind; an org that fails is reported, the restore goes
 #      on); check the restored database against the WORM archive and raise the number series above it (main.ts
-#      restore-report --reseed, issue #2007: what the archive holds beyond the backup point is listed in
-#      archive-report.json; a series it cannot raise, or an archive that does not match, fails the restore with the
+#      restore-report --reseed --acknowledge, issues #2007 and #2020: what the archive holds beyond the backup point is
+#      listed in archive-report.json and acknowledged in the archive store, so the nightly verification excuses exactly
+#      those rows; a series it cannot raise, or an archive that does not match, fails the restore with the
 #      stack not started); then start the whole stack, and /readyz must answer ready.
 # Exit 0 when everything passed; otherwise `[restore] FAILED: <reason>` and exit 1. The log goes to stdout and to
 # <BACKUP_DIR>/logs/restore-<time>.log.
@@ -453,23 +454,25 @@ fi
 # The WORM archive outlives the database (#2007): the rows it holds beyond the backup point were lost with the
 # restore. The check lists them per org in archive-report.json, and raises every number series above the highest
 # number the archive holds for it (one audited command each), so no number is given out twice. It runs before the
-# worker starts, so nothing is numbered in between. Exit 2 means rows were lost and every series is safe: the restore
-# goes on and the operator reconciles (docs/runbooks/ledger-after-restore.md). Exit 3 (a series it cannot raise: an
-# org whose lost numbers no version 7 batch covers) and 1 (the archive does not match, or is not reachable) stop the
-# restore with the stack not started.
+# worker starts, so nothing is numbered in between. Once every series is safe it acknowledges the lost rows in the
+# archive store and records the batches after the backup point (#2020): the nightly verification then excuses exactly
+# those rows. Exit 2 means rows were lost and every series is safe: the restore goes on and the operator reconciles
+# (docs/runbooks/ledger-after-restore.md). Exit 3 (a series it cannot raise: an org whose lost numbers no version 7
+# batch covers) and 1 (the archive does not match, or is not reachable) stop the restore with the stack not started.
+# Nothing is acknowledged then: the operator's run with the floors does it, before the stack starts.
 archive_lost=0
 if [ "$RESTORE_ARCHIVE" = check ]; then
-  STEP="checking against the WORM archive (main.ts restore-report --reseed)"
+  STEP="checking against the WORM archive (main.ts restore-report --reseed --acknowledge)"
   archive_status=0
-  dc run --rm --no-deps -T "$worker" restore-report --reseed --json </dev/null >"$WORK/archive-report.json" || archive_status=$?
+  dc run --rm --no-deps -T "$worker" restore-report --reseed --acknowledge --json </dev/null >"$WORK/archive-report.json" || archive_status=$?
   case "$archive_status" in
     0) log "archive: the restored database holds everything the WORM archive holds" ;;
     2)
       archive_lost=1
-      log "WARNING: the WORM archive holds rows made after the backup point (above, and $WORK/archive-report.json); every number series is above them"
+      log "WARNING: the WORM archive holds rows made after the backup point (above, and $WORK/archive-report.json); every number series is above them, and the lost rows are acknowledged"
       ;;
     3)
-      STEP="number series behind the WORM archive (above): name a floor for each with main.ts restore-report --reseed --floor ..., then start the stack (docs/runbooks/ledger-after-restore.md)"
+      STEP="number series behind the WORM archive (above): name a floor for each with main.ts restore-report --reseed --acknowledge --floor ..., then start the stack (docs/runbooks/ledger-after-restore.md)"
       false
       ;;
     *)

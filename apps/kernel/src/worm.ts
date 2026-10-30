@@ -22,7 +22,8 @@
 //     (restore-report.ts). Each batch verifies with the version it was written with; a batch of a lower version after a
 //     higher one means rows went unanchored.
 //   - verifyArchive, nightly: reads every batch back from the store, checks the chain, and recomputes every row hash
-//     from the database. A changed, missing or added row, a broken chain, a window gap, or a store and database that
+//     from the database. After a restore, the rows the restore lost are named by an acknowledgement the restore check
+//     wrote to the store (restores/v1/, #2020): those rows, in those batches, are excused, and nothing else is. A changed, missing or added row, a broken chain, a window gap, or a store and database that
 //     disagree fail the run: the job fails without a retry, and the prober alerts on the dead letter. So does an
 //     anchored number series whose period key does not fit its reset (crove_kernel.archive_series_misfits, #1820): a
 //     reset switched and switched back before the series was anchored, which its row hash alone cannot show.
@@ -498,6 +499,7 @@ export interface ArchiveProblem {
     | 'revisions_gap'
     | 'highs_gap'
     | 'high_mismatch'
+    | 'restore_ack_unreadable'
     | 'series_period_mismatch';
   seq: number;
   ref?: string;
@@ -508,6 +510,60 @@ export interface ArchiveVerification {
   batches: number;
   rows: number;
   problems: ArchiveProblem[];
+  // Rows a restore acknowledgement excused (#2020): lost with a restore, and named by its report.
+  excused: number;
+}
+
+// After a restore (#2020): the rows the restore lost, as its report named them, written once to the archive store by
+// the restore check (restore-report.ts, --acknowledge) before the restored stack starts. recordedAtRestore is the
+// newest batch the restored database had recorded, batchesAtRestore the newest in the store: the rows lost are in the
+// batches between them, and refs names each one with its batch, [sequence, reference]. A row is listed when the
+// restored database lacks it, or, for a series high, holds it with another hash (a window that lost some of its
+// numbers). The object is create-only like a batch (Object Lock on s3), so the database owner cannot write one.
+export const RESTORE_ACK_PREFIX = 'restores/v1/';
+
+export interface RestoreAck {
+  format: 'crove-restore-ack';
+  version: 1;
+  acknowledgedAt: string;
+  recordedAtRestore: number;
+  batchesAtRestore: number;
+  refs: Array<[number, string]>;
+}
+
+export const restoreAckKey = (recorded: number, batches: number) =>
+  `${RESTORE_ACK_PREFIX}${String(recorded).padStart(12, '0')}-${String(batches).padStart(12, '0')}.json`;
+
+function parseRestoreAck(bytes: Uint8Array): RestoreAck | null {
+  try {
+    const value = JSON.parse(new TextDecoder().decode(bytes)) as RestoreAck;
+    if (!value || value.format !== 'crove-restore-ack' || value.version !== 1 || typeof value.acknowledgedAt !== 'string') return null;
+    if (!Number.isSafeInteger(value.recordedAtRestore) || !Number.isSafeInteger(value.batchesAtRestore) || value.recordedAtRestore < 0) return null;
+    if (value.batchesAtRestore <= value.recordedAtRestore || !Array.isArray(value.refs)) return null;
+    const wellFormed = value.refs.every(
+      (r) => Array.isArray(r) && r.length === 2 && Number.isSafeInteger(r[0]) && r[0] > value.recordedAtRestore && r[0] <= value.batchesAtRestore && typeof r[1] === 'string',
+    );
+    return wellFormed ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+// The rows every acknowledgement in the store excuses, as "<sequence> <reference>", and the objects it cannot read
+// (excusing nothing). An object whose key does not match its own range is unreadable too.
+async function restoreExcuses(store: ArchiveStore): Promise<{ excused: Set<string>; problems: ArchiveProblem[] }> {
+  const excused = new Set<string>();
+  const problems: ArchiveProblem[] = [];
+  for (const key of await store.list(RESTORE_ACK_PREFIX)) {
+    const bytes = await store.get(key);
+    const ack = bytes ? parseRestoreAck(bytes) : null;
+    if (!ack || key !== restoreAckKey(ack.recordedAtRestore, ack.batchesAtRestore)) {
+      problems.push({ code: 'restore_ack_unreadable', seq: 0, ref: key });
+      continue;
+    }
+    for (const [seq, ref] of ack.refs) excused.add(`${seq} ${ref}`);
+  }
+  return { excused, problems };
 }
 
 // Checks the whole archive against the database and records the result. Never throws for a problem it finds; it
@@ -532,6 +588,11 @@ export async function verifyArchive(db: Db, store: ArchiveStore): Promise<Archiv
   // The batch that anchored each number series, and the rows already found changed, missing or added.
   const seriesSeq = new Map<string, number>();
   const rowProblems = new Set<string>();
+  // The rows restores lost, as their acknowledgements name them (#2020).
+  const acks = await restoreExcuses(store);
+  for (const problem of acks.problems) note(problem);
+  let excused = 0;
+  const isExcused = (seq: number, ref: string) => acks.excused.has(`${seq} ${ref}`);
   for (const key of keys) {
     seq += 1;
     if (key !== archiveKey(seq)) {
@@ -571,12 +632,22 @@ export async function verifyArchive(db: Db, store: ArchiveStore): Promise<Archiv
     rowsChecked += current.length;
     for (const [ref, hash] of current) {
       const kept = archived.get(ref);
+      archived.delete(ref);
+      // A series high whose window lost some of its numbers to a restore holds another hash now; any other row that
+      // differs is a finding, acknowledged or not.
+      if (kept !== undefined && kept !== hash && ref.startsWith('number_high:') && isExcused(seq, ref)) {
+        excused += 1;
+        continue;
+      }
       if (kept === undefined) note({ code: 'row_added', seq, ref });
       else if (kept !== hash) note({ code: 'row_changed', seq, ref });
       if (kept !== hash) rowProblems.add(ref);
-      archived.delete(ref);
     }
     for (const ref of archived.keys()) {
+      if (isExcused(seq, ref)) {
+        excused += 1;
+        continue;
+      }
       note({ code: 'row_missing', seq, ref });
       rowProblems.add(ref);
     }
@@ -600,7 +671,7 @@ export async function verifyArchive(db: Db, store: ArchiveStore): Promise<Archiv
     }
   }
 
-  const result = { ok: problems.length === 0, batches: seq, rows: rowsChecked, problems };
+  const result = { ok: problems.length === 0, batches: seq, rows: rowsChecked, problems, excused };
   await sql`SELECT crove_kernel.archive_verified(${result.ok}, ${result.batches}::int, ${result.rows}::bigint, ${JSON.stringify(problems)}::jsonb)`.execute(db);
   return result;
 }
@@ -663,6 +734,9 @@ export interface RestoreReport {
   // Series of an org or legal entity the restored database lacks (made after the backup point, or an org closed since):
   // nothing to raise, their numbers are lost with the org or entity.
   orphaned: RestoreSeries[];
+  // Every row of the batches written after the backup point that the restored database lacks, and every series high of
+  // those batches that it holds with another hash: [sequence, reference], what an acknowledgement excuses (#2020).
+  lostRefs: Array<[number, string]>;
   // Anything else the archive check found (a broken chain, a changed row, a recorded batch the store lacks).
   problems: ArchiveProblem[];
 }
@@ -723,6 +797,7 @@ export async function restoreReport(db: Db, store: ArchiveStore): Promise<Restor
   const beyond: RestoreReport['beyond'] = [];
   const orgs = new Map<string, RestoreOrgLoss>();
   const seen = new Set<string>();
+  const lostRefs: Array<[number, string]> = [];
   let auditEvents = 0;
   let prev = GENESIS_SHA256;
   let prevTo = EPOCH;
@@ -776,10 +851,12 @@ export async function restoreReport(db: Db, store: ArchiveStore): Promise<Restor
 
     const current = new Map(await rowHashes(db, batch));
     for (const [ref, hash] of batch.rows) {
+      const now = current.get(ref);
+      const high = ref.startsWith('number_high:');
+      if (record === undefined && (now === undefined || (high && now !== hash))) lostRefs.push([seq, ref]);
       // A series high counts the numbers of its window, so a restore that lost some of them changes it or drops it:
       // the reseed below reads it, and the lost allocations are named by their own rows.
-      if (ref.startsWith('number_high:')) continue;
-      const now = current.get(ref);
+      if (high) continue;
       if (now === undefined) {
         if (seen.has(ref)) continue;
         seen.add(ref);
@@ -850,6 +927,47 @@ export async function restoreReport(db: Db, store: ArchiveStore): Promise<Restor
     uncovered,
     uncoveredSeries,
     orphaned,
+    lostRefs,
     problems,
   };
+}
+
+// Writes the acknowledgement of a restore the report found (#2020) and records the batches written after the backup
+// point in the restored database, as the archiver would on its next run, so the nightly verifier reads them as the
+// chain they are and excuses exactly the rows the report named. Run before the restored stack starts, once its
+// series are safe: an archive with a problem, or batches after the backup point that are not the store's newest, in
+// order, are refused. A second run over the same restore finds its own acknowledgement and records what is left.
+// Returns the acknowledgement's key, or null when the restore lost nothing.
+export async function acknowledgeRestore(db: Db, store: ArchiveStore, report: RestoreReport, now: Date = new Date()): Promise<string | null> {
+  if (report.problems.length > 0) throw new Error('the archive does not match the restored database; nothing is acknowledged');
+  if (report.beyond.length === 0) return null;
+  report.beyond.forEach((b, i) => {
+    if (b.seq !== report.recorded + 1 + i) throw new Error(`batch ${b.seq} is not the next after the restored database's ${report.recorded}; nothing is acknowledged`);
+  });
+  if (report.recorded + report.beyond.length !== report.batches) throw new Error('the batches after the backup point are not the store\'s newest; nothing is acknowledged');
+  const ack: RestoreAck = {
+    format: 'crove-restore-ack',
+    version: 1,
+    acknowledgedAt: now.toISOString(),
+    recordedAtRestore: report.recorded,
+    batchesAtRestore: report.batches,
+    refs: report.lostRefs,
+  };
+  const key = restoreAckKey(ack.recordedAtRestore, ack.batchesAtRestore);
+  try {
+    await store.put(key, new TextEncoder().encode(JSON.stringify(ack)));
+  } catch (error) {
+    if (!(error instanceof ArchiveObjectExistsError)) throw error;
+    const bytes = await store.get(key);
+    const found = bytes ? parseRestoreAck(bytes) : null;
+    if (!found || JSON.stringify(found.refs) !== JSON.stringify(ack.refs)) throw new Error(`${key} already holds another acknowledgement; see docs/runbooks/worm-archive.md`);
+  }
+  for (const b of report.beyond) {
+    const bytes = await store.get(archiveKey(b.seq));
+    const batch = bytes ? parseBatch(bytes) : null;
+    if (!batch) throw new Error(`archive object ${archiveKey(b.seq)} cannot be read`);
+    await sql`SELECT crove_kernel.archive_record(${batch.seq}::bigint, ${batch.window.from}::timestamptz, ${batch.window.to}::timestamptz,
+      ${batch.rows.length}::int, ${batch.batchSha256}, ${batch.chainSha256}, ${archiveKey(batch.seq)})`.execute(db);
+  }
+  return key;
 }

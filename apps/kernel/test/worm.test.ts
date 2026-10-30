@@ -16,13 +16,16 @@ import {
   S3ArchiveStore,
   archiveKey,
   batchSha256,
+  acknowledgeRestore,
   chainSha256,
   highSha256,
+  restoreAckKey,
   restoreReport,
   verifyArchive,
   writeArchive,
   type ArchiveBatch,
   type ArchiveHigh,
+  type RestoreAck,
   type ArchiveS3Sender,
   type ArchiveStore,
 } from '../src/worm.ts';
@@ -630,6 +633,7 @@ describe('series highs and the restore report (#2007)', () => {
       uncovered: [],
       uncoveredSeries: [],
       orphaned: [],
+      lostRefs: batches[1]!.rows.map(([ref]): [number, string] => [2, ref]),
       problems: [],
     });
 
@@ -685,5 +689,108 @@ describe('series highs and the restore report (#2007)', () => {
     expect(await restoreReport(db, storeOf(batches))).toMatchObject({ ok: true, beyond: [], orgs: [], reseed: [], problems: [] });
     // An empty store, as on a server whose archive settings do not point at the surviving archive.
     expect((await restoreReport(db, storeOf([]))).problems).toEqual([{ code: 'object_missing', seq: 1 }]);
+  });
+
+  // After a restore (#2020): batch 1 was recorded before the backup point, batch 2 after it and lost with the restore.
+  const keptRows: Array<[string, string]> = [[`journal:${ORG}:e1`, hash('1')]];
+  const lostRows: Array<[string, string]> = [
+    ['audit:x2', hash('2')],
+    [`journal:${ORG}:e2`, hash('3')],
+    [`number:${ORG}:a2`, hash('7')],
+  ];
+  const restoreChain = () =>
+    chainOf([
+      { version: 7, rows: keptRows, highs: [high('5')] },
+      { version: 7, rows: lostRows, highs: [high('6')] },
+    ]);
+  const ackOf = (refs: Array<[number, string]>, recordedAtRestore = 1, batchesAtRestore = 2): RestoreAck => ({
+    format: 'crove-restore-ack',
+    version: 1,
+    acknowledgedAt: at(10),
+    recordedAtRestore,
+    batchesAtRestore,
+    refs,
+  });
+  // A store holding the batches and the given objects, which put writes create-only.
+  function writableStore(batches: ArchiveBatch[], extra: Record<string, unknown> = {}): ArchiveStore & { objects: Map<string, Uint8Array> } {
+    const objects = new Map<string, Uint8Array>([
+      ...batches.map((b): [string, Uint8Array] => [archiveKey(b.seq), new TextEncoder().encode(JSON.stringify(b))]),
+      ...Object.entries(extra).map(([k, v]): [string, Uint8Array] => [k, new TextEncoder().encode(typeof v === 'string' ? v : JSON.stringify(v))]),
+    ]);
+    return {
+      objects,
+      put: async (key, body) => {
+        if (objects.has(key)) throw new ArchiveObjectExistsError(key);
+        objects.set(key, body);
+      },
+      get: async (key) => objects.get(key) ?? null,
+      list: async (prefix) => [...objects.keys()].filter((k) => k.startsWith(prefix)).sort(),
+      describe: () => 'memory',
+    };
+  }
+
+  it('excuses exactly the rows a restore acknowledgement names, in their batch, and nothing else (#2020)', async () => {
+    const batches = restoreChain();
+    const lost = batches[1]!.rows.map(([ref]): [number, string] => [2, ref]);
+    // The restored database, with both batches recorded (the acknowledgement records the second), holds batch 1 only.
+    const restored = (present = { [EPOCH]: keptRows }, highs: Record<string, ArchiveHigh[]> = { [EPOCH]: [high('5')] }) =>
+      dbOf({ batches, recorded: 2, present, highs, series: [{ series_id: SERIES, next_number: '7' }] });
+    const missing = (seq: number, rows: Array<[string, string]>) => rows.map(([ref]) => ({ code: 'row_missing', seq, ref }));
+
+    // Without an acknowledgement every lost row fails the verification.
+    const bare = await verifyArchive(restored(), writableStore(batches));
+    expect(bare.problems).toEqual(missing(2, batches[1]!.rows));
+    // With one, they are excused, and counted.
+    const acked = await verifyArchive(restored(), writableStore(batches, { [restoreAckKey(1, 2)]: ackOf(lost) }));
+    expect(acked).toMatchObject({ ok: true, problems: [], excused: lost.length });
+
+    // A row of batch 1, which the restore kept, deleted since: still a finding.
+    const deleted = await verifyArchive(restored({ [EPOCH]: [] }), writableStore(batches, { [restoreAckKey(1, 2)]: ackOf(lost) }));
+    expect(deleted.problems).toEqual(missing(1, keptRows));
+    // A lost row that comes back with other content: a finding; a series high whose window lost numbers: excused.
+    const back = await verifyArchive(
+      restored({ [EPOCH]: keptRows, [at(1)]: [[`journal:${ORG}:e2`, hash('9')]] }, { [EPOCH]: [high('5')], [at(1)]: [high('4')] }),
+      writableStore(batches, { [restoreAckKey(1, 2)]: ackOf(lost) }),
+    );
+    expect(back.problems).toEqual([{ code: 'row_changed', seq: 2, ref: `journal:${ORG}:e2` }]);
+    // A reference named under another batch, or an acknowledgement that does not parse or sits under another key,
+    // excuses nothing.
+    const misplaced = lost.map(([, ref]): [number, string] => [1, ref]);
+    expect((await verifyArchive(restored(), writableStore(batches, { [restoreAckKey(0, 2)]: ackOf(misplaced, 0, 2) }))).problems).toEqual(missing(2, batches[1]!.rows));
+    expect((await verifyArchive(restored(), writableStore(batches, { [restoreAckKey(1, 2)]: 'not json' }))).problems).toEqual([
+      { code: 'restore_ack_unreadable', seq: 0, ref: restoreAckKey(1, 2) },
+      ...missing(2, batches[1]!.rows),
+    ]);
+    expect((await verifyArchive(restored(), writableStore(batches, { [restoreAckKey(0, 2)]: ackOf(lost) }))).problems).toEqual([
+      { code: 'restore_ack_unreadable', seq: 0, ref: restoreAckKey(0, 2) },
+      ...missing(2, batches[1]!.rows),
+    ]);
+  });
+
+  it('writes the acknowledgement once and records the batches after the backup point; refuses an archive with a problem (#2020)', async () => {
+    const batches = restoreChain();
+    const recordedCalls: unknown[][] = [];
+    const db = fakeDb((query) => {
+      if (query.sql.includes('archive_record(')) recordedCalls.push([...query.parameters]);
+      return [];
+    });
+    const store = writableStore(batches);
+    const report = {
+      ...(await restoreReport(
+        dbOf({ batches, recorded: 1, present: { [EPOCH]: keptRows }, highs: { [EPOCH]: [high('5')] }, series: [{ series_id: SERIES, next_number: '7' }] }),
+        store,
+      )),
+    };
+    expect(report.lostRefs).toEqual(batches[1]!.rows.map(([ref]) => [2, ref]));
+    const key = await acknowledgeRestore(db, store, report, new Date(at(10)));
+    expect(key).toBe(restoreAckKey(1, 2));
+    expect(JSON.parse(new TextDecoder().decode(store.objects.get(restoreAckKey(1, 2))))).toEqual(ackOf(report.lostRefs));
+    expect(recordedCalls).toEqual([[2, at(1), at(2), batches[1]!.rows.length, batches[1]!.batchSha256, batches[1]!.chainSha256, archiveKey(2)]]);
+    // A second run over the same restore finds its own acknowledgement; another one under the key is refused.
+    expect(await acknowledgeRestore(db, store, report, new Date(at(11)))).toBe(restoreAckKey(1, 2));
+    await expect(acknowledgeRestore(db, store, { ...report, lostRefs: [[2, 'audit:x2']] })).rejects.toThrow(/already holds another acknowledgement/);
+    // Nothing to acknowledge when nothing came after the backup point; nothing at all when the archive has a problem.
+    expect(await acknowledgeRestore(db, store, { ...report, beyond: [], recorded: 2 })).toBeNull();
+    await expect(acknowledgeRestore(db, store, { ...report, problems: [{ code: 'chain_broken', seq: 2 }] })).rejects.toThrow(/nothing is acknowledged/);
   });
 });

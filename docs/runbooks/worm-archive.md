@@ -117,6 +117,7 @@ docker compose exec db psql -U postgres -c "SELECT verified_at, ok, batches, row
 | `object_missing` | The database recorded a batch the store does not have. |
 | `version_regressed`, `numbers_gap`, `entities_gap`, `allocations_gap`, `series_gap`, `revisions_gap`, `highs_gap` | A batch of a lower version follows a higher one, or a batch does not take its numbers (versions 2 and up), legal entities (versions 3 and up), number allocations (versions 4 and up), number series (versions 5 and up), source revisions (versions 6 and up) or series highs (version 7) from where the last one stopped. Either a worker older than #977, #1489, #1594, #1623, #1337 or #2007 wrote to the archive, or a batch was replaced. The numbers, entities, series, revisions or highs in that stretch are not anchored. Find the deploy that ran the old worker. |
 | `high_mismatch` | A version 7 batch's series high in the clear does not match its row hash, or a high row has no clear values: the batch was edited in the store. The restore check does not trust that high. Treat it like `chain_broken`. |
+| `restore_ack_unreadable` | An object under `restores/v1/` does not parse as a restore acknowledgement, or its key does not match its own range (#2020). It excuses nothing. The restore check writes these objects create-only: one that does not read was written by something else. Treat it like `chain_broken`. |
 | `series_period_mismatch` | A `number_series:` row verifies as written, but its period key does not fit the reset of its doc type (`YYYY` for yearly, `YYYY-MM` for monthly, `-` for never; #1820, `crove_kernel.archive_series_misfits`). The doc type's reset was switched, a number given out, and the reset switched back before the archiver anchored the series. Numbering never does this since #1608 (20261103050000): the reset is locked once a doc type has numbers, and a reset change waits for a first number in flight. A series created before that fix, by a reset change racing the doc type's first number (#1607), shows the same way. |
 | `record_mismatch` | `crove_kernel.archive_batch` disagrees with the store. The store is the authority. |
 
@@ -140,17 +141,29 @@ A restore brings the database back to its backup point. The archive store is not
 - **The restore check.** `tools/backup/restore.sh` runs it before the stack starts (`main.ts restore-report --reseed`, in the worker's container; [backup-and-restore.md](backup-and-restore.md), step 6).
   - It lists, per org, the journal entries, vouchers, document voids, number allocations, number voids and number series that the archive holds and the database lacks, and the batches written after the backup point.
   - It raises every number series above the highest number that the version 7 batches hold for it, so no number is given out twice.
+  - Once every series is safe, it **acknowledges** the restore (`--acknowledge`, #2020). That writes the lost rows to the archive store, under `restores/v1/<newest batch the restored database had>-<newest batch in the store>.json`, and records the batches written after the backup point in the restored database.
+    - The object names each lost row with its batch: the rows the restored database lacks, and the series highs of those batches that it holds with another hash.
+    - It is written create-only, like a batch, and with `s3` under Object Lock. Only the store holds it, so no database role can write or change one.
   - What to do with the report is in [ledger-after-restore.md](ledger-after-restore.md), step 4.
-- **Run it again by hand at any time.** It reads only, unless `--reseed` is given:
+- **Run it again by hand at any time.** It reads only, unless `--reseed` (and `--acknowledge`) is given:
 
   ```sh
   docker compose run --rm --no-deps worker restore-report
   ```
 
   Use the service `crove` on the all-in-one stack.
-- **The nightly verification after a restore.** The verifier still reports each lost row as `row_missing`, and the series highs of those windows as `row_changed` or `row_missing`. So the job fails every night after a restore.
+- **The nightly verification after a restore.** The verifier reads every acknowledgement in `restores/v1/` and excuses exactly the rows it names, in the batch it names them for:
+  - a row missing from the database;
+  - a series high that holds another hash, because its window lost some numbers.
+
+  It counts them as `excused`, and the run passes. Anything else is still a finding:
+  - a row of a batch the restored database had recorded, deleted or changed since;
+  - a lost row that comes back with other content;
+  - a row of a batch after the restore.
+
+  An acknowledgement it cannot read, or one under a key that does not match its own range, is reported as `restore_ack_unreadable` and excuses nothing.
   - Record the restore and its report in the incident.
-  - Until #2020 lets the operator mark the reported rows as known lost, check that every `row_missing` the verifier names is in the report. A row the report does not name is a real finding.
+  - **A restore whose check did not acknowledge** (it stopped on exit 3, and the stack was started anyway; or it ran with `RESTORE_ARCHIVE=skip`): the worker records the batches after the backup point on its next run, and the verification fails on the lost rows every night. Before the stack starts, run the check again with `--reseed --acknowledge` (and the floors). Once the worker has recorded those batches, the check finds nothing after the backup point and can no longer acknowledge them; raise it on #2020.
 
 ## Running the verifier by hand
 

@@ -7,8 +7,14 @@ import type { Db } from '@crove/db';
 import { DomainError } from '@crove/kernel-runtime';
 import type { RestoreReport } from '../src/worm.ts';
 
-const report = vi.hoisted(() => ({ current: null as RestoreReport | null }));
-vi.mock('../src/worm.ts', () => ({ restoreReport: async () => report.current }));
+const report = vi.hoisted(() => ({ current: null as RestoreReport | null, acknowledged: [] as RestoreReport[] }));
+vi.mock('../src/worm.ts', () => ({
+  restoreReport: async () => report.current,
+  acknowledgeRestore: async (_db: unknown, _store: unknown, r: RestoreReport) => {
+    report.acknowledged.push(r);
+    return 'restores/v1/000000000002-000000000003.json';
+  },
+}));
 
 const { RESTORE_REPORT_EXIT, parseRestoreReportArgs, restoreReportLines, runRestoreReport } = await import('../src/restore-report.ts');
 
@@ -17,7 +23,20 @@ const OTHER = '0190f000-0000-7000-8000-00000000000b';
 const ENTITY = '0190f000-0000-7000-8000-0000000000e1';
 const SERIES = '0190f000-0000-7000-8000-0000000000f1';
 
-const clean: RestoreReport = { ok: true, batches: 3, recorded: 3, beyond: [], auditEvents: 0, orgs: [], reseed: [], uncovered: [], uncoveredSeries: [], orphaned: [], problems: [] };
+const clean: RestoreReport = {
+  ok: true,
+  batches: 3,
+  recorded: 3,
+  beyond: [],
+  auditEvents: 0,
+  orgs: [],
+  reseed: [],
+  uncovered: [],
+  uncoveredSeries: [],
+  orphaned: [],
+  lostRefs: [],
+  problems: [],
+};
 const lostOne: RestoreReport = {
   ...clean,
   ok: false,
@@ -30,6 +49,7 @@ const lostOne: RestoreReport = {
 
 async function run(given: RestoreReport, argv: string[], refuse: (input: unknown) => Error | null = () => null) {
   report.current = given;
+  report.acknowledged = [];
   const calls: Array<{ command: string; input: unknown; orgId: string | undefined }> = [];
   const runtime = {
     execute: async (command: string, input: unknown, options: { orgId?: string }) => {
@@ -50,12 +70,15 @@ async function run(given: RestoreReport, argv: string[], refuse: (input: unknown
 
 describe('restore-report arguments', () => {
   it('reads --reseed, --json, floors named by org, entity, doc type and period, and the orgs whose floors are complete', () => {
-    expect(parseRestoreReportArgs([])).toEqual({ reseed: false, json: false, floors: [], floorsComplete: [] });
-    expect(parseRestoreReportArgs(['--reseed', '--json', '--floor', `${ORG}:${ENTITY}:finance.cash_voucher.pt:2026=41`, '--floors-complete', ORG])).toEqual({
+    expect(parseRestoreReportArgs([])).toEqual({ reseed: false, json: false, floors: [], floorsComplete: [], acknowledge: false });
+    expect(
+      parseRestoreReportArgs(['--reseed', '--json', '--floor', `${ORG}:${ENTITY}:finance.cash_voucher.pt:2026=41`, '--floors-complete', ORG, '--acknowledge']),
+    ).toEqual({
       reseed: true,
       json: true,
       floors: [{ orgId: ORG, legalEntityId: ENTITY, docType: 'finance.cash_voucher.pt', periodKey: '2026', next: '41' }],
       floorsComplete: [ORG],
+      acknowledge: true,
     });
     expect(() => parseRestoreReportArgs(['--floors-complete', ORG])).toThrow('take effect with --reseed only');
     expect(() => parseRestoreReportArgs(['--reseed', '--floors-complete', 'acme'])).toThrow('--floors-complete needs an org id');
@@ -89,6 +112,20 @@ describe('restore-report run', () => {
         expect.stringContaining('provider-issued numbers (e-invoices)'),
       ]),
     );
+  });
+
+  it('acknowledges the restore with --acknowledge once every series is safe, and not before (#2020)', async () => {
+    const safe = await run(lostOne, ['--reseed', '--acknowledge']);
+    expect(safe.code).toBe(RESTORE_REPORT_EXIT.lost);
+    expect(report.acknowledged).toEqual([lostOne]);
+    expect(safe.lines).toEqual(expect.arrayContaining([expect.stringContaining('acknowledged: ')]));
+    // Without --reseed the series stay behind: no acknowledgement, so the verifier keeps failing.
+    const behind = await run(lostOne, ['--acknowledge']);
+    expect(behind.code).toBe(RESTORE_REPORT_EXIT.behind);
+    expect(report.acknowledged).toEqual([]);
+    // Nor for an archive with a problem.
+    expect((await run({ ...lostOne, problems: [{ code: 'record_mismatch', seq: 3 }] }, ['--reseed', '--acknowledge'])).code).toBe(RESTORE_REPORT_EXIT.failed);
+    expect(report.acknowledged).toEqual([]);
   });
 
   it('with --reseed raises each series to the archived highest + 1 and exits 2: rows were lost, no number repeats', async () => {
@@ -174,6 +211,7 @@ describe('restore-report run', () => {
       needFloor: [],
       missingFloors: [],
       unconfirmed: [],
+      acknowledged: null,
     });
     expect(lines).toContain(`lost in org ${ORG}: 25 journal entries: ${many.slice(0, 20).join(' ')} and 5 more`);
   });
