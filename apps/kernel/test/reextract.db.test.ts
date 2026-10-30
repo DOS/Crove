@@ -184,6 +184,14 @@ suite('re-extraction on PostgreSQL (issue #40)', () => {
     reads.push(null);
     await extractAndPropose({ runtime: workerRuntime, store, extractor: ai, extract }, orgA, fileId, version);
     expect(await recent(fileId)).toMatchObject({ status: 'failed', version: 2, proposalId, proposalStatus: 'rejected', canReextract: true });
+    // Drop the re-read's queued event, so the worker test below does not read it from the shared fake AI.
+    const closer = new pg.Client({ connectionString: adminUrl });
+    await closer.connect();
+    try {
+      await closer.query(`DELETE FROM crove_kernel.outbox_pending WHERE org_id = $1`, [orgA]);
+    } finally {
+      await closer.end();
+    }
   });
 
   it('shows a lost re-read of a file without a proposal as failed, with a message', async () => {
