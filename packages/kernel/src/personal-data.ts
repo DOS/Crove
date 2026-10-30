@@ -26,7 +26,8 @@ export const PERSONAL_DATA_HANDLINGS = ['erase', 'keep_legal', 'keep_org', 'keep
 export type PersonalDataHandling = (typeof PERSONAL_DATA_HANDLINGS)[number];
 
 // What a value is, for the finder: which columns a searched email, phone or code is compared with. free_text: words
-// among which a value may be written (a note's body), matched by freeTextMatch below.
+// among which a value may be written (a note's body, an activity line, a comment, a description; #1678, #1948), matched
+// by freeTextMatch below.
 export const PERSONAL_DATA_KINDS = ['email', 'phone', 'address', 'name', 'tax_code', 'email_list', 'free_text', 'other'] as const;
 export type PersonalDataKind = (typeof PERSONAL_DATA_KINDS)[number];
 
@@ -125,6 +126,33 @@ export const PERSONAL_DATA_COLUMNS = {
   'crove_finance.portal_invoice_list.buyer_tax_code': { kind: 'tax_code', handling: 'keep_legal', reason: "The tax portal's invoice list, kept like the books" },
   'crove_finance.portal_invoice_row.seller_tax_code': { kind: 'tax_code', handling: 'keep_legal', reason: "The tax portal's invoice list, kept like the books" },
   'crove_finance.portal_invoice_row.seller_name': { kind: 'name', handling: 'keep_legal', reason: "The tax portal's invoice list, kept like the books" },
+  // Free text that can name a person (#1948): searched for the value anywhere inside it. Social's posts and comments
+  // are left out while Social is paused (decision D5).
+  'crove_kernel.activity.summary': {
+    kind: 'free_text',
+    handling: 'erase',
+    reason: "A line of a record's timeline, which may quote a person's email or phone; the value is replaced inside it",
+  },
+  'crove_kernel.task_comment.body': {
+    kind: 'free_text',
+    handling: 'keep_record',
+    reason: 'A comment on a task is an append-only record of the work, which the erase command cannot change; it goes with the org',
+  },
+  'crove_finance.journal_entry.description': {
+    kind: 'free_text',
+    handling: 'keep_legal',
+    reason: 'The description of a posted journal entry is part of the books, append-only and anchored in the WORM archive',
+  },
+  'crove_finance.cash_voucher.description': {
+    kind: 'free_text',
+    handling: 'keep_legal',
+    reason: 'The reason written on a phiếu thu or phiếu chi is part of the accounting voucher, append-only and kept by law (Accounting Law 88/2015, Art. 41)',
+  },
+  'crove_finance.journal_voucher.description': {
+    kind: 'free_text',
+    handling: 'keep_legal',
+    reason: 'The reason written on a journal voucher is part of the accounting voucher, append-only and kept by law (Accounting Law 88/2015, Art. 41)',
+  },
   // Social.
   'crove_social.report_branding.display_name': { kind: 'name', handling: 'keep_org', reason: "The agency's name on its white-label client reports (#1053), the business itself" },
   'crove_social.report_schedule.recipients': { kind: 'email_list', handling: 'erase', reason: 'Addresses a scheduled client report is mailed to' },
@@ -197,7 +225,8 @@ export function freeTextRedact(probe: Probe, column: RawBuilder<unknown>, mark: 
 
 const probeValue = (probe: Probe): string => (probe.kind === 'email' ? probe.email : probe.digits);
 
-// The columns a probe is compared with, and how. Phone numbers match with or without Vietnam's +84.
+// The columns a probe is compared with, and how. Phone numbers match with or without Vietnam's +84. Free text is
+// searched for the value anywhere inside it (#1678, #1948): freeTextMatch.
 function columnMatch(kind: PersonalDataKind, probe: Probe, column: RawBuilder<unknown>): RawBuilder<boolean> | null {
   if (kind === 'free_text') return freeTextMatch(probe, column);
   if (probe.kind === 'email') {
@@ -278,6 +307,12 @@ export function heldFilesReason(until: Date | null): string {
   return `Original files behind posted entries that name this party: accounting evidence, ${kept} and never deleted by Crove (Accounting Law 88/2015, Art. 41)`;
 }
 
+// The fewest digits a value needs before the erasure replaces it inside activity lines (#1948): a shorter number may be
+// an amount or a voucher number there, so its lines are listed for the owner instead, with this reason.
+export const ACTIVITY_REDACT_MIN_DIGITS = 10;
+export const ACTIVITY_SHORT_NUMBER_REASON =
+  'A number of fewer than 10 digits may also be an amount or a voucher number in a timeline line, so the erasure does not replace it there; check these lines and tell the person, or ask for a longer value';
+
 // The name an erased party keeps: a party row cannot lose its name, and nothing in the books names it.
 export const ERASED_PARTY_NAME = 'Đã xóa theo yêu cầu';
 
@@ -289,10 +324,12 @@ export const ERASED_PARTY_NAME = 'Đã xóa theo yêu cầu';
 // - the sender of forwarded mails and the recipient of mails Crove sent (the keyed hash stays, so a suppression holds);
 // - the org's contact email;
 // - the visitor's name, email, phone and note on bookings from a public booking page;
-// - the address in Social report schedules (a schedule left with nobody to mail is deleted).
+// - the address in Social report schedules (a schedule left with nobody to mail is deleted);
+// - the value wherever an activity line quotes it (#1948), replaced inside the line.
 // What the law or an append-only record keeps (the names and tax codes of parties in the books and of the legal entities
-// the org keeps books for, #1312, cash vouchers, the tax portal's lists, invites, review feedback, and the original files
-// of posted invoices naming the party, under their retention hold, #1009) is left as it is and listed with its reason.
+// the org keeps books for, #1312, cash vouchers, the tax portal's lists, invites, review feedback, task comments and the
+// descriptions of journal entries and vouchers that quote the value, #1948, and the original files of posted invoices
+// naming the party, under their retention hold, #1009) is left as it is and listed with its reason.
 // The audit row holds counts only, never the value or the rows.
 export const personalDataErase = defineCommand({
   name: 'kernel.personal_data.erase',
@@ -394,14 +431,28 @@ export const personalDataErase = defineCommand({
       add('crove_social.report_schedule.recipients', Number(schedules.numAffectedRows ?? 0) + Number(dropped.numAffectedRows ?? 0));
     }
 
+    // Activity lines that quote the person (#1948): the mention is replaced inside the line, through the owner-only
+    // definer (tenant roles may not update activity rows). Comments and the books' descriptions are append-only and
+    // stay; the finder's answer below lists them with their reasons.
+    // A number of 8 or 9 digits may as well be an amount or a voucher number in a line, and a redaction cannot be
+    // undone: those lines are left as they are and listed with ACTIVITY_SHORT_NUMBER_REASON (the definer refuses them
+    // too).
+    const shortNumber = probe.kind === 'digits' && probe.digits.length < ACTIVITY_REDACT_MIN_DIGITS;
+    if (!shortNumber) {
+      const { rows: redacted } = await sql<{ rows: number }>`
+        SELECT crove_kernel.personal_data_redact_activity(${probe.kind}, ${probeValue(probe)}) AS rows`.execute(ctx.trx);
+      add('crove_kernel.activity.summary', Number(redacted[0]?.rows ?? 0));
+    }
+
     // What stays, with its reason: the finder's answer after the erasure (the cleared values no longer match).
     const after = await findPersonalData(ctx.trx, ctx.orgId, probe);
     // Grouped by column and reason: rows of one column may be kept for different reasons (the default legal entity and
     // the others).
     const kept = new Map<string, { column: string; rows: number; reason: string }>();
     for (const m of after.matches) {
-      const group = `${m.column}\n${m.reason}`;
-      const k = kept.get(group) ?? { column: m.column, rows: 0, reason: m.reason };
+      const reason = shortNumber && m.column === 'crove_kernel.activity.summary' ? ACTIVITY_SHORT_NUMBER_REASON : m.reason;
+      const group = `${m.column}\n${reason}`;
+      const k = kept.get(group) ?? { column: m.column, rows: 0, reason };
       k.rows += 1;
       kept.set(group, k);
     }

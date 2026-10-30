@@ -1,6 +1,7 @@
 // The composition root (plan Decision 12, ADR-0030). createKernel takes the configuration and one adapter per port
 // and starts the server roles; it builds no adapter itself. main.ts wires the open-source defaults from
 // configuration (defaultAdapters); a Crove Cloud entrypoint wires its own adapters into the same factory.
+import { hostname } from 'node:os';
 import { serve } from '@hono/node-server';
 import { InvoiceExtractor, SchedulingReader, SocialWriter, type InvoiceReader } from '@crove/agent';
 import {
@@ -87,7 +88,7 @@ import { createMediaUrls } from './media-urls.ts';
 import { createTaxCodeLookup } from './tax-lookup.ts';
 import { createPortalSync } from './portal-sync.ts';
 import { createTaxPortalClient, testPortalAllowed } from './tax-portal.ts';
-import { startWorker } from './worker.ts';
+import { startWorker, workerApplicationName } from './worker.ts';
 import { createPushSender, loadVapidKeys } from './web-push.ts';
 import { WORKER_LAG_EXIT_MS, WORKER_LAG_SUSTAIN_MS, startLagWatchdog } from './back-pressure.ts';
 
@@ -470,7 +471,10 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
 
       if (worker && workerUrl && extractUrl) {
         console.log(`[extract] parsing in crove-extract at ${new URL(extractUrl).host}`);
-        const { pool, db, runtime } = buildRuntime(workerUrl, 'crove-worker');
+        // The instance the heartbeat names is in every system audit row this worker writes (#1951), cut to what fits in
+        // the connections' application_name, so both name it alike.
+        const instance = hostname().slice(0, 50);
+        const { pool, db, runtime } = buildRuntime(workerUrl, workerApplicationName(instance));
         stops.push(() => pool.end());
         await assertRlsEnforced(pool);
         await assertSystemContextAccess(pool, 'granted');
@@ -483,6 +487,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
             connectionString: workerUrl,
             workerDb: db,
             runtime,
+            instance,
             store,
             extractor: resolved.ai,
             extract: createExtractClient({ url: extractUrl }),

@@ -1,7 +1,8 @@
 // Activity summaries keep no classified value and no free text (#1634, #1825, after #1626): crove_kernel.activity.summary
-// is text a member reads in a record's timeline, kept with the record and out of reach of the PDPL erasure (#923), so it
-// names what happened, never a person's or an org's name, tax code, address, email or other classified value, nor a
-// reason or note a member typed. The record's page shows its current values beside the timeline.
+// is text a member reads in a record's timeline, kept with the record; the PDPL erasure only replaces an email, phone or
+// ID quoted in it (#1948), so it names what happened, never a person's or an org's name, tax code, address, email or
+// other classified value, nor a reason or note a member typed. The record's page shows its current values beside the
+// timeline.
 // A source scan of the summary (the fourth argument) of every ctx.activity(...) call. It fails when the summary reads a
 // column some manifest classifies (anything but internal), in snake_case or camelCase, anywhere its value can reach the
 // text: in a template's ${...} (`${party.name}`), a concatenation (`'Thêm ' + name`), a branch or the whole summary
@@ -102,7 +103,9 @@ function scan(file: string, text: string, classified: Set<string>, allowed: Reco
 }
 
 describe('activity summaries and classified columns (#1634)', () => {
-  const classified = classifiedColumns();
+  // The summary itself is classified (pii since #1948: an old or hand-written line may quote a person), but a summary
+  // passed by that name is the text being written, not a read of the column.
+  const classified = new Set([...classifiedColumns()].filter((column) => column !== 'summary'));
   const files = SCANNED.flatMap((dir) => sources(join(ROOT, dir)));
 
   it('scans the sources that write activity', () => {

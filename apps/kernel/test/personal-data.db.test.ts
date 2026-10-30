@@ -13,9 +13,10 @@ import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
-import { createOrg, kernelCommands, kernelQueries, PERSONAL_DATA_COLUMNS, personalDataProbe, upsertIdentity, type PersonalDataColumn } from '@crove/kernel';
+import { ACTIVITY_SHORT_NUMBER_REASON, createOrg, kernelCommands, kernelQueries, PERSONAL_DATA_COLUMNS, personalDataProbe, upsertIdentity, type PersonalDataColumn } from '@crove/kernel';
 import type { PersonalDataErasure, PersonalDataResult } from '@crove/kernel-contract';
 import { Runtime } from '@crove/kernel-runtime';
+import { enterUser } from './context-token.ts';
 import { TEST_MANIFESTS } from './manifests.ts';
 import { PII_TEXT_CASES } from './pii-text-cases.ts';
 
@@ -421,5 +422,186 @@ suite('finding a person in the org (#923)', () => {
     const rows = (await admin((c) => c.query<{ id: string; from_address: string | null; body_text: string | null }>('SELECT id, from_address, body_text FROM crove_kernel.inbound_message WHERE id = ANY($1)', [[theirs, others]]))).rows;
     expect(rows.find((r) => r.id === theirs)).toMatchObject({ from_address: null, body_text: null });
     expect(rows.find((r) => r.id === others)).toMatchObject({ from_address: 'khac@shop-khac.example', body_text: 'Chào chị Mẫu, ưu đãi 20%' });
+  });
+  // Free text that quotes a person (#1948): the finder searches activity lines, task comments, journal entry
+  // descriptions and the reasons on cash and journal vouchers for the value anywhere inside them. The erasure replaces
+  // it in activity lines, and keeps the comments (append-only) and the books (kept by law), listed with their reasons;
+  // its audit row holds counts only.
+  it('finds a person quoted in free text, redacts it in activity lines and keeps the comments and the books (#1948)', async () => {
+    const email = 'Tu.Tran@Example.vn';
+    const seeded = await admin(async (c) => {
+      const line = async (summary: string) =>
+        (
+          await c.query<{ id: string }>(
+            `INSERT INTO crove_kernel.activity (org_id, record_type, record_id, kind, summary) VALUES ($1, 'kernel.party', $2, 'party.note', $3) RETURNING id`,
+            [org.orgId, person, summary],
+          )
+        ).rows[0]?.id as string;
+      const byEmail = await line(`Đã gửi hợp đồng cho ${email} hôm nay`);
+      const byPhone = await line('Gọi chị Tú ở số 0987.654.321 lúc 9 giờ');
+      const longer = await line('Mã đơn 0987654321999 không phải số điện thoại');
+      const task = (
+        await c.query<{ id: string }>(
+          `INSERT INTO crove_kernel.task (org_id, title, source, created_by_type) VALUES ($1, 'Liên hệ khách', 'human', 'user') RETURNING id`,
+          [org.orgId],
+        )
+      ).rows[0]?.id as string;
+      await c.query(`INSERT INTO crove_kernel.task_comment (org_id, task_id, body, author_type, author_id) VALUES ($1, $2, $3, 'user', $4)`, [
+        org.orgId,
+        task,
+        `Đã hẹn với tu.tran@example.vn`,
+        org.owner,
+      ]);
+      // An entry, a cash receipt and a journal voucher, each entry with balanced lines, in one transaction (the ledger's
+      // and the vouchers' checks run at commit).
+      const receipt = randomUUID();
+      const voucher = randomUUID();
+      const lines = (entry: string, debit: string, credit: string) =>
+        c.query(
+          `INSERT INTO crove_finance.journal_line (org_id, entry_id, line_no, account_code, debit, credit) VALUES ($1, $2, 1, $3, 100000, 0), ($1, $2, 2, $4, 0, 100000)`,
+          [org.orgId, entry, debit, credit],
+        );
+      await c.query('BEGIN');
+      const advance = (
+        await c.query<{ id: string }>(
+          `INSERT INTO crove_finance.journal_entry (org_id, entry_date, description, source_type, source_id) VALUES ($1, '2026-09-04', $2, 'test.pdpl', $3) RETURNING id`,
+          [org.orgId, `Tạm ứng cho ${email}`, randomUUID()],
+        )
+      ).rows[0]?.id as string;
+      await lines(advance, '141', '1111');
+      const entry = (
+        await c.query<{ id: string }>(
+          `INSERT INTO crove_finance.journal_entry (org_id, entry_date, description, source_type, source_id) VALUES ($1, '2026-09-05', 'PT', 'finance.cash_voucher', $2) RETURNING id`,
+          [org.orgId, receipt],
+        )
+      ).rows[0]?.id as string;
+      await lines(entry, '1111', '131');
+      await c.query(
+        `INSERT INTO crove_finance.cash_voucher (org_id, id, voucher_type, number, voucher_date, cash_account, description, amount)
+         VALUES ($1, $2, 'cash_receipt', 1, '2026-09-05', '1111', $3, 100000)`,
+        [org.orgId, receipt, `Thu tiền của ${email}`],
+      );
+      const adjustment = (
+        await c.query<{ id: string }>(
+          `INSERT INTO crove_finance.journal_entry (org_id, entry_date, description, source_type, source_id) VALUES ($1, '2026-09-06', 'PKT', 'finance.journal_voucher', $2) RETURNING id`,
+          [org.orgId, voucher],
+        )
+      ).rows[0]?.id as string;
+      await lines(adjustment, '6422', '331');
+      await c.query(`INSERT INTO crove_finance.journal_voucher (org_id, id, number, voucher_date, description) VALUES ($1, $2, 1, '2026-09-06', $3)`, [
+        org.orgId,
+        voucher,
+        `Điều chỉnh theo thư của ${email}`,
+      ]);
+      await c.query('COMMIT');
+      return { byEmail, byPhone, longer };
+    });
+
+    const found = await find(email);
+    expect(columns(found)).toEqual([
+      'crove_finance.cash_voucher.description',
+      'crove_finance.journal_entry.description',
+      'crove_finance.journal_voucher.description',
+      'crove_kernel.activity.summary',
+      'crove_kernel.task_comment.body',
+    ]);
+    expect(found.matches.find((m) => m.column === 'crove_kernel.activity.summary')).toMatchObject({ handling: 'erase', rowId: seeded.byEmail });
+    expect(found.matches.find((m) => m.column === 'crove_kernel.task_comment.body')?.handling).toBe('keep_record');
+    expect(found.matches.filter((m) => m.column.startsWith('crove_finance.')).map((m) => m.handling)).toEqual(['keep_legal', 'keep_legal', 'keep_legal']);
+    // A phone however it is spelled, never inside a longer number.
+    const byPhone = await find('+84 987 654 321');
+    expect(byPhone.matches.filter((m) => m.column === 'crove_kernel.activity.summary').map((m) => m.rowId)).toEqual([seeded.byPhone]);
+
+    const erased = await erase(email);
+    expect(erased.erased).toContainEqual({ column: 'crove_kernel.activity.summary', rows: 1 });
+    for (const column of ['crove_kernel.task_comment.body', 'crove_finance.journal_entry.description', 'crove_finance.cash_voucher.description', 'crove_finance.journal_voucher.description']) {
+      expect(erased.kept, column).toContainEqual({ column, rows: 1, reason: expect.any(String) });
+    }
+    await erase('0987654321');
+    const summaries = (
+      await admin((c) => c.query<{ id: string; summary: string }>('SELECT id, summary FROM crove_kernel.activity WHERE id = ANY($1)', [[seeded.byEmail, seeded.byPhone, seeded.longer]]))
+    ).rows;
+    const summary = (id: string) => summaries.find((r) => r.id === id)?.summary;
+    expect(summary(seeded.byEmail)).toBe('Đã gửi hợp đồng cho [đã xóa] hôm nay');
+    expect(summary(seeded.byPhone)).toBe('Gọi chị Tú ở số [đã xóa] lúc 9 giờ');
+    expect(summary(seeded.longer)).toBe('Mã đơn 0987654321999 không phải số điện thoại');
+    // The kept rows are still there to find, and nothing else is.
+    expect(columns(await find(email))).toEqual([
+      'crove_finance.cash_voucher.description',
+      'crove_finance.journal_entry.description',
+      'crove_finance.journal_voucher.description',
+      'crove_kernel.task_comment.body',
+    ]);
+    const audits = (
+      await admin((c) =>
+        c.query<{ detail: unknown }>(
+          `SELECT detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'kernel.personal_data.erase' AND outcome = 'ok' ORDER BY id DESC LIMIT 2`,
+          [org.orgId],
+        ),
+      )
+    ).rows;
+    expect(JSON.stringify(audits).toLowerCase()).not.toContain('tu.tran');
+    expect(JSON.stringify(audits)).not.toMatch(/987.?654/);
+  });
+
+  // A number of 8 or 9 digits (an old ID card number) may as well be an amount or a voucher number in a timeline line:
+  // the erasure lists those lines with its reason and leaves them as they are; the definer changes nothing for it
+  // either (#1948, the coordinator's review).
+  it('lists the activity lines a short number matches and leaves them as they are (#1948)', async () => {
+    const line = await admin(
+      async (c) =>
+        (
+          await c.query<{ id: string }>(
+            `INSERT INTO crove_kernel.activity (org_id, record_type, record_id, kind, summary) VALUES ($1, 'kernel.party', $2, 'party.note', 'Mã đối chiếu 23456789 của khách') RETURNING id`,
+            [org.orgId, person],
+          )
+        ).rows[0]?.id as string,
+    );
+    expect((await find('23456789')).matches.filter((m) => m.column === 'crove_kernel.activity.summary').map((m) => m.rowId)).toEqual([line]);
+    const result = await erase('23456789');
+    expect(result.erased.map((e) => e.column)).not.toContain('crove_kernel.activity.summary');
+    expect(result.kept).toContainEqual({ column: 'crove_kernel.activity.summary', rows: 1, reason: ACTIVITY_SHORT_NUMBER_REASON });
+    const summary = (await admin((c) => c.query<{ summary: string }>('SELECT summary FROM crove_kernel.activity WHERE id = $1', [line]))).rows[0]?.summary;
+    expect(summary).toBe('Mã đối chiếu 23456789 của khách');
+  });
+
+  // Only the erase command reaches the redaction: an owner's own context, never a member's or a raw tenant call.
+  it('redacts activity lines only in an owner context (#1948)', async () => {
+    const app = new URL(adminUrl);
+    app.username = 'crove_app';
+    app.password = 'test-app-pw';
+    const call = async (user: string) => {
+      const c = new pg.Client({ connectionString: app.toString() });
+      await c.connect();
+      try {
+        await c.query('BEGIN');
+        await enterUser(c, user, org.orgId);
+        await c.query(`SELECT crove_kernel.personal_data_redact_activity('email', 'nobody@example.vn')`);
+        return 'answered';
+      } catch (error) {
+        return (error as Error).message;
+      } finally {
+        await c.query('ROLLBACK').catch(() => {});
+        await c.end();
+      }
+    };
+    expect(await call(org.owner)).toBe('answered');
+    expect(await call(org.admin)).toBe('PERSONAL_DATA_OWNER_ONLY');
+    expect(await call(org.member)).toBe('PERSONAL_DATA_OWNER_ONLY');
+    // Nobody but the API login may call it at all: the tenant and worker roles hold no EXECUTE.
+    const grants = await admin(
+      async (c) =>
+        (
+          await c.query<{ role: string; allowed: boolean }>(
+            `SELECT r AS role, pg_catalog.has_function_privilege(r, 'crove_kernel.personal_data_redact_activity(text, text)', 'EXECUTE') AS allowed
+               FROM pg_catalog.unnest(ARRAY['crove_app', 'crove_tenant', 'crove_worker']) AS r`,
+          )
+        ).rows,
+    );
+    expect(grants).toEqual([
+      { role: 'crove_app', allowed: true },
+      { role: 'crove_tenant', allowed: false },
+      { role: 'crove_worker', allowed: false },
+    ]);
   });
 });
