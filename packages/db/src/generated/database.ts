@@ -1018,6 +1018,7 @@ export interface KernelNumberSeriesPolicyTable {
   reset: ColumnType<string, NotGranted, NotGranted>;
   updated_by: ColumnType<string | null, NotGranted, NotGranted>;
   updated_at: ColumnType<Date, NotGranted, NotGranted>;
+  schedule: ColumnType<unknown, NotGranted, NotGranted>;
 }
 
 /** crove_kernel.number_series */
@@ -1029,6 +1030,7 @@ export interface KernelNumberSeriesTable {
   period_key: ColumnType<string, NotGranted, NotGranted>;
   next_number: ColumnType<string, NotGranted, NotGranted>;
   created_at: ColumnType<Date, NotGranted, NotGranted>;
+  last_doc_date: ColumnType<string | null, NotGranted, NotGranted>;
 }
 
 /** crove_kernel.number_void */

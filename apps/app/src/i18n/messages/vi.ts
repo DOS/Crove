@@ -6131,6 +6131,7 @@ export const vi = {
         allocations: 'Xem các số chứng từ đã cấp',
         policy: {
           set: 'Đặt cách đánh số chứng từ',
+          schedule: 'Hẹn đổi cách đánh số chứng từ từ đầu năm sau',
         },
         reseed: 'Nâng dãy số chứng từ sau khi khôi phục',
         void: 'Hủy số chứng từ',
