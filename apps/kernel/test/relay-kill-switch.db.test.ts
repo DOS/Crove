@@ -240,15 +240,15 @@ suite('a kill switch per relay type on PostgreSQL (#1696)', () => {
     await drain();
     const BACKLOG = 2000;
     await set(`relay:${HELD}`, true);
-    const held = await addMany(HELD, BACKLOG);
-    expect(held).toHaveLength(BACKLOG);
-    // The statistics a step behind, every time (#2074): taken now, before the claim marks the backlog, so they say no
-    // row is marked, and kept so (no autovacuum on this database's outbox) for the rest of the round. The measured
-    // passes below must pass on the claim's index path all the same.
+    // The statistics a step behind, every time (#2074): taken now, while the drained outbox is empty, so they know
+    // neither the backlog nor its marks, and kept so (no autovacuum on this database's outbox) for the rest of the
+    // round. The measured passes below must pass on the claim's index path all the same.
     await admin(async (c) => {
       await c.query('ALTER TABLE crove_kernel.outbox_pending SET (autovacuum_enabled = false)');
       await c.query('ANALYZE crove_kernel.outbox_pending, crove_kernel.outbox_event');
     });
+    const held = await addMany(HELD, BACKLOG);
+    expect(held).toHaveLength(BACKLOG);
 
     // The first claim meets every held row once: one event probe and one mark each, and claims none of them.
     const first = await asWorker((c) => touched(c, () => claimIn(c)));
@@ -268,7 +268,20 @@ suite('a kill switch per relay type on PostgreSQL (#1696)', () => {
     // TEMPORARY (#2074 evidence, removed before merge): the same passes as the planner picks them on these statistics.
     const rawIdle = await asWorker((c) => touched(c, () => claimIn(c), true));
     const rawLag = await asWorker((c) => touched(c, async () => (await c.query('SELECT crove_kernel.outbox_lag_seconds() AS lag')).rows[0]?.lag, true));
-    console.log(`#2074 control: with sequential scans allowed, an idle claim read ${rawIdle.pending.rows} and the lag ${rawLag.pending.rows} outbox_pending rows`);
+    const forced = async <T>(c: pg.Client, run: () => Promise<T>) => {
+      await c.query('BEGIN');
+      await c.query('SET LOCAL enable_indexscan = off');
+      await c.query('SET LOCAL enable_bitmapscan = off');
+      const before = (await c.query<{ n: string }>(`SELECT (coalesce(seq_tup_read, 0) + coalesce(idx_tup_fetch, 0))::text AS n FROM pg_stat_xact_user_tables WHERE relname = 'outbox_pending'`)).rows[0]?.n;
+      await run();
+      const after = (await c.query<{ n: string }>(`SELECT (coalesce(seq_tup_read, 0) + coalesce(idx_tup_fetch, 0))::text AS n FROM pg_stat_xact_user_tables WHERE relname = 'outbox_pending'`)).rows[0]?.n;
+      await c.query('ROLLBACK');
+      return Number(after) - Number(before);
+    };
+    const seqLag = await asWorker((c) => forced(c, () => c.query('SELECT crove_kernel.outbox_lag_seconds() AS lag')));
+    console.log(
+      `#2074 control: planner's own choice, idle claim ${rawIdle.pending.rows} and lag ${rawLag.pending.rows} outbox_pending rows; a sequential scan plan, lag ${seqLag} rows`,
+    );
     // An empty pass touches no held row either.
     const idle = await asWorker((c) => touched(c, () => claimIn(c)));
     expect(idle.result).toEqual([]);
