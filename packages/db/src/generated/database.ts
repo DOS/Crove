@@ -21,6 +21,7 @@ export interface CroveCrmSchema {
 export interface CroveFinanceSchema {
   'crove_finance.account': FinanceAccountTable;
   'crove_finance.bank_feed_account': FinanceBankFeedAccountTable;
+  'crove_finance.bank_feed_listed_account': FinanceBankFeedListedAccountTable;
   'crove_finance.bank_line': FinanceBankLineTable;
   'crove_finance.cash_voucher': FinanceCashVoucherTable;
   'crove_finance.categorization_rule': FinanceCategorizationRuleTable;
@@ -244,6 +245,16 @@ export interface FinanceBankFeedAccountTable {
   last_synced_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   created_by: ColumnType<string | null, string | null, NotGranted>;
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+}
+
+/** crove_finance.bank_feed_listed_account */
+export interface FinanceBankFeedListedAccountTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  channel_connection_id: ColumnType<string, string, NotGranted>;
+  external_account_id: ColumnType<string, string, NotGranted>;
+  display_name: string;
+  listed_at: ColumnType<Date, Date | string | undefined, Date | string>;
 }
 
 /** crove_finance.bank_line */
