@@ -17,11 +17,13 @@ import { DateInput } from '../components/date-input.tsx';
 import { DataTable, Empty, ErrorText, PageHeader, Spinner, TableSkeleton } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc } from '../lib/api.ts';
+import { type ChipVariant } from '../lib/status.ts';
 import { auditFilter, auditForm, commandLabel, nextAuditCursor, withCommandLabels, type AuditFilterForm, type AuditSearch } from '../lib/audit.ts';
 
-const OUTCOME_BADGE: Record<AuditOutcome, 'success' | 'warning' | 'destructive' | 'secondary'> = {
+const OUTCOME_BADGE: Record<AuditOutcome, ChipVariant> = {
   ok: 'success',
-  pending_approval: 'secondary',
+  // "Chờ duyệt", the same words and chip as a proposal waiting for a person (#2000).
+  pending_approval: 'proposal',
   denied: 'warning',
   failed: 'destructive',
 };
