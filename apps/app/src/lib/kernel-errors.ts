@@ -222,6 +222,8 @@ export const KERNEL_ERROR_CODES = [
   'REVISION_OUT_OF_ORDER',
   'SOURCE_STILL_POSTED',
   'REVERSAL_REVISION',
+  // A purchase or sale document posted again (#1928).
+  'DOCUMENT_REPOST',
   // The legal entity whose books a call is for (#1280).
   'LEGAL_ENTITY_REQUIRED',
   'LEGAL_ENTITY_NOT_ALLOWED',

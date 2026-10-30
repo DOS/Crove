@@ -29,6 +29,17 @@ describe('source revision refusals', () => {
     });
   });
 
+  it('answers DOCUMENT_REPOST for a purchase or sale document posted again (#1928)', () => {
+    const error = sourceRevisionError({
+      code: '23514',
+      message: 'new row for relation "journal_entry" violates check constraint "journal_entry_document_one_revision"',
+      constraint: 'journal_entry_document_one_revision',
+      detail: 'Failing row contains (...)',
+    });
+    expect(error).toMatchObject({ code: 'DOCUMENT_REPOST', status: 409, details: { sourceType: null, sourceId: null, revision: null } });
+    expect(error?.message).toContain('hóa đơn thay thế');
+  });
+
   it('answers REVISION_OUT_OF_ORDER with the revision expected', () => {
     const error = sourceRevisionError({
       code: '23514',

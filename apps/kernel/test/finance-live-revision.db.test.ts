@@ -1,7 +1,7 @@
-// A re-posted source counts once (issue #1338). Since #1283 a source document may have several journal entries:
-// revision 1, its reversal, then revision 2. The lists that join a source to its entry keep the latest revision only
-// (modules/finance/src/source-entry.ts), so a purchase document and a cash voucher posted again each show once, with
-// their revision 2 entry, and a document's export history names each file that took one of its revisions in, once.
+// A re-posted source counts once (issue #1338). Since #1283 a source may have several journal entries: revision 1, its
+// reversal, then revision 2. The lists that join a source to its entry keep the latest revision only
+// (modules/finance/src/source-entry.ts), so a cash voucher posted again shows once, with its revision 2 entry. A
+// purchase or sale document is posted once (#1928): its revision 2 is refused, and it shows once, voided.
 // The entries are written by the database owner, as the posting path would leave them; the lists are read through the
 // runtime as the org's owner.
 // Set CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
@@ -14,6 +14,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
+import { enterUser } from './context-token.ts';
 import { TEST_MANIFESTS } from './manifests.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
@@ -116,7 +117,10 @@ suite('a re-posted source counts once in the finance lists (#1338)', () => {
     await root.end();
   });
 
-  it('lists a purchase document posted, reversed and posted again once, with its revision 2 entry', async () => {
+  // A purchase or sale document is posted once (#1928): after its entry is reversed, with the void of the document,
+  // revision 2 is refused, whether through the posting path or written by the database owner, so the ledger never
+  // counts a document that stays voided. The list shows it once, with its revision 1 entry and its void.
+  it('refuses revision 2 of a purchase document whose revision 1 was reversed, and lists it once, voided', async () => {
     const party = randomUUID();
     const document = randomUUID();
     const lines: Line[] = [
@@ -134,12 +138,8 @@ suite('a re-posted source counts once in the finance lists (#1338)', () => {
       );
       first = await entry(c, { date: '2026-09-10', sourceType: 'finance.purchase_document', sourceId: document, lines });
     });
-    // Exported while revision 1 is in force: the journal and the MISA purchases file of its dates.
     await exported({ from: '2026-09-01', to: '2026-09-15' });
-    await exported({ from: '2026-09-01', to: '2026-09-15', format: 'misa_sme_purchases' });
-    // The reversal of revision 1 voids the document in the same transaction, as finance.journal.reverse does. The void
-    // stays: a purchase document has one void (#1928), so revision 2 counts in the ledger while the document stays out
-    // of VAT and MISA. This test pins only that each list shows the document once.
+    // The reversal of revision 1 voids the document in the same transaction, as finance.journal.reverse does.
     let reversal = '';
     await inTransaction(async (c) => {
       reversal = await entry(c, { date: '2026-09-20', sourceType: 'test.reversal', sourceId: randomUUID(), reverses: first, lines: mirror(lines) });
@@ -149,33 +149,37 @@ suite('a re-posted source counts once in the finance lists (#1338)', () => {
         reversal,
       ]);
     });
-    let second = '';
-    await inTransaction(async (c) => {
-      second = await entry(c, { date: '2026-09-25', sourceType: 'finance.purchase_document', sourceId: document, revision: 2, lines });
-    });
-    // Exported after revision 2: the journal of its dates, the journal of the month, which holds both revisions, and a
-    // MISA file, which leaves the voided document out.
-    await exported({ from: '2026-09-20', to: '2026-09-30' });
-    await exported({ from: '2026-09-01', to: '2026-09-30' });
-    await exported({ from: '2026-09-01', to: '2026-09-30', format: 'misa_sme_purchases' });
 
-    // Two entries name the document; the list shows it once, with revision 2.
+    // Revision 2 through the posting path, in the owner's context: its own checks pass (the next revision, the
+    // previous one reversed), and the ledger's rule refuses it.
+    const refusal = (run: Promise<unknown>) => run.then(() => 'posted', (error: { code?: string; constraint?: string }) => `${error.code} ${error.constraint}`);
+    const posted = await admin(async (c) => {
+      await c.query('BEGIN');
+      try {
+        await enterUser(c, userId, orgId);
+        return await refusal(
+          c.query(`SELECT crove_finance.post_journal_entry('2026-09-25'::date, 'ghi lại', 'finance.purchase_document', $1::uuid, $2::jsonb, NULL::uuid, 2)`, [
+            document,
+            JSON.stringify(lines.map(([line_no, account_code, debit, credit]) => ({ line_no, account_code, debit, credit }))),
+          ]),
+        );
+      } finally {
+        await c.query('ROLLBACK');
+      }
+    });
+    expect(posted).toBe('23514 journal_entry_document_one_revision');
+    // Written by the database owner, too.
+    const written = await refusal(inTransaction(async (c) => void (await entry(c, { date: '2026-09-25', sourceType: 'finance.purchase_document', sourceId: document, revision: 2, lines }))));
+    expect(written).toBe('23514 journal_entry_document_one_revision');
+
+    // The list shows the document once, with its revision 1 entry, voided; the voided document stays out of MISA.
     const listed = (await query<Array<{ id: string; journalEntryId: string | null }>>('finance.documents.list', {})).filter((d) => d.id === document);
-    expect(listed).toEqual([expect.objectContaining({ id: document, journalEntryId: second })]);
-    expect(await query('finance.documents.get', { id: document })).toMatchObject({ id: document, journalEntryId: second, voided: { reversalEntryId: reversal } });
-    // The voided document stays out of the MISA export, as before.
+    expect(listed).toEqual([expect.objectContaining({ id: document, journalEntryId: first })]);
+    expect(await query('finance.documents.get', { id: document })).toMatchObject({ id: document, journalEntryId: first, voided: { reversalEntryId: reversal } });
     expect(await query<unknown[]>('finance.vouchers.purchases', { from: '2026-09-01', to: '2026-09-30' })).toEqual([]);
-    // The document's export history: each file that took one of its revisions in, once.
-    const history = await query<Array<{ format: string; from: string | null; to: string | null }>>('finance.document.exports', { documentId: document });
-    expect(history.map((h) => [h.format, h.from, h.to])).toEqual([
-      ['journal', '2026-09-01', '2026-09-15'],
-      ['misa_sme_purchases', '2026-09-01', '2026-09-15'],
-      ['journal', '2026-09-20', '2026-09-30'],
-      ['journal', '2026-09-01', '2026-09-30'],
-    ]);
-    // The journal lists every entry: both revisions and the reversal.
     const journal = await query<Array<{ id: string }>>('finance.journal.list', { from: '2026-09-01', to: '2026-09-30' });
-    expect(journal.map((e) => e.id).sort()).toEqual([first, reversal, second].sort());
+    expect(journal.map((e) => e.id).filter((id) => id === first || id === reversal).sort()).toEqual([first, reversal].sort());
+    expect((await query<Array<{ format: string }>>('finance.document.exports', { documentId: document })).map((h) => h.format)).toEqual(['journal']);
   });
 
   it('lists a cash voucher posted, reversed and posted again once, in force with its revision 2 entry', async () => {
