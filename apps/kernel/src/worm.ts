@@ -78,6 +78,9 @@ export interface ArchiveStore {
   // When the store wrote the object, by its own clock, or null when there is none: S3's LastModified, which the writer
   // cannot set, or the file's modification time. The restore acknowledgements are checked against it (#2020).
   writtenAt?(key: string): Promise<Date | null>;
+  // How many versions each key under the prefix has, delete markers included, where the store keeps versions (S3 with
+  // Object Lock). A WORM object has exactly one: a second means a PUT over it, or a delete (#2020).
+  versionCounts?(prefix: string): Promise<Map<string, number>>;
   describe(): string;
 }
 
@@ -213,8 +216,21 @@ export class S3ArchiveStore implements ArchiveStore {
     return keys.sort();
   }
 
+  async versionCounts(prefix: string): Promise<Map<string, number>> {
+    const counts = new Map<string, number>();
+    let keyMarker: string | undefined;
+    let versionMarker: string | undefined;
+    do {
+      const page = await this.client.send(new ListObjectVersionsCommand({ Bucket: this.bucket, Prefix: prefix, KeyMarker: keyMarker, VersionIdMarker: versionMarker }));
+      for (const v of [...(page.Versions ?? []), ...(page.DeleteMarkers ?? [])]) if (v.Key) counts.set(v.Key, (counts.get(v.Key) ?? 0) + 1);
+      [keyMarker, versionMarker] = page.IsTruncated ? [page.NextKeyMarker, page.NextVersionIdMarker] : [undefined, undefined];
+    } while (keyMarker !== undefined);
+    return counts;
+  }
+
   // The oldest version's LastModified: Object Lock turns versioning on, and a PUT without If-None-Match makes a new
-  // version with a new LastModified, but cannot remove or redate the locked first one.
+  // version with a new LastModified, but cannot remove or redate the locked first one. The verifier also fails any key
+  // with more than one version (versionCounts), so get and writtenAt read the same, single version.
   async writtenAt(key: string): Promise<Date | null> {
     let oldest: Date | null = null;
     let keyMarker: string | undefined;
@@ -530,6 +546,7 @@ export interface ArchiveProblem {
     | 'high_mismatch'
     | 'restore_ack_unreadable'
     | 'restore_ack_mismatch'
+    | 'object_versions'
     | 'series_period_mismatch';
   seq: number;
   ref?: string;
@@ -540,8 +557,12 @@ export interface ArchiveVerification {
   batches: number;
   rows: number;
   problems: ArchiveProblem[];
-  // Rows a restore acknowledgement excused (#2020): lost with a restore, and named by its report.
+  // Rows a restore acknowledgement excused (#2020): lost with a restore, and named by its report. Never silent: the
+  // run records the count and the acknowledgement in force (restoreAck, its sequence), logs them, and newRestoreAck
+  // says the acknowledgement is newer than any earlier run recorded, which the worker alerts on.
   excused: number;
+  restoreAck: number | null;
+  newRestoreAck: boolean;
 }
 
 // After a restore (#2020): the rows a restore lost, written to the archive store by the restore check
@@ -624,6 +645,17 @@ function parseRestoreAck(bytes: Uint8Array): RestoreAck | null {
 
 const refKey = ([seq, ref]: [number, string]) => `${seq} ${ref}`;
 
+// Every batch and acknowledgement key with more than one version, where the store keeps versions: a PUT over a WORM
+// object, or a delete, which Object Lock keeps in view but does not stop with the writer's key (#2020).
+async function multiVersionProblems(store: ArchiveStore): Promise<ArchiveProblem[]> {
+  if (!store.versionCounts) return [];
+  const problems: ArchiveProblem[] = [];
+  for (const prefix of [ARCHIVE_PREFIX, RESTORE_ACK_PREFIX]) {
+    for (const [key, count] of await store.versionCounts(prefix)) if (count > 1) problems.push({ code: 'object_versions', seq: 0, ref: key });
+  }
+  return problems;
+}
+
 // Whether an acknowledgement is bound to the store's newest batch when it was written: batch batchesAtRestore holds
 // its chain hash, and the batch after it, if any, was written no earlier than the acknowledgement, by the store's own
 // clock. A store that cannot tell when it wrote an object cannot bind one.
@@ -683,7 +715,6 @@ async function restoreHolds(db: Db, [first, last, point]: RestoreInterval, windo
   const lastWindow = windows.get(last);
   if (!Number.isFinite(at) || !firstWindow || !lastWindow) return false;
   if (Date.parse(firstWindow.to) <= at - RESTORE_SLACK_MS) return false;
-  if (Date.parse(lastWindow.to) <= at) return true;
   // The point as given, to the microsecond: PostgreSQL reads it, Date.parse would round it to the millisecond.
   const from = point;
   const kept = await rowHashes(db, {
@@ -745,6 +776,7 @@ export async function verifyArchive(db: Db, store: ArchiveStore): Promise<Archiv
   // reads as one (restoreHolds).
   const acks = await restoreAckChain(store);
   for (const problem of acks.problems) note(problem);
+  for (const problem of await multiVersionProblems(store)) note(problem);
   const excuses = new Set((acks.ack?.refs ?? []).map(refKey));
   const listed: Array<{ seq: number; ref: string; code: 'row_missing' | 'row_changed' }> = [];
   const windows = new Map<number, ArchiveBatch['window']>();
@@ -859,8 +891,13 @@ export async function verifyArchive(db: Db, store: ArchiveStore): Promise<Archiv
     }
   }
 
-  const result = { ok: problems.length === 0, batches: seq, rows: rowsChecked, problems, excused };
-  await sql`SELECT crove_kernel.archive_verified(${result.ok}, ${result.batches}::int, ${result.rows}::bigint, ${JSON.stringify(problems)}::jsonb)`.execute(db);
+  const restoreAck = acks.ack?.sequence ?? null;
+  const { rows: recordedRun } = await sql<{ previous: string | null }>`
+    SELECT crove_kernel.archive_verified(${problems.length === 0}, ${seq}::int, ${rowsChecked}::bigint, ${JSON.stringify(problems)}::jsonb, ${excused}::bigint,
+      ${restoreAck}::bigint) AS previous`.execute(db);
+  const recordedAck = recordedRun[0]?.previous;
+  const newRestoreAck = restoreAck !== null && (recordedAck === null || recordedAck === undefined || restoreAck > Number(recordedAck));
+  const result = { ok: problems.length === 0, batches: seq, rows: rowsChecked, problems, excused, restoreAck, newRestoreAck };
   return result;
 }
 
@@ -1001,7 +1038,7 @@ export async function restoreReport(db: Db, store: ArchiveStore, options: { back
   const windows = new Map<number, ArchiveBatch['window']>();
   const missingRecorded: Array<[number, string]> = [];
   const acks = await restoreAckChain(store);
-  problems.push(...acks.problems);
+  problems.push(...acks.problems, ...(await multiVersionProblems(store)));
   let auditEvents = 0;
   let prev = GENESIS_SHA256;
   let prevTo = EPOCH;

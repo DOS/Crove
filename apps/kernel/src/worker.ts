@@ -793,7 +793,15 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       const elapsed = () => `${Math.round((Date.now() - started) / 1000)} s`;
       try {
         const result = await runArchiveVerification(deps.workerDb, store);
-        console.log(`[archive] verified ${result.batches} batch(es), ${result.rows} row(s) in ${elapsed()}`);
+        // An excuse is never silent (#2020): every run says what a restore acknowledgement excused, and a new one alerts,
+        // so an operator matches it to a real restore.
+        const excused = result.restoreAck === null ? '' : `, excused ${result.excused} row(s) under restore acknowledgement #${result.restoreAck}`;
+        console.log(`[archive] verified ${result.batches} batch(es), ${result.rows} row(s)${excused} in ${elapsed()}`);
+        if (result.newRestoreAck) {
+          opsAlert(
+            `[archive] ALERT a new restore acknowledgement #${result.restoreAck} excuses ${result.excused} row(s) the WORM archive holds: match it to a restore incident (docs/runbooks/worm-archive.md)`,
+          );
+        }
       } catch (error) {
         console.error(`[archive] ALERT after ${elapsed()}: ${error instanceof Error ? error.message : 'verification could not run'}`);
         throw error;

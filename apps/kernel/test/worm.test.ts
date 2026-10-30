@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { GetObjectCommand, GetObjectLockConfigurationCommand, ListObjectsV2Command, PutObjectCommand } from '@aws-sdk/client-s3';
+import { GetObjectCommand, GetObjectLockConfigurationCommand, ListObjectVersionsCommand, ListObjectsV2Command, PutObjectCommand } from '@aws-sdk/client-s3';
 import { Kysely, PostgresAdapter, PostgresIntrospector, PostgresQueryCompiler, type CompiledQuery, type DatabaseConnection, type QueryResult } from 'kysely';
 import { describe, expect, it } from 'vitest';
 import type { Db } from '@crove/db';
@@ -99,6 +99,44 @@ describe('S3 archive store', () => {
     expect(await store.get(archiveKey(1))).toEqual(new Uint8Array([7]));
     expect(sent.at(-1)).toMatchObject({ name: GetObjectCommand.name, input: { Key: archiveKey(1) } });
     expect(await store.get(archiveKey(9))).toBeNull();
+  });
+});
+
+describe('S3 archive store versions (#2020)', () => {
+  it("reads an object's write time from its oldest version, and counts every key's versions and delete markers", async () => {
+    const at = (s: number) => new Date(Date.UTC(2026, 9, 22, 0, 0, s));
+    const pages = [
+      {
+        Versions: [
+          { Key: 'restores/v1/000000000001.json', LastModified: at(30) },
+          { Key: 'restores/v1/000000000001.json', LastModified: at(10) },
+          { Key: 'restores/v1/000000000001.json.bak', LastModified: at(1) },
+        ],
+        IsTruncated: true,
+        NextKeyMarker: 'k',
+        NextVersionIdMarker: 'v',
+      },
+      { Versions: [{ Key: 'restores/v1/000000000001.json', LastModified: at(20) }], DeleteMarkers: [{ Key: 'restores/v1/000000000002.json' }], IsTruncated: false },
+    ];
+    const { client, sent } = fakeS3((command) => (command.name === ListObjectVersionsCommand.name ? pages[sent.filter((s) => s.name === command.name).length - 1] : {}));
+    const store = new S3ArchiveStore({ client, bucket: 'b', lockMode: 'COMPLIANCE', retentionDays: 1 });
+    // The oldest of the key's own versions, not of a key it prefixes, and across pages.
+    expect(await store.writtenAt('restores/v1/000000000001.json')).toEqual(at(10));
+    expect(sent.map((s) => s.input)).toEqual([
+      { Bucket: 'b', Prefix: 'restores/v1/000000000001.json', KeyMarker: undefined, VersionIdMarker: undefined },
+      { Bucket: 'b', Prefix: 'restores/v1/000000000001.json', KeyMarker: 'k', VersionIdMarker: 'v' },
+    ]);
+    sent.length = 0;
+    expect(await store.versionCounts('restores/v1/')).toEqual(
+      new Map([
+        ['restores/v1/000000000001.json', 3],
+        ['restores/v1/000000000001.json.bak', 1],
+        ['restores/v1/000000000002.json', 1],
+      ]),
+    );
+    // A key with no version has no write time.
+    const empty = new S3ArchiveStore({ client: fakeS3(() => ({ Versions: [], IsTruncated: false })).client, bucket: 'b', lockMode: 'COMPLIANCE', retentionDays: 1 });
+    expect(await empty.writtenAt('chain/v1/000000000009.json')).toBeNull();
   });
 });
 
@@ -938,6 +976,41 @@ describe('series highs and the restore report (#2007)', () => {
     // Without it coming back, the same acknowledgement excuses the four rows.
     const clean = await verifyArchive(dbOf({ batches, recorded: 5, present: { [EPOCH]: entryOf(batches, 1) } }), writableStore(batches, acks));
     expect(clean).toMatchObject({ ok: true, excused: 4 });
+  });
+
+  it('never excuses silently: reports the count and the acknowledgement in force, says when it is new, and fails a key with two versions (#2020)', async () => {
+    const batches = restoreChain();
+    const lost = batches[1]!.rows.map(([ref]): [number, string] => [2, ref]);
+    const answer = (previous: string | null) => {
+      const calls: unknown[][] = [];
+      const db = fakeDb((query) => {
+        if (query.sql.includes('archive_verified(')) {
+          calls.push([...query.parameters]);
+          return [{ previous }];
+        }
+        if (query.sql.includes('archive_batches()')) {
+          return batches.map((b) => ({ seq: String(b.seq), window_from: new Date(b.window.from), window_to: new Date(b.window.to), chain_sha256: b.chainSha256, object_key: archiveKey(b.seq) }));
+        }
+        const [from, to] = query.parameters as [string, string];
+        if (query.sql.includes('archive_series_highs(')) return EPOCH >= from && EPOCH < to ? [highAnswer(high('5'))] : [];
+        if (query.sql.includes('archive_row_hashes(')) return EPOCH >= from && EPOCH < to ? keptRows.map(([ref, row_sha256]) => ({ ref, row_sha256 })) : [];
+        return [];
+      });
+      return { db, calls };
+    };
+    const store = () => writableStore(batches, ackChain(batches, [{ refs: lost }]));
+    const first = answer(null);
+    expect(await verifyArchive(first.db, store())).toMatchObject({ ok: true, excused: lost.length, restoreAck: 1, newRestoreAck: true });
+    // The run records the count and the sequence.
+    expect(first.calls[0]?.slice(4)).toEqual([lost.length, 1]);
+    // An acknowledgement an earlier run already recorded is not new.
+    expect(await verifyArchive(answer('1').db, store())).toMatchObject({ ok: true, restoreAck: 1, newRestoreAck: false });
+    // Without one, nothing is excused and nothing is new.
+    expect(await verifyArchive(answer(null).db, writableStore(batches))).toMatchObject({ excused: 0, restoreAck: null, newRestoreAck: false });
+
+    // A batch or an acknowledgement with a second version (a PUT over it, or a delete) is a finding.
+    const versioned = { ...store(), versionCounts: async (prefix: string) => new Map(prefix === 'chain/v1/' ? [[archiveKey(2), 2]] : [[restoreAckKey(1), 1]]) };
+    expect((await verifyArchive(answer('1').db, versioned)).problems).toContainEqual({ code: 'object_versions', seq: 0, ref: archiveKey(2) });
   });
 
   it('accepts a row lost with a time before the backup point, as a transaction still open at the backup is (#2020)', async () => {
