@@ -330,7 +330,13 @@ export function checkEnv(env: Env): CheckResult[] {
         ]),
     // The worker on the SDK's default credential chain (no S3_ACCESS_KEY_ID) and the prober opted in to the same chain
     // (#2109): on one host that almost certainly means the prober runs under the worker's role, which writes the archive.
-    ...(value(env, 'ARCHIVE_STORE') === 's3' && value(env, 'S3_ACCESS_KEY_ID') === undefined && value(env, 'PROBER_ARCHIVE_S3_DEFAULT_CHAIN') === 'true'
+    // Not beside a failure of those settings, nor when the prober has a pair of its own (both are reported on their own).
+    ...(!alerts.some((problem) => problem !== null) &&
+    value(env, 'ARCHIVE_STORE') === 's3' &&
+    value(env, 'S3_ACCESS_KEY_ID') === undefined &&
+    value(env, 'PROBER_ARCHIVE_S3_DEFAULT_CHAIN') === 'true' &&
+    value(env, 'PROBER_ARCHIVE_S3_ACCESS_KEY_ID') === undefined &&
+    value(env, 'PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY') === undefined
       ? [
           {
             item: 'Alerts',

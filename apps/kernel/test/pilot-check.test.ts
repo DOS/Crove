@@ -157,6 +157,11 @@ describe('pilot-check settings', () => {
     expect(manual({ ...shared, PROBER_ARCHIVE_S3_DEFAULT_CHAIN: undefined })).toHaveLength(1);
     expect(manual({ ...shared, PROBER_ARCHIVE_S3_DEFAULT_CHAIN: 'false' })).toHaveLength(1);
     expect(manual({ ...shared, ARCHIVE_STORE: 'local' })).toHaveLength(1);
+    // Not beside the failures it would only repeat: a pair of its own with the opt-in (refused), no bucket, a bad endpoint.
+    const reader = { PROBER_ARCHIVE_S3_ACCESS_KEY_ID: fake('reader'), PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY: fake('reader-secret') };
+    expect(manual({ ...shared, ...reader })).toHaveLength(1);
+    expect(manual({ ...shared, ARCHIVE_S3_BUCKET: undefined })).toHaveLength(1);
+    expect(manual({ ...shared, S3_ENDPOINT: 'not a url' })).toHaveLength(1);
   });
 
   it('requires backups in a second location over https, apart from the files bucket (issues #307, #351)', () => {
