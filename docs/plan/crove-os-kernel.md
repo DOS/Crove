@@ -1874,7 +1874,7 @@ Build: TS domain + `post_journal_entry` (SQL) + fast-check + TT133 B01/B02 on sa
 
 ### Phase 2b: Finance A2 (starts when e-invoice issuing and bank connectors are ready, in `crove-cloud` or via DOS-18/19; 8 weeks)
 
-**Scope:** e-invoice issuing (covers timeout -> `ambiguous` -> reconciliation); bank API; Ask-the-books; chat dock on `crove-stream`; SSE.
+**Scope:** e-invoice issuing (covers timeout -> `ambiguous` -> reconciliation); bank API (bank feed connectors: [ADR-0039](../adr/0039-bank-feed-connectors.md), proposed; #2044, #2045); Ask-the-books; chat dock on `crove-stream`; SSE.
 
 **Exit criteria:**
 - A timeout injected mid-flight never causes duplicate issuance.
@@ -2098,6 +2098,7 @@ ADRs live in `docs/adr/`, using the MADR template. They keep the "why"; this pla
 | [0036](../adr/0036-assisted-tax-portal-sync.md) | Assisted purchase-invoice sync from the tax portal (#325): the accountant types the client's portal password and solves the CAPTCHA in Crove; the API logs in and seals only the portal's session for the browser (bound to user, org and period, 20 minutes); the list goes through the import path and the XML through the upload path; egress to one fixed origin through the egress guard; off unless `TAX_PORTAL_SYNC=true` | Accepted 2026-10-23 (owner decision on #325) |
 | [0037](../adr/0037-private-notes-and-todos.md) | Private notes and to-dos of the `notes` module ([notes.md](notes.md), #1649): read by their author only, enforced by restrictive policies on the sealed context with the system context kept out except through named definers; a leaving member's private items sealed 30 days then deleted; private items out of the org export; the PDPL finder sees counts, never text | Accepted by the owner 2026-10-28 (proposed 2026-10-27, decisions N-2 to N-6 of the plan) |
 | [0038](../adr/0038-staff-actor-and-support-grants.md) | The staff actor and support grants (#1950): staff on a control-plane allowlist act only through a `staff` command-line tool on their own login role (`crove_staff`), with their own `aal2` token on every action; they reach an org's data only under an owner-issued, time-limited, revocable `support_grant` (read-only by default), never as a member; every staff action in an org is an audit row the owner sees; the database owner's "staff writes aside" exemptions do not apply to them | Proposed 2026-10-30; owner decisions S-1 to S-7 pending |
+| [0039](../adr/0039-bank-feed-connectors.md) | Bank feed connectors (#2044, #2045): a bank-feed port in `modules/finance` through which statement files and API feeds store the same bank lines with the ADR-0021 keys; read-only provider adapters behind a capability interface with the channel layer's connections, sealed credentials and egress allowlist; switched on per deployment and per org; Tingee first, in the core or in Crove Cloud as the owner decides | Proposed 2026-10-30 |
 
 **To write** (the ones the External-tenant gate depends on first):
 
