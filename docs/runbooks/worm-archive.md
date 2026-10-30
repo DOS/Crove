@@ -154,9 +154,16 @@ A restore brings the database back to its backup point. The archive store is not
       - a row it lost lies in a batch that ended more than an hour before the backup point. The hour covers the archive lag and a transaction still open at the backup.
 
       A deletion fails it. For example, the database owner forgets the newest batches in `archive_batch` and deletes a row, the newer rows still there. Batch windows are checked by their time, so the rows a version's first batch took in from the epoch do not count.
+    - **The acknowledgements form a chain**, checked whole before any is trusted:
+      - sequences 1, 2, ... with no gap, each with the sha256 of the one before;
+      - each bound to the store's newest batch when it was written: it names that batch and its chain hash, and the batch after it must have been written later, by the store's own clock. That is S3's `LastModified`, which the writer cannot set; it is the file's time on `local`.
+      - each carries the restores of the one before it, or some of them, and at most one of its own, ending at its own newest batch. It may drop excuses of earlier restores, never add any.
+
+      A break anywhere is `restore_ack_unreadable` or `restore_ack_mismatch`, and then no acknowledgement is in force: nothing is excused.
     - **What is left:**
-      - With the real backup point, a row can only be excused if it was lost with everything after the point, which is what a restore does, and the report lists every row.
-      - Someone who can write the store, and also delete rows, could write an acknowledgement with a point of their choosing. That hides the deletion of a row from the last hour of the archive at most, and only together with everything after it.
+      - **The last hour before a backup point.** A row stamped less than `RESTORE_SLACK_MS` (an hour) before the point, in the restore's own batches, counts as lost with the restore. Someone who deletes such a row in the restored database between the restore and its check gets it excused with the rest. `restore.sh` runs the check right after the restore, before the stack starts.
+      - **Store and database access together.** Someone who can both write the store and delete database rows can write an acknowledgement bound to the newest batch at that moment, with a point of their choosing. It is excused only if the database holds no archived row stamped from that point to the newest batch, and if the first lost row is less than an hour before the point. So it can only cover wiping every row since the point, which is what a real restore looks like. Each new acknowledgement shows in the store, and the verifier's `excused` count changes. Under GOVERNANCE, deleting the newest acknowledgement with the bypass permission is not detected by the chain alone. That is the same as for the newest batches; use COMPLIANCE in production.
+      - **A clock behind after a restore.** If the restored cluster's clock is behind the old one, rows written after the restore can be stamped before the end of the restore's newest batch. They then read as rows kept past the backup point: a false `restore_ack_mismatch`, and the restore's rows are no longer excused. Fix the clock, as for the ledger stamps ([ledger-after-restore.md](ledger-after-restore.md), step 2). The rows stamped in the wrong window stay, so raise it on #2020.
   - What to do with the report is in [ledger-after-restore.md](ledger-after-restore.md), step 4.
 - **Run it again by hand at any time.** It reads only, unless `--reseed` (and `--acknowledge --backup-point <the backup's SNAPSHOT_AT>`) is given:
 

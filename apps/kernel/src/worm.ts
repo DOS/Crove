@@ -39,11 +39,12 @@
 //   - local: read-only files under ARCHIVE_DIR, written create-only. It keeps the same chain and catches edits made in
 //     the database, but whoever controls the host can rewrite it; use s3 in production (docs/runbooks/worm-archive.md).
 import { createHash, randomUUID } from 'node:crypto';
-import { link, mkdir, readFile, readdir, unlink, writeFile } from 'node:fs/promises';
+import { link, mkdir, readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import {
   GetObjectCommand,
   GetObjectLockConfigurationCommand,
+  HeadObjectCommand,
   ListObjectsV2Command,
   PutObjectCommand,
   type S3Client,
@@ -74,6 +75,9 @@ export interface ArchiveStore {
   get(key: string): Promise<Uint8Array | null>;
   // Every key under the prefix, in key order.
   list(prefix: string): Promise<string[]>;
+  // When the store wrote the object, by its own clock, or null when there is none: S3's LastModified, which the writer
+  // cannot set, or the file's modification time. The restore acknowledgements are checked against it (#2020).
+  writtenAt?(key: string): Promise<Date | null>;
   describe(): string;
 }
 
@@ -122,6 +126,15 @@ export class LocalArchiveStore implements ArchiveStore {
       throw error;
     });
     return names.map((name) => `${prefix}${name}`).sort();
+  }
+
+  async writtenAt(key: string): Promise<Date | null> {
+    try {
+      return (await stat(join(this.dir, key))).mtime;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw error;
+    }
   }
 
   describe(): string {
@@ -198,6 +211,17 @@ export class S3ArchiveStore implements ArchiveStore {
       token = page.IsTruncated ? page.NextContinuationToken : undefined;
     } while (token);
     return keys.sort();
+  }
+
+  async writtenAt(key: string): Promise<Date | null> {
+    try {
+      const answer = await this.client.send(new HeadObjectCommand({ Bucket: this.bucket, Key: key }));
+      return answer.LastModified ?? null;
+    } catch (error) {
+      const status = (error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode;
+      if (status === 404) return null;
+      throw error;
+    }
   }
 
   describe(): string {
@@ -531,12 +555,22 @@ export interface ArchiveVerification {
 // the backup point to the end of batch last, and batch first ends less than RESTORE_SLACK_MS before the point (a row
 // lost with a time before the point is one of a transaction still open at the backup, or archived late). A row
 // deleted on its own, newer rows still there, is never excused, whoever wrote the acknowledgement.
+// Acknowledgements form a chain, checked whole before any is trusted (restoreAckChain): sequences 1..n with no gap,
+// each with the sha256 of the one before (prevSha256), each bound to the store's newest batch when it was written
+// (batchesAtRestore, with that batch's chain hash): the batch after it must have been written later than the
+// acknowledgement, by the store's own clock, so one written later naming an older batch fails. Each carries the
+// restores of the one before it, or some of them, and at most one of its own, which ends at its own batchesAtRestore;
+// it may drop excuses of earlier restores, never add any.
 export const RESTORE_ACK_PREFIX = 'restores/v1/';
 
 export interface RestoreAck {
   format: 'crove-restore-ack';
   version: 1;
   sequence: number;
+  // The sha256 of the previous acknowledgement's bytes (GENESIS_SHA256 for the first), and the chain hash of batch
+  // batchesAtRestore.
+  prevSha256: string;
+  lastChainSha256: string;
   acknowledgedAt: string;
   recordedAtRestore: number;
   batchesAtRestore: number;
@@ -557,6 +591,8 @@ function parseRestoreAck(bytes: Uint8Array): RestoreAck | null {
     const value = JSON.parse(new TextDecoder().decode(bytes)) as RestoreAck;
     if (!value || value.format !== 'crove-restore-ack' || value.version !== 1 || typeof value.acknowledgedAt !== 'string') return null;
     if (!Number.isSafeInteger(value.sequence) || value.sequence < 1) return null;
+    if (typeof value.prevSha256 !== 'string' || !/^[0-9a-f]{64}$/.test(value.prevSha256)) return null;
+    if (typeof value.lastChainSha256 !== 'string' || !/^[0-9a-f]{64}$/.test(value.lastChainSha256) || value.batchesAtRestore < 1) return null;
     if (!Number.isSafeInteger(value.recordedAtRestore) || !Number.isSafeInteger(value.batchesAtRestore) || value.recordedAtRestore < 0) return null;
     if (value.batchesAtRestore < value.recordedAtRestore || !Array.isArray(value.refs) || !Array.isArray(value.intervals)) return null;
     const intervals = value.intervals.every(
@@ -581,24 +617,56 @@ function parseRestoreAck(bytes: Uint8Array): RestoreAck | null {
   }
 }
 
-// The newest acknowledgement in the store, and the objects it cannot read (an object under a key that does not match
-// its own sequence included). Any unreadable one is a problem: the verifier and the restore check fail on it.
-async function latestRestoreAck(store: ArchiveStore): Promise<{ ack: RestoreAck | null; problems: ArchiveProblem[] }> {
-  let latest: RestoreAck | null = null;
-  const problems: ArchiveProblem[] = [];
-  for (const key of await store.list(RESTORE_ACK_PREFIX)) {
-    const bytes = await store.get(key);
-    const ack = bytes ? parseRestoreAck(bytes) : null;
-    if (!ack || key !== restoreAckKey(ack.sequence)) {
-      problems.push({ code: 'restore_ack_unreadable', seq: 0, ref: key });
-      continue;
-    }
-    if (!latest || ack.sequence > latest.sequence) latest = ack;
-  }
-  return { ack: latest, problems };
+const refKey = ([seq, ref]: [number, string]) => `${seq} ${ref}`;
+
+// Whether an acknowledgement is bound to the store's newest batch when it was written: batch batchesAtRestore holds
+// its chain hash, and the batch after it, if any, was written no earlier than the acknowledgement, by the store's own
+// clock. A store that cannot tell when it wrote an object cannot bind one.
+async function ackBound(store: ArchiveStore, key: string, ack: RestoreAck): Promise<boolean> {
+  if (!store.writtenAt) return false;
+  const bytes = await store.get(archiveKey(ack.batchesAtRestore));
+  const batch = bytes ? parseBatch(bytes) : null;
+  if (!batch || batch.chainSha256 !== ack.lastChainSha256) return false;
+  const written = await store.writtenAt(key);
+  if (!written) return false;
+  const next = await store.writtenAt(archiveKey(ack.batchesAtRestore + 1));
+  return next === null || next.getTime() >= written.getTime();
 }
 
-const refKey = ([seq, ref]: [number, string]) => `${seq} ${ref}`;
+// Whether an acknowledgement follows the one before it: every restore it carries is one of the previous one's, but at
+// most one of its own, which ends at its batchesAtRestore; every row it names in an earlier restore, the previous one
+// named too; and the store had not shrunk.
+function ackFollows(ack: RestoreAck, previous: RestoreAck | null): boolean {
+  const before = new Set((previous?.intervals ?? []).map((i) => JSON.stringify(i)));
+  const own = ack.intervals.filter((i) => !before.has(JSON.stringify(i)));
+  if (own.length > 1 || own.some(([, last]) => last !== ack.batchesAtRestore)) return false;
+  if (previous && ack.batchesAtRestore < previous.batchesAtRestore) return false;
+  const named = new Set((previous?.refs ?? []).map(refKey));
+  const inOwn = ([s]: [number, string]) => own.some(([a, b]) => s >= a && s <= b);
+  return ack.refs.every((r) => inOwn(r) || named.has(refKey(r)));
+}
+
+// The acknowledgement in force: the newest of a chain that holds whole, with the sha256 of its bytes. Any break (a
+// gap, an object that does not parse, a broken link, one not bound to its newest batch, one that adds to an earlier
+// restore) is a problem, and then none is in force: nothing is excused.
+async function restoreAckChain(store: ArchiveStore): Promise<{ ack: RestoreAck | null; sha256: string; problems: ArchiveProblem[] }> {
+  const keys = await store.list(RESTORE_ACK_PREFIX);
+  let previous: RestoreAck | null = null;
+  let prevSha = GENESIS_SHA256;
+  for (const [i, key] of keys.entries()) {
+    const bytes = key === restoreAckKey(i + 1) ? await store.get(key) : null;
+    const ack = bytes ? parseRestoreAck(bytes) : null;
+    if (!bytes || !ack || ack.sequence !== i + 1 || ack.prevSha256 !== prevSha) {
+      return { ack: null, sha256: prevSha, problems: [{ code: 'restore_ack_unreadable', seq: 0, ref: key }] };
+    }
+    if (!ackFollows(ack, previous) || !(await ackBound(store, key, ack))) {
+      return { ack: null, sha256: prevSha, problems: [{ code: 'restore_ack_mismatch', seq: 0, ref: key }] };
+    }
+    previous = ack;
+    prevSha = createHash('sha256').update(bytes).digest('hex');
+  }
+  return { ack: previous, sha256: prevSha, problems: [] };
+}
 
 // Whether a restore still reads as one (see RestoreAck): batch first ends less than RESTORE_SLACK_MS before its backup
 // point, and the database holds no row of any kind the archive anchors stamped from the backup point to the end of
@@ -652,7 +720,7 @@ export async function verifyArchive(db: Db, store: ArchiveStore): Promise<Archiv
   // The rows restores lost, as the newest acknowledgement names them (#2020). A missing row (or a series high with
   // another hash) it names waits in `listed` until every batch is read: its excuse holds only if its restore still
   // reads as one (restoreHolds).
-  const acks = await latestRestoreAck(store);
+  const acks = await restoreAckChain(store);
   for (const problem of acks.problems) note(problem);
   const excuses = new Set((acks.ack?.refs ?? []).map(refKey));
   const listed: Array<{ seq: number; ref: string; code: 'row_missing' | 'row_changed' }> = [];
@@ -825,7 +893,7 @@ export interface RestoreReport {
   // The restores that acknowledgement carries, each [first batch with a lost row, newest batch then, backup point]
   // (#2020); this restore's only when its backup point was given.
   acknowledgedIntervals: RestoreInterval[];
-  latestAck: { sequence: number; intervals: RestoreInterval[]; refs: Array<[number, string]> } | null;
+  latestAck: { sequence: number; sha256: string; intervals: RestoreInterval[]; refs: Array<[number, string]> } | null;
   // Anything else the archive check found (a broken chain, a changed row, a recorded batch the store lacks).
   problems: ArchiveProblem[];
 }
@@ -894,7 +962,7 @@ export async function restoreReport(db: Db, store: ArchiveStore, options: { back
   const missingNow = new Set<string>();
   const windows = new Map<number, ArchiveBatch['window']>();
   const missingRecorded: Array<[number, string]> = [];
-  const acks = await latestRestoreAck(store);
+  const acks = await restoreAckChain(store);
   problems.push(...acks.problems);
   let auditEvents = 0;
   let prev = GENESIS_SHA256;
@@ -1051,7 +1119,7 @@ export async function restoreReport(db: Db, store: ArchiveStore, options: { back
     lostRefs,
     acknowledgedRefs: [...new Map([...carriedRefs, ...lostRefs].map((r) => [refKey(r), r])).values()].sort(byBatchRef),
     acknowledgedIntervals: intervals,
-    latestAck: acks.ack ? { sequence: acks.ack.sequence, intervals: acks.ack.intervals, refs: acks.ack.refs } : null,
+    latestAck: acks.ack ? { sequence: acks.ack.sequence, sha256: acks.sha256, intervals: acks.ack.intervals, refs: acks.ack.refs } : null,
     problems,
   };
 }
@@ -1081,10 +1149,19 @@ export async function acknowledgeRestore(db: Db, store: ArchiveStore, report: Re
   let key = latest ? restoreAckKey(latest.sequence) : null;
   const sameIntervals = JSON.stringify(latest?.intervals ?? []) === JSON.stringify(report.acknowledgedIntervals);
   if (!same(latest?.refs ?? [], report.acknowledgedRefs) || !sameIntervals) {
+    // Bound to the store's newest batch: no batch may be written until the batches after the backup point are recorded
+    // below (restore.sh runs this with the worker stopped).
+    const newest = await store.get(archiveKey(report.batches));
+    const newestBatch = newest ? parseBatch(newest) : null;
+    if (!newestBatch || (await store.list(ARCHIVE_PREFIX)).length !== report.batches) {
+      throw new Error("the store's newest batch moved since the report; run the restore check again with the worker stopped");
+    }
     const ack: RestoreAck = {
       format: 'crove-restore-ack',
       version: 1,
       sequence: (latest?.sequence ?? 0) + 1,
+      prevSha256: latest?.sha256 ?? GENESIS_SHA256,
+      lastChainSha256: newestBatch.chainSha256,
       acknowledgedAt: now.toISOString(),
       recordedAtRestore: report.recorded,
       batchesAtRestore: report.batches,
