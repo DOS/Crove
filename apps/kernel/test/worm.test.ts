@@ -23,6 +23,7 @@ import {
   RESTORE_ACK_PREFIX,
   restoreAckAlert,
   restoreAckKey,
+  restoreAckStoreAlert,
   restoreReport,
   verifyArchive,
   writeArchive,
@@ -1033,6 +1034,15 @@ describe('series highs and the restore report (#2007)', () => {
     expect(failing.problems).toContainEqual({ code: 'object_versions', seq: 0, ref: archiveKey(2) });
     expect(failing).toMatchObject({ ok: false, alertRestoreAck: true });
     expect(new ArchiveMismatchError(failing).message).toContain('restore acknowledgement #1 in force');
+
+    // The alert the worker posts before the run reads the database comes from the store alone: the newest object, by
+    // key, while recent, even one that does not parse.
+    expect(await restoreAckStoreAlert(store(), at(1))).toContain(`restore acknowledgement ${restoreAckKey(1)}, written ${written.toISOString()}`);
+    expect(await restoreAckStoreAlert(store(), at(15))).toBeNull();
+    expect(await restoreAckStoreAlert(writableStore(batches), at(1))).toBeNull();
+    expect(await restoreAckStoreAlert(writableStore(batches, { [restoreAckKey(1)]: 'not json' }), at(1))).toContain(restoreAckKey(1));
+    const { writtenAt: _blindAt, ...blindStore } = store();
+    expect(await restoreAckStoreAlert(blindStore, at(30))).toContain('at a time the store cannot tell');
   });
 
   it('accepts a row lost with a time before the backup point, as a transaction still open at the backup is (#2020)', async () => {

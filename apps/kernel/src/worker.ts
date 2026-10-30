@@ -39,7 +39,16 @@ import { RETENTION_CRON, RETENTION_TZ, expireExports, runRetention, sweepInbound
 import { NOTES_REMIND_CRON, NOTES_TRASH_CRON, NOTES_TRASH_TZ, queueNotesMemberPurge, runNotesMemberPurge, sweepNotesFormerMembers, sweepNotesReminders, sweepNotesTrash, type NotesMemberPurgeJob } from './notes-worker.ts';
 import { PERIOD_BALANCE_VERIFY_CRON, runPeriodBalanceReconciliation } from './period-balance.ts';
 import { runYearArchive } from './year-archive.ts';
-import { ARCHIVE_VERIFY_CRON, ARCHIVE_WRITE_CRON, ArchiveMismatchError, restoreAckAlert, verifyArchive, writeArchive, type ArchiveStore } from './worm.ts';
+import {
+  ARCHIVE_VERIFY_CRON,
+  ARCHIVE_WRITE_CRON,
+  ArchiveMismatchError,
+  restoreAckAlert,
+  restoreAckStoreAlert,
+  verifyArchive,
+  writeArchive,
+  type ArchiveStore,
+} from './worm.ts';
 import type { SessionRevoker, SignOutTarget } from './sessions.ts';
 import { opsAlert } from './ops-alert.ts';
 
@@ -792,8 +801,12 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       // The verifier reads every batch and row, so its time grows with the archive: logged on every run.
       const started = Date.now();
       const elapsed = () => `${Math.round((Date.now() - started) / 1000)} s`;
+      const alertOptions = deps.archive?.restoreAlertDays === undefined ? {} : { restoreAlertDays: deps.archive.restoreAlertDays };
       try {
-        const result = await verifyArchive(deps.workerDb, store, deps.archive?.restoreAlertDays === undefined ? {} : { restoreAlertDays: deps.archive.restoreAlertDays });
+        // First, from the store alone, before any database query: a run the database owner stops has alerted already.
+        const early = await restoreAckStoreAlert(store, alertOptions);
+        if (early) opsAlert(`[archive] ALERT ${early}`);
+        const result = await verifyArchive(deps.workerDb, store, alertOptions);
         // An excuse is never silent (#2020): every run says what a restore acknowledgement excused, and a recent one, by
         // the store's own write time, alerts on every run, passing or failing, so an operator matches it to a real
         // restore and a webhook down for a night loses nothing.

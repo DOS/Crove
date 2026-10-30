@@ -940,6 +940,18 @@ export class ArchiveMismatchError extends Error {
   }
 }
 
+// What the worker alerts before a verification run reads the database (#2020): the newest object under restores/v1/, by
+// key, when the store wrote it within restoreAlertDays, read from the store alone. So a run the database owner stops,
+// kills or locks has alerted already. The object need not parse: one that does not is a finding of the run too.
+export async function restoreAckStoreAlert(store: ArchiveStore, options: { restoreAlertDays?: number; now?: () => Date } = {}): Promise<string | null> {
+  const newest = (await store.list(RESTORE_ACK_PREFIX)).at(-1);
+  if (!newest) return null;
+  const written = store.writtenAt ? await store.writtenAt(newest) : null;
+  const now = (options.now ?? (() => new Date()))().getTime();
+  if (written && now - written.getTime() >= (options.restoreAlertDays ?? RESTORE_ACK_ALERT_DAYS) * 86_400_000) return null;
+  return `restore acknowledgement ${newest}, written ${written ? written.toISOString() : 'at a time the store cannot tell'}, is in the WORM archive: match it to a restore incident (docs/runbooks/worm-archive.md)`;
+}
+
 // What the worker alerts while a restore acknowledgement is recent (#2020), in a passing run or a failing one; the worker
 // posts it as its own ALERT line through opsAlert.
 export function restoreAckAlert(result: ArchiveVerification): string | null {
