@@ -53,7 +53,10 @@ test('sign up, upload an e-invoice, approve it, then find it in the lists, the e
     await expect(page.getByText('einvoice-basic.xml')).toBeVisible();
     // The worker reads the XML and raises the proposal; the Inbox polls every few seconds.
     await expect(page.getByRole('link', { name: SELLER })).toBeVisible({ timeout: 60_000 });
-    await expect(page.getByText('Đã có đề xuất')).toBeVisible();
+    // The file says its proposal waits for a person, in the proposal's words (#2009), in the upload panel and the
+    // recent files.
+    await expect(page.getByTestId('intake-item').filter({ hasText: 'einvoice-basic.xml' })).toContainText('Chờ duyệt');
+    await expect(page.getByTestId('recent-file').filter({ hasText: 'einvoice-basic.xml' })).toContainText('Chờ duyệt');
   });
 
   await test.step('open the proposal and approve it', async () => {
@@ -86,6 +89,8 @@ test('sign up, upload an e-invoice, approve it, then find it in the lists, the e
     // The Inbox says what the approval did, in its button's verb (#1384).
     await expect(page.getByRole('status').filter({ hasText: `Đã duyệt và ghi sổ ${SELLER}` })).toBeVisible();
     await expect(page.getByText('Không có đề xuất nào chờ duyệt')).toBeVisible();
+    // Posted now: the file says so, no longer waiting (#2009).
+    await expect(page.getByTestId('recent-file').filter({ hasText: 'einvoice-basic.xml' })).toContainText('Đã ghi sổ');
     await page.getByRole('tab', { name: 'Đã ghi sổ' }).click();
     await expect(page.getByRole('link', { name: SELLER })).toBeVisible();
   });

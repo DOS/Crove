@@ -524,6 +524,7 @@ export function InboxPage() {
             {files.data?.slice(0, 8).map((file) => (
               <span
                 key={file.id}
+                data-testid="recent-file"
                 className="inline-flex max-w-full items-center gap-2 rounded-lg border bg-card px-2.5 py-1.5 text-xs"
                 title={file.error ?? undefined}
               >
