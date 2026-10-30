@@ -471,6 +471,107 @@ suite('ledger reports per month, quarter or year (#321)', () => {
     expect(await statementAudits()).toHaveLength(1);
   });
 
+  // The comparison columns (#2090): B01's start of year and B02 against the same period last year or the period before.
+  // An org of its own with invoices in two years, each 1,800,000 of expense on 24: 2025 has May (Q2) and December;
+  // 2026 has three in the first quarter and two in the second. The figures the columns carry are the ones the same
+  // statements show for those periods.
+  let twoYears: OrgRef | null = null;
+  async function twoYearOrg(): Promise<OrgRef> {
+    if (twoYears) return twoYears;
+    const created = await rpc('org/create', await tokenFor(owner), { name: 'Công ty hai năm', idempotencyKey: randomUUID() }, null);
+    expect(created.status).toBe(200);
+    const fresh = { slug: String(created.body?.slug), orgId: String(created.body?.orgId) };
+    for (const [number, date] of [
+      ['2501', '2025-05-10'],
+      ['2502', '2025-12-15'],
+      ['2601', '2026-01-10'],
+      ['2602', '2026-02-10'],
+      ['2603', '2026-03-10'],
+      ['2604', '2026-05-12'],
+      ['2605', '2026-06-20'],
+    ] as const) {
+      await record(fresh, owner, number, date);
+    }
+    twoYears = fresh;
+    return fresh;
+  }
+  const byCode = (lines: StatementLine[]) => Object.fromEntries(lines.map((l) => [l.code, l.amount]));
+  const statementsOf = async (period: string, slug: string) => {
+    const response = await rpc('ledger/statements', await tokenFor(owner), { period }, slug);
+    expect(response.status, period).toBe(200);
+    return response.body;
+  };
+
+  it("shows B01's start of year as the previous year's closing B01, and B02 of a year against the previous year", async () => {
+    const { slug } = await twoYearOrg();
+    const year = await statementsOf('2026', slug);
+    const previousYear = await statementsOf('2025', slug);
+    // Each column also carries the warnings of its own period's statement (B01 balanced, balances no line reads).
+    expect(year.comparison.startOfYear).toEqual({ asOf: '2025-12-31', amounts: byCode(previousYear.b01.lines), balanced: previousYear.b01.balanced, unmapped: previousYear.b01.unmapped.length });
+    expect(year.comparison.lastYear).toEqual({ period: '2025', from: '2025-01-01', to: '2025-12-31', amounts: byCode(previousYear.b02.lines), unmapped: previousYear.b02.unmapped.length });
+    expect(year.comparison.startOfYear).toMatchObject({ balanced: true, unmapped: 0 });
+    // A year has no period before it: its previous year is the comparison.
+    expect(year.comparison.previous).toBeNull();
+    // The figures themselves: two invoices stood at the end of 2025 and five were booked in 2026.
+    expect(year.comparison.startOfYear.amounts).toMatchObject({ '181': '360000', '311': '3960000', '417': '-3600000' });
+    expect(year.comparison.lastYear.amounts['24']).toBe('3600000');
+    expect(byCode(year.b02.lines)['24']).toBe('9000000');
+    // The first of these tests books the org's seven invoices.
+  }, 120_000);
+
+  it('reads a quarter against the same quarter last year and, as the other choice, the quarter before', async () => {
+    const { slug } = await twoYearOrg();
+    const quarter = await statementsOf('2026-Q2', slug);
+    const { lastYear, previous, startOfYear } = quarter.comparison;
+    expect(lastYear).toMatchObject({ period: '2025-Q2', from: '2025-04-01', to: '2025-06-30' });
+    expect(previous).toMatchObject({ period: '2026-Q1', from: '2026-01-01', to: '2026-03-31' });
+    expect(startOfYear.asOf).toBe('2025-12-31');
+    expect(lastYear.amounts).toEqual(byCode((await statementsOf('2025-Q2', slug)).b02.lines));
+    expect(previous.amounts).toEqual(byCode((await statementsOf('2026-Q1', slug)).b02.lines));
+    // One invoice in Q2 2025, three in Q1 2026 and two in Q2 2026: the two choices differ.
+    expect([lastYear.amounts['24'], previous.amounts['24'], byCode(quarter.b02.lines)['24']]).toEqual(['1800000', '5400000', '3600000']);
+  });
+
+  it('reads a month across the year end, an empty earlier period as zeros', async () => {
+    const { slug } = await twoYearOrg();
+    const january = await statementsOf('2026-01', slug);
+    // The month before January is last December; January last year had nothing booked.
+    expect(january.comparison.previous).toMatchObject({ period: '2025-12', from: '2025-12-01', to: '2025-12-31' });
+    expect(january.comparison.previous.amounts['24']).toBe('1800000');
+    expect(january.comparison.lastYear).toMatchObject({ period: '2025-01' });
+    expect(january.comparison.lastYear.amounts['24']).toBe('0');
+    const first = await statementsOf('2026-Q1', slug);
+    expect(first.comparison.previous).toMatchObject({ period: '2025-Q4' });
+    expect(first.comparison.previous.amounts['24']).toBe('1800000');
+  });
+
+  it('shows zeros for an org with no earlier year, and no column before the first year the ledger accepts', async () => {
+    // The org of this file has entries from August 2026 only: nothing in 2025, so the year's columns read 0, never an error.
+    const year = await statementsOf('2026', org.slug);
+    expect(year.comparison.startOfYear.asOf).toBe('2025-12-31');
+    expect(Object.keys(year.comparison.startOfYear.amounts).length).toBeGreaterThan(10);
+    expect(Object.values(year.comparison.startOfYear.amounts).every((amount) => amount === '0')).toBe(true);
+    expect(Object.values(year.comparison.lastYear.amounts).every((amount) => amount === '0')).toBe(true);
+    // September: the period before holds August's invoice, the same month last year nothing.
+    const september = await statementsOf('2026-09', org.slug);
+    expect(september.comparison.previous).toMatchObject({ period: '2026-08' });
+    expect(september.comparison.previous.amounts['24']).toBe('1800000');
+    expect(Object.values(september.comparison.lastYear.amounts).every((amount) => amount === '0')).toBe(true);
+    // Before the first year the ledger accepts (2000) there is no earlier period to read.
+    for (const period of ['2000', '2000-01', '2000-Q1']) {
+      const first = await statementsOf(period, org.slug);
+      expect(first.comparison, period).toEqual({ startOfYear: null, lastYear: null, previous: null });
+    }
+    expect((await statementsOf('2000-06', org.slug)).comparison).toMatchObject({ startOfYear: null, lastYear: null, previous: { period: '2000-05' } });
+  });
+
+  it('exports the compared statements to Excel (the columns themselves are checked in statements-export.test.ts)', async () => {
+    const { slug } = await twoYearOrg();
+    const response = await statementsFile(await tokenFor(owner), '2026-Q2', slug);
+    expect(response.status).toBe(200);
+    expect(Array.from(new Uint8Array(await response.arrayBuffer()).subarray(0, 4))).toEqual([0x50, 0x4b, 0x03, 0x04]);
+  });
+
   // The year's statements as HTKK XML (issue #920); the layout itself is unit-tested in
   // modules/finance/test/statements-htkk-xml.test.ts.
   const htkkFile = async (token: string, year: string, slug = org.slug) =>
