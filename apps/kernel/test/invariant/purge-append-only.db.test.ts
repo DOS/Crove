@@ -4,8 +4,9 @@
 // and a DELETE unless it runs as the owner of crove_kernel.org_purge with the purge's mark naming the row's org, on
 // the worker login, in that org's system context, while the org offboards. This suite reaches the guard as that owner
 // through a probe definer created and rolled back inside each transaction, so a refusal comes from the guard and not
-// from a missing grant, and checks each condition on its own against a probe that passes. It also holds that the
-// guard sits on these two tables only, and that no function but org_purge deletes from them: the guard's first check
+// from a missing grant, and checks each condition on its own against a probe that passes, the owner check with a
+// probe of another role that may delete the rows. It also holds that the guard sits on these two tables only, and that
+// no function but org_purge deletes from them, by name or through a table name it is handed: the guard's first check
 // means "running as org_purge's owner", which owns most definers. Keep this directory self-contained: import code under
 // test, never helpers from outside test/invariant/. Set CROVE_TEST_ADMIN_URL to a superuser URL; each run creates and
 // drops its own database.
@@ -86,7 +87,7 @@ suite('the org purge alone deletes task comments and post approvals (#1032, #201
   // Runs `statement` ($1 = the target org, none when null) inside a probe definer owned by org_purge's owner, with the purge's mark set
   // to `mark` (or cleared), from the given session, in one transaction rolled back afterwards. Returns the rows the
   // statement changed, or the error's message.
-  async function probe(session: Session, mark: string | null, statement: string, target: string | null): Promise<string> {
+  async function probe(session: Session, mark: string | null, statement: string, target: string | null, owner: 'purger' | 'other' = 'purger'): Promise<string> {
     return withClient(adminUrl, async (c) => {
       await c.query('BEGIN');
       try {
@@ -99,8 +100,15 @@ suite('the org purge alone deletes task comments and post approvals (#1032, #201
             GET DIAGNOSTICS v_n = ROW_COUNT;
             RETURN v_n;
           END $$`);
-        const owner = (await c.query<{ owner: string }>(`SELECT proowner::regrole::text AS owner FROM pg_proc WHERE oid = 'crove_kernel.org_purge(integer)'::regprocedure`)).rows[0]?.owner;
-        await c.query(`ALTER FUNCTION crove_kernel.t2011_probe(text, text, uuid) OWNER TO ${owner}`);
+        let role = (await c.query<{ owner: string }>(`SELECT proowner::regrole::text AS owner FROM pg_proc WHERE oid = 'crove_kernel.org_purge(integer)'::regprocedure`)).rows[0]?.owner;
+        if (owner === 'other') {
+          // Another role that may read and delete the rows past their row policies, rolled back with the rest.
+          role = `t2011_other_${randomUUID().slice(0, 8)}`;
+          await c.query(`CREATE ROLE ${role} NOLOGIN BYPASSRLS`);
+          await c.query(`GRANT USAGE ON SCHEMA crove_kernel, crove_social TO ${role}`);
+          await c.query(`GRANT SELECT, UPDATE, DELETE ON ${GUARDED.join(', ')} TO ${role}`);
+        }
+        await c.query(`ALTER FUNCTION crove_kernel.t2011_probe(text, text, uuid) OWNER TO ${role}`);
         await c.query(`GRANT EXECUTE ON FUNCTION crove_kernel.t2011_probe(text, text, uuid) TO ${session.login}`);
         await c.query(`SET SESSION AUTHORIZATION ${session.login}`);
         const context = session.context;
@@ -163,8 +171,9 @@ suite('the org purge alone deletes task comments and post approvals (#1032, #201
       // The probe passes when every condition holds, so each refusal below is the guard's.
       expect([table, await probe(worker(a.orgId), a.orgId, remove(table), a.orgId)]).toEqual([table, '1 row(s)']);
 
-      const refused: Array<[string, Session, string | null, string, string]> = [
+      const refused: Array<[string, Session, string | null, string, string, ('purger' | 'other')?]> = [
         ['no mark', worker(a.orgId), null, remove(table), a.orgId],
+        ["a definer of another role than org_purge's owner", worker(a.orgId), a.orgId, remove(table), a.orgId, 'other'],
         ['a mark naming another org', worker(a.orgId), b.orgId, remove(table), a.orgId],
         ["another org's rows, under its mark, from this org's context", worker(a.orgId), b.orgId, remove(table), b.orgId],
         ["another org's rows, under this org's mark", worker(a.orgId), a.orgId, remove(table), b.orgId],
@@ -174,8 +183,8 @@ suite('the org purge alone deletes task comments and post approvals (#1032, #201
         ['an org that is not offboarding', worker(live.orgId), live.orgId, remove(table), live.orgId],
         ['an UPDATE under every other condition', worker(a.orgId), a.orgId, change(table), a.orgId],
       ];
-      for (const [label, session, mark, statement, target] of refused) {
-        expect([table, label, await probe(session, mark, statement, target)]).toEqual([table, label, expect.stringMatching(APPEND_ONLY)]);
+      for (const [label, session, mark, statement, target, owner] of refused) {
+        expect([table, label, await probe(session, mark, statement, target, owner)]).toEqual([table, label, expect.stringMatching(APPEND_ONLY)]);
       }
     }
 
@@ -218,18 +227,26 @@ suite('the org purge alone deletes task comments and post approvals (#1032, #201
     }
   });
 
+  // Read from each function's whole definition, so a SQL-standard body counts too. A static DELETE names the table; a
+  // dynamic one takes it as an argument of format() (org_purge's own table lists), so no other function may build a
+  // DELETE of a table it is handed. Not covered: a DELETE built by concatenation, or a cascade from a parent table
+  // (today only crove_kernel.tenant, whose rows tenant_no_delete keeps).
   it('has no function but org_purge delete from task comments or post approvals', async () => {
-    const deleters = await withClient(adminUrl, async (c) =>
-      (
-        await c.query<{ fn: string }>(
-          `SELECT p.oid::regprocedure::text AS fn FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-           WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND p.prosrc IS NOT NULL
-             AND p.prosrc ~* $1
-           ORDER BY 1`,
-          [`delete\\s+from\\s+(only\\s+)?"?(crove_kernel"?\\s*\\.\\s*"?task_comment|crove_social"?\\s*\\.\\s*"?post_approval)\\M`],
-        )
-      ).rows.map((r) => r.fn),
-    );
-    expect(deleters).toEqual(['crove_kernel.org_purge(integer)']);
+    const deleters = (pattern: string) =>
+      withClient(adminUrl, async (c) =>
+        (
+          await c.query<{ fn: string }>(
+            `SELECT p.oid::regprocedure::text AS fn FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+             WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND p.prokind IN ('f', 'p')
+               AND pg_get_functiondef(p.oid) ~* $1
+             ORDER BY 1`,
+            [pattern],
+          )
+        ).rows.map((r) => r.fn),
+      );
+    expect(await deleters(String.raw`delete\s+from\s+(only\s+)?"?(crove_kernel"?\s*\.\s*"?task_comment|crove_social"?\s*\.\s*"?post_approval)\M`)).toEqual([
+      'crove_kernel.org_purge(integer)',
+    ]);
+    expect(await deleters(String.raw`delete\s+from\s+(only\s+)?%`)).toEqual(['crove_kernel.org_purge(integer)']);
   });
 });
