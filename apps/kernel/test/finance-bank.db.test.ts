@@ -727,4 +727,23 @@ suite('bank statement import (#326)', () => {
       await apiLogin.end();
     }
   });
+
+  // #2079: a mapping that row security hides from the caller (here a test policy; in the books, another entity's rows)
+  // answers like a visible one in another entity, not a generic conflict.
+  it('answers BANK_FEED_ACCOUNT_MAPPED for an account whose mapping the caller cannot see', async () => {
+    const connectionId = String((await feed('connectSandbox', owner, { displayName: 'Ngân hàng ẩn' })).body.connectionId);
+    await sync(connectionId);
+    const entity = await defaultEntity();
+    const at = (account: string) => ({ connectionId, externalAccountId: account, bankAccount: '1121', legalEntityId: entity, idempotencyKey: randomUUID() });
+    expect((await feed('map', owner, at('SBX-001'))).status).toBe(200);
+    await admin((c) => c.query(`CREATE POLICY crove_test_hidden_2079 ON crove_finance.bank_feed_account AS RESTRICTIVE FOR SELECT TO crove_tenant USING (external_account_id <> 'SBX-001')`));
+    try {
+      expect(await feed('map', owner, at('SBX-001'))).toMatchObject({ status: 409, body: { code: 'BANK_FEED_ACCOUNT_MAPPED' } });
+      // Another account of the connection maps as usual, and the one mapping stays.
+      expect((await feed('map', owner, at('SBX-002'))).status).toBe(200);
+    } finally {
+      await admin((c) => c.query('DROP POLICY IF EXISTS crove_test_hidden_2079 ON crove_finance.bank_feed_account'));
+    }
+    expect((await feed('accounts', owner)).body.filter((a: { connectionId: string }) => a.connectionId === connectionId)).toHaveLength(2);
+  });
 });

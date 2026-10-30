@@ -71,6 +71,9 @@ export const bankFeedMap = defineCommand({
       await ctx.trx.updateTable('crove_finance.bank_feed_account').set({ bank_account: input.bankAccount }).where('org_id', '=', ctx.orgId).where('id', '=', existing.id).execute();
       feedAccountId = existing.id;
     } else {
+      // Under the account's lock the lookup above has seen every mapping the caller may read. A conflict here is a
+      // mapping row row security hides from the caller (in another entity's books): the same answer as a visible one in
+      // another entity, never a generic conflict, and nothing says which entity holds it (#2079).
       const inserted = await ctx.trx
         .insertInto('crove_finance.bank_feed_account')
         .values({
@@ -81,8 +84,10 @@ export const bankFeedMap = defineCommand({
           bank_account: input.bankAccount,
           created_by: ctx.actor.type === 'user' ? ctx.actor.userId : null,
         })
+        .onConflict((oc) => oc.columns(['org_id', 'channel_connection_id', 'external_account_id']).doNothing())
         .returning('id')
-        .executeTakeFirstOrThrow();
+        .executeTakeFirst();
+      if (!inserted) throw new DomainError('BANK_FEED_ACCOUNT_MAPPED', 409, 'Tài khoản này đã gắn với một pháp nhân khác; hãy gỡ liên kết trước');
       feedAccountId = inserted.id;
     }
     ctx.audit({ feedAccountId, connectionId: connection.id, provider: connection.provider, bankAccount: input.bankAccount, legalEntityId, remapped: Boolean(existing) });
