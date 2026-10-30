@@ -185,7 +185,13 @@ suite('a kill switch per relay type on PostgreSQL (#1696)', () => {
     return (await pending()).filter((id) => !before.has(id));
   };
   // What a statement touched, from this transaction's own table statistics: the outbox_event probes (one per pending
-  // row whose type is looked up) and the outbox_pending rows read and updated.
+  // row whose type is looked up) and the outbox_pending rows read and updated. Counted on the index path (#2074): the
+  // claim's walk and the lag read the unmarked rows through outbox_pending_held_seq (held_type, seq), which is what keeps
+  // them off the marked backlog, but with the table's statistics a step behind its rows (an analyze that ran before
+  // the backlog was marked, by autovacuum at any moment under CI load) the planner may scan the whole table instead,
+  // and the counts measured the plan, not the claim. Sequential scans are off in the measured transaction, so the
+  // counts show what the claim's own queries reach; a claim that walked the backlog through the index would still be
+  // caught.
   const touched = async <T>(c: pg.Client, run: () => Promise<T>) => {
     const stats = async () =>
       Object.fromEntries(
@@ -199,6 +205,7 @@ suite('a kill switch per relay type on PostgreSQL (#1696)', () => {
       ) as Record<'outbox_event' | 'outbox_pending', { scans: number; rows: number; updated: number }>;
     await c.query('BEGIN');
     try {
+      await c.query('SET LOCAL enable_seqscan = off');
       const start = await stats();
       const result = await run();
       const end = await stats();
@@ -218,7 +225,35 @@ suite('a kill switch per relay type on PostgreSQL (#1696)', () => {
   const claimIn = (c: pg.Client, limit = 100) =>
     c.query<{ event_id: string; type: string }>('SELECT event_id, type FROM crove_kernel.outbox_claim($1)', [limit]).then((r) => r.rows);
 
-  it('passes a large held backlog without walking it on every claim (#1713)', async () => {
+  // Fresh statistics for the outbox, as autovacuum would take them, and an analyzer that keeps taking them in the
+  // background while the test runs, at any point of it, as autovacuum does under CI load (#2074).
+  const analyze = () => admin((c) => c.query('ANALYZE crove_kernel.outbox_pending, crove_kernel.outbox_event'));
+  const analyzing = () => {
+    let on = true;
+    const done = (async () => {
+      while (on) {
+        await analyze();
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+    })();
+    return async () => {
+      on = false;
+      await done;
+    };
+  };
+  // Rounds of the backlog test: 1 in every run, 20 to show it stable (#2074).
+  const ROUNDS = 20;
+
+  it('passes a large held backlog without walking it on every claim (#1713)', { timeout: 600_000 }, async () => {
+    const stop = analyzing();
+    try {
+      for (let round = 0; round < ROUNDS; round++) await backlogRound();
+    } finally {
+      await stop();
+    }
+  });
+
+  async function backlogRound() {
     await drain();
     const BACKLOG = 2000;
     await set(`relay:${HELD}`, true);
@@ -235,6 +270,7 @@ suite('a kill switch per relay type on PostgreSQL (#1696)', () => {
     // From then on a claim reaches newer rows of other types, and a newer held row, without touching the marked backlog.
     const others = [await add(OTHER), await add(OTHER), await add(OTHER)];
     const lateHeld = await add(HELD);
+    await analyze();
     const next = await asWorker((c) => touched(c, () => claimIn(c)));
     expect(next.result).toEqual(others.map((event_id) => ({ event_id, type: OTHER })));
     expect(next.event.scans).toBeLessThan(20);
@@ -284,7 +320,7 @@ suite('a kill switch per relay type on PostgreSQL (#1696)', () => {
     await set(`relay:${KEEP}`, false);
     expect(await claim()).toEqual([kept, ...again].map((event_id) => ({ event_id, type: KEEP })));
     expect(await pending()).toEqual([]);
-  });
+  }
 
   // Claims until a pass comes back empty, at `limit` rows a pass; returns what each pass claimed.
   const passes = async (limit: number) => {
