@@ -1,7 +1,7 @@
 // oRPC implementation of @crove/kernel-contract. Handlers only call the runtime (execute/query).
 import { implement, ORPCError } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
-import { OAUTH_MAX_ACCOUNTS_PER_GRANT, contract, isBankFeedProviderId, zChannelConnection } from '@crove/kernel-contract';
+import { OAUTH_MAX_ACCOUNTS_PER_GRANT, contract } from '@crove/kernel-contract';
 import { sandboxBankFeed } from '@crove/bank-feed';
 import { BlueskyError, ConnectorError, blueskyLogin, connectBluesky, connectDiscord, connectMastodon, connectTelegram, connectWordPress, discordLogin, mastodonLogin, telegramLogin, wordpressLogin, newOAuthAttempt, oauthStateHash, sandbox, type OAuthConnector } from '@crove/channel';
 import {
@@ -1220,12 +1220,7 @@ export function createRpcHandler(
       },
     },
     channels: {
-      // Social and messaging channels: a bank feed's connection is the finance screens' (bankFeeds), not a channel to post to.
-      list: os.channels.list.handler(({ context, input }) =>
-        inOrg(context, async (orgId, actor) =>
-          (await runtime.query<Array<z.infer<typeof zChannelConnection>>>('kernel.channel.list', input, { actor, orgId })).filter((c) => !isBankFeedProviderId(c.provider)),
-        ),
-      ),
+      list: os.channels.list.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.query('kernel.channel.list', input, { actor, orgId }))),
       // The token is made and sealed here and only the envelope reaches the command. No idempotency key: every seal
       // differs, and connecting the same sandbox key again is already a reconnect of the same account.
       connectSandbox: os.channels.connectSandbox.handler(({ context, input }) =>
