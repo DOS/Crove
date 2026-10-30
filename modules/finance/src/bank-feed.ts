@@ -154,6 +154,23 @@ export const bankFeedListed = defineQuery({
   },
 });
 
+// The mapped accounts of a connection and where each one's next pull starts, for the worker's sync.
+export const bankFeedPullDue = defineQuery({
+  name: 'finance.bank_feed.pull_due',
+  input: z.object({ connectionId: zId }),
+  access: 'system',
+  handler: async (ctx, input): Promise<Array<{ feedAccountId: string; externalAccountId: string; cursor: string | null }>> => {
+    const rows = await ctx.trx
+      .selectFrom('crove_finance.bank_feed_account')
+      .select(['id', 'external_account_id', 'cursor'])
+      .where('org_id', '=', ctx.orgId)
+      .where('channel_connection_id', '=', input.connectionId)
+      .orderBy('external_account_id')
+      .execute();
+    return rows.map((r) => ({ feedAccountId: r.id, externalAccountId: r.external_account_id, cursor: r.cursor }));
+  },
+});
+
 export const bankFeedRecordAccounts = defineCommand({
   name: 'finance.bank_feed.record_accounts',
   input: zBankFeedRecordAccounts,
@@ -220,4 +237,4 @@ export const bankFeedRecordPull = defineCommand({
 });
 
 export const bankFeedCommands = [bankFeedMap, bankFeedUnmap, bankFeedRecordAccounts, bankFeedRecordPull];
-export const bankFeedQueries = [bankFeedAccounts, bankFeedListed];
+export const bankFeedQueries = [bankFeedAccounts, bankFeedListed, bankFeedPullDue];

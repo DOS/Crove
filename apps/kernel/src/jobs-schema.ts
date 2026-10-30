@@ -60,6 +60,8 @@ export const QUEUES = {
   notesTrash: 'notes-trash',
   // Created by the notes reminders migration (20261103210000).
   notesRemind: 'notes-reminders',
+  // Created by the bank feed sync migration (20261108080000): a bank feed connection's sync (ADR-0039, #2044).
+  bankFeedSync: 'finance-bank-feed-sync',
   // Created by the dead letter migration (20261103150000): every other queue's dead letters (#1720, dead-letter.ts).
   deadLetter: 'kernel-job.dlq',
 } as const;
@@ -128,6 +130,9 @@ const QUEUE_EGRESS: { readonly [Q in QueueName]: JobEgress } = {
   [QUEUES.notesMemberPurge]: 'none',
   [QUEUES.notesTrash]: 'none',
   [QUEUES.notesRemind]: 'none',
+  // The bank feed adapters (channels.bankFeeds): the offline sandbox reaches nothing. A real adapter (#2045) adds its
+  // provider here, and to DEPS_REACH first.
+  [QUEUES.bankFeedSync]: 'none',
   [QUEUES.deadLetter]: 'none',
 };
 
