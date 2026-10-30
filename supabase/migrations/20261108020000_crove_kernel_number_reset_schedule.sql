@@ -33,10 +33,15 @@
 -- number_period_key and number_allocate follow the schedule and keep last_doc_date.
 --
 -- A schedule edited outside the definer would change the numbering without changing the '-' series' anchored reset, so
--- archive_series_misfits also reports a series whose last document date (when known) falls under a reset its period
--- key does not fit: the latest document a '-' series numbered must have been dated under 'never', a year's under
--- 'yearly'. For every series numbered under a schedule the definer wrote, and for every series when there is none,
--- this holds; the reset in force on a date is the reset of the series that date's documents went to.
+-- archive_series_misfits also checks what the archive anchors for a doc type that has a schedule: each cash or journal
+-- voucher of one of its series, whose date (version 2 rows) and number period (version 4 rows) are anchored, must have
+-- the period key the schedule gives its date. A switch written into a year a '-' series already numbered makes that
+-- series a misfit, whatever last_doc_date says (it is not anchored). As a second check, without the archive's anchor,
+-- a series whose last document date (when known) falls under a reset its period key does not fit is reported too.
+-- For every series numbered under a schedule the definer wrote, and for every series when there is none, both hold.
+--
+-- Locks: the ALTER TABLE ... ADD COLUMN statements and the backfill hold an exclusive lock on number_series and
+-- number_series_policy while they run (a few rows per org at pilot size); lock_timeout bounds the wait for them.
 SET LOCAL lock_timeout = '2s';
 
 ALTER TABLE crove_kernel.number_series_policy ADD COLUMN IF NOT EXISTS schedule jsonb NOT NULL DEFAULT '[]'::jsonb;
@@ -63,6 +68,14 @@ FROM (
   GROUP BY a.org_id, a.series_id
 ) d
 WHERE s.org_id = d.org_id AND s.id = d.series_id AND s.last_doc_date IS NULL;
+
+-- Series an earlier reseed raised (#2007) above their highest allocation, or created with none: the dates of the
+-- numbers between are not known here, so their last document date is 'infinity', which no allocation lowers.
+UPDATE crove_kernel.number_series s
+SET last_doc_date = 'infinity'
+WHERE s.next_number - 1 > coalesce(
+  (SELECT pg_catalog.max(a.number) FROM crove_kernel.number_allocation a WHERE a.org_id = s.org_id AND a.series_id = s.id), 0)
+  AND s.last_doc_date IS DISTINCT FROM 'infinity';
 
 -- The reset in force for a doc type on a date (see the header).
 CREATE OR REPLACE FUNCTION crove_kernel.number_reset_at(p_org_id uuid, p_legal_entity_id uuid, p_doc_type text, p_date date)
@@ -231,8 +244,8 @@ END $$;
 REVOKE ALL ON FUNCTION crove_kernel.archive_series_hashes(timestamptz, timestamptz) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION crove_kernel.archive_series_hashes(timestamptz, timestamptz) TO crove_worker;
 
--- As in 20261104190000, with the reset of the series (number_series_reset), and the reset in force on its last document
--- date (see the header).
+-- As in 20261104190000, with the reset of the series (number_series_reset), the anchored vouchers of a scheduled doc
+-- type, and the reset in force on its last document date (see the header).
 CREATE OR REPLACE FUNCTION crove_kernel.archive_series_misfits()
 RETURNS TABLE (ref text)
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
@@ -252,6 +265,17 @@ BEGIN
                    WHEN 'monthly' THEN s.period_key ~ '^[0-9]{4}-(0[1-9]|1[0-2])$'
                    ELSE s.period_key = '-'
                  END)
+     -- The anchored facts: a voucher of a scheduled doc type numbered in a period its date does not give.
+     OR EXISTS (
+       SELECT 1
+       FROM crove_kernel.number_series_policy p
+       JOIN crove_kernel.number_allocation a ON a.org_id = s.org_id AND a.series_id = s.id
+       LEFT JOIN crove_finance.cash_voucher c ON a.target_type = 'finance.cash_voucher' AND c.org_id = a.org_id AND c.id = a.target_id
+       LEFT JOIN crove_finance.journal_voucher j ON a.target_type = 'finance.journal_voucher' AND j.org_id = a.org_id AND j.id = a.target_id
+       WHERE p.org_id = s.org_id AND p.legal_entity_id = s.legal_entity_id AND p.doc_type = s.doc_type
+         AND p.schedule <> '[]'::jsonb
+         AND coalesce(c.voucher_date, j.voucher_date) IS NOT NULL
+         AND crove_kernel.number_period_key(s.org_id, s.legal_entity_id, s.doc_type, coalesce(c.voucher_date, j.voucher_date)) <> s.period_key)
   ORDER BY 1;
 END $$;
 REVOKE ALL ON FUNCTION crove_kernel.archive_series_misfits() FROM PUBLIC;

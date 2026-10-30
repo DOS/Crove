@@ -366,6 +366,8 @@ suite('gapless numbering on PostgreSQL (#1401)', () => {
     // From the switch on, each year starts at 1; a voucher dated before it continues the '-' series.
     expect(await post(owner, legacyOrg, 'journal', `${year + 1}-01-05`)).toMatchObject({ number: 1, period: String(year + 1) });
     expect(await post(owner, legacyOrg, 'journal', `${year}-12-20`)).toMatchObject({ number: 5, period: '-' });
+    // An earlier date after a later one: the series keeps its latest date (greatest).
+    expect(await post(owner, legacyOrg, 'journal', `${year}-03-01`)).toMatchObject({ number: 6, period: '-' });
     expect(await post(owner, legacyOrg, 'journal', `${year + 1}-02-01`)).toMatchObject({ number: 2, period: String(year + 1) });
     // Now that year has numbers, its switch stays.
     await expect(schedule(owner, { docType: doc, reset: 'monthly', from: from(year + 1) })).rejects.toMatchObject({ code: 'CONFLICT' });
@@ -400,7 +402,8 @@ suite('gapless numbering on PostgreSQL (#1401)', () => {
       { period_key: '-', reset: 'never', last_doc_date: `${year}-12-20` },
       { period_key: String(year + 1), reset: 'yearly', last_doc_date: `${year + 1}-02-01` },
     ]);
-    // A switch written outside the definer into a year the '-' series already numbered: that series is a misfit now.
+    // A switch written outside the definer into a year the '-' series already numbered, with the series' last document
+    // date cleared too (it is not anchored): the vouchers the archive anchors make that series a misfit.
     const tampered = await admin(async (c) => {
       await c.query('BEGIN');
       try {
@@ -409,6 +412,7 @@ suite('gapless numbering on PostgreSQL (#1401)', () => {
           doc,
           JSON.stringify([{ from: from(year), reset: 'yearly' }]),
         ]);
+        await c.query(`UPDATE crove_kernel.number_series SET last_doc_date = NULL WHERE org_id = $1 AND doc_type = $2`, [legacyOrg, doc]);
         await c.query('SET SESSION AUTHORIZATION crove_worker');
         return (await c.query<{ ref: string }>('SELECT ref FROM crove_kernel.archive_series_misfits()')).rows.map((r) => r.ref).filter((ref) => ref.includes(legacyOrg));
       } finally {
