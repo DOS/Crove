@@ -24,6 +24,7 @@ import { Markdown } from '../lib/markdown.tsx';
 import { applyFormat, shortcutFormat, type MarkdownFormat } from '../lib/markdown-edit.ts';
 import { createAutosaver, type Autosaver, type NoteValues, type SaveState } from '../lib/note-autosave.ts';
 import { notesMarkdown, saveText } from '../lib/notes-export.ts';
+import { toast } from '../lib/toast.ts';
 import { listOfNote, looksLikePassword, parseTags, tagCounts, type NotesSearch } from '../lib/notes.ts';
 
 const SAVE_AFTER_MS = 800;
@@ -73,6 +74,7 @@ function Editor({
   onTag: (tag: string) => void;
 }) {
   const t = useTranslations('notes');
+  const common = useTranslations('common');
   const f = useFormat();
   const navigate = useNavigate();
   const [values, setValues] = useState<NoteValues>(() => valuesOf(note));
@@ -165,7 +167,34 @@ function Editor({
       setConfirmShare(false);
       if (action === 'share' || action === 'unshare') saver.setRevision(done.revision);
       void refreshNotes();
-      if (action === 'delete' || action === 'archive') void navigate({ to: '/o/$slug/notes', params: { slug }, search: back });
+      if (action === 'delete' || action === 'archive') {
+        const going = navigate({ to: '/o/$slug/notes', params: { slug }, search: back });
+        // Undo (DESIGN.md §4.5, #2003) reverses only the state this action set. Restore clears the archive and the trash
+        // at once, so the other one, as the note has it when the undo runs, is set again: a note archived before it went
+        // to the trash goes back to the archive, and one moved to the trash after it was archived stays there.
+        const ref = { noteId: note.id };
+        const undo = async () => {
+          let keep: 'archive' | 'delete' | null = null;
+          try {
+            const now = await api.notes.get(ref);
+            keep = action === 'delete' ? (now.archivedAt !== null ? 'archive' : null) : now.deletedAt !== null ? 'delete' : null;
+            await api.notes.restore(ref);
+          } catch (error) {
+            toast(common('undoFailed', { reason: errorMessage(error) }), 'error');
+            void refreshNotes();
+            return;
+          }
+          try {
+            if (keep) await api.notes[keep](ref);
+            toast(t('undoneToast'));
+          } catch (error) {
+            toast(t('undonePartly', { reason: errorMessage(error) }), 'error');
+          } finally {
+            void refreshNotes();
+          }
+        };
+        toast(action === 'archive' ? t('archivedToast') : t('deletedToast'), 'success', { holdUntil: going, action: { label: common('undo'), run: () => void undo() } });
+      }
     },
   });
   const blocked = act.isPending || state === 'saving';

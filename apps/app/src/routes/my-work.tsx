@@ -23,11 +23,29 @@ import { DateInput } from '../components/date-input.tsx';
 import { TimeInput } from '../components/time-input.tsx';
 import { Empty, ErrorText, ListSkeleton, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
-import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
+import { client, clientForOrg, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { SAFETY_POLL_MS, pollEvery, useStreamLive } from '../lib/stream-hook.ts';
+import { toast } from '../lib/toast.ts';
 import { browserTimeZone, groupTodos, handOverDescription, moveTarget, myWorkShortcut, stepSelection, type MyWorkAction } from '../lib/my-work.ts';
 
 const refresh = () => void queryClient.invalidateQueries({ queryKey: orpc.notes.todos.key() });
+
+// A result toast in the action's verb with an undo (DESIGN.md §4.5, #2003): the undo runs the inverse command, says it
+// did, or why it could not, and reads the lists again. The inverse goes to the org the action ran in (clientForOrg),
+// since the toast outlives a switch to another org.
+function toastWithUndo(said: string, undone: string, inverse: () => Promise<unknown>, labels: { undo: string; failed: (reason: string) => string }) {
+  const undo = async () => {
+    try {
+      await inverse();
+      toast(undone);
+    } catch (error) {
+      toast(labels.failed(errorMessage(error)), 'error');
+    } finally {
+      refresh();
+    }
+  };
+  toast(said, 'success', { action: { label: labels.undo, run: () => void undo() } });
+}
 type Chart = Awaited<ReturnType<typeof orpc.chart.get.call>>;
 // The most to-dos one list shows; a longer list says so.
 const LIST_LIMIT = 500;
@@ -160,7 +178,9 @@ function TaskRow({ task, slug, chart }: { task: MyWorkTask; slug: string; chart:
 // reminder had it turned off (or its time had passed when it was written). Untouched, the box sends nothing and the
 // server keeps the reminder, moving an automatic one with the due day; a time picked elsewhere stays.
 function TodoEditor({ todo, onClose }: { todo: Todo; onClose: () => void }) {
+  const { slug } = useParams({ strict: false }) as { slug: string };
   const t = useTranslations('myWork');
+  const common = useTranslations('common');
   const f = useFormat();
   const [title, setTitle] = useState(todo.title);
   const [details, setDetails] = useState(todo.details);
@@ -206,6 +226,10 @@ function TodoEditor({ todo, onClose }: { todo: Todo; onClose: () => void }) {
     onSuccess: () => {
       refresh();
       onClose();
+      toastWithUndo(t('deletedToast', { title: todo.title }), t('undoneToast', { title: todo.title }), () => clientForOrg(slug).notes.todos.restore({ todoId: todo.id }), {
+        undo: common('undo'),
+        failed: (reason) => common('undoFailed', { reason }),
+      });
     },
   });
   const addStep = () => {
@@ -366,6 +390,7 @@ function QuickAdd({ inputRef }: { inputRef: RefObject<HTMLInputElement | null> }
 export function MyWorkPage() {
   const { slug } = useParams({ strict: false }) as { slug: string };
   const t = useTranslations('myWork');
+  const common = useTranslations('common');
   const f = useFormat();
   const [view, setView] = useState<TodoListView>('open');
   const [selected, setSelected] = useState<string | null>(null);
@@ -386,7 +411,10 @@ export function MyWorkPage() {
   const order = useMemo(() => (view === 'open' ? groups.flatMap((g) => g.items.map((i) => i.id)) : todos.map((i) => i.id)), [view, groups, todos]);
 
   const act = useMutation({
-    mutationFn: (v: { what: 'complete' | 'reopen' | 'restore'; todoId: string } | { what: 'reorder'; todoId: string; place: 'before' | 'after'; anchorId: string }) => {
+    // A completion carries the to-do's title as shown when it was asked for: by the answer, the list may have moved on.
+    mutationFn: (
+      v: { what: 'complete'; todoId: string; title: string } | { what: 'reopen' | 'restore'; todoId: string } | { what: 'reorder'; todoId: string; place: 'before' | 'after'; anchorId: string },
+    ) => {
       switch (v.what) {
         case 'reorder':
           return client.notes.todos.reorder({ todoId: v.todoId, place: v.place, anchorId: v.anchorId });
@@ -398,6 +426,15 @@ export function MyWorkPage() {
           return client.notes.todos.restore({ todoId: v.todoId });
       }
     },
+    // Completing (the box or the X key) moves the to-do to Done: the toast says so and can open it again.
+    onSuccess: (_done, v) => {
+      if (v.what !== 'complete') return;
+      const { title } = v;
+      toastWithUndo(t('completedToast', { title }), t('undoneToast', { title }), () => clientForOrg(slug).notes.todos.reopen({ todoId: v.todoId }), {
+        undo: common('undo'),
+        failed: (reason) => common('undoFailed', { reason }),
+      });
+    },
     onSettled: refresh,
   });
 
@@ -408,7 +445,7 @@ export function MyWorkPage() {
       new: () => quickAdd.current?.focus(),
       next: () => setSelected(stepSelection(order, selected, 1)),
       previous: () => setSelected(stepSelection(order, selected, -1)),
-      ...(selected && view === 'open' ? { done: () => act.mutate({ what: 'complete', todoId: selected }) } : {}),
+      ...(selected && view === 'open' ? { done: () => act.mutate({ what: 'complete', todoId: selected, title: todos.find((x) => x.id === selected)?.title ?? '' }) } : {}),
       ...(selected && view === 'open' ? { edit: () => setEditing(selected) } : {}),
     };
   });
@@ -444,7 +481,7 @@ export function MyWorkPage() {
             checked={todo.status === 'done'}
             aria-label={todo.status === 'done' ? t('reopenTodo', { title: todo.title }) : t('completeTodo', { title: todo.title })}
             disabled={act.isPending}
-            onCheckedChange={(checked) => act.mutate({ what: checked === true ? 'complete' : 'reopen', todoId: todo.id })}
+            onCheckedChange={(checked) => act.mutate(checked === true ? { what: 'complete', todoId: todo.id, title: todo.title } : { what: 'reopen', todoId: todo.id })}
           />
         ) : view === 'open' || view === 'done' ? (
           // A handed-over to-do has no checkbox; the space keeps its title in line with the others.
