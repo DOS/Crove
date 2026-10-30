@@ -179,7 +179,7 @@ The first migration adds the CHECK `journal_entry_document_one_revision` to `cro
 - No code path has ever posted a document's revision 2, so the check should be empty.
 - A row it lists was written outside the posting path. Such a row would also count in the ledger while its document stays voided, out of the VAT working and the MISA exports.
 
-It must return no rows:
+Run it as the database owner. `journal_entry` is under tenant row-level security, so a login role without an org context sees no rows, and the check would pass falsely. On an environment without the column `source_revision` (before `20261031000000_crove_finance_source_revision.sql`), the query fails on the missing column: every entry there is revision 1, so there is nothing to check. It must return no rows:
 
 ```sql
 BEGIN READ ONLY;
