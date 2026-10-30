@@ -85,15 +85,13 @@ describe('unclassified invoice lines (#2091)', () => {
     expect(payload.checks.some((c) => c.id === 'accounts')).toBe(false);
   });
 
-  // The e-invoice fixture's line 3 ("Chiết khấu thương mại", TChat 3) matches no keyword: the invoice itself declares it a
-  // discount, so it keeps its built-in 6422 and the invoice stays approvable (the invariant suite approves that fixture).
-  it('keeps a declared discount line on its built-in 6422, classified', async () => {
+  // The e-invoice fixture's line 3 ("Chiết khấu thương mại", TChat 3) keeps its built-in 6422, covered by the db test that
+  // approves the fixture and by the l10n-vn test of bookableLines. A model reading a photo or PDF can set a line's
+  // nature, so there the same words stay unclassified: no injected "discount" can skip the review.
+  it('does not trust a discount nature a model read from a PDF', async () => {
     const payload = await propose(['Phí quảng cáo Google', 'Chiết khấu thương mại'], {}, { 2: 'discount' });
-    expect(payload.lines[1]).toMatchObject({ debitAccount: '6422', accountRule: { source: 'builtin' } });
-    expect(payload.checks.some((c) => c.id === 'accounts')).toBe(false);
-    // The same words on a line the invoice does not declare a discount are unclassified.
-    const plain = await propose(['Phí quảng cáo Google', 'Chiết khấu thương mại']);
-    expect(plain.lines[1]).toMatchObject({ debitAccount: UNCLASSIFIED_ACCOUNT_CODE, accountRule: { source: 'unclassified' } });
+    expect(payload.lines[1]).toMatchObject({ debitAccount: UNCLASSIFIED_ACCOUNT_CODE, accountRule: { source: 'unclassified' } });
+    expect(payload.checks.find((c) => c.id === 'accounts')).toMatchObject({ status: 'warn', params: { lines: '2' } });
   });
 
   it('keeps learned rules and the vendor default working: they classify the line', async () => {

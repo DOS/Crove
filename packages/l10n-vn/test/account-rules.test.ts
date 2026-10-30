@@ -117,7 +117,13 @@ describe('suggestDebitAccount order (#1399)', () => {
     expect(suggestion).toMatchObject({ account: UNCLASSIFIED_ACCOUNT, rule: { source: 'unclassified' } });
     expect(suggestion.reason).toContain('Chưa phân loại');
     // A line the invoice declares a discount is not a guess: it keeps its built-in 6422.
-    expect(suggestDebitAccount({ ...line('Chiết khấu thương mại'), nature: 'discount' }, null)).toMatchObject({ account: '6422', rule: { source: 'builtin' } });
+    const discount = { ...line('Chiết khấu thương mại'), nature: 'discount' as const };
+    expect(suggestDebitAccount(discount, null, [], true)).toMatchObject({ account: '6422', rule: { source: 'builtin' } });
+    // Only a nature the invoice declares counts: one a model read from a photo or PDF is unclassified.
+    expect(suggestDebitAccount(discount, null)).toMatchObject({ account: UNCLASSIFIED_ACCOUNT, rule: { source: 'unclassified' } });
+    const bySource = (source: 'einvoice_xml' | 'ai') => bookableLines({ source, lines: [{ ...discount, amount: '-200000' }] } as unknown as ParsedInvoice, null)[0];
+    expect(bySource('einvoice_xml')).toMatchObject({ debitAccount: '6422', accountRule: { source: 'builtin' } });
+    expect(bySource('ai')).toMatchObject({ debitAccount: UNCLASSIFIED_ACCOUNT, accountRule: { source: 'unclassified' } });
     // A learned rule, the vendor default and a built-in keyword still win over it, unchanged.
     expect(suggestDebitAccount(line('Khoản không rõ'), '156').rule.source).toBe('vendor_default');
     expect(suggestDebitAccount(line('Khoản không rõ'), null, [rule({ id: 'k', kind: 'keyword', text: 'khong ro', account: '5211' })]).rule.source).toBe('learned');

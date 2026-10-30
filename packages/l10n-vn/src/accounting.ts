@@ -141,7 +141,13 @@ const ASSET_PATTERN = /máy|thiết bị|xe |ô tô|laptop|máy tính|server|đi
 // keyword), the vendor's default account, a learned rule for every vendor, then the built-in keyword list. The
 // vendor's own rules come before its default: the default is one account for the whole vendor, and a vendor that sells
 // both goods and services needs its lines told apart.
-export function suggestDebitAccount(line: InvoiceLine, vendorDefault: string | null, rules: readonly LearnedRule[] = []): AccountSuggestion {
+export function suggestDebitAccount(
+  line: InvoiceLine,
+  vendorDefault: string | null,
+  rules: readonly LearnedRule[] = [],
+  // Whether the line's nature was declared by the invoice (an e-invoice's TChat) and not read by a model.
+  declared = false,
+): AccountSuggestion {
   const own = matchLearnedRule(line.description, rules, true);
   if (own) return learnedSuggestion(own);
   if (vendorDefault) return { account: vendorDefault, reason: 'Theo lần duyệt trước của nhà cung cấp này', rule: { source: 'vendor_default' } };
@@ -155,8 +161,9 @@ export function suggestDebitAccount(line: InvoiceLine, vendorDefault: string | n
     if (rule.pattern.test(line.description)) return { account: rule.account, reason: rule.reason, rule: builtin };
   }
   // A line the invoice itself declares a discount (TChat 3) is not a guess: it keeps the built-in account it always had,
-  // shown as built-in on the line, for the reviewer to change.
-  if (line.nature === 'discount') return { account: '6422', reason: 'Chiết khấu ghi giảm chi phí quản lý doanh nghiệp', rule: builtin };
+  // shown as built-in on the line, for the reviewer to change. A nature a model read from a photo or PDF is not a
+  // declaration (injected text could set it), so that line is unclassified like any other no rule matches.
+  if (declared && line.nature === 'discount') return { account: '6422', reason: 'Chiết khấu ghi giảm chi phí quản lý doanh nghiệp', rule: builtin };
   // No rule matched: never a guessed account (#2091). The line carries a placeholder no chart holds, which finance
   // refuses to post, so a reviewer has to choose the account. AI never picks it.
   return { account: UNCLASSIFIED_ACCOUNT, reason: UNCLASSIFIED_REASON, rule: { source: 'unclassified' } };
@@ -227,7 +234,7 @@ export function bookableLines(invoice: ParsedInvoice, vendorDefault: string | nu
   return invoice.lines
     .filter((l) => !money(lineContribution(l)).isZero())
     .map((l) => {
-      const suggestion = suggestDebitAccount(l, vendorDefault, rules);
+      const suggestion = suggestDebitAccount(l, vendorDefault, rules, invoice.source === 'einvoice_xml');
       return {
         lineNo: l.lineNo,
         description: l.description,
