@@ -129,7 +129,7 @@ docker compose exec db psql -U postgres -c "SELECT verified_at, ok, batches, row
    - Superuser sessions: `log_connections` and the database logs.
    - Changes to triggers: `ALTER TABLE ... DISABLE TRIGGER` shows in the logs when `log_statement` is `ddl`.
    - Host and bucket access logs.
-3. **For a `series_period_mismatch`, compare the series' `created_at` with the deploy of #1608 and with the doc type's `kernel.number.policy.set` audit events.** A series created before that deploy, next to a policy change at the same moment, is the #1607 race, not an edit: record it in the issue. Otherwise the reset was edited outside the command: restore the policy row from the last backup before the series and find who wrote it (step 2).
+3. **For a `series_period_mismatch`, compare the series' `created_at` with the deploy of #1608 and with the doc type's `kernel.number.policy.set` and `kernel.number.policy.schedule` audit events.** A scheduled switch (#1595) gives a year or month series the reset in force on the first day of its period, and the `-` series `never`. A series created before that deploy, next to a policy change at the same moment, is the #1607 race, not an edit: record it in the issue. Otherwise the reset was edited outside the command: restore the policy row from the last backup before the series and find who wrote it (step 2).
 4. **For a `row_changed` journal entry, compare the entry with the period's exports and the accountant's books.** The archive holds hashes, not values, so the correct values come from the last export or backup taken before the change.
 5. **Write it up in an issue (security label):** what changed, when it was noticed, what was restored.
 

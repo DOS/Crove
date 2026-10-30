@@ -24,7 +24,8 @@ async function font(weight: 400 | 600, text: string): Promise<ArrayBuffer> {
 export async function renderOgImage(dict: Dictionary): Promise<ImageResponse> {
   const text = [...new Set(`Ludy ludy.vn ${dict.hero.title} ${dict.footer.tagline}`)].join('');
   const [regular, semibold] = await Promise.all([font(400, text), font(600, text)]);
-  const mark = await readFile(join(process.cwd(), 'public', 'favicon.svg'), 'utf8');
+  // The dark mark, not favicon.svg: this image has a dark ground, and Satori ignores the color-scheme query inside that file.
+  const mark = await readFile(join(process.cwd(), 'public', 'brand', 'ludy-mark-dark.svg'), 'utf8');
   return new ImageResponse(
     (
       <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', padding: 72, background: '#141418', color: '#f6f6f8', fontFamily: 'Be Vietnam Pro' }}>

@@ -56,6 +56,8 @@ docker compose run --rm --no-deps worker restore-report --reseed --acknowledge -
 - A series the restore lost altogether is created again, with its archived id and key.
 - Each raise is one audited command (`kernel.number.reseed`, system actor), and it never lowers a number. Running it again changes nothing.
 - The numbers between the restored series and the new next number are the lost ones. They stay as the archive holds them, and the report names their allocations.
+- A series it raises or creates no longer knows the dates of its documents (its `last_doc_date` becomes `infinity`), so its document type's reset can no longer be switched from a future year (`kernel.number.policy.schedule`, #1595).
+- A switch scheduled after the backup point is lost with it: the reseed of a series that switch numbered then fails (`NUMBER_RESEED_PERIOD_MISFIT`). Schedule the switch again with `kernel.number.policy.schedule`, as the archive's audit event of it names, then run `--reseed` again.
 
 **Its exit code** (also the outcome of that step of `restore.sh`):
 

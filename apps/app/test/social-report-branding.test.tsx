@@ -36,8 +36,8 @@ const t = viMessages.social.reportBranding;
 const TOKEN = 'a'.repeat(43);
 // A PNG signature and a few bytes: what the page checks before it shows a logo.
 const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==';
-// The Crove mark's first path, which only the Crove logo draws.
-const CROVE_MARK = 'M141.5 33.7';
+// The spark of the Ludy mark, which only the Ludy logo draws.
+const LUDY_MARK = 'M71 0C73.27 15.5';
 
 const report = (brand: unknown) => ({
   org: 'Công ty Truyền thông Sao Mai',
@@ -84,9 +84,9 @@ describe('white-label client pages (#1053)', () => {
   });
   beforeEach(() => client.current.clear());
 
-  it('shows the report as today without branding: the Crove logo, the org line, no accent and no credit', () => {
+  it('shows the report as today without branding: the Ludy logo, the org line, no accent and no credit', () => {
     for (const html of [render('report', report(null)), render('report', report(undefined))]) {
-      expect(html).toContain(CROVE_MARK);
+      expect(html).toContain(LUDY_MARK);
       expect(html).toContain('Công ty Truyền thông Sao Mai');
       expect(html).not.toContain('--brand-accent');
       expect(html).not.toContain(t.madeWith);
@@ -94,9 +94,9 @@ describe('white-label client pages (#1053)', () => {
     }
   });
 
-  it('shows the agency logo, name and accent instead of the Crove logo, and the credit unless hidden', () => {
+  it('shows the agency logo, name and accent instead of the Ludy logo, and the credit unless hidden', () => {
     const html = render('report', report({ name: 'Sao Mai Agency', logo: PNG, accent: '#1d4ed8', hideCrove: false }));
-    expect(html).not.toContain(CROVE_MARK);
+    expect(html).not.toContain(LUDY_MARK);
     expect(html).toContain(`<img src="${PNG}" alt="Sao Mai Agency"`);
     expect(html).toContain('Sao Mai Agency');
     expect(html).toContain('--brand-accent:#1d4ed8');
@@ -104,7 +104,7 @@ describe('white-label client pages (#1053)', () => {
     expect(html).toContain(t.madeWith);
 
     const hidden = render('report', report({ name: null, logo: null, accent: null, hideCrove: true }));
-    expect(hidden).not.toContain(CROVE_MARK);
+    expect(hidden).not.toContain(LUDY_MARK);
     expect(hidden).not.toContain('Crove');
     // No name: the org's own, as text.
     expect(hidden).toContain('Công ty Truyền thông Sao Mai');
@@ -113,10 +113,10 @@ describe('white-label client pages (#1053)', () => {
 
   it('brands the review page the same way, and leaves it as today without branding', () => {
     const plain = render('review', review(null));
-    expect(plain).toContain(CROVE_MARK);
+    expect(plain).toContain(LUDY_MARK);
     expect(plain).not.toContain(t.madeWith);
     const branded = render('review', review({ name: 'Sao Mai Agency', logo: PNG, accent: '#1d4ed8', hideCrove: true }));
-    expect(branded).not.toContain(CROVE_MARK);
+    expect(branded).not.toContain(LUDY_MARK);
     expect(branded).not.toContain('Crove');
     expect(branded).toContain(`<img src="${PNG}"`);
     expect(branded).toContain('Sao Mai Agency');
@@ -137,9 +137,9 @@ describe('white-label client pages (#1053)', () => {
         </QueryClientProvider>,
       );
     };
-    expect(print(null)).toContain(CROVE_MARK);
+    expect(print(null)).toContain(LUDY_MARK);
     const branded = print({ name: 'Sao Mai Agency', logo: PNG, accent: '#1d4ed8', hideCrove: true, updatedAt: '2026-10-22T00:00:00.000Z' });
-    expect(branded).not.toContain(CROVE_MARK);
+    expect(branded).not.toContain(LUDY_MARK);
     expect(branded).toContain(`<img src="${PNG}"`);
     expect(branded).toContain('--brand-accent:#1d4ed8');
   });
