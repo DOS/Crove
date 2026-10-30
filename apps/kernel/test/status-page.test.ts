@@ -99,6 +99,8 @@ describe('prober', () => {
     dead_letter_count: 0,
     worker_heartbeat_age_seconds: 12,
     notify_queue_usage: 0,
+    archive_verify_age_seconds: null,
+    archive_lag_seconds: null,
   };
   const config = (overrides: Partial<ProberConfig> = {}): ProberConfig => ({
     databaseUrl: 'postgres://crove_prober:pw@db:5432/postgres',

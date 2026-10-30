@@ -143,6 +143,33 @@ suite('prober on PostgreSQL', () => {
     }
   });
 
+  it('measures the WORM archive: since its last verification (or first batch) and the oldest row not yet archived (#1997)', async () => {
+    // Audit events of the org setup, and no batch yet: nothing to verify, every row waiting.
+    const before = await readHealth(proberUrl, 3600);
+    expect(before.archive_verify_age_seconds).toBeNull();
+    expect(before.archive_lag_seconds).toBeGreaterThanOrEqual(0);
+    const hash = 'a'.repeat(64);
+    await admin(async (c) => {
+      // A first batch written two days ago whose window reaches past now: every row anchored.
+      await c.query(
+        `INSERT INTO crove_kernel.archive_batch (seq, window_from, window_to, row_count, batch_sha256, chain_sha256, object_key, written_at)
+         VALUES (1, '-infinity', now() + interval '1 hour', 0, $1, $1, 'chain/v1/000000000001.json', now() - interval '2 days')`,
+        [hash],
+      );
+    });
+    const anchored = await readHealth(proberUrl, 3600);
+    expect(anchored.archive_lag_seconds).toBeNull();
+    // Never verified: aged from the first batch, two days, over a 26-hour limit.
+    expect(anchored.archive_verify_age_seconds).toBeGreaterThan(2 * 86_400 - 60);
+    const archive = { ...limits, archiveVerifyAgeSeconds: 93_600, archiveLagSeconds: 3600 };
+    expect(evaluateHealth(anchored, archive, 3600).map((f) => f.check)).toContain('archive_verify');
+    await admin((c) => c.query(`INSERT INTO crove_kernel.archive_verification (ok, batches, rows_checked, verified_at) VALUES (true, 1, 0, now() - interval '1 hour')`));
+    const verified = await readHealth(proberUrl, 3600);
+    expect(verified.archive_verify_age_seconds).toBeGreaterThan(3500);
+    expect(verified.archive_verify_age_seconds).toBeLessThan(3700);
+    expect(evaluateHealth(verified, archive, 3600).map((f) => f.check)).not.toContain('archive_verify');
+  });
+
   it('is healthy once the relay is current and the worker beats', async () => {
     await beat(workerDb, 'worker-a', ALL_MODULES);
     const health = await readHealth(proberUrl, 3600);

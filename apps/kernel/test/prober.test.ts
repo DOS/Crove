@@ -21,6 +21,8 @@ const healthy: HealthSnapshot = {
   dead_letter_count: 0,
   worker_heartbeat_age_seconds: 12,
   notify_queue_usage: 0,
+  archive_verify_age_seconds: null,
+  archive_lag_seconds: null,
 };
 const limits = { outboxAgeSeconds: 300, jobAgeSeconds: 900, heartbeatAgeSeconds: 120, deadLetters: 0, notifyQueuePercent: 50 };
 
@@ -107,6 +109,42 @@ describe('health thresholds', () => {
     expect(loadProberConfig({ PROBER_MAX_NOTIFY_QUEUE_PERCENT: '80' }).thresholds.notifyQueuePercent).toBe(80);
   });
 
+  it('reports a WORM verification older than its limit and an archive behind its limit, and neither when off or unknown (#1997)', () => {
+    const archive = { ...limits, archiveVerifyAgeSeconds: 93_600, archiveLagSeconds: 3600 };
+    expect(evaluateHealth({ ...healthy, archive_verify_age_seconds: 93_600, archive_lag_seconds: 3600 }, archive, 300)).toEqual([]);
+    expect(evaluateHealth({ ...healthy, archive_verify_age_seconds: 180_000, archive_lag_seconds: 7200 }, archive, 300)).toEqual([
+      {
+        check: 'archive_verify',
+        value: 180_000,
+        threshold: 93_600,
+        message: 'the WORM archive was last verified 50 h ago (limit 26 h): the nightly verification is not running (docs/runbooks/worm-archive.md)',
+      },
+      {
+        check: 'archive_lag',
+        value: 7200,
+        threshold: 3600,
+        message: 'the oldest audit event or journal entry not yet in the WORM archive is 7200 s old (limit 3600 s): the archiver is behind or stopped (docs/runbooks/worm-archive.md)',
+      },
+    ]);
+    // 0 turns a check off; null (no batch yet, every row archived) is not a finding.
+    expect(evaluateHealth({ ...healthy, archive_verify_age_seconds: 180_000, archive_lag_seconds: 7200 }, { ...limits, archiveVerifyAgeSeconds: 0, archiveLagSeconds: 0 }, 300)).toEqual([]);
+    expect(evaluateHealth(healthy, archive, 300)).toEqual([]);
+  });
+
+  it('alerts once when the archive falls behind, and sends a recovery when it catches up (#1997)', async () => {
+    const io = capture();
+    const hook = webhook();
+    const cfg = config({ thresholds: { ...limits, archiveVerifyAgeSeconds: 93_600, archiveLagSeconds: 3600 } });
+    const behind = { ...healthy, archive_lag_seconds: 5000 };
+    expect(await probeOnce(cfg, { ...io, fetch: hook.fetch, readHealth: async () => behind })).toBe(EXIT.unhealthy);
+    expect(await probeOnce(cfg, { ...io, fetch: hook.fetch, readHealth: async () => behind })).toBe(EXIT.unhealthy);
+    expect(hook.calls).toHaveLength(1);
+    expect(hook.body(0).crove.findings).toEqual([expect.objectContaining({ check: 'archive_lag', value: 5000, threshold: 3600 })]);
+    expect(await probeOnce(cfg, { ...io, fetch: hook.fetch, readHealth: async () => ({ ...healthy, archive_lag_seconds: 620 }) })).toBe(EXIT.ok);
+    expect(hook.calls).toHaveLength(2);
+    expect(hook.body(1).crove).toMatchObject({ kind: 'resolved', previous: ['archive_lag'] });
+  });
+
   it('honors the dead letter limit', () => {
     expect(evaluateHealth({ ...healthy, dead_letter_count: 2 }, { ...limits, deadLetters: 2 }, 300)).toEqual([]);
     expect(evaluateHealth({ ...healthy, dead_letter_count: 3 }, { ...limits, deadLetters: 2 }, 300).map((f) => f.check)).toEqual(['dead_letters']);
@@ -130,8 +168,15 @@ describe('prober configuration', () => {
         PROBER_MAX_HEARTBEAT_AGE_SECONDS: '62',
         PROBER_MAX_DEAD_LETTERS: '5',
         PROBER_DEAD_LETTER_WINDOW_SECONDS: '600',
+        PROBER_MAX_ARCHIVE_VERIFY_AGE_SECONDS: '7200',
+        PROBER_MAX_ARCHIVE_LAG_SECONDS: '0',
       }),
-    ).toMatchObject({ instance: 'office', thresholds: { outboxAgeSeconds: 60, jobAgeSeconds: 61, heartbeatAgeSeconds: 62, deadLetters: 5 }, deadLetterWindowSeconds: 600 });
+    ).toMatchObject({
+      instance: 'office',
+      thresholds: { outboxAgeSeconds: 60, jobAgeSeconds: 61, heartbeatAgeSeconds: 62, deadLetters: 5, archiveVerifyAgeSeconds: 7200, archiveLagSeconds: 0 },
+      deadLetterWindowSeconds: 600,
+    });
+    expect(loadProberConfig({}).thresholds).toMatchObject({ archiveVerifyAgeSeconds: 93_600, archiveLagSeconds: 3600 });
   });
 
   // #1894: the modules the deployment runs, which health() counts in the job age whatever the workers record.

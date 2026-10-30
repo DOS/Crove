@@ -356,6 +356,9 @@ services:
       PUBLIC_AUTH_ANON_KEY: ${PUBLIC_AUTH_ANON_KEY:-}
       PROBER_AUTH_MISSES: ${PROBER_AUTH_MISSES:-2}
       PROBER_AUTH_TIMEOUT_SECONDS: ${PROBER_AUTH_TIMEOUT_SECONDS:-10}
+      # The WORM archive (#1997): its nightly verification and its lag; 0 turns either off.
+      PROBER_MAX_ARCHIVE_VERIFY_AGE_SECONDS: ${PROBER_MAX_ARCHIVE_VERIFY_AGE_SECONDS:-93600}
+      PROBER_MAX_ARCHIVE_LAG_SECONDS: ${PROBER_MAX_ARCHIVE_LAG_SECONDS:-3600}
     volumes:
       - status:/data/status
     depends_on:

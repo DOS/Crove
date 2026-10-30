@@ -164,10 +164,8 @@ suite('prober privileges', () => {
       'dead_letter_count',
       'worker_heartbeat_age_seconds',
     ];
-    // #1997 adds two ages of the WORM archive (aggregates, no tenant data): this copy accepts health() with or without
-    // them, so the migration that adds them can land while this suite runs from base; its PR then pins the longer list.
-    const archive = ['archive_verify_age_seconds', 'archive_lag_seconds'];
-    expect([columns, [...columns, ...archive]]).toContainEqual(Object.keys(rows[0] as object));
+    // The WORM archive's two ages (#1997): times only, no tenant data.
+    expect(Object.keys(rows[0] as object)).toEqual([...columns, 'archive_verify_age_seconds', 'archive_lag_seconds']);
     const refused = [
       'SELECT 1 FROM crove_kernel.tenant LIMIT 1',
       'SELECT 1 FROM crove_kernel.outbox_event LIMIT 1',
