@@ -11,6 +11,7 @@ How the owner of a Ludy deployment (the pilot setup, backlog item M1-9, issue #3
 | The worker, the relay or the job queue stalls; jobs fail after their last retry | the prober |
 | The database cannot be reached | the prober, and the heartbeat monitor once the pings stop |
 | A nightly backup fails | the backup script, through the prober's webhook |
+| A job that records its own failure gives up, or a sweep stops working (an `ALERT` line in the worker or API log: a sign-out left open in Supabase Auth, an org export or year archive that failed, a retention purge or blob sweep that stopped, evidence holds that fail, a stored file whose bytes no longer match) | the worker or API itself, through the same webhook (`ALERT_WEBHOOK_URL`), once an hour per kind (`SECURITY_ALERT_REPEAT_MINUTES`, #1993) |
 | A nightly backup stops running (the timer disabled, the server off) | the backup heartbeat monitor (`BACKUP_HEARTBEAT_URL`, [backup-and-restore.md](backup-and-restore.md)) |
 | The API, the reverse proxy or the TLS certificate fails | the uptime check |
 | The whole server is down | the uptime check and the heartbeat monitor |

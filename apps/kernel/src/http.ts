@@ -118,6 +118,7 @@ import {
 } from './booking-page.ts';
 import { STATUS_PAGE_CSP, readStatusFile, renderStatusPage, statusView, type ProbeStatus } from './status-page.ts';
 import { WEB_MANIFEST_PATH, brandedManifest } from './web-manifest.ts';
+import { opsAlert } from './ops-alert.ts';
 import { shortLinkTarget, SHORT_LINK_HITS_PER_MINUTE } from './short-link.ts';
 import { ORG_SLUG, attachmentDisposition } from './attachment.ts';
 import { createRpcHandler, resolveMembership, resolveOrg, type BookingReader, type RpcChannels, type SocialDrafter } from './rpc.ts';
@@ -242,7 +243,7 @@ function storeProblem(error: unknown): DomainError | null {
 function problem(c: Context, error: unknown) {
   const store = storeProblem(error);
   const domain = error instanceof DomainError ? error : (store ?? new DomainError('INTERNAL', 500, 'Lỗi hệ thống'));
-  if (error instanceof BlobIntegrityError) console.error('[http] ALERT evidence integrity:', error.message);
+  if (error instanceof BlobIntegrityError) opsAlert(`[http] ALERT evidence integrity: ${error.message}`);
   else if (domain.status === 500 || store) console.error('[http]', error);
   return c.json({ code: domain.code, message: domain.message }, domain.status);
 }

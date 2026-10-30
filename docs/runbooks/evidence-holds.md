@@ -37,6 +37,8 @@ A failed file is tried again after 5 minutes, then 10, 20 and so on, at least on
 
 ## Alerts
 
+Each line below is in the worker log and, with `ALERT_WEBHOOK_URL` set, posted to the alert webhook once an hour per kind (#1993). So is `[http] ALERT evidence integrity: ...` from the API: a stored file whose bytes no longer match its hash, an incident ([incidents.md](incidents.md)).
+
 | Log line | Meaning | What to do |
 |---|---|---|
 | `[evidence-hold] ALERT the bucket has no Object Lock: N posted file(s) wait for their retention hold` | Holds are on but the bucket cannot hold objects. Logged once a day while files wait; nothing is recorded per file, and postings go on. | Enable Object Lock on the bucket (see above), or set `EVIDENCE_LOCK_DAYS=0` if this deployment keeps evidence another way. The waiting files are held on the next run once it is on. |

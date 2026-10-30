@@ -89,6 +89,7 @@ import { createTaxCodeLookup } from './tax-lookup.ts';
 import { createPortalSync } from './portal-sync.ts';
 import { createTaxPortalClient, testPortalAllowed } from './tax-portal.ts';
 import { startWorker, workerApplicationName } from './worker.ts';
+import { configureOpsAlerts } from './ops-alert.ts';
 import { createPushSender, loadVapidKeys } from './web-push.ts';
 import { WORKER_LAG_EXIT_MS, WORKER_LAG_SUSTAIN_MS, startLagWatchdog } from './back-pressure.ts';
 
@@ -393,6 +394,10 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
     assertExportKey(config);
     // Browser push (#1238): both roles or neither; a partial or mismatched key set stops the start.
     const vapid = loadVapidKeys(config);
+    // The alert webhook of this process: the worker's security alerts, and the operational ALERT lines of both roles
+    // (#1993), once a window per kind.
+    const alerts = securityAlerts(config);
+    configureOpsAlerts({ target: alerts.target, repeatSeconds: alerts.thresholds.repeatSeconds });
     // The worker alone enters system context, so it never shares the API's login role (External-tenant gate T5).
     const workerUrl = config.WORKER_DATABASE_URL;
     if (worker && !workerUrl) throw new Error('WORKER_DATABASE_URL is required for the worker; connect it as crove_worker');
@@ -506,7 +511,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
             mail: { mailer: resolved.mail, templates: MAIL_TEMPLATES, brand: config.BRAND_NAME, bounceDomain: config.INBOUND_DOMAIN && config.INBOUND_SECRET ? config.INBOUND_DOMAIN : null },
             archive: { store: archiveStore, lagSeconds: config.ARCHIVE_LAG_SECONDS },
             usageLimits: usageLimits(config),
-            securityAlerts: securityAlerts(config),
+            securityAlerts: alerts,
             aiPrice: { inputPerMTok: config.AI_PRICE_INPUT_PER_MTOK, outputPerMTok: config.AI_PRICE_OUTPUT_PER_MTOK },
             outboxLagPauseSeconds: config.OUTBOX_LAG_PAUSE_SECONDS,
             ...(vapid ? { push: { sender: createPushSender(vapid), brand: config.BRAND_NAME } } : {}),
