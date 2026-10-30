@@ -5834,6 +5834,7 @@ export const vi = {
       },
       bank: {
         import: 'Nhập sao kê ngân hàng',
+        ingest: 'Lưu các dòng từ nguồn giao dịch ngân hàng',
         line_voucher: 'Xem chứng từ của dòng sao kê',
         lines: 'Xem các dòng sao kê',
         open_lines: 'Xem các dòng sao kê chưa đối chiếu',

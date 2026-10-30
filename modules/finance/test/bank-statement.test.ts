@@ -3,7 +3,7 @@
 // balance check. The import itself is tested on PostgreSQL in apps/kernel/test/finance-bank.db.test.ts.
 import { describe, expect, it } from 'vitest';
 import { normalizeStatementAmount, type BankStatementRow } from '@crove/kernel-contract';
-import { balanceBreaks, checkStatement, classify, dedupeKeys, parseStatementAmount, parseStatementDate, readStatement } from '../src/domain/bank-statement.ts';
+import { balanceBreaks, checkLines, checkStatement, classify, dedupeKeys, parseStatementAmount, parseStatementDate, readFeedLines, readStatement } from '../src/domain/bank-statement.ts';
 
 let rowNo = 1;
 const row = (date: string, moneyIn: string, moneyOut: string, balance = '', reference = '', description = 'Giao dịch'): BankStatementRow => ({
@@ -148,5 +148,53 @@ describe('checkStatement', () => {
     expect(again.preview.counts).toEqual({ new: 1, duplicate: 2, ambiguous: 0, invalid: 0 });
     expect(again.preview.breaks).toEqual([]);
     expect(again.lines.map((l) => l.position)).toEqual([3]);
+  });
+});
+
+// A bank feed's lines (ADR-0039, #2044) go through the same keys and classification as a statement's.
+describe('readFeedLines', () => {
+  const line = (date: string, amount: string, reference: string, balance: string | null = null) => ({ date, description: ' Giao dịch ', amount, balance, reference });
+
+  it('puts the lines oldest first, keeping the order within a day, and keys them as a statement', () => {
+    const read = readFeedLines([line('2026-11-03', '-22000.00', 'FT2'), line('2026-11-02', '1000000', 'FT1'), line('2026-11-03', '5', 'FT3', '100.50')]);
+    expect(read).toEqual({
+      ok: true,
+      lines: [
+        { rowNo: 2, date: '2026-11-02', description: 'Giao dịch', amount: '1000000', balance: null, reference: 'FT1' },
+        { rowNo: 1, date: '2026-11-03', description: 'Giao dịch', amount: '-22000', balance: null, reference: 'FT2' },
+        { rowNo: 3, date: '2026-11-03', description: 'Giao dịch', amount: '5', balance: '100.5', reference: 'FT3' },
+      ],
+      keys: ['ref:FT1', 'ref:FT2', 'ref:FT3'],
+    });
+  });
+
+  it("turns a day the feed lists newest first round by its balances, so the chain holds", () => {
+    // Opening 100, then +50 (150) and -30 (120) on the 2nd; the feed sends the 2nd newest first.
+    const read = readFeedLines([line('2026-11-02', '-30', 'B', '120'), line('2026-11-02', '50', 'A', '150'), line('2026-11-01', '100', 'O', '100')]);
+    if (!read.ok) throw new Error('read');
+    expect(read.lines.map((l) => l.reference)).toEqual(['O', 'A', 'B']);
+    expect(balanceBreaks(read.lines.map((l) => ({ ...l, rowNo: l.rowNo })))).toEqual([]);
+  });
+
+  it('names every line whose amount is zero, too precise or too large, whose balance is unreadable, or whose day no statement has', () => {
+    expect(
+      readFeedLines([
+        line('2026-11-02', '1', 'A'),
+        line('2026-11-02', '0', 'B'),
+        line('2026-11-02', '1.005', 'C'),
+        line('2026-11-02', '1e16', 'D'),
+        line('2026-11-02', '1', 'E', '0.001'),
+        line('1999-12-31', '1', 'F'),
+        line('2100-01-01', '1', 'G'),
+      ]),
+    ).toEqual({ ok: false, rows: [2, 3, 4, 5, 6, 7] });
+  });
+
+  it('classifies a feed batch against the stored lines as a statement is', () => {
+    const read = readFeedLines([line('2026-11-02', '1000', 'FT1'), line('2026-11-02', '2000', 'FT2'), line('2026-11-02', '2000', 'FT2')]);
+    if (!read.ok) throw new Error('read');
+    const checked = checkLines(read.lines, read.keys, { keys: new Set(['ref:FT1']), dateAmounts: new Set() }, { before: null, within: [] });
+    expect(checked.statuses).toEqual(['duplicate', 'new', 'duplicate']);
+    expect(checked.toStore.map((l) => [l.key, l.position])).toEqual([['ref:FT2', 2]]);
   });
 });
