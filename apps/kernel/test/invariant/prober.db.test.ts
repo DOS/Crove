@@ -133,6 +133,10 @@ suite('prober privileges', () => {
       expect(runners.rows).toEqual([{ role: 'crove_prober' }]);
       const def = await admin.query(`SELECT p.prosecdef, p.proconfig FROM pg_proc p WHERE p.oid = $1::oid`, [archiveOid]);
       expect(def.rows).toEqual([{ prosecdef: true, proconfig: PINNED }]);
+      // It answers the two ages and nothing else.
+      const answer = await admin.query('SELECT * FROM crove_kernel.archive_health()');
+      expect(answer.fields.map((f) => f.name)).toEqual(['archive_verify_age_seconds', 'archive_lag_seconds']);
+      expect(answer.rows).toHaveLength(1);
     }
     // crove_prober executes no other Crove function.
     const others = await admin.query<{ fn: string }>(
