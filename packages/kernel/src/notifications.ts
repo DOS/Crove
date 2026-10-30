@@ -46,7 +46,9 @@ export interface NotifyInput {
   // The legal entity it belongs to (#1280): a member limited to other entities never sees it. Default: the org's
   // default entity.
   legalEntityId?: string | null;
-  // The few words the line shows (a title, a file name, a period); strings only, 2 KB at most.
+  // What the line needs besides its subject: ids, codes, counts, a period; strings only, 2 KB at most. Never a copy of a
+  // title, a name or other free text: kernel.notification.list reads the subject's when it shows the notice, so an
+  // erasure that redacts it leaves no copy here (#1977).
   detail?: Record<string, string>;
   // The outbox event it comes from.
   eventId?: string | null;
@@ -238,8 +240,8 @@ function requireUser(ctx: Pick<CommandContext, 'actor'>): string {
 // The viewer's newest notifications, how many are unread (up to NOTIFICATION_UNREAD_CAP + 1) and the kinds they turned
 // off. A proposal that is no longer pending is not waiting for anyone, so its notification is shown read. The subject's
 // title (a proposal's or task's) or file name is read here, as the viewer may read it, never kept with the notice: a
-// value the personal-data erasure redacts in the task leaves no copy behind (#1977). A notice written before keeps its
-// copy only when the subject is gone (20261106260000).
+// value the personal-data erasure redacts in the task leaves no copy behind (#1977); 20261106260000 dropped the copies
+// written before.
 export const notificationList = defineQuery({
   name: 'kernel.notification.list',
   input: z.object({}),
