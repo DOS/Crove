@@ -196,6 +196,17 @@ suite('WORM verifier after a restore on PostgreSQL (#2020)', () => {
     expect(await verifyArchive(worker, store)).toMatchObject({ ok: true, problems: [] });
   });
 
+  it("lets only the worker read the restore check's own audit events", async () => {
+    const allowed = await client(urlOf(copyName), async (c) => {
+      const { rows } = await c.query<{ role: string }>(
+        `SELECT r AS role FROM unnest(ARRAY['crove_app', 'crove_worker', 'crove_tenant', 'crove_definer_tenant', 'crove_prober']) r
+         WHERE has_function_privilege(r, 'crove_kernel.archive_reseed_audit(timestamptz)', 'EXECUTE')`,
+      );
+      return rows.map((r) => r.role);
+    });
+    expect(allowed).toEqual(['crove_worker']);
+  });
+
   it('still fails on a row the restore kept and that was deleted since', async () => {
     const worker = dbFor(copyName, WORKER);
     // An audit event of a batch the restored database had recorded at the backup point.
@@ -255,7 +266,7 @@ suite('WORM verifier after a restore on PostgreSQL (#2020)', () => {
       lastBackup,
     ]);
     expect(code).toBe(RESTORE_REPORT_EXIT.failed);
-    expect(lines).toContain('[restore-report] PROBLEM: restore_ack_mismatch in batch 2');
+    expect(lines.some((l) => l.startsWith('[restore-report] PROBLEM: restore_ack_mismatch in batch 2'))).toBe(true);
     expect(await forgedStore.list(RESTORE_ACK_PREFIX)).toEqual([]);
   });
 });

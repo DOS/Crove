@@ -435,24 +435,6 @@ while :; do
 done
 migrated="$(dc logs --no-color migrate | grep -o '\[migrate\] done, [0-9]* new migration(s)' | tail -1 || true)"
 log "migrate: ${migrated:-done}"
-# Org exports are recorded in audit rows, which keep the old object versions: after a restore into a new bucket they
-# are re-recorded with the restored ones (kernel.org.export.record, as the worker), so they download again. The data
-# is in place by now, so an org whose export cannot be re-recorded is reported and the restore goes on: its owner
-# asks for a new export.
-rebind_failed=0
-if [ "$STORAGE" = s3 ] && [ "$RESTORE_FILES" = copy ]; then
-  STEP="re-recording org exports with the restored object versions (main.ts exports-rebind)"
-  orgs="$(db_psql -d postgres -tA -c "SELECT DISTINCT org_id FROM crove_kernel.audit_event WHERE command = 'kernel.org.export.record' AND outcome = 'ok' ORDER BY 1")"
-  if [ -n "$orgs" ]; then
-    # shellcheck disable=SC2086
-    if ! dc run --rm --no-deps -T "$worker" exports-rebind $orgs </dev/null; then
-      rebind_failed=1
-      log "WARNING: some org exports could not be re-recorded (above); their owners ask for a new export (org.offboard again)"
-    fi
-  else
-    log "exports: no org has an export to re-record"
-  fi
-fi
 # The WORM archive outlives the database (#2007): the rows it holds beyond the backup point were lost with the
 # restore. The check lists them per org in archive-report.json, and raises every number series above the highest
 # number the archive holds for it (one audited command each), so no number is given out twice. It runs before the
@@ -461,7 +443,9 @@ fi
 # those rows. Exit 2 means rows were lost and every series is safe: the restore goes on and the operator reconciles
 # (docs/runbooks/ledger-after-restore.md). Exit 3 (a series it cannot raise: an org whose lost numbers no version 7
 # batch covers) and 1 (the archive does not match, or is not reachable) stop the restore with the stack not started.
-# Nothing is acknowledged then: the operator's run with the floors does it, before the stack starts.
+# Nothing is acknowledged then: the operator's run with the floors does it, before the stack starts. It runs before the
+# export rebind, which writes audit events stamped now: the check refuses any row stamped after the backup point but
+# its own (#2020).
 archive_lost=0
 if [ "$RESTORE_ARCHIVE" = check ]; then
   STEP="checking against the WORM archive (main.ts restore-report --reseed --acknowledge)"
@@ -490,6 +474,24 @@ if [ "$RESTORE_ARCHIVE" = check ]; then
   esac
 else
   log "archive: RESTORE_ARCHIVE=skip, the restored database was not checked against the WORM archive"
+fi
+# Org exports are recorded in audit rows, which keep the old object versions: after a restore into a new bucket they
+# are re-recorded with the restored ones (kernel.org.export.record, as the worker), so they download again. The data
+# is in place by now, so an org whose export cannot be re-recorded is reported and the restore goes on: its owner
+# asks for a new export.
+rebind_failed=0
+if [ "$STORAGE" = s3 ] && [ "$RESTORE_FILES" = copy ]; then
+  STEP="re-recording org exports with the restored object versions (main.ts exports-rebind)"
+  orgs="$(db_psql -d postgres -tA -c "SELECT DISTINCT org_id FROM crove_kernel.audit_event WHERE command = 'kernel.org.export.record' AND outcome = 'ok' ORDER BY 1")"
+  if [ -n "$orgs" ]; then
+    # shellcheck disable=SC2086
+    if ! dc run --rm --no-deps -T "$worker" exports-rebind $orgs </dev/null; then
+      rebind_failed=1
+      log "WARNING: some org exports could not be re-recorded (above); their owners ask for a new export (org.offboard again)"
+    fi
+  else
+    log "exports: no org has an export to re-record"
+  fi
 fi
 STEP="starting the stack"
 dc up -d

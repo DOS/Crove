@@ -864,7 +864,7 @@ describe('series highs and the restore report (#2007)', () => {
     // The database owner forgets batches 2 to 5 and deletes batch 2's entry; batches 3 to 5 keep theirs. The restore
     // check refuses it, so nothing is acknowledged.
     const forged = await restoreReport(holding(batches, 1, [1, 3, 4, 5]), writableStore(batches), { backupPoint: at(1) });
-    expect(forged.problems).toEqual([{ code: 'restore_ack_mismatch', seq: 2 }]);
+    expect(forged.problems).toEqual([{ code: 'restore_ack_mismatch', seq: 2, ref: entryOf(batches, 3)[0]![0] }]);
     // Without a backup point nothing is acknowledged at all.
     const pointless = await restoreReport(holding(batches, 1, [1]), writableStore(batches));
     await expect(acknowledgeRestore(fakeDb(() => []), writableStore(batches), pointless)).rejects.toThrow(/--backup-point/);
@@ -903,6 +903,41 @@ describe('series highs and the restore report (#2007)', () => {
     // A row of a batch that restore kept, deleted later, is a finding in the report too.
     const later = await restoreReport(holding(batches, 5, []), realStore);
     expect(later.problems).toEqual([{ code: 'row_missing', seq: 1, ref: entryOf(batches, 1)[0]![0] }]);
+  });
+
+  it('refuses an edit restamped past the newest batch: no row after the point, and no lost row back (#2020)', async () => {
+    const batches = five();
+    // The database owner edits batch 2's entry and moves it, and every row after it, past batch 5 (stamped far ahead),
+    // then the check is run with the edited row's time as the point. The restored database holds rows after the point:
+    // refused, whatever the upper bound.
+    const restamped = dbOf({
+      batches,
+      recorded: 1,
+      present: { [EPOCH]: entryOf(batches, 1), '2099-01-01T00:00:00.000Z': [[entryOf(batches, 2)[0]![0], hash('9')], ...[3, 4, 5].map((n) => entryOf(batches, n)[0]!)] },
+    });
+    const report = await restoreReport(restamped, writableStore(batches), { backupPoint: at(1) });
+    expect(report.problems).toEqual([{ code: 'restore_ack_mismatch', seq: 2, ref: entryOf(batches, 2)[0]![0] }]);
+
+    // And the verifier: an acknowledgement in force whose lost row comes back, in a later batch or among the rows not
+    // archived yet, excuses nothing.
+    const lost = [2, 3, 4, 5].map((n): [number, string] => [n, entryOf(batches, n)[0]![0]]);
+    const acks = ackChain(batches, [{ refs: lost, batchesAtRestore: 5, intervals: [[2, 5, at(1)]] }]);
+    const sixth = chainOf([1, 2, 3, 4, 5, 6].map((n) => ({ version: 7 as const, rows: [[`journal:${ORG}:e${n === 6 ? 2 : n}`, hash(String(n))] as [string, string]] })));
+    // The sixth batch holds batch 2's entry again; the chain of six shares the first five batches.
+    const store6 = writableStore(sixth, acks, [...sixth.slice(0, 5).map((b) => archiveKey(b.seq)), restoreAckKey(1), archiveKey(6)]);
+    const db6 = dbOf({ batches: sixth, recorded: 6, present: { [EPOCH]: entryOf(sixth, 1), [at(5)]: entryOf(sixth, 6) } });
+    const inBatch = await verifyArchive(db6, store6);
+    expect(inBatch.problems).toContainEqual({ code: 'restore_ack_mismatch', seq: 2, ref: entryOf(batches, 2)[0]![0] });
+    expect(inBatch.excused).toBe(0);
+    const tail = await verifyArchive(
+      dbOf({ batches, recorded: 5, present: { [EPOCH]: entryOf(batches, 1), '2099-01-01T00:00:00.000Z': [[entryOf(batches, 2)[0]![0], hash('9')]] } }),
+      writableStore(batches, acks),
+    );
+    expect(tail.problems).toContainEqual({ code: 'restore_ack_mismatch', seq: 2, ref: entryOf(batches, 2)[0]![0] });
+    expect(tail.excused).toBe(0);
+    // Without it coming back, the same acknowledgement excuses the four rows.
+    const clean = await verifyArchive(dbOf({ batches, recorded: 5, present: { [EPOCH]: entryOf(batches, 1) } }), writableStore(batches, acks));
+    expect(clean).toMatchObject({ ok: true, excused: 4 });
   });
 
   it('accepts a row lost with a time before the backup point, as a transaction still open at the backup is (#2020)', async () => {

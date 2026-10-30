@@ -44,7 +44,7 @@ import { dirname, join } from 'node:path';
 import {
   GetObjectCommand,
   GetObjectLockConfigurationCommand,
-  HeadObjectCommand,
+  ListObjectVersionsCommand,
   ListObjectsV2Command,
   PutObjectCommand,
   type S3Client,
@@ -213,15 +213,20 @@ export class S3ArchiveStore implements ArchiveStore {
     return keys.sort();
   }
 
+  // The oldest version's LastModified: Object Lock turns versioning on, and a PUT without If-None-Match makes a new
+  // version with a new LastModified, but cannot remove or redate the locked first one.
   async writtenAt(key: string): Promise<Date | null> {
-    try {
-      const answer = await this.client.send(new HeadObjectCommand({ Bucket: this.bucket, Key: key }));
-      return answer.LastModified ?? null;
-    } catch (error) {
-      const status = (error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode;
-      if (status === 404) return null;
-      throw error;
-    }
+    let oldest: Date | null = null;
+    let keyMarker: string | undefined;
+    let versionMarker: string | undefined;
+    do {
+      const page = await this.client.send(new ListObjectVersionsCommand({ Bucket: this.bucket, Prefix: key, KeyMarker: keyMarker, VersionIdMarker: versionMarker }));
+      for (const v of page.Versions ?? []) {
+        if (v.Key === key && v.LastModified && (!oldest || v.LastModified < oldest)) oldest = v.LastModified;
+      }
+      [keyMarker, versionMarker] = page.IsTruncated ? [page.NextKeyMarker, page.NextVersionIdMarker] : [undefined, undefined];
+    } while (keyMarker !== undefined);
+    return oldest;
   }
 
   describe(): string {
@@ -695,6 +700,24 @@ async function restoreHolds(db: Db, [first, last, point]: RestoreInterval, windo
 }
 const byBatchRef = (a: [number, string], b: [number, string]) => a[0] - b[0] || (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0);
 
+// Every row of any kind the archive anchors that the database holds stamped at or after `from`, with no upper bound.
+async function rowsSince(db: Db, from: string): Promise<Array<[string, string]>> {
+  return rowHashes(db, {
+    version: 7,
+    window: { from, to: 'infinity' },
+    numbersFrom: from,
+    entitiesFrom: from,
+    allocationsFrom: from,
+    seriesFrom: from,
+    revisionsFrom: from,
+    highsFrom: from,
+  });
+}
+
+// References that legitimately come back after a restore: a series' row the reseed made again with its archived id, and
+// a series' highs, which go on in later batches. Any other excused reference that comes back is an edit restamped.
+const comesBack = (ref: string) => ref.startsWith('number_series:') || ref.startsWith('number_high:');
+
 // Checks the whole archive against the database and records the result. Never throws for a problem it finds; it
 // throws only when it cannot run (store or database unreachable), and then records nothing.
 export async function verifyArchive(db: Db, store: ArchiveStore): Promise<ArchiveVerification> {
@@ -725,6 +748,8 @@ export async function verifyArchive(db: Db, store: ArchiveStore): Promise<Archiv
   const excuses = new Set((acks.ack?.refs ?? []).map(refKey));
   const listed: Array<{ seq: number; ref: string; code: 'row_missing' | 'row_changed' }> = [];
   const windows = new Map<number, ArchiveBatch['window']>();
+  // The references of the batches after the acknowledgement's newest.
+  const laterRefs = new Set<string>();
   let excused = 0;
   const isListed = (seq: number, ref: string) => excuses.has(`${seq} ${ref}`);
   for (const key of keys) {
@@ -765,6 +790,7 @@ export async function verifyArchive(db: Db, store: ArchiveStore): Promise<Archiv
     const current = await rowHashes(db, batch);
     rowsChecked += current.length;
     windows.set(seq, batch.window);
+    if (acks.ack && seq > acks.ack.batchesAtRestore) for (const [ref] of batch.rows) laterRefs.add(ref);
     for (const [ref, hash] of current) {
       const kept = archived.get(ref);
       archived.delete(ref);
@@ -798,6 +824,18 @@ export async function verifyArchive(db: Db, store: ArchiveStore): Promise<Archiv
   for (const interval of acks.ack?.intervals ?? []) {
     if (await restoreHolds(db, interval, windows)) holding.push(interval);
     else if (acks.ack) note({ code: 'restore_ack_mismatch', seq: interval[0], ref: restoreAckKey(acks.ack.sequence) });
+  }
+  // A row a restore lost never comes back under its own reference: one that does, in a batch after the
+  // acknowledgement's newest or among the rows not archived yet, was restamped past the restore, so nothing is excused.
+  if (acks.ack && holding.length > 0) {
+    const ack = acks.ack;
+    const lastWindow = windows.get(seq);
+    const later = new Set([...laterRefs, ...(lastWindow ? (await rowsSince(db, lastWindow.to)).map(([ref]) => ref) : [])]);
+    const back = ack.refs.find(([, ref]) => !comesBack(ref) && later.has(ref));
+    if (back) {
+      note({ code: 'restore_ack_mismatch', seq: back[0], ref: back[1] });
+      holding.length = 0;
+    }
   }
   for (const row of listed) {
     if (holding.some(([a, b]) => row.seq >= a && row.seq <= b)) {
@@ -1064,10 +1102,20 @@ export async function restoreReport(db: Db, store: ArchiveStore, options: { back
   const first = lostRefs.reduce((min, [s]) => Math.min(min, s), Number.POSITIVE_INFINITY);
   const intervals = [...carriedIntervals];
   const point = options.backupPoint ?? null;
-  if (Number.isFinite(first) && point !== null && Number.isFinite(Date.parse(point))) {
-    const own: RestoreInterval = [first, seq, point];
-    if (!(await restoreHolds(db, own, windows))) problems.push({ code: 'restore_ack_mismatch', seq: first });
-    if (!intervals.some((i) => JSON.stringify(i) === JSON.stringify(own))) intervals.push(own);
+  if (point !== null && Number.isFinite(Date.parse(point))) {
+    // A restored database holds no row stamped at or after its backup point, with no upper bound: a row there was
+    // restamped, or the database is not a restore of that backup. The rows the reseed of this check writes (its audit
+    // events, a series it made again) are the only ones expected, and a series' row only with its archived id.
+    const reseeded = new Set(
+      (await sql<{ ref: string }>`SELECT ref FROM crove_kernel.archive_reseed_audit(${point}::timestamptz)`.execute(db)).rows.map((r) => r.ref),
+    );
+    const since = (await rowsSince(db, point)).find(([ref]) => !reseeded.has(ref) && !comesBack(ref));
+    if (since) problems.push({ code: 'restore_ack_mismatch', seq: Number.isFinite(first) ? first : 0, ref: since[0] });
+    if (Number.isFinite(first)) {
+      const own: RestoreInterval = [first, seq, point];
+      if (!since && !(await restoreHolds(db, own, windows))) problems.push({ code: 'restore_ack_mismatch', seq: first });
+      if (!intervals.some((i) => JSON.stringify(i) === JSON.stringify(own))) intervals.push(own);
+    }
   }
   // Batches the restored database recorded that the store does not hold: the archive is not the one this deployment
   // wrote, or it is unreachable.
