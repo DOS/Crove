@@ -49,7 +49,7 @@ import {
   voucherTotal,
   type VoucherProblem,
 } from './domain/cash-voucher.ts';
-import { postJournalEntry } from './ledger.ts';
+import { postNewEntry } from './ledger.ts';
 import { resolveLegalEntity } from './legal-entity.ts';
 import { latestRevision } from './source-entry.ts';
 import type { CashVoucher } from './misa.ts';
@@ -207,7 +207,7 @@ export const recordVoucher = defineCommand({
     const code = voucherCode(payload.type, voucher.number);
     // The party as it is now (its name may have changed since the voucher was asked for).
     const described = { description: payload.description, party: party ? { name: party.name } : null };
-    const journalEntryId = await postJournalEntry(ctx, {
+    const journalEntryId = await postNewEntry(ctx, {
       entryDate: payload.date,
       description: voucherEntryDescription(code, described),
       sourceType: VOUCHER_SOURCE,

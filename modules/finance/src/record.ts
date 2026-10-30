@@ -25,7 +25,7 @@ import {
   type ProposedLine,
 } from '@crove/l10n-vn';
 import { assertUsableAccounts, isInactiveDefaultRefusal } from './accounts.ts';
-import { postJournalEntry } from './ledger.ts';
+import { postNewEntry } from './ledger.ts';
 import { resolveLegalEntity } from './legal-entity.ts';
 import { latestRevision } from './source-entry.ts';
 import { learnFromApproval } from './categorization.ts';
@@ -548,7 +548,7 @@ export const recordPurchase = defineCommand({
         .execute();
     }
 
-    const journalEntryId = await postJournalEntry(ctx, {
+    const journalEntryId = await postNewEntry(ctx, {
       entryDate: lateDate ?? invoice.issueDate,
       description: memo,
       sourceType: 'finance.purchase_document',

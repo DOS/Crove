@@ -7,6 +7,10 @@
 // Each entry posts one revision of its source (#1283, ADR-0021 decision 5): posting the same revision again with the
 // same payload returns the posted entry and writes nothing, another payload is refused (IDEMPOTENCY_CONFLICT), and a
 // new revision must follow the previous one and come after its reversal (REVISION_OUT_OF_ORDER, SOURCE_STILL_POSTED).
+// The caller learns which (#1925): `replayed` is true when the entry was already on the books, so it skips what it does
+// once per posting (its activity, its event, the rows that depend on the entry). A replay of an entry no longer in force
+// (a later revision posted, or the entry reversed) is refused (POSTING_SUPERSEDED): a retried old request never takes
+// a reversed entry for the one on the books.
 import { sql } from 'kysely';
 import { DomainError, type CommandContext } from '@crove/kernel-runtime';
 import type { Money } from '@crove/l10n-vn';
@@ -41,7 +45,14 @@ export interface Posting {
   legalEntityId?: string;
 }
 
-export async function postJournalEntry(ctx: CommandContext, posting: Posting): Promise<string> {
+export interface PostedEntry {
+  id: string;
+  // True when the same revision and payload were already posted (in this transaction or an earlier one): nothing was
+  // written, and the posting's side effects already happened then.
+  replayed: boolean;
+}
+
+export async function postJournalEntry(ctx: CommandContext, posting: Posting): Promise<PostedEntry> {
   const lines = posting.lines.map((l) => ({
     line_no: l.lineNo,
     account_code: l.accountCode,
@@ -50,12 +61,30 @@ export async function postJournalEntry(ctx: CommandContext, posting: Posting): P
     party_id: l.partyId,
     memo: l.memo,
   }));
+  const revision = posting.sourceRevision ?? 1;
+  // One source at a time, with the lock the definer takes first (same key, built the same way from the context's org),
+  // so no other transaction can post this revision between the look below and the definer's own. Held to the end of
+  // the transaction; the definer's second take of it is free.
+  await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(
+      'crove_finance.journal_entry.source:' || crove_kernel.ctx_org_id()::text || ':' || ${posting.sourceType}::text || ':' || ${posting.sourceId}::uuid::text, 0))`.execute(
+    ctx.trx,
+  );
+  // Already posted: the definer replays it (same payload) or refuses it (another one). A replay can only be of an entry
+  // this caller may see: the definer replays only into the entity the context allows.
+  const before = await ctx.trx
+    .selectFrom('crove_finance.journal_entry')
+    .select('id')
+    .where('org_id', '=', ctx.orgId)
+    .where('source_type', '=', posting.sourceType)
+    .where('source_id', '=', posting.sourceId)
+    .where('source_revision', '=', revision)
+    .executeTakeFirst();
   let rows: Array<{ id: string }>;
   try {
     ({ rows } = await sql<{ id: string }>`
       SELECT crove_finance.post_journal_entry(
         ${posting.entryDate}::date, ${posting.description}, ${posting.sourceType}, ${posting.sourceId}::uuid, ${JSON.stringify(lines)}::jsonb,
-        ${posting.reversesEntryId ?? null}::uuid, ${posting.sourceRevision ?? 1}::int, ${posting.legalEntityId ?? null}::uuid
+        ${posting.reversesEntryId ?? null}::uuid, ${revision}::int, ${posting.legalEntityId ?? null}::uuid
       ) AS id`.execute(ctx.trx));
   } catch (error) {
     // An entry dated in a locked month, or on or before the opening entry (period-lock.ts), or an amount the book
@@ -64,7 +93,57 @@ export async function postJournalEntry(ctx: CommandContext, posting: Posting): P
   }
   const id = rows[0]?.id;
   if (!id) throw new DomainError('INTERNAL', 500, 'Không ghi được bút toán');
-  return id;
+  if (!before) return { id, replayed: false };
+  if (before.id !== id) throw new DomainError('INTERNAL', 500, 'Không ghi được bút toán');
+  // A replay: the entry must still be the one in force for its source.
+  const state = await ctx.trx
+    .selectFrom('crove_finance.journal_entry as e')
+    .select((eb) => [
+      eb
+        .exists(
+          eb
+            .selectFrom('crove_finance.journal_entry as later')
+            .select('later.id')
+            .whereRef('later.org_id', '=', 'e.org_id')
+            .whereRef('later.source_type', '=', 'e.source_type')
+            .whereRef('later.source_id', '=', 'e.source_id')
+            .whereRef('later.source_revision', '>', 'e.source_revision'),
+        )
+        .as('superseded'),
+      eb
+        .exists(eb.selectFrom('crove_finance.journal_entry as r').select('r.id').whereRef('r.org_id', '=', 'e.org_id').whereRef('r.reverses_entry_id', '=', 'e.id'))
+        .as('reversed'),
+    ])
+    .where('e.org_id', '=', ctx.orgId)
+    .where('e.id', '=', id)
+    .executeTakeFirstOrThrow();
+  if (state.superseded || state.reversed) {
+    throw new DomainError(
+      'POSTING_SUPERSEDED',
+      409,
+      state.superseded
+        ? 'Chứng từ này đã được ghi sổ lại bằng một lần ghi sau; yêu cầu này là của lần ghi cũ nên sổ không ghi lại nó.'
+        : 'Bút toán của yêu cầu này đã bị đảo; sổ không ghi lại nó. Nếu cần, hãy ghi sổ chứng từ bằng lần ghi kế tiếp.',
+      { sourceType: posting.sourceType, sourceId: posting.sourceId, revision, entryId: id, reason: state.superseded ? 'later_revision' : 'reversed' },
+    );
+  }
+  return { id, replayed: true };
+}
+
+// The posting of a caller whose source is new in its own command (a voucher or document it just inserted, the command's
+// own id, the approval it runs under): a replay cannot be a retry of this posting, so it is refused (ALREADY_POSTED)
+// rather than taken as success, and nothing the caller does once per posting runs twice.
+export async function postNewEntry(ctx: CommandContext, posting: Posting): Promise<string> {
+  const posted = await postJournalEntry(ctx, posting);
+  if (posted.replayed) {
+    throw new DomainError('ALREADY_POSTED', 409, 'Chứng từ này đã được ghi sổ rồi; lần ghi này không ghi gì thêm.', {
+      sourceType: posting.sourceType,
+      sourceId: posting.sourceId,
+      revision: posting.sourceRevision ?? 1,
+      entryId: posted.id,
+    });
+  }
+  return posted.id;
 }
 
 // The definer's refusal of an amount with more decimals than the book currency uses (22023 AMOUNT_SCALE, with the line,
