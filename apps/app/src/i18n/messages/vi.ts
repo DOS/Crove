@@ -5850,6 +5850,7 @@ export const vi = {
         suggestions: 'Xem gợi ý đối chiếu sao kê',
       },
       bank_feed: {
+        connection: 'Xem trạng thái của kết nối nguồn giao dịch ngân hàng',
         accounts: 'Xem các tài khoản của nguồn giao dịch ngân hàng',
         listed: 'Xem các tài khoản mà nguồn giao dịch ngân hàng có',
         pull_due: 'Xem các tài khoản nguồn giao dịch ngân hàng cần lấy',

@@ -10,6 +10,8 @@
 // connects it again, rather than failing every day.
 import type { BankFeedProvider } from '@crove/bank-feed';
 import { BANK_FEED_MAX_ACCOUNTS } from '@crove/kernel-contract';
+import { sql } from 'kysely';
+import type { Db } from '@crove/db';
 import { DomainError, type CredentialBroker, type Runtime } from '@crove/kernel-runtime';
 
 const SYSTEM = { type: 'system' as const, component: 'finance.bank_feed' };
@@ -34,15 +36,27 @@ interface SealedChannelCredential {
   envelope: string;
 }
 
+// A page of the active bank feed connections of active orgs after a key (crove_finance.bank_feeds_due, the worker
+// login's alone), for the daily sweep.
+export const BANK_FEEDS_DUE_PAGE = 1000;
+export async function bankFeedsDue(workerDb: Db, after: { orgId: string; connectionId: string } | null): Promise<Array<{ orgId: string; connectionId: string; provider: string }>> {
+  const { rows } = await sql<{ org_id: string; connection_id: string; provider: string }>`
+    SELECT org_id, connection_id, provider FROM crove_finance.bank_feeds_due(${after?.orgId ?? null}::uuid, ${after?.connectionId ?? null}::uuid, ${BANK_FEEDS_DUE_PAGE}::int)`.execute(workerDb);
+  return rows.map((r) => ({ orgId: r.org_id, connectionId: r.connection_id, provider: r.provider }));
+}
+
 export async function runBankFeedSync(deps: BankFeedSyncDeps, job: BankFeedSyncJob): Promise<{ accounts: number; pages: number; stored: number }> {
   const options = { actor: SYSTEM, orgId: job.orgId };
+  // The connection's version, so marking it expired leaves alone one connected again meanwhile.
+  const seen = await deps.runtime.query<{ updatedAt: string } | null>('finance.bank_feed.connection', { connectionId: job.connectionId }, options);
+  if (!seen) return { accounts: 0, pages: 0, stored: 0 };
   let sealed: SealedChannelCredential;
   try {
     sealed = await deps.runtime.query<SealedChannelCredential>('kernel.channel.credential', { connectionId: job.connectionId }, options);
   } catch (error) {
     if (error instanceof DomainError && (error.code === 'CHANNEL_OWNER_LEFT' || error.code === 'CHANNEL_NOT_ACTIVE')) {
       if (error.code === 'CHANNEL_OWNER_LEFT') {
-        await deps.runtime.execute('kernel.channel.mark_expired', { connectionId: job.connectionId, reason: 'owner_left' }, options);
+        await deps.runtime.execute('kernel.channel.mark_expired', { connectionId: job.connectionId, reason: 'owner_left', ifVersion: seen.updatedAt }, options);
       }
       return { accounts: 0, pages: 0, stored: 0 };
     }

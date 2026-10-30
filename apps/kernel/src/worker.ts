@@ -42,7 +42,7 @@ import { runYearArchive } from './year-archive.ts';
 import { ARCHIVE_VERIFY_CRON, ARCHIVE_WRITE_CRON, runArchiveVerification, writeArchive, type ArchiveStore } from './worm.ts';
 import type { SessionRevoker, SignOutTarget } from './sessions.ts';
 import { opsAlert } from './ops-alert.ts';
-import { runBankFeedSync, type BankFeedSyncJob } from './bank-feed-sync.ts';
+import { BANK_FEEDS_DUE_PAGE, bankFeedsDue, runBankFeedSync, type BankFeedSyncJob } from './bank-feed-sync.ts';
 import type { BankFeedProvider } from '@crove/bank-feed';
 
 const SOCIAL_PUBLISH_RETRY_LIMIT = 2;
@@ -908,23 +908,20 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       if (!job) return;
       if ('sweep' in job.data) {
         // Every active bank feed, a page of connections at a time by key.
-        let after: { org: string; id: string } | null = null;
+        let after: { orgId: string; connectionId: string } | null = null;
         for (;;) {
-          const page: Array<{ org_id: string; connection_id: string; provider: string }> = (
-            await sql<{ org_id: string; connection_id: string; provider: string }>`
-              SELECT org_id, connection_id, provider FROM crove_finance.bank_feeds_due(${after?.org ?? null}::uuid, ${after?.id ?? null}::uuid, 1000)`.execute(deps.workerDb)
-          ).rows;
+          const page = await bankFeedsDue(deps.workerDb, after);
           for (const row of page.filter((r) => Object.hasOwn(bankFeeds, r.provider))) {
-            await boss.send(QUEUES.bankFeedSync, { orgId: row.org_id, connectionId: row.connection_id } satisfies BankFeedSyncJob, {
-              singletonKey: jobKey(row.org_id, QUEUES.bankFeedSync, row.connection_id),
+            await boss.send(QUEUES.bankFeedSync, { orgId: row.orgId, connectionId: row.connectionId } satisfies BankFeedSyncJob, {
+              singletonKey: jobKey(row.orgId, QUEUES.bankFeedSync, row.connectionId),
               retryLimit: BANK_FEED_SYNC_RETRY_LIMIT,
               retryDelay: 30,
               retryBackoff: true,
             });
           }
           const last = page.at(-1);
-          if (!last || page.length < 1000) break;
-          after = { org: last.org_id, id: last.connection_id };
+          if (!last || page.length < BANK_FEEDS_DUE_PAGE) break;
+          after = { orgId: last.orgId, connectionId: last.connectionId };
         }
         return;
       }

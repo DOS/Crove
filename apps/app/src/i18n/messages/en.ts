@@ -5850,6 +5850,7 @@ export const en = {
         suggestions: 'Read bank matching suggestions',
       },
       bank_feed: {
+        connection: 'Read the status of a bank feed connection',
         accounts: 'List bank feed accounts',
         listed: 'List the accounts a bank feed reaches',
         pull_due: 'List the bank feed accounts a sync pulls',

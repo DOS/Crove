@@ -176,6 +176,23 @@ export const bankFeedPullDue = defineQuery({
   },
 });
 
+// A bank feed connection's status and version (its updated_at), for the worker's sync; null for none of this org.
+export const bankFeedConnection = defineQuery({
+  name: 'finance.bank_feed.connection',
+  input: z.object({ connectionId: zId }),
+  access: 'system',
+  handler: async (ctx, input): Promise<{ status: string; updatedAt: string } | null> => {
+    const row = await ctx.trx
+      .selectFrom('crove_kernel.channel_connection')
+      .select(['provider', 'status', 'updated_at'])
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.connectionId)
+      .executeTakeFirst();
+    if (!row || !isBankFeedProviderId(row.provider)) return null;
+    return { status: row.status, updatedAt: new Date(row.updated_at).toISOString() };
+  },
+});
+
 export const bankFeedRecordAccounts = defineCommand({
   name: 'finance.bank_feed.record_accounts',
   input: zBankFeedRecordAccounts,
@@ -185,11 +202,12 @@ export const bankFeedRecordAccounts = defineCommand({
   handler: async (ctx, input): Promise<{ listed: number; removed: number }> => {
     const connection = await ctx.trx
       .selectFrom('crove_kernel.channel_connection')
-      .select(['id', 'provider'])
+      .select(['id', 'provider', 'status'])
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', input.connectionId)
       .executeTakeFirst();
     if (!connection || !isBankFeedProviderId(connection.provider)) throw new DomainError('BANK_FEED_NOT_FOUND', 404, 'Không tìm thấy kết nối nguồn giao dịch ngân hàng');
+    if (connection.status !== 'active') throw new DomainError('BANK_FEED_INACTIVE', 422, 'Kết nối nguồn giao dịch ngân hàng không còn hoạt động; hãy kết nối lại');
     const ids = input.accounts.map((a) => a.externalAccountId);
     if (new Set(ids).size !== ids.length) throw new DomainError('BANK_FEED_INVALID', 422, 'Nguồn giao dịch ngân hàng gửi một tài khoản hai lần');
     for (const account of input.accounts) {
@@ -244,4 +262,4 @@ export const bankFeedRecordPull = defineCommand({
 });
 
 export const bankFeedCommands = [bankFeedMap, bankFeedUnmap, bankFeedRecordAccounts, bankFeedRecordPull];
-export const bankFeedQueries = [bankFeedAccounts, bankFeedListed, bankFeedPullDue];
+export const bankFeedQueries = [bankFeedAccounts, bankFeedListed, bankFeedPullDue, bankFeedConnection];

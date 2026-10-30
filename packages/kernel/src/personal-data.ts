@@ -117,6 +117,17 @@ export const PERSONAL_DATA_COLUMNS = {
     handling: 'erase',
     reason: 'The name of a connected social account, which may be a person; disconnecting removes the account',
   },
+  // Bank feeds (ADR-0039, #2044): the accounts a connection reaches, as the worker listed them; not the books.
+  'crove_finance.bank_feed_listed_account.display_name': {
+    kind: 'name',
+    handling: 'erase',
+    reason: "The name of a bank account a bank feed reaches, which may be its holder's; the next listing replaces it and disconnecting removes it",
+  },
+  'crove_finance.bank_feed_listed_account.external_account_id': {
+    kind: 'other',
+    handling: 'erase',
+    reason: "The provider's id of a bank account a bank feed reaches, which may be its number; the next listing replaces it and disconnecting removes it",
+  },
   // Finance records.
   'crove_finance.cash_voucher.person_name': {
     kind: 'name',

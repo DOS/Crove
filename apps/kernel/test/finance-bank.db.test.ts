@@ -565,4 +565,60 @@ suite('bank statement import (#326)', () => {
     expect(await admin(async (c) => (await c.query<{ status: string }>('SELECT status FROM crove_kernel.channel_connection WHERE org_id = $1 AND id = $2', [orgId, connectionId])).rows[0]?.status)).toBe('expired');
     expect(await sync(connectionId)).toEqual({ accounts: 0, pages: 0, stored: 0 });
   });
+
+  it("pages the daily sweep's bank feeds by key, active ones of active orgs only, for the worker login alone", async () => {
+    const workerAdmin = async <T>(fn: (c: pg.Client) => Promise<T>) => {
+      const url = new URL(adminUrl);
+      url.username = 'crove_worker';
+      url.password = 'test-worker-pw';
+      const c = new pg.Client({ connectionString: url.toString() });
+      await c.connect();
+      try {
+        return await fn(c);
+      } finally {
+        await c.end();
+      }
+    };
+    const connection = async (org: string, provider: string, status = 'active') =>
+      admin(
+        async (c) =>
+          (
+            await c.query<{ id: string }>(
+              `INSERT INTO crove_kernel.channel_connection (org_id, provider, external_account_id, display_name, connected_by, status) VALUES ($1, $2, $3, 'Sweep', $4, $5) RETURNING id`,
+              [org, provider, `sweep-${randomUUID()}`, owner.userId, status],
+            )
+          ).rows[0]?.id as string,
+      );
+    const otherOrg = await admin(async (c) => (await c.query<{ org_id: string }>('SELECT org_id FROM crove_kernel.tenant WHERE slug = $1', [otherSlug])).rows[0]?.org_id as string);
+    const live = [await connection(orgId, 'bank_sandbox'), await connection(orgId, 'bank_sandbox')];
+    await connection(orgId, 'bank_sandbox', 'revoked');
+    await connection(orgId, 'bank_sandbox', 'expired');
+    await connection(orgId, 'sandbox');
+    await connection(otherOrg, 'bank_sandbox');
+    await admin((c) => c.query(`UPDATE crove_kernel.tenant SET status = 'closed' WHERE org_id = $1`, [otherOrg]));
+    // A page of one at a time, by key, reaches every live bank feed of this org and nothing else.
+    const seen: string[] = [];
+    let after: [string | null, string | null] = [null, null];
+    for (let i = 0; i < 50; i++) {
+      const rows = await workerAdmin(async (c) => (await c.query<{ org_id: string; connection_id: string }>('SELECT org_id, connection_id FROM crove_finance.bank_feeds_due($1::uuid, $2::uuid, 1)', after)).rows);
+      const row = rows[0];
+      if (!row) break;
+      expect(row.org_id).toBe(orgId);
+      seen.push(row.connection_id);
+      after = [row.org_id, row.connection_id];
+    }
+    for (const id of live) expect(seen).toContain(id);
+    expect(new Set(seen).size).toBe(seen.length);
+    const callers = await admin(
+      async (c) =>
+        (
+          await c.query<{ role: string }>(
+            `SELECT r.rolname AS role FROM pg_catalog.pg_roles r
+             WHERE r.rolname = ANY (ARRAY['crove_tenant', 'crove_app', 'crove_worker', 'crove_definer_tenant', 'crove_prober'])
+               AND pg_catalog.has_function_privilege(r.oid, 'crove_finance.bank_feeds_due(uuid, uuid, integer)', 'EXECUTE')`,
+          )
+        ).rows,
+    );
+    expect(callers.map((r) => r.role)).toEqual(['crove_worker']);
+  });
 });
