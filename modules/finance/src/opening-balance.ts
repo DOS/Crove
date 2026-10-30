@@ -20,7 +20,7 @@ import { zOpeningBalanceImport, type OpeningBalanceImport } from '@crove/kernel-
 import { DomainError, defineCommand, defineQuery, type QueryContext } from '@crove/kernel-runtime';
 import { chartOfAccounts } from './accounts.ts';
 import { OPENING_BALANCE_SOURCE, checkOpeningBalance, type LedgerFacts, type OpeningCheck, type OpeningParty } from './domain/opening-balance.ts';
-import { postJournalEntry } from './ledger.ts';
+import { postNewEntry } from './ledger.ts';
 import { resolveLegalEntity } from './legal-entity.ts';
 import { upsertParty } from './record.ts';
 
@@ -126,7 +126,7 @@ export const openingBalancePost = defineCommand({
     };
     const posted = [];
     for (const { party, ...line } of lines) posted.push({ ...line, partyId: await partyOf(line.accountCode, party), memo: null });
-    const journalEntryId = await postJournalEntry(ctx, {
+    const journalEntryId = await postNewEntry(ctx, {
       entryDate: input.asOf,
       description: `Số dư đầu kỳ tại ngày ${input.asOf}`,
       sourceType: OPENING_BALANCE_SOURCE,

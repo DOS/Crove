@@ -31,7 +31,7 @@ import {
   journalVoucherTotal,
   type JournalVoucherProblem,
 } from './domain/journal-voucher.ts';
-import { postJournalEntry } from './ledger.ts';
+import { postNewEntry } from './ledger.ts';
 import { resolveLegalEntity } from './legal-entity.ts';
 import { dateLabel, periodLockedThrough } from './period-lock.ts';
 
@@ -137,7 +137,7 @@ export async function postJournalVoucher(ctx: CommandContext, payload: JournalVo
     .returning(['id', 'number'])
     .executeTakeFirstOrThrow();
   const code = journalVoucherCode(voucher.number);
-  const journalEntryId = await postJournalEntry(ctx, {
+  const journalEntryId = await postNewEntry(ctx, {
     entryDate: payload.date,
     description: journalVoucherEntryDescription(code, payload.description),
     sourceType: JOURNAL_VOUCHER_SOURCE,

@@ -5,6 +5,7 @@ export const vi = {
   common: {
     toasts: 'Thông báo kết quả',
     undo: 'Hoàn tác',
+    toastShortcut: 'Nhấn {key} để tới nút {action}.',
     undoFailed: 'Chưa hoàn tác được: {reason}',
     datePlaceholder: 'dd/mm/yyyy',
     monthPlaceholder: 'mm/yyyy',
@@ -5439,6 +5440,8 @@ export const vi = {
       IDEMPOTENCY_CONFLICT: 'Chứng từ này đã được ghi sổ với nội dung khác (dòng, số tiền, ngày hoặc bút toán được đảo). Sổ giữ nguyên bút toán đã ghi; muốn sửa thì đảo bút toán đó rồi ghi sổ lại',
       REVISION_OUT_OF_ORDER: 'Chứng từ này chỉ ghi sổ lại được bằng lần ghi kế tiếp, không bỏ qua hay ghi lùi lần nào',
       SOURCE_STILL_POSTED: 'Bút toán trước của chứng từ này vẫn còn trên sổ; hãy đảo bút toán đó trước rồi mới ghi sổ lại',
+      POSTING_SUPERSEDED: 'Yêu cầu này là của một lần ghi sổ cũ: bút toán của nó đã bị đảo hoặc chứng từ đã được ghi sổ lại sau đó. Sổ không ghi lại nó',
+      ALREADY_POSTED: 'Chứng từ này đã được ghi sổ rồi; lần ghi này không ghi gì thêm',
       REVERSAL_REVISION: 'Bút toán đảo chỉ ghi sổ một lần, như lần ghi đầu tiên của nó; không ghi lại bút toán đảo được',
       DOCUMENT_REPOST: 'Hóa đơn đã ghi sổ một lần thì không ghi sổ lại được. Nếu hóa đơn sai, hãy đảo bút toán của nó và ghi hóa đơn thay thế hoặc điều chỉnh như một chứng từ mới',
       LEGAL_ENTITY_REQUIRED: 'Hãy chọn pháp nhân trước khi xem hoặc ghi sổ',

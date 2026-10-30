@@ -227,6 +227,10 @@ suite('journal reversal through the API, and voided purchase documents (#165)', 
     expect(detail.body?.payload?.checks).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'duplicate', status: 'fail' })]));
     await expect(approve(String(copy.proposalId), 1, { acceptFailedChecks: true })).rejects.toMatchObject({ code: 'DUPLICATE_INVOICE', status: 409 });
     await runtime.execute('kernel.proposal.reject', { id: copy.proposalId }, { actor: asUser(owner.userId), orgId: org.orgId });
+    // The copy's file carries its proposal's rejection (#2009); the app shows it on a file read as proposed, while a
+    // file marked as a duplicate keeps its duplicate chip.
+    const recent = (await rpc('files/recent', await tokenFor(owner), undefined)).body as Array<{ proposalId: string | null; proposalStatus: string | null }>;
+    expect(recent.find((f) => f.proposalId === copy.proposalId)).toMatchObject({ proposalStatus: 'rejected' });
 
     // The file of a recorded invoice is not read again.
     await expect(
@@ -385,7 +389,8 @@ suite('journal reversal through the API, and voided purchase documents (#165)', 
   it('records the same invoice again from its file after the void, with the corrected accounts', async () => {
     expect((await rpc('inbox/get', await tokenFor(owner), { id: firstProposal })).body).toMatchObject({ voided: true, canReextract: true });
     const files = await rpc('files/recent', await tokenFor(owner), undefined);
-    expect((files.body as any[]).find((f) => f.id === fileId)).toMatchObject({ canReextract: true });
+    // The file's proposal was posted (#2009): the Inbox shows the file as posted, not as waiting.
+    expect((files.body as any[]).find((f) => f.id === fileId)).toMatchObject({ proposalStatus: 'executed', canReextract: true });
 
     const { version } = await runtime.execute<{ version: number }>(
       'kernel.file.reextract',

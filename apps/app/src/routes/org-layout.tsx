@@ -270,7 +270,8 @@ export function OrgLayout() {
         <NavDrawer open={menuOpen} onOpenChange={setMenuOpen}>
           {shellNav(() => setMenuOpen(false))}
         </NavDrawer>
-        <main className="mx-auto w-full max-w-6xl px-4 py-6 md:px-8 md:py-8">
+        {/* Focusable from code only: where the focus goes when the toast that held it leaves (#2026). */}
+        <main tabIndex={-1} className="mx-auto w-full max-w-6xl px-4 py-6 outline-none md:px-8 md:py-8">
           <OrgLeftNotice />
           {me.isSuccess && !org ? <p className="text-sm text-destructive">{t('notMember')}</p> : <Outlet />}
         </main>

@@ -67,6 +67,13 @@ const schema = z.object({
   // reading (one stuck in a transaction, say); once full, every commit that sends a NOTIFY fails, including writes to
   // the tables that send stream hints. PostgreSQL itself starts warning in its log at 50.
   PROBER_MAX_NOTIFY_QUEUE_PERCENT: z.coerce.number().int().min(0).max(100).default(50),
+  // The WORM archive (#1997): the nightly verification older than this (26 h: a day and the slack of one late run), or
+  // the oldest audit event not yet archived older than this. The archiver keeps ARCHIVE_LAG_SECONDS
+  // (the worker's value, 600 s by default) on purpose, so the lag limit defaults to the larger of 3600 s and that plus
+  // 15 minutes. 0 turns either check off.
+  PROBER_MAX_ARCHIVE_VERIFY_AGE_SECONDS: seconds(93_600),
+  PROBER_MAX_ARCHIVE_LAG_SECONDS: optional.pipe(z.coerce.number<string | undefined>().int().min(0).max(604_800).optional()),
+  ARCHIVE_LAG_SECONDS: optional.pipe(z.coerce.number<string | undefined>().int().min(60).max(86_400).optional()),
   // Failed jobs count for this long. Default: the probe interval plus 60 s with --every (each dead letter alerts
   // once, or twice when it lands in the overlap, never zero times), 3600 otherwise. With cron, set it to the
   // cron interval plus 60.
@@ -121,6 +128,9 @@ export interface Thresholds {
   deadLetters: number;
   // Percent of the NOTIFY queue.
   notifyQueuePercent: number;
+  // The WORM archive (#1997); 0: not checked. Left out of thresholds built by hand: not checked.
+  archiveVerifyAgeSeconds?: number;
+  archiveLagSeconds?: number;
 }
 
 export function loadProberConfig(env: NodeJS.ProcessEnv = process.env, everySeconds: number | null = null): ProberConfig {
@@ -144,6 +154,8 @@ export function loadProberConfig(env: NodeJS.ProcessEnv = process.env, everySeco
       heartbeatAgeSeconds: raw.PROBER_MAX_HEARTBEAT_AGE_SECONDS,
       deadLetters: raw.PROBER_MAX_DEAD_LETTERS,
       notifyQueuePercent: raw.PROBER_MAX_NOTIFY_QUEUE_PERCENT,
+      archiveVerifyAgeSeconds: raw.PROBER_MAX_ARCHIVE_VERIFY_AGE_SECONDS,
+      archiveLagSeconds: raw.PROBER_MAX_ARCHIVE_LAG_SECONDS ?? Math.max(3600, (raw.ARCHIVE_LAG_SECONDS ?? 600) + 900),
     },
     deadLetterWindowSeconds: raw.PROBER_DEAD_LETTER_WINDOW_SECONDS ?? (everySeconds === null ? 3600 : Math.min(everySeconds + 60, 604_800)),
     heartbeatUrl: raw.PROBER_HEARTBEAT_URL,
@@ -202,10 +214,16 @@ export interface HealthSnapshot {
   // The fraction (0 to 1) of the cluster's NOTIFY queue in use: pg_notification_queue_usage(), a core function any
   // login may call. Read beside health() rather than through it.
   notify_queue_usage: number;
+  // The WORM archive (#1997): since the newest verification run (or the first batch, before any run), and the age of the
+  // oldest row not yet archived (every row's, before the first batch); null with no batch for the first, and with every
+  // row archived for the second.
+  archive_verify_age_seconds: number | null;
+  archive_lag_seconds: number | null;
 }
 
 const s = (n: number) => `${Math.round(n)} s`;
 const percent = (fraction: number) => `${Math.round(fraction * 1000) / 10}%`;
+const hours = (n: number) => `${Math.round((n / 3600) * 10) / 10} h`;
 
 /** The thresholds a snapshot exceeds, as findings; [] when healthy. A missing heartbeat is a finding (absence). */
 export function evaluateHealth(h: HealthSnapshot, t: Thresholds, deadLetterWindowSeconds: number): Finding[] {
@@ -255,6 +273,24 @@ export function evaluateHealth(h: HealthSnapshot, t: Thresholds, deadLetterWindo
       message: `last worker heartbeat was ${s(h.worker_heartbeat_age_seconds)} ago (limit ${s(t.heartbeatAgeSeconds)}): the worker is down`,
     });
   }
+  const verifyLimit = t.archiveVerifyAgeSeconds ?? 0;
+  if (verifyLimit > 0 && h.archive_verify_age_seconds !== null && h.archive_verify_age_seconds > verifyLimit) {
+    findings.push({
+      check: 'archive_verify',
+      value: h.archive_verify_age_seconds,
+      threshold: verifyLimit,
+      message: `the WORM archive last passed verification ${hours(h.archive_verify_age_seconds)} ago (limit ${hours(verifyLimit)}): the nightly verification is not running or keeps failing (docs/runbooks/worm-archive.md)`,
+    });
+  }
+  const lagLimit = t.archiveLagSeconds ?? 0;
+  if (lagLimit > 0 && h.archive_lag_seconds !== null && h.archive_lag_seconds > lagLimit) {
+    findings.push({
+      check: 'archive_lag',
+      value: h.archive_lag_seconds,
+      threshold: lagLimit,
+      message: `the oldest audit event not yet in the WORM archive is ${s(h.archive_lag_seconds)} old (limit ${s(lagLimit)}): the archiver is behind or stopped (docs/runbooks/worm-archive.md)`,
+    });
+  }
   if (h.notify_queue_usage * 100 > t.notifyQueuePercent) {
     findings.push({
       check: 'notify_queue',
@@ -291,7 +327,7 @@ export async function readHealth(databaseUrl: string, deadLetterWindowSeconds: n
     // both statements on one server connection and leaves nothing set on it (#1894 review).
     await client.query('BEGIN READ ONLY');
     await client.query(`SELECT pg_catalog.set_config('crove.prober_modules', $1, true)`, [modules.join(',')]);
-    const { rows } = await client.query<HealthSnapshot>(
+    const { rows } = await client.query<Omit<HealthSnapshot, 'notify_queue_usage' | 'archive_verify_age_seconds' | 'archive_lag_seconds'>>(
       `SELECT checked_at::text AS checked_at, outbox_pending, outbox_oldest_age_seconds, inbound_pending, inbound_oldest_age_seconds,
               jobs_schema_present, jobs_queued, job_oldest_queued_age_seconds, dead_letter_count, worker_heartbeat_age_seconds
        FROM crove_kernel.health($1::int)`,
@@ -299,9 +335,18 @@ export async function readHealth(databaseUrl: string, deadLetterWindowSeconds: n
     );
     const row = rows[0];
     if (!row) throw new Error('crove_kernel.health() returned no row');
+    // The WORM archive's two ages (#1997), from a function of their own: health()'s columns never change.
+    const { rows: archive } = await client.query<Pick<HealthSnapshot, 'archive_verify_age_seconds' | 'archive_lag_seconds'>>(
+      'SELECT archive_verify_age_seconds, archive_lag_seconds FROM crove_kernel.archive_health()',
+    );
     const { rows: queue } = await client.query<{ usage: number }>('SELECT pg_catalog.pg_notification_queue_usage() AS usage');
     await client.query('COMMIT');
-    return { ...row, notify_queue_usage: Number(queue[0]?.usage ?? 0) };
+    return {
+      ...row,
+      notify_queue_usage: Number(queue[0]?.usage ?? 0),
+      archive_verify_age_seconds: archive[0]?.archive_verify_age_seconds ?? null,
+      archive_lag_seconds: archive[0]?.archive_lag_seconds ?? null,
+    };
   } finally {
     await client.end().catch(() => {});
   }

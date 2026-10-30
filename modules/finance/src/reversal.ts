@@ -18,7 +18,7 @@ import { z } from 'zod';
 import { zJournalReversal, type DocumentDirection, type JournalReversal } from '@crove/kernel-contract';
 import { DomainError, defineCommand, type CommandContext } from '@crove/kernel-runtime';
 import { OPENING_BALANCE_SOURCE } from './domain/opening-balance.ts';
-import { postJournalEntry } from './ledger.ts';
+import { postNewEntry } from './ledger.ts';
 
 export { zJournalReversal, type JournalReversal };
 
@@ -174,7 +174,7 @@ export async function postReversal(
     .where('entry_id', '=', entry.id)
     .orderBy('line_no')
     .execute();
-  const journalEntryId = await postJournalEntry(ctx, {
+  const journalEntryId = await postNewEntry(ctx, {
     entryDate,
     description: `Đảo bút toán ngày ${entry.entry_date}: ${entry.description} (lý do: ${reason})`,
     // The approval that ordered it; the original is reverses_entry_id.
@@ -190,8 +190,10 @@ export async function postReversal(
       memo: l.memo,
     })),
   }).catch((error: { code?: string; constraint?: string; message?: string }) => {
-    // A concurrent reversal of the same entry committed first: its insert held the unique index.
+    // A concurrent reversal of the same entry committed first: its insert held the unique index. Or this approval's
+    // reversal is already posted (ALREADY_POSTED, a replay of it, #1925).
     if (error?.code === '23505' && error.constraint === 'journal_entry_reverses_uq') throw ALREADY_REVERSED();
+    if (error?.code === 'ALREADY_POSTED') throw ALREADY_REVERSED();
     // The original is posted, so it balances and has at least 2 lines, and the date and reversal rules were checked
     // above: a mirror the database still refuses (not a mirror, unbalanced, too few lines) was built from fewer lines
     // than the entry has, because the approver cannot see them all.

@@ -2,7 +2,7 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import { useRef, useState, type DragEvent } from 'react';
 import { useTranslations } from 'use-intl';
-import { JOURNAL_VOUCHER_KIND } from '@crove/kernel-contract';
+import { JOURNAL_VOUCHER_KIND, type FileStatus } from '@crove/kernel-contract';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
@@ -23,7 +23,7 @@ import { getConfig } from '../lib/auth.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { REVERSAL_KIND } from '../lib/reversal.ts';
 import { providerName } from '../lib/social.ts';
-import { FILE_STATE_VARIANT, type FileState } from '../lib/status.ts';
+import { FILE_STATE_VARIANT, fileChipVariant, fileProposal, type FileState } from '../lib/status.ts';
 import { toast } from '../lib/toast.ts';
 import { VOUCHER_KIND } from '../lib/vouchers.ts';
 import {
@@ -253,6 +253,12 @@ function SocialMails({ slug }: { slug: string }) {
 export function InboxPage() {
   const { slug } = useParams({ strict: false }) as { slug: string };
   const t = useTranslations('inbox');
+  const proposalWords = useTranslations('inboxDetail.status');
+  // A file's chip words: a proposed file says its proposal's status (#2009), any other its own.
+  const fileWords = (file: FileStatus) => {
+    const proposal = fileProposal(file.status, file.proposalStatus);
+    return proposal ? proposalWords(proposal) : isFileStatus(file.status) ? t(`fileStatus.${file.status}`) : file.status;
+  };
   const f = useFormat();
   // The tab lives in the address (#1513), left out for the pending proposals.
   const search: InboxSearch = useSearch({ strict: false });
@@ -518,12 +524,14 @@ export function InboxPage() {
             {files.data?.slice(0, 8).map((file) => (
               <span
                 key={file.id}
+                data-testid="recent-file"
                 className="inline-flex max-w-full items-center gap-2 rounded-lg border bg-card px-2.5 py-1.5 text-xs"
                 title={file.error ?? undefined}
               >
                 <span className="max-w-[16rem] truncate text-muted-foreground">{file.filename}</span>
-                <Badge variant={isFileStatus(file.status) ? FILE_STATE_VARIANT[file.status] : 'secondary'}>
-                  {isFileStatus(file.status) ? t(`fileStatus.${file.status}`) : file.status}
+                {/* A proposed file shows its proposal's status (#2009): waiting, posted or rejected. */}
+                <Badge variant={isFileStatus(file.status) ? fileChipVariant(file.status, file.proposalStatus) : 'secondary'}>
+                  {fileWords(file)}
                 </Badge>
                 {file.status === 'failed' && file.canReextract && (
                   <button

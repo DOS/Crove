@@ -121,10 +121,10 @@ suite('prober privileges', () => {
       { fn: 'crove_kernel.worker_build_lag(timestamp with time zone)', prosecdef: true, proconfig: PINNED },
     ]);
     // #1997: crove_kernel.archive_health(), the WORM archive's two ages (times only, no tenant data), for crove_prober
-    // alone and a pinned definer, once it exists. This copy accepts it absent, so the migration that adds it can land
-    // while this suite runs from base; that PR then requires it.
+    // alone and a pinned definer.
     const archive = await admin.query<{ oid: number | null }>(`SELECT to_regprocedure('crove_kernel.archive_health()')::oid AS oid`);
     const archiveOid = archive.rows[0]?.oid ?? null;
+    expect(archiveOid).not.toBeNull();
     if (archiveOid !== null) {
       const runners = await admin.query<{ role: string }>(`SELECT r AS role FROM unnest($1::text[]) r WHERE has_function_privilege(r, $2::oid, 'EXECUTE') ORDER BY 1`, [
         roles,
@@ -138,12 +138,31 @@ suite('prober privileges', () => {
       expect(answer.fields.map((f) => f.name)).toEqual(['archive_verify_age_seconds', 'archive_lag_seconds']);
       expect(answer.rows).toHaveLength(1);
     }
+    // #1998: crove_kernel.extraction_health(integer), the counts of failed document readings in a window (counts only,
+    // no tenant data), for crove_prober alone and a pinned definer, once it exists. This copy accepts it absent, so the
+    // migration that adds it can land while this suite runs from base; that PR then requires it.
+    const extraction = await admin.query<{ oid: number | null }>(`SELECT to_regprocedure('crove_kernel.extraction_health(integer)')::oid AS oid`);
+    const extractionOid = extraction.rows[0]?.oid ?? null;
+    if (extractionOid !== null) {
+      const runners = await admin.query<{ role: string }>(`SELECT r AS role FROM unnest($1::text[]) r WHERE has_function_privilege(r, $2::oid, 'EXECUTE') ORDER BY 1`, [
+        roles,
+        extractionOid,
+      ]);
+      expect(runners.rows).toEqual([{ role: 'crove_prober' }]);
+      const def = await admin.query(`SELECT p.prosecdef, p.proconfig FROM pg_proc p WHERE p.oid = $1::oid`, [extractionOid]);
+      expect(def.rows).toEqual([{ prosecdef: true, proconfig: PINNED }]);
+      // It answers the two counts and nothing else.
+      const answer = await admin.query('SELECT * FROM crove_kernel.extraction_health(3600)');
+      expect(answer.fields.map((f) => f.name)).toEqual(['service_failures', 'document_failures']);
+      expect(answer.rows).toHaveLength(1);
+    }
     // crove_prober executes no other Crove function.
     const others = await admin.query<{ fn: string }>(
       `SELECT p.oid::regprocedure::text AS fn FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
        WHERE n.nspname LIKE 'crove\\_%' AND n.nspname <> 'crove_jobs'
          AND p.oid NOT IN ('crove_kernel.health(integer)'::regprocedure, 'crove_kernel.prober_alert_gate(text,integer)'::regprocedure,
-                           COALESCE(to_regprocedure('crove_kernel.archive_health()')::oid, 0))
+                           COALESCE(to_regprocedure('crove_kernel.archive_health()')::oid, 0),
+                           COALESCE(to_regprocedure('crove_kernel.extraction_health(integer)')::oid, 0))
          AND has_function_privilege('crove_prober', p.oid, 'EXECUTE')`,
     );
     expect(others.rows).toEqual([]);
@@ -186,6 +205,9 @@ suite('prober privileges', () => {
     // health()'s result stays as it is: every migration file must re-apply on the final schema (migrate.db.test.ts),
     // so its result columns never change; the WORM archive's ages come from archive_health() (#1997).
     expect(Object.keys(rows[0] as object)).toEqual(columns);
+    // The WORM archive's two ages (#1997): times only.
+    const archive = await prober.query('SELECT * FROM crove_kernel.archive_health()');
+    expect(archive.fields.map((f) => f.name)).toEqual(['archive_verify_age_seconds', 'archive_lag_seconds']);
     const refused = [
       'SELECT 1 FROM crove_kernel.tenant LIMIT 1',
       'SELECT 1 FROM crove_kernel.outbox_event LIMIT 1',
