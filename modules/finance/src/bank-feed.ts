@@ -8,6 +8,7 @@
 //   an existing mapping at another bank account of the same entity.
 // - finance.bank_feed.unmap: removes a mapping; the lines it brought in stay, as imported ones do.
 // - finance.bank_feed.accounts: the mappings the caller's entities hold, with their connection's name and status.
+import { sql } from 'kysely';
 import { z } from 'zod';
 import type { MemberRole } from '@crove/db';
 import { isBankFeedProviderId, zBankFeedMap, zId, type BankFeedAccountView } from '@crove/kernel-contract';
@@ -36,6 +37,9 @@ export const bankFeedMap = defineCommand({
     if (connection.status !== 'active') throw new DomainError('BANK_FEED_INACTIVE', 422, 'Kết nối nguồn giao dịch ngân hàng không còn hoạt động; hãy kết nối lại');
     await bankAccount(ctx, input.bankAccount, true);
     const legalEntityId = await resolveLegalEntity(ctx, input.legalEntityId);
+    // Two maps of one account at once: the second waits, then finds the first's row and remaps it (a FOR UPDATE of a
+    // row that does not exist yet would lock nothing).
+    await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`crove.bank_feed:${ctx.orgId}:${connection.id}:${input.externalAccountId}`}, 0))`.execute(ctx.trx);
     const existing = await ctx.trx
       .selectFrom('crove_finance.bank_feed_account')
       .select(['id', 'legal_entity_id'])

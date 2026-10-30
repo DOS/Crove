@@ -444,20 +444,32 @@ suite('bank statement import (#326)', () => {
     expect(connected.status).toBe(200);
     expect(connected.body.accounts.map((a: { externalAccountId: string }) => a.externalAccountId)).toEqual(['SBX-001', 'SBX-002']);
     const connectionId = String(connected.body.connectionId);
-    // Sealed like any channel's: the secret is nowhere in the row the API wrote.
+    // Sealed like any channel's: a credential row holds it, and no audit row or answer carries a sandbox secret.
     const stored = await admin(async (c) => (await c.query<{ provider: string }>('SELECT provider FROM crove_kernel.channel_connection WHERE org_id = $1 AND id = $2', [orgId, connectionId])).rows);
     expect(stored).toEqual([{ provider: 'bank_sandbox' }]);
+    expect(Number((await admin(async (c) => (await c.query<{ n: string }>('SELECT count(*) AS n FROM crove_kernel.credential WHERE org_id = $1', [orgId])).rows[0]?.n)))).toBeGreaterThan(0);
+    expect(JSON.stringify(connected.body)).not.toMatch(/sbx_/);
+    expect(
+      await admin(async (c) => (await c.query(`SELECT 1 FROM crove_kernel.audit_event WHERE org_id = $1 AND detail::text LIKE '%sbx\\_%'`, [orgId])).rows),
+    ).toEqual([]);
     expect((await rpc('channels/list', await tokenFor(owner), {}, slug, feedApp)).body.map((c: { id: string }) => c.id)).not.toContain(connectionId);
 
     const map = (who: Account, input: Record<string, unknown>) => feed('map', who, { connectionId, externalAccountId: 'SBX-001', bankAccount: '1121.VCB', idempotencyKey: randomUUID(), ...input });
     expect((await map(member, {})).status).toBe(403);
+    expect((await map(viewer, {})).status).toBe(403);
     expect(await map(owner, { bankAccount: '331' })).toMatchObject({ status: 422, body: { code: 'NOT_A_BANK_ACCOUNT' } });
     expect(await map(owner, { bankAccount: '1121.OLD' })).toMatchObject({ status: 422, body: { code: 'ACCOUNT_INACTIVE' } });
     const mapped = await map(owner, {});
     expect(mapped.status).toBe(200);
-    // Mapping it again points it at another bank account of the same entity.
+    // Mapping it again points it at another bank account of the same entity; another entity takes an unmap first.
     const again = await map(owner, { bankAccount: '1121' });
     expect(again.body.feedAccountId).toBe(mapped.body.feedAccountId);
+    const branch = await admin(
+      async (c) =>
+        (await c.query<{ id: string }>(`INSERT INTO crove_kernel.legal_entity (org_id, name, kind, created_by) VALUES ($1, 'Chi nhánh ngân hàng', 'branch', $2) RETURNING id`, [orgId, owner.userId])).rows[0]
+          ?.id as string,
+    );
+    expect(await map(owner, { bankAccount: '1121', legalEntityId: branch })).toMatchObject({ status: 409, body: { code: 'BANK_FEED_ACCOUNT_MAPPED' } });
     const listed = await feed('accounts', viewer);
     expect(listed.status).toBe(200);
     expect(listed.body).toMatchObject([

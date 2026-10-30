@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS crove_finance.bank_feed_account (
   CONSTRAINT bank_feed_account_connection_fk FOREIGN KEY (org_id, channel_connection_id) REFERENCES crove_kernel.channel_connection (org_id, id),
   CONSTRAINT bank_feed_account_entity_fk FOREIGN KEY (org_id, legal_entity_id) REFERENCES crove_kernel.legal_entity (org_id, id)
 );
-CREATE INDEX IF NOT EXISTS bank_feed_account_entity_idx ON crove_finance.bank_feed_account (org_id, legal_entity_id);
+-- Entity first, as the finance tables' entity indexes are (20261102140000).
+CREATE INDEX IF NOT EXISTS bank_feed_account_entity_idx ON crove_finance.bank_feed_account (legal_entity_id, org_id);
 
 SELECT crove_kernel.apply_tenant_rls('crove_finance.bank_feed_account');
 -- A mapping is made and removed whole; a pull moves its cursor, and an owner or admin may point it at another bank account.
