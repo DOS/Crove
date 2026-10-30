@@ -10,7 +10,7 @@ import { Card } from '@crove/ui/components/card';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { TableCell, TableRow } from '@crove/ui/components/table';
 import { useChosenEntity } from '../components/entity-switcher.tsx';
-import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
+import { CardSkeleton, DataTable, Empty, ErrorText, ListSkeleton, PageHeader, Spinner } from '../components/ui.tsx';
 import { PortalSyncPanel } from '../components/portal-sync.tsx';
 import { getConfig } from '../lib/auth.ts';
 import { canSyncFromPortal } from '../lib/portal-sync.ts';
@@ -132,7 +132,7 @@ function MissingInvoiceRequest({ period, missing, editor, canManage, slug }: { p
   const entity = useChosenEntity();
   const reminder = useMutation(orpc.missingInvoices.setReminder.mutationOptions({ onSettled: refresh }));
   const data = status.data;
-  if (status.isLoading) return <Spinner />;
+  if (status.isLoading) return <CardSkeleton />;
   if (status.error) return <ErrorText>{errorMessage(status.error)}</ErrorText>;
   if (!data) return null;
   const contact = data.contactEmail;
@@ -360,7 +360,7 @@ export function PortalListPage() {
       )}
 
       {report.isPending ? (
-        <Spinner />
+        <ListSkeleton />
       ) : report.error ? (
         <ErrorText>{errorMessage(report.error)}</ErrorText>
       ) : data ? (

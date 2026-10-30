@@ -14,7 +14,7 @@ import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { TableCell, TableRow } from '@crove/ui/components/table';
 import { StepUpPrompt } from '../components/two-factor.tsx';
-import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
+import { DataTable, Empty, ErrorText, ListSkeleton, PageHeader, Spinner, TableSkeleton } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import {
   EVERY_ENTITY,
@@ -669,7 +669,7 @@ function Templates({ perms, entities, entitiesReady }: { perms: AgentPermissions
         </div>
       )}
       {templates.isPending ? (
-        <Spinner />
+        <ListSkeleton rows={2} />
       ) : templates.error ? (
         <ErrorText>{errorMessage(templates.error)}</ErrorText>
       ) : templates.data.length === 0 ? (
@@ -817,7 +817,7 @@ function Budgets({ agents, perms }: { agents: Agent[]; perms: AgentPermissions }
       <h2 className="text-sm font-semibold text-foreground">{t('budgetsTitle')}</h2>
       <p className="mt-1 mb-3 text-xs text-muted-foreground">{t('budgetsHint')}</p>
       {budgets.isPending ? (
-        <Spinner />
+        <TableSkeleton columns={4} rows={3} />
       ) : budgets.error ? (
         <ErrorText>{errorMessage(budgets.error)}</ErrorText>
       ) : budgets.data.length === 0 ? (
@@ -869,7 +869,7 @@ export function AgentsPage() {
     <div>
       <PageHeader title={t('title')} subtitle={t('subtitle')} actions={perms.stop ? <StopAi /> : undefined} />
       {chart.isPending ? (
-        <Spinner />
+        <ListSkeleton />
       ) : chart.error ? (
         <ErrorText>{errorMessage(chart.error)}</ErrorText>
       ) : (

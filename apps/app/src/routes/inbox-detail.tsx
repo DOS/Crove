@@ -16,7 +16,7 @@ import { ConfirmDialog } from '../components/confirm-dialog.tsx';
 import { DateInput } from '../components/date-input.tsx';
 import { useLegalEntity } from '../components/entity-switcher.tsx';
 import { StepUpPrompt } from '../components/two-factor.tsx';
-import { ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
+import { CardSkeleton, DocumentSkeleton, ErrorText, ListSkeleton, PageHeader, ProposalSkeleton, RowsSkeleton, Spinner } from '../components/ui.tsx';
 import { accountLabel, pickableAccounts } from '../lib/accounts.ts';
 import { errorMessage, fetchFile, isStepUpRequired, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
@@ -64,7 +64,7 @@ function FilePreview({ fileId, contentType, filename }: { fileId: string; conten
     };
   }, [fileId]);
   if (error) return <ErrorText>{errorMessage(error)}</ErrorText>;
-  if (!url) return <Spinner />;
+  if (!url) return <DocumentSkeleton image={contentType.startsWith('image/')} />;
   if (contentType.startsWith('image/')) return <img src={url} alt={filename} className="w-full rounded-lg border" />;
   if (contentType === 'application/pdf')
     return (
@@ -106,7 +106,7 @@ function ReversalCard({ reversal, slug }: { reversal: { entryId: string; entryDa
         </div>
       </div>
       {entry.isLoading ? (
-        <Spinner />
+        <CardSkeleton />
       ) : entry.error ? (
         <ErrorText>{errorMessage(entry.error)}</ErrorText>
       ) : entry.data ? (
@@ -312,8 +312,8 @@ function InboxQueue({ slug, current }: { slug: string; current: string }) {
     <section aria-label={t('queue')} className="sticky top-6 max-h-[calc(100dvh-3rem)] overflow-y-auto rounded-lg border bg-card">
       <p className="border-b px-3 py-2 text-xs font-medium text-subtle-foreground">{t('queue')}</p>
       {pending.isPending ? (
-        <div className="p-3">
-          <Spinner />
+        <div className="px-3">
+          <RowsSkeleton />
         </div>
       ) : pending.error ? (
         // A failed load is not an empty queue.
@@ -534,7 +534,7 @@ function InboxDetail({ slug, id, split }: { slug: string; id: string; split: boo
   };
   useReviewShortcuts(handlers);
 
-  if (detail.isLoading) return <Spinner />;
+  if (detail.isLoading) return <ProposalSkeleton />;
   if (detail.error) return <ErrorText>{errorMessage(detail.error)}</ErrorText>;
   if (!item) return null;
   // A foreign-currency invoice converted at a rate is shown in VND, its amounts as booked (#918).
@@ -1151,7 +1151,7 @@ function ProposalTimeline({ id, documentId }: { id: string; documentId: string |
     <Card className="mt-6 block p-4" data-testid="timeline">
       <p className="mb-3 text-sm font-medium text-muted-foreground">{t('timeline')}</p>
       {timeline.isLoading ? (
-        <Spinner />
+        <ListSkeleton rows={2} />
       ) : timeline.error ? (
         <ErrorText>{errorMessage(timeline.error)}</ErrorText>
       ) : items.length === 0 ? (

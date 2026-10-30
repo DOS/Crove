@@ -12,7 +12,7 @@ import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { TableCell, TableRow } from '@crove/ui/components/table';
 import { Tabs, TabsList, TabsTrigger } from '@crove/ui/components/tabs';
-import { DataTable, Empty, ErrorText, ListSkeleton, PageHeader, Spinner } from '../components/ui.tsx';
+import { DataTable, Empty, ErrorText, ListSkeleton, PageHeader, PageSkeleton, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { OPEN_TASK_STATUSES, TASK_LIST_LIMIT, TASK_STATUSES, agentPermissions, fromTodo, socialPostOf, type TaskFilter, type TaskStatus, type TasksSearch } from '../lib/agents.ts';
 import { errorMessage, orpc, queryClient } from '../lib/api.ts';
@@ -168,7 +168,14 @@ export function TaskDetailPage() {
       {t('back')}
     </Link>
   );
-  if (detail.isPending) return <Spinner />;
+  if (detail.isPending) {
+    return (
+      <div className="space-y-3">
+        {back}
+        <PageSkeleton body="list" />
+      </div>
+    );
+  }
   if (detail.error) {
     return (
       <div className="space-y-3">
