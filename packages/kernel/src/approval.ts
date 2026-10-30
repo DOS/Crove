@@ -46,7 +46,7 @@ interface CommandPolicy {
 // (role_key, scope) keeps it from naming an entity), and no entity-scoped role holds an approval permission (#1507;
 // roles.db.test.ts pins the table). So its holders cover every legal entity a proposal names (#1538, #2060). Should an
 // entity role ever hold it, eligibility must first become "holds it for the proposal's entity", here and in the
-// database's gate (crove_kernel.proposal_approve, #1793).
+// database (crove_kernel.proposal_approval_decide, approval_eligible_now and the chief accountant keep guard, #1793).
 export const LEDGER_APPROVE_PERMISSION = 'finance.proposal.approve';
 
 // Approval policy per proposal command. Every proposal command today is R3 and posts to the ledger, so the roles that
