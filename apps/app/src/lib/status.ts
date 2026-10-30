@@ -40,11 +40,16 @@ export type FileState = keyof typeof FILE_STATE_VARIANT;
 // The proposal a file's chip shows (#2009): a proposed file looks as its proposal does, waiting for a person in the
 // proposal hue, posted in success, rejected as a rejected proposal (DESIGN.md principle 2). Null for any other state,
 // which keeps its file chip.
-export function fileProposal(state: string, proposalStatus: ProposalStatus | null): ProposalStatus | null {
-  return state === 'proposed' ? proposalStatus : null;
+// A posting voided by a reversal (#2032) is no longer in the books: it says so, in the error chip the proposal page gives
+// it, never as posted.
+export type FileProposalChip = ProposalStatus | 'voided';
+
+export function fileProposal(state: string, proposalStatus: ProposalStatus | null, voided = false): FileProposalChip | null {
+  if (state !== 'proposed' || !proposalStatus) return null;
+  return voided && proposalStatus === 'executed' ? 'voided' : proposalStatus;
 }
 
-export function fileChipVariant(state: FileState, proposalStatus: ProposalStatus | null): ChipVariant {
-  const proposal = fileProposal(state, proposalStatus);
-  return proposal ? PROPOSAL_STATUS_VARIANT[proposal] : FILE_STATE_VARIANT[state];
+export function fileChipVariant(state: FileState, proposalStatus: ProposalStatus | null, voided = false): ChipVariant {
+  const proposal = fileProposal(state, proposalStatus, voided);
+  return proposal === 'voided' ? 'destructive' : proposal ? PROPOSAL_STATUS_VARIANT[proposal] : FILE_STATE_VARIANT[state];
 }
