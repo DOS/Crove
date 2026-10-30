@@ -162,8 +162,8 @@ export interface ProberConfig {
   authTimeoutSeconds?: number;
   // The verification marker check (#2082); unset: off. A setting the check cannot use (error) disables the check, which
   // then reports it on every probe: it never stops the other probes or the backup and test alerts (#2094).
-  // workerKey: the error is the worker's key in a shared environment, which a deployment's .env always has (the pilot
-  // preflight leaves it out).
+  // workerKey: the error is the worker's key in the prober's own environment (a prober run from the shared .env). The pilot
+  // preflight reads the prober as Compose runs it, without that key, so it never sees this one.
   archiveMarker?: ({ maxAgeSeconds: number } & ({ store: ArchiveStoreSettings } | { error: string; workerKey?: true })) | undefined;
 }
 
