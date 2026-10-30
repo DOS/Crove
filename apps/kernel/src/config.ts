@@ -574,6 +574,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     if (config.AUTH_AUTOCONFIRM === 'true') {
       throw new Error('AUTH_AUTOCONFIRM=true lets anyone claim any email address; set it to false and configure SMTP');
     }
+    // ADR-0039 point 3: the sandbox feed writes made-up bank lines, so it stays on development deployments.
+    if (config.BANK_FEED_SANDBOX === 'true') {
+      throw new Error('BANK_FEED_SANDBOX=true writes made-up bank lines into the books; it is for local development only');
+    }
     if (config.AUTH_SESSION_CHECK === 'off') {
       throw new Error('AUTH_SESSION_CHECK=off keeps signed-out sessions working; use db (bundled Supabase Auth) or jwt');
     }

@@ -64,6 +64,9 @@ describe('configuration guards', () => {
     expect(() => loadConfig(local)).not.toThrow();
     expect(() => loadConfig({ ...local, PUBLIC_URL: 'https://books.example.com' })).toThrow(/sample value/);
     expect(() => loadConfig({ ...base, AUTH_AUTOCONFIRM: 'true', PUBLIC_URL: 'https://books.example.com' })).toThrow(/AUTH_AUTOCONFIRM/);
+    // The sandbox bank feed (ADR-0039): made-up bank lines, never on a deployment others reach.
+    expect(() => loadConfig({ ...base, BANK_FEED_SANDBOX: 'true' })).not.toThrow();
+    expect(() => loadConfig({ ...base, BANK_FEED_SANDBOX: 'true', PUBLIC_URL: 'https://books.example.com' })).toThrow(/BANK_FEED_SANDBOX/);
     expect(() => loadConfig({ ...base, PUBLIC_URL: 'https://books.example.com', PUBLIC_AUTH_URL: 'https://auth.example.com/auth/v1' })).not.toThrow();
   });
 
