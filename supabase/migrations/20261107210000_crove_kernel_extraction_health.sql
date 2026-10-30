@@ -11,8 +11,10 @@
 --   document_failures   the others: the document itself could not be read (not an invoice, unreadable, unsupported,
 --                       AI switched off or not configured), which pages nobody. An event written before #1998 carries no
 --                       reason and counts here.
--- Counts only, no tenant data. The window is clamped to 60 s .. 1 day, and each count stops at 10000; the events are
--- read through the outbox's BRIN index on created_at, so only the window's rows are visited.
+-- Counts only, no tenant data. The window is clamped to 60 s .. 1 day. Each kind is counted on its own and stops at
+-- 10001, one past the prober's highest limit (10000), so many document failures never hide a service failure and a
+-- count at the limit still shows as over it. The events are read through the outbox's BRIN index on created_at, so
+-- only the window's rows are visited.
 --
 -- A function of its own, as archive_health() (#1997): health()'s result never changes (every migration file must
 -- re-apply on the final schema). The invariant suite lets crove_prober execute this one since #2039.
@@ -25,12 +27,17 @@ DECLARE
   v_since constant timestamptz := pg_catalog.now()
     - pg_catalog.make_interval(secs => LEAST(GREATEST(COALESCE(p_window_seconds, 3600), 60), 86400));
 BEGIN
-  SELECT pg_catalog.count(*) FILTER (WHERE f.reason = 'service')::int, pg_catalog.count(*) FILTER (WHERE f.reason IS DISTINCT FROM 'service')::int
-    INTO service_failures, document_failures
+  SELECT pg_catalog.count(*)::int INTO service_failures
     FROM (
-      SELECT e.payload ->> 'reason' AS reason FROM crove_kernel.outbox_event e
-       WHERE e.created_at > v_since AND e.type = 'kernel.file.read_failed'
-       LIMIT 10000
+      SELECT 1 FROM crove_kernel.outbox_event e
+       WHERE e.created_at > v_since AND e.type = 'kernel.file.read_failed' AND e.payload ->> 'reason' = 'service'
+       LIMIT 10001
+    ) f;
+  SELECT pg_catalog.count(*)::int INTO document_failures
+    FROM (
+      SELECT 1 FROM crove_kernel.outbox_event e
+       WHERE e.created_at > v_since AND e.type = 'kernel.file.read_failed' AND (e.payload ->> 'reason') IS DISTINCT FROM 'service'
+       LIMIT 10001
     ) f;
   RETURN NEXT;
 END $$;

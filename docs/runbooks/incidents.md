@@ -25,7 +25,7 @@ The queries in this runbook only read. The one write is the dead-letter retry in
 | Line on the page | Prober checks | Section |
 |---|---|---|
 | Cơ sở dữ liệu (database) | `probe` | 1, and [backup-and-restore.md](backup-and-restore.md) when the data is gone |
-| Xử lý chứng từ tải lên (uploaded documents) | `heartbeat`, `job_age`, `dead_letters`, `jobs_schema` | 1, 3 |
+| Xử lý chứng từ tải lên (uploaded documents) | `heartbeat`, `job_age`, `dead_letters`, `jobs_schema`, `extraction` | 1, 3, 6 |
 | Nhận hóa đơn qua email (invoices by email) | `inbound`, `heartbeat` | 2, 1 |
 | Cập nhật trực tiếp trên màn hình (live updates) | `outbox`, `notify_queue` | 2 |
 | Đăng nhập (signing in) | `auth` | 4 |
