@@ -727,4 +727,34 @@ suite('bank statement import (#326)', () => {
       await apiLogin.end();
     }
   });
+
+  // #2079: a mapping that row security hides from the caller (here a test policy; in the books, another entity's rows)
+  // answers like a visible one in another entity, not a generic conflict.
+  it('answers BANK_FEED_ACCOUNT_MAPPED for an account whose mapping the caller cannot see', async () => {
+    const connectionId = String((await feed('connectSandbox', owner, { displayName: 'Ngân hàng ẩn' })).body.connectionId);
+    await sync(connectionId);
+    const entity = await defaultEntity();
+    const at = (account: string) => ({ connectionId, externalAccountId: account, bankAccount: '1121', legalEntityId: entity, idempotencyKey: randomUUID() });
+    const mapped = await feed('map', owner, at('SBX-001'));
+    expect(mapped.status).toBe(200);
+    // Owners and admins always hold the whole-org scope today, so no entity-limited admin exists to hide a mapping: a
+    // restrictive SELECT policy stands in for the other entity's row security. It hides that one row by its id: the row an
+    // insert proposes must pass a SELECT policy too (RETURNING), so a policy on `external_account_id` would refuse the
+    // insert itself.
+    await admin((c) => c.query(`CREATE POLICY crove_test_hidden_2079 ON crove_finance.bank_feed_account AS RESTRICTIVE FOR SELECT TO crove_tenant USING (id <> '${mapped.body.feedAccountId}'::uuid)`));
+    try {
+      const refused = await feed('map', owner, at('SBX-001'));
+      expect(refused).toMatchObject({ status: 409, body: { code: 'BANK_FEED_ACCOUNT_MAPPED' } });
+      // The answer names no entity.
+      expect(JSON.stringify(refused.body)).not.toContain(entity);
+      // Another account of the connection maps as usual.
+      expect((await feed('map', owner, at('SBX-002'))).status).toBe(200);
+    } finally {
+      await admin((c) => c.query('DROP POLICY IF EXISTS crove_test_hidden_2079 ON crove_finance.bank_feed_account'));
+    }
+    // Both mappings stay, and the hidden one was left as it was.
+    const accounts = (await feed('accounts', owner)).body.filter((a: { connectionId: string }) => a.connectionId === connectionId);
+    expect(accounts).toHaveLength(2);
+    expect(accounts.find((a: { externalAccountId: string }) => a.externalAccountId === 'SBX-001').id).toBe(mapped.body.feedAccountId);
+  });
 });
