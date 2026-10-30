@@ -1937,8 +1937,8 @@ export const en = {
     // A proposal's status (lib/status.ts, #2000); executed shows executedAt with its time.
     status: {
       pending: 'Awaiting approval',
-      approved: 'Approved, running',
-      executed: 'Done',
+      approved: 'Approved',
+      executed: 'Posted',
       rejected: 'Rejected',
       failed: 'Failed to run',
       expired: 'Expired',

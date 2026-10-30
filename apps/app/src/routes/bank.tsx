@@ -223,10 +223,10 @@ function LineState({ slug, line, canEnter, onEnter }: { slug: string; line: Bank
   }
   if (line.state.status === 'proposed') {
     return (
-      // The proposal waiting for a person, in its chip (DESIGN.md §4.4, #2000), which opens it.
-      <Link to="/o/$slug/inbox/$id" params={{ slug, id: line.state.proposalId }} className="hover:underline">
-        <Badge variant="proposal">{t('state.proposed')}</Badge>
-      </Link>
+      // The proposal waiting for a person, in its chip (DESIGN.md §4.4, #2000); the chip is the link that opens it.
+      <Badge variant="proposal" className="hover:underline" render={<Link to="/o/$slug/inbox/$id" params={{ slug, id: line.state.proposalId }} />}>
+        {t('state.proposed')}
+      </Badge>
     );
   }
   if (!canEnter) return <span className="text-subtle-foreground">{t('state.open')}</span>;

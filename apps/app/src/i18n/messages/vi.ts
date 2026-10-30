@@ -1934,10 +1934,10 @@ export const vi = {
     // A proposal's status (lib/status.ts, #2000); executed shows executedAt with its time.
     status: {
       pending: 'Chờ duyệt',
-      approved: 'Đã duyệt, đang thực hiện',
-      executed: 'Đã thực hiện',
+      approved: 'Đã duyệt',
+      executed: 'Đã ghi sổ',
       rejected: 'Đã từ chối',
-      failed: 'Thực hiện lỗi',
+      failed: 'Thực hiện không thành công',
       expired: 'Đã hết hạn',
     },
     reading:

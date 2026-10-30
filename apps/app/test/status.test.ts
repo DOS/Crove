@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // One chip per state (DESIGN.md §4.4, #2000): every proposal status has its chip and its words in both languages, and a
-// proposal waiting for a person is never shown in the success green of work that is done.
+// proposal waiting for a person is shown in the proposal hue, never the success green of work that is done.
 import { describe, expect, it } from 'vitest';
 import { en } from '../src/i18n/messages/en.ts';
 import { vi } from '../src/i18n/messages/vi.ts';
@@ -18,11 +18,12 @@ describe('status chips', () => {
     }
   });
 
-  it('shows a proposal waiting for a person in the proposal hue, on a proposal and on its file alike', () => {
+  it('shows a proposal waiting for a person in the proposal hue, and an error in the error chip', () => {
     expect(PROPOSAL_STATUS_VARIANT.pending).toBe('proposal');
-    expect(FILE_STATE_VARIANT.proposed).toBe('proposal');
-    // A rejected proposal looks the same on the proposal and on its file.
-    expect(FILE_STATE_VARIANT.rejected).toBe(PROPOSAL_STATUS_VARIANT.rejected);
+    expect(PROPOSAL_STATUS_VARIANT.executed).toBe('success');
     expect(PROPOSAL_STATUS_VARIANT.failed).toBe('destructive');
+    // Files: an archive entry not filed and a file not read are errors.
+    expect(FILE_STATE_VARIANT.rejected).toBe('destructive');
+    expect(FILE_STATE_VARIANT.failed).toBe('destructive');
   });
 });

@@ -19,18 +19,20 @@ export const PROPOSAL_STATUS_VARIANT: Record<ProposalStatus, ChipVariant> = {
   expired: 'warning',
 };
 
-// A file on its way to a proposal (the Inbox's files and the intake list): the same words, the same chips. A file whose
-// proposal waits is in the proposal hue, and one whose proposal was rejected is grey, as the proposal itself.
+// A file on its way to a proposal (the Inbox's files and the intake list): one map, so a state looks the same on both.
+// `proposed` says only that the file has a proposal, posted or not, so it keeps the success chip until the file carries
+// its proposal's status (#2009). `rejected` is an archive entry that was not filed (encrypted, corrupt, too large): an
+// error, not a rejected proposal.
 export const FILE_STATE_VARIANT = {
   queued: 'secondary',
   uploading: 'brand',
   upload_failed: 'destructive',
   processing: 'brand',
   waiting: 'warning',
-  proposed: 'proposal',
+  proposed: 'success',
   duplicate: 'warning',
   failed: 'destructive',
   expanded: 'success',
-  rejected: 'secondary',
+  rejected: 'destructive',
 } as const satisfies Record<string, ChipVariant>;
 export type FileState = keyof typeof FILE_STATE_VARIANT;
