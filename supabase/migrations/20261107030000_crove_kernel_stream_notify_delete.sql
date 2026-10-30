@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: AGPL-3.0-only
 -- Crove kernel (issue #1973, from the review of #1971): the stream hint function also serves a delete trigger.
 -- Idempotent; applied files stay untouched.
 --

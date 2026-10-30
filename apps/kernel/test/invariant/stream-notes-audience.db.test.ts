@@ -435,8 +435,9 @@ suite('invariant: the hints of to-dos and notes reach only the members who may r
       await streams.author.waitFor((e) => [task, privateNote, shared].every((id) => got(e, id) >= 1), 5_000);
       for (const name of ['admin', 'member'] as const) await streams[name].waitFor((e) => got(e, shared) >= 1, 5_000);
 
-      // The private note into the trash a day ago (a change, so a second hint), then emptied by the worker's sweep.
-      await admin((a) => a.query(`UPDATE crove_notes.note SET deleted_at = now() - interval '1 day', revision = revision + 1 WHERE org_id = $1 AND id = $2`, [orgId, privateNote]));
+      // The private note into the trash 31 days ago (a change, so a second hint; the sweep keeps 30 days), then emptied
+      // by the worker's sweep.
+      await admin((a) => a.query(`UPDATE crove_notes.note SET deleted_at = now() - interval '31 days', revision = revision + 1 WHERE org_id = $1 AND id = $2`, [orgId, privateNote]));
       await streams.author.waitFor((e) => got(e, privateNote) >= 2, 5_000);
       const workerUrl = new URL(adminUrl);
       workerUrl.username = 'crove_worker';

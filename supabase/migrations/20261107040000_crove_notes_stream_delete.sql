@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: AGPL-3.0-only
 -- Crove notes (issue #1973, from the review of #1971): a hard-deleted note or to-do tells its readers' open apps.
 -- Idempotent; applied files stay untouched.
 --
