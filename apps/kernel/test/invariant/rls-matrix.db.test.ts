@@ -53,6 +53,7 @@ const MACHINERY = new Set([
 // until the table exists, neither its factory nor its MACHINERY entry is stale. Remove an entry once its table is on
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
+  'crove_finance.bank_feed_listed_account',
   'crove_notes.link',
   'crove_notes.note',
 ]);
@@ -341,6 +342,18 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
       return {
         setup: [{ table: 'crove_kernel.channel_connection', values: connection }],
         row: { org_id: o.id, id: randomUUID(), channel_connection_id: connection.id, external_account_id: 'SBX-001', bank_account: '1121' },
+      };
+    },
+  },
+  // The accounts a bank feed connection reaches, as the worker last listed them (ADR-0039, #2044 part 2b). Tenant roles
+  // update only the name and when it was listed (a column grant), so the update probes assign the name to itself.
+  'crove_finance.bank_feed_listed_account': {
+    update: { set: 'display_name = display_name' },
+    make: (o) => {
+      const connection = { ...channelConnectionRow(o), provider: 'bank_sandbox' };
+      return {
+        setup: [{ table: 'crove_kernel.channel_connection', values: connection }],
+        row: { org_id: o.id, id: randomUUID(), channel_connection_id: connection.id, external_account_id: 'SBX-001', display_name: 'Sandbox Bank 001' },
       };
     },
   },
