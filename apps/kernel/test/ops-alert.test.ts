@@ -133,8 +133,8 @@ const OWN_SINK: Readonly<Record<string, number>> = {
   'security-signals.ts [security] ALERT': 1,
   'worker.ts [archive] ALERT': 1,
   'worker.ts [period-balance] ALERT': 1,
-  // Not a log line: the preflight's text tells the operator to look for this one in the worker log.
-  'pilot-check.ts [evidence-hold] ALERT': 1,
+  // Not log lines: the preflight's manual, probe and pass lines tell the operator to look for this one in the worker log.
+  'pilot-check.ts [evidence-hold] ALERT': 3,
 };
 
 describe('ALERT lines of the kernel (#1993)', () => {
