@@ -41,6 +41,8 @@ const NOT_SHOWN: Record<string, string> = {
   EXTERNAL_POST_NOT_FOUND: 'worker',
   // A bank feed's batch (ADR-0039, #2044): finance.bank.ingest is a system command the feed job runs.
   BANK_FEED_INVALID: 'worker',
+  // A late sync's page (#2044 part 2b): only the worker's record_pull raises it.
+  BANK_FEED_CURSOR_MOVED: 'worker',
   // The tax portal sync (#325): a download already made for the synced list; fetchXml skips it, the SPA never gets it.
   PORTAL_CALL_DONE: 'portal sync',
   // The inbound mail endpoint answers the mail relay, not a browser.

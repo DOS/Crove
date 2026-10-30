@@ -540,9 +540,15 @@ suite('bank statement import (#326)', () => {
     expect((await sync(connectionId)).stored).toBe(0);
     expect((await stored('1121')).length).toBe(lines.length);
     // The pull takes the mapping's account and entity, never the job's: a page for an unknown mapping is refused.
-    await expect(worker.execute('finance.bank_feed.record_pull', { feedAccountId: randomUUID(), lines: [], cursor: '2026-11-01' }, { actor: SYSTEM, orgId })).rejects.toMatchObject({
-      code: 'BANK_FEED_ACCOUNT_NOT_FOUND',
-    });
+    await expect(
+      worker.execute('finance.bank_feed.record_pull', { feedAccountId: randomUUID(), fromCursor: null, lines: [], cursor: '2026-11-01' }, { actor: SYSTEM, orgId }),
+    ).rejects.toMatchObject({ code: 'BANK_FEED_ACCOUNT_NOT_FOUND' });
+    // A late sync's page, pulled from a cursor the account has moved past, never moves it back.
+    const at = (await admin(async (c) => (await c.query<{ cursor: string }>('SELECT cursor FROM crove_finance.bank_feed_account WHERE org_id = $1 AND id = $2', [orgId, mapped.body.feedAccountId])).rows[0]?.cursor)) as string;
+    await expect(
+      worker.execute('finance.bank_feed.record_pull', { feedAccountId: mapped.body.feedAccountId, fromCursor: '2026-01-01', lines: [], cursor: '2026-01-31' }, { actor: SYSTEM, orgId }),
+    ).rejects.toMatchObject({ code: 'BANK_FEED_CURSOR_MOVED' });
+    expect((await admin(async (c) => (await c.query<{ cursor: string }>('SELECT cursor FROM crove_finance.bank_feed_account WHERE org_id = $1 AND id = $2', [orgId, mapped.body.feedAccountId])).rows[0]?.cursor))).toBe(at);
   });
 
   it('stops syncing once the member who connected the feed may no longer use it', async () => {

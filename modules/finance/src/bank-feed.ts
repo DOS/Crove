@@ -214,13 +214,15 @@ export const bankFeedRecordPull = defineCommand({
     const mapped = await ctx.trx
       .selectFrom('crove_finance.bank_feed_account as a')
       .innerJoin('crove_kernel.channel_connection as c', (j) => j.onRef('c.org_id', '=', 'a.org_id').onRef('c.id', '=', 'a.channel_connection_id'))
-      .select(['a.id', 'a.bank_account', 'a.legal_entity_id', 'c.provider', 'c.status'])
+      .select(['a.id', 'a.bank_account', 'a.legal_entity_id', 'a.cursor', 'c.provider', 'c.status'])
       .where('a.org_id', '=', ctx.orgId)
       .where('a.id', '=', input.feedAccountId)
       .forUpdate('a')
       .executeTakeFirst();
     if (!mapped) throw new DomainError('BANK_FEED_ACCOUNT_NOT_FOUND', 404, 'Không tìm thấy tài khoản của nguồn giao dịch ngân hàng');
     if (mapped.status !== 'active') throw new DomainError('BANK_FEED_INACTIVE', 422, 'Kết nối nguồn giao dịch ngân hàng không còn hoạt động; hãy kết nối lại');
+    // Under the row lock: another sync recorded a page since this one read the cursor, so this page is stale.
+    if (mapped.cursor !== input.fromCursor) throw new DomainError('BANK_FEED_CURSOR_MOVED', 409, 'Một lần đồng bộ khác đã ghi tài khoản này trước; lần này dừng lại');
     const result =
       input.lines.length > 0
         ? await ingestFeedLines(ctx, { bankAccount: mapped.bank_account, legalEntityId: mapped.legal_entity_id, source: mapped.provider, lines: input.lines })

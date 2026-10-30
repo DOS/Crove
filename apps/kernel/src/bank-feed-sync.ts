@@ -56,7 +56,7 @@ export async function runBankFeedSync(deps: BankFeedSyncDeps, job: BankFeedSyncJ
       const pulled = await provider.pull(secret, account.externalAccountId, cursor);
       const result = await deps.runtime.execute<{ counts?: { new: number; ambiguous: number } }>(
         'finance.bank_feed.record_pull',
-        { feedAccountId: account.feedAccountId, lines: pulled.transactions, cursor: pulled.cursor },
+        { feedAccountId: account.feedAccountId, fromCursor: cursor, lines: pulled.transactions, cursor: pulled.cursor },
         options,
       );
       pages++;

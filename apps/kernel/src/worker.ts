@@ -907,15 +907,24 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     await boss.work<BankFeedSyncJob | { sweep: true }>(QUEUES.bankFeedSync, { batchSize: 1 }, async ([job]) => {
       if (!job) return;
       if ('sweep' in job.data) {
-        const { rows } = await sql<{ org_id: string; connection_id: string; provider: string }>`
-          SELECT org_id, connection_id, provider FROM crove_finance.bank_feeds_due(1000)`.execute(deps.workerDb);
-        for (const row of rows.filter((r) => Object.hasOwn(bankFeeds, r.provider))) {
-          await boss.send(QUEUES.bankFeedSync, { orgId: row.org_id, connectionId: row.connection_id } satisfies BankFeedSyncJob, {
-            singletonKey: jobKey(row.org_id, QUEUES.bankFeedSync, row.connection_id),
-            retryLimit: BANK_FEED_SYNC_RETRY_LIMIT,
-            retryDelay: 30,
-            retryBackoff: true,
-          });
+        // Every active bank feed, a page of connections at a time by key.
+        let after: { org: string; id: string } | null = null;
+        for (;;) {
+          const page: Array<{ org_id: string; connection_id: string; provider: string }> = (
+            await sql<{ org_id: string; connection_id: string; provider: string }>`
+              SELECT org_id, connection_id, provider FROM crove_finance.bank_feeds_due(${after?.org ?? null}::uuid, ${after?.id ?? null}::uuid, 1000)`.execute(deps.workerDb)
+          ).rows;
+          for (const row of page.filter((r) => Object.hasOwn(bankFeeds, r.provider))) {
+            await boss.send(QUEUES.bankFeedSync, { orgId: row.org_id, connectionId: row.connection_id } satisfies BankFeedSyncJob, {
+              singletonKey: jobKey(row.org_id, QUEUES.bankFeedSync, row.connection_id),
+              retryLimit: BANK_FEED_SYNC_RETRY_LIMIT,
+              retryDelay: 30,
+              retryBackoff: true,
+            });
+          }
+          const last = page.at(-1);
+          if (!last || page.length < 1000) break;
+          after = { org: last.org_id, id: last.connection_id };
         }
         return;
       }

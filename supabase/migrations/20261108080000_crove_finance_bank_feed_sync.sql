@@ -8,8 +8,8 @@
 -- connection itself: the name of a bank account, no entity's books.
 -- The queue finance-bank-feed-sync runs a connection's sync: list its accounts, then pull each mapped one since its
 -- cursor (finance.bank_feed.record_pull stores the lines and moves the cursor in one transaction).
--- crove_finance.bank_feeds_due(limit): the active bank feed connections of active orgs, for the worker's daily pull;
--- the worker login's alone.
+-- crove_finance.bank_feeds_due(after_org, after_id, limit): the active bank feed connections of active orgs after a key,
+-- in key order, for the worker's daily pull, which pages through them all; the worker login's alone.
 SET LOCAL lock_timeout = '2s';
 
 CREATE TABLE IF NOT EXISTS crove_finance.bank_feed_listed_account (
@@ -30,15 +30,16 @@ GRANT UPDATE (display_name, listed_at) ON crove_finance.bank_feed_listed_account
 
 SELECT crove_jobs.create_queue('finance-bank-feed-sync', '{"policy":"standard","deadLetter":"kernel-job.dlq"}'::jsonb);
 
-CREATE OR REPLACE FUNCTION crove_finance.bank_feeds_due(p_limit int)
+CREATE OR REPLACE FUNCTION crove_finance.bank_feeds_due(p_after_org uuid, p_after_id uuid, p_limit int)
 RETURNS TABLE (org_id uuid, connection_id uuid, provider text)
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
   SELECT c.org_id, c.id, c.provider
   FROM crove_kernel.channel_connection c
   JOIN crove_kernel.tenant t ON t.org_id = c.org_id AND t.status = 'active'
   WHERE c.status = 'active' AND c.provider LIKE 'bank\_%'
+    AND (p_after_org IS NULL OR (c.org_id, c.id) > (p_after_org, p_after_id))
   ORDER BY c.org_id, c.id
   LIMIT LEAST(GREATEST(p_limit, 1), 1000)
 $$;
-REVOKE ALL ON FUNCTION crove_finance.bank_feeds_due(int) FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant;
-GRANT EXECUTE ON FUNCTION crove_finance.bank_feeds_due(int) TO crove_worker;
+REVOKE ALL ON FUNCTION crove_finance.bank_feeds_due(uuid, uuid, int) FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant;
+GRANT EXECUTE ON FUNCTION crove_finance.bank_feeds_due(uuid, uuid, int) TO crove_worker;
