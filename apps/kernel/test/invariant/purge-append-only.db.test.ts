@@ -228,25 +228,39 @@ suite('the org purge alone deletes task comments and post approvals (#1032, #201
   });
 
   // Read from each function's whole definition, so a SQL-standard body counts too. A static DELETE names the table; a
-  // dynamic one takes it as an argument of format() (org_purge's own table lists), so no other function may build a
-  // DELETE of a table it is handed. Not covered: a DELETE built by concatenation, or a cascade from a parent table
+  // dynamic one gets it through format() (org_purge's own table lists), bare or behind one of these tables' schemas,
+  // so no other function may build a DELETE of a table it is handed there. Not seen: SQL a caller passes in and the
+  // function runs as given (EXECUTE p_sql), a DELETE built by string concatenation, and a cascade from a parent table
   // (today only crove_kernel.tenant, whose rows tenant_no_delete keeps).
   it('has no function but org_purge delete from task comments or post approvals', async () => {
-    const deleters = (pattern: string) =>
-      withClient(adminUrl, async (c) =>
-        (
-          await c.query<{ fn: string }>(
-            `SELECT p.oid::regprocedure::text AS fn FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-             WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND p.prokind IN ('f', 'p')
-               AND pg_get_functiondef(p.oid) ~* $1
-             ORDER BY 1`,
-            [pattern],
-          )
-        ).rows.map((r) => r.fn),
-      );
-    expect(await deleters(String.raw`delete\s+from\s+(only\s+)?"?(crove_kernel"?\s*\.\s*"?task_comment|crove_social"?\s*\.\s*"?post_approval)\M`)).toEqual([
-      'crove_kernel.org_purge(integer)',
-    ]);
-    expect(await deleters(String.raw`delete\s+from\s+(only\s+)?%`)).toEqual(['crove_kernel.org_purge(integer)']);
+    const STATIC = String.raw`delete\s+from\s+(only\s+)?"?(crove_kernel"?\s*\.\s*"?task_comment|crove_social"?\s*\.\s*"?post_approval)\M`;
+    const DYNAMIC = String.raw`delete\s+from\s+(only\s+)?("?(crove_kernel|crove_social)"?\s*\.\s*)?%`;
+    const deleters = async (c: pg.Client, pattern: string) =>
+      (
+        await c.query<{ fn: string }>(
+          `SELECT p.oid::regprocedure::text AS fn FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+           WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND p.prokind IN ('f', 'p')
+             AND pg_get_functiondef(p.oid) ~* $1
+           ORDER BY 1`,
+          [pattern],
+        )
+      ).rows.map((r) => r.fn);
+    await withClient(adminUrl, async (c) => {
+      expect(await deleters(c, STATIC)).toEqual(['crove_kernel.org_purge(integer)']);
+      expect(await deleters(c, DYNAMIC)).toEqual(['crove_kernel.org_purge(integer)']);
+
+      // The checks see a schema-qualified %I delete and a SQL-standard body (a fixture, rolled back).
+      await c.query('BEGIN');
+      try {
+        await c.query(`CREATE FUNCTION crove_social.t2011_dynamic(p_org uuid) RETURNS void LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
+          BEGIN EXECUTE pg_catalog.format('DELETE FROM crove_social.%I WHERE org_id = $1', 'post_approval') USING p_org; END $$`);
+        await c.query(`CREATE FUNCTION crove_kernel.t2011_atomic(p_org uuid) RETURNS void LANGUAGE sql SET search_path = pg_catalog, pg_temp
+          BEGIN ATOMIC DELETE FROM crove_kernel.task_comment WHERE org_id = p_org; END`);
+        expect(await deleters(c, DYNAMIC)).toEqual(['crove_kernel.org_purge(integer)', 'crove_social.t2011_dynamic(uuid)']);
+        expect(await deleters(c, STATIC)).toEqual(['crove_kernel.org_purge(integer)', 'crove_kernel.t2011_atomic(uuid)']);
+      } finally {
+        await c.query('ROLLBACK');
+      }
+    });
   });
 });
