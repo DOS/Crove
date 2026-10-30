@@ -239,4 +239,57 @@ suite('booking suggestions from a client message (#1440)', () => {
     expect(missing.status).toBe(404);
     expect(asked.length).toBe(before + 1);
   });
+
+  it("answers 404 for another org's event type, before any model call", async () => {
+    const other = await rpc('org/create', await tokenFor(owner), { name: 'Văn phòng khác', idempotencyKey: randomUUID() }, { slug: null });
+    expect(other.status).toBe(200);
+    const otherOrgId = String(other.body?.orgId);
+    const foreign = await rt.execute<EventType>(
+      'crm.event_type.create',
+      { slug: 'tu-van', title: 'Tư vấn nơi khác', description: null, durationMin: 60, bufferBeforeMin: 0, bufferAfterMin: 0, minNoticeMin: 0, horizonDays: 30, dailyLimit: null, locationKind: 'video', locationValue: null, hostUserId: owner.userId, assignment: 'single', coHostUserIds: [] },
+      { actor: asUser(owner.userId), orgId: otherOrgId },
+    );
+    const before = asked.length;
+    // The owner belongs to both orgs; the type is real, but not of the org the request names.
+    answers.push({ asksForMeeting: true, windows: [] });
+    const refused = await rpc('crm/bookings/suggest', await tokenFor(owner), { eventTypeId: foreign.id, message: 'Chiều mai được không?' });
+    expect(refused.status).toBe(404);
+    expect(asked.length).toBe(before);
+    // The queued answer was never read.
+    expect(answers).toHaveLength(1);
+    answers.length = 0;
+  });
+
+  // Last: the budget is the process's, kept per member and org, so this member of this org spends only their own.
+  it("answers 429 RATE_LIMITED with retryAfterSeconds once the member's AI budget is spent, without asking the model", async () => {
+    const limited: Account = { subject: randomUUID(), email: 'limited@suggest.test', session: randomUUID(), userId: '' };
+    const me = await rpc('me/get', await tokenFor(limited), undefined, { slug: null });
+    expect(me.status).toBe(200);
+    limited.userId = String(me.body?.userId);
+    await admin((c) => c.query("INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member')", [org.orgId, limited.userId]));
+    let refused: Awaited<ReturnType<typeof rpc>> | null = null;
+    let allowed = 0;
+    for (let i = 0; i < 10 && !refused; i++) {
+      const before = asked.length;
+      answers.push({ asksForMeeting: false, windows: [] });
+      const r = await suggest('Cảm ơn em nhé', 'on', limited);
+      if (r.status === 200) {
+        allowed++;
+        expect(asked.length).toBe(before + 1);
+      } else {
+        refused = r;
+        expect(asked.length).toBe(before);
+        // The answer queued for the refused call was not read.
+        answers.length = 0;
+      }
+    }
+    // Six a minute per member, as drafts (#386).
+    expect(allowed).toBe(6);
+    expect(refused).toMatchObject({ status: 429, body: { code: 'RATE_LIMITED' } });
+    if (!refused) throw new Error('the budget never refused');
+    const wait = (refused.body as { data?: { retryAfterSeconds?: unknown } }).data?.retryAfterSeconds;
+    expect(typeof wait).toBe('number');
+    expect(wait as number).toBeGreaterThan(0);
+    expect(wait as number).toBeLessThanOrEqual(60);
+  });
 });
