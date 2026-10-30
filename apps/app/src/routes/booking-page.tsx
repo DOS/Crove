@@ -13,8 +13,9 @@ import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { Label } from '@crove/ui/components/label';
+import { Skeleton } from '@crove/ui/components/skeleton';
 import { Textarea } from '@crove/ui/components/textarea';
-import { ErrorText, FieldError, fieldControl, focusFirstInvalid, isEmailAddress, Logo, Spinner, useFieldErrors } from '../components/ui.tsx';
+import { CardSkeleton, ErrorText, FieldError, fieldControl, focusFirstInvalid, isEmailAddress, Logo, Spinner, useFieldErrors } from '../components/ui.tsx';
 import { useLocaleSetting } from '../i18n/provider.tsx';
 import type { Locale } from '../i18n/locale.ts';
 import { getConfig } from '../lib/auth.ts';
@@ -39,6 +40,41 @@ const post = <T,>(path: string, body: unknown) => call<T>(path, { method: 'POST'
 export const whenOf = (s: Slot, zone: string, locale: Locale) =>
   `${dayLabel(zonedDate(zone, Date.parse(s.start)), locale)}, ${timeIn(s.start, zone, locale)} - ${timeIn(s.end, zone, locale)} (${zone})`;
 
+// While the week's free times load (DESIGN.md §5.3, #2005): a few days, each with a row of time buttons.
+function SlotsSkeleton() {
+  const t = useTranslations('common');
+  return (
+    <div aria-busy="true" className="space-y-3">
+      <span className="sr-only">{t('loading')}</span>
+      {[0, 1, 2].map((d) => (
+        <div key={d} className="space-y-1.5">
+          <Skeleton className="h-4 w-32" />
+          <div className="flex flex-wrap gap-1">
+            {[0, 1, 2, 3].map((i) => (
+              <Skeleton key={i} className="h-8 w-16 rounded-md" />
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// While a public booking page loads: the page's frame, its header (the org, the title, the length and place) and a card
+// where the booking appears.
+function PublicPageSkeleton() {
+  return (
+    <main className="mx-auto max-w-2xl space-y-4 p-4 sm:p-6">
+      <div className="space-y-2">
+        <Skeleton className="h-4 w-32" />
+        <Skeleton className="h-6 w-64 max-w-full" />
+        <Skeleton className="h-4 w-40" />
+      </div>
+      <CardSkeleton />
+    </main>
+  );
+}
+
 // A week of the type's free slots, with the weeks before and after; picking one calls onPick. The bookings screen
 // (#1320) uses it for a host's move too.
 export function SlotPicker({ path, zone, onPick }: { path: string; zone: string; onPick: (slot: Slot) => void }) {
@@ -51,7 +87,7 @@ export function SlotPicker({ path, zone, onPick }: { path: string; zone: string;
     queryKey: ['booking-page', path, range.from],
     queryFn: () => call<Page>(`${path}?from=${encodeURIComponent(range.from)}&to=${encodeURIComponent(range.to)}`),
   });
-  if (page.isLoading) return <Spinner />;
+  if (page.isLoading) return <SlotsSkeleton />;
   if (page.error) return <ErrorText>{errorMessage(page.error)}</ErrorText>;
   const days = slotsByDay(page.data?.slots ?? [], zone);
   return (
@@ -152,7 +188,7 @@ function Manage({ path, token, zone }: { path: string; token: string; zone: stri
     document.title = view.data ? `${view.data.eventType.title} · ${view.data.orgName}` : t('title');
   }, [view.data, t]);
 
-  if (view.isLoading) return <Spinner />;
+  if (view.isLoading) return <PublicPageSkeleton />;
   if (view.error) return <ErrorText>{errorMessage(view.error)}</ErrorText>;
   const b = view.data;
   if (!b) {
@@ -361,7 +397,7 @@ function Book({ path, zone }: { path: string; zone: string }) {
     void page.refetch();
   };
 
-  if (page.isLoading) return <Spinner />;
+  if (page.isLoading) return <PublicPageSkeleton />;
   if (page.error) return <ErrorText>{errorMessage(page.error)}</ErrorText>;
   if (!page.data) {
     return (

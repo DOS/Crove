@@ -70,6 +70,7 @@ import { createAuthenticator, type Authenticate } from './auth.ts';
 import { AVAILABLE_MODULES, assertExportKey, usageLimits, type Config, type ModuleId } from './config.ts';
 import { createCredentialBroker, noCredentialBroker } from './credentials.ts';
 import { rebindExports as rebindOrgExports } from './export-rebind.ts';
+import { numberReseedCommand, runRestoreReport } from './restore-report.ts';
 import { exportSealer } from './export-seal.ts';
 import { webhookTarget, type WebhookTarget } from './alert.ts';
 import type { SecurityThresholds } from './security-signals.ts';
@@ -158,6 +159,9 @@ export interface Kernel {
   // The operator purges an offboarded org by its deletion map and closes it, as the worker (issue #1024,
   // org-purge.ts). Resolves to the exit code.
   purgeOrg(argv: readonly string[]): Promise<number>;
+  // After a restore: what the WORM archive holds that the database lacks, and with --reseed the number series raised
+  // above it, as the worker (issue #2007, restore-report.ts). Resolves to the exit code.
+  restoreReport(argv: readonly string[]): Promise<number>;
 }
 
 // No-op defaults for the optional ports: nothing can be bound, no connector is installed, every module is on.
@@ -584,7 +588,24 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
     }
   }
 
-  return { config, modules: config.CROVE_MODULES, adapters: resolved, start, rebindExports, setUserStatus, purgeOrg };
+  // The restore-report role (#2007): the worker login is the only role that may read the archive hashes and execute
+  // crove_kernel.number_series_reseed, in the system context its command runs in. Only this runtime registers it.
+  async function restoreReport(argv: readonly string[]): Promise<number> {
+    const workerUrl = config.WORKER_DATABASE_URL;
+    if (!workerUrl) throw new Error('WORKER_DATABASE_URL is required for restore-report; run it in the worker container');
+    const { pool, db, runtime } = buildRuntime(workerUrl, 'crove-restore');
+    runtime.register({ commands: [numberReseedCommand()] });
+    try {
+      await assertRlsEnforced(pool);
+      await assertSystemContextAccess(pool, 'granted');
+      return await runRestoreReport({ db, store: createArchiveStore(config), runtime }, argv);
+    } finally {
+      // Best effort: a failure to close never hides the run's own outcome.
+      await pool.end().catch((error: unknown) => console.error('[restore-report] could not close the pool', error));
+    }
+  }
+
+  return { config, modules: config.CROVE_MODULES, adapters: resolved, start, rebindExports, setUserStatus, purgeOrg, restoreReport };
 }
 
 // The Social writer as the API uses it: drafts, rewrites, hashtags, post ideas (#1181) and period summaries (#1237) as

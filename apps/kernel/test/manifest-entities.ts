@@ -6,6 +6,7 @@ import type { ModuleManifest } from '@crove/kernel-contract';
 import { loadConfig } from '../src/config.ts';
 import { moduleDefinitions } from '../src/kernel.ts';
 import { orgPurgeCommand } from '../src/org-purge.ts';
+import { numberReseedCommand } from '../src/restore-report.ts';
 import type { Manifests } from './manifest-permissions.ts';
 
 // A doc type as crove_kernel.number_series' CHECK accepts it, optionally ending in `<column>` (EntityDeclaration).
@@ -116,7 +117,7 @@ function anyInput(): unknown {
 // kernel registers on its own). A target whose type is not a string is a problem.
 export function commandTargetTypes(): { uses: TargetUse[]; problems: string[] } {
   const config = loadConfig({ DATABASE_URL: 'postgres://localhost/x', AUTH_JWT_SECRET: 'unit-test-jwt-secret-0123456789abcdef', AUTH_ISSUER: 'crove-auth' });
-  const commands = [...moduleDefinitions(config).commands, orgPurgeCommand({ store: {} as never })];
+  const commands = [...moduleDefinitions(config).commands, orgPurgeCommand({ store: {} as never }), numberReseedCommand()];
   const uses: TargetUse[] = [];
   const problems: string[] = [];
   for (const c of commands) {

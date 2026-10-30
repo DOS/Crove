@@ -6117,6 +6117,7 @@ export const vi = {
         policy: {
           set: 'Đặt cách đánh số chứng từ',
         },
+        reseed: 'Nâng dãy số chứng từ sau khi khôi phục',
         void: 'Hủy số chứng từ',
       },
       org: {

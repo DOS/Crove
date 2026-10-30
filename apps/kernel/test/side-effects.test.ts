@@ -9,6 +9,7 @@ import { crmCommands } from '@crove/mod-crm';
 import { financeCommands } from '@crove/mod-finance';
 import { socialCommands } from '@crove/mod-social';
 import { orgPurgeCommand } from '../src/org-purge.ts';
+import { numberReseedCommand } from '../src/restore-report.ts';
 import { TEST_MANIFESTS } from './manifests.ts';
 
 // Commands whose R3 is policy, not side effect: who may change membership and roles (pinned so an annotation cannot
@@ -19,7 +20,7 @@ const POLICY_R3 = ['kernel.member.change_role', 'kernel.member.invite.create', '
 const FINANCE_POLICY = { 'finance.period.lock': 'R2', 'finance.period.unlock': 'R3' } as const;
 
 const all = (): Array<CommandDef<unknown, unknown>> =>
-  [...kernelCommands, orgPurgeCommand({ store: {} as never }), ...financeCommands, ...socialCommands, ...crmCommands] as Array<CommandDef<unknown, unknown>>;
+  [...kernelCommands, orgPurgeCommand({ store: {} as never }), numberReseedCommand(), ...financeCommands, ...socialCommands, ...crmCommands] as Array<CommandDef<unknown, unknown>>;
 
 describe('declared risk and side effects (#1563)', () => {
   it('derives R3 from financial, legal and irreversible effects, R2 from external, R1 from internal, R0 from none', () => {

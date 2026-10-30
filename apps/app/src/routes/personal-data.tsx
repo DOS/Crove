@@ -13,7 +13,7 @@ import { Button } from '@crove/ui/components/button';
 import { Input } from '@crove/ui/components/input';
 import { TableCell, TableRow } from '@crove/ui/components/table';
 import { StepUpPrompt } from '../components/two-factor.tsx';
-import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
+import { DataTable, Empty, ErrorText, PageHeader, PageSkeleton, Spinner, TableSkeleton } from '../components/ui.tsx';
 import { errorMessage, isStepUpRequired, orpc, queryClient } from '../lib/api.ts';
 
 const HANDLING_BADGE = { erase: 'warning', keep_legal: 'secondary', keep_org: 'secondary', keep_record: 'secondary' } as const;
@@ -74,7 +74,7 @@ export function PersonalDataPage() {
   const items = (notes: number, todos: number) =>
     [notes > 0 ? t('privateNotes', { count: notes }) : null, todos > 0 ? t('privateTodos', { count: todos }) : null].filter(Boolean).join(` ${t('and')} `);
 
-  if (org.isLoading) return <Spinner />;
+  if (org.isLoading) return <PageSkeleton />;
   if (org.error) return <ErrorText>{errorMessage(org.error)}</ErrorText>;
   if (!canRead) return <Empty title={t('forbidden')} />;
 
@@ -151,7 +151,7 @@ export function PersonalDataPage() {
         </div>
       )}
       {found.isFetching ? (
-        <Spinner />
+        <TableSkeleton columns={4} />
       ) : found.error ? (
         <ErrorText>{errorMessage(found.error)}</ErrorText>
       ) : !found.data ? null : !hasAny ? (

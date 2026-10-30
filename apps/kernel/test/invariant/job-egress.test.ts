@@ -11,6 +11,7 @@ import { FINANCE_NOTIFYING_EVENTS, financeCommands } from '@crove/mod-finance';
 import { CHAT_ALERTING_EVENTS, CHAT_ALERT_TEST_EVENT, NOTIFYING_EVENTS, socialCommands } from '@crove/mod-social';
 import { MAIL_QUEUES, QUEUES, SOCIAL_PUBLISH_QUEUES, TENANT_HOSTED_PROVIDERS, queueEgress, socialPublishQueue, type JobEgress } from '../../src/jobs-schema.ts';
 import { orgPurgeCommand } from '../../src/org-purge.ts';
+import { numberReseedCommand } from '../../src/restore-report.ts';
 import { DEPS_REACH, PENDING_DEPS, Sources, depsCoverage, emittersOf, reachOf, sendSites, workSites, type DynamicRuns, type Known, type WorkSite } from './job-egress.ts';
 
 const known: Known = {
@@ -58,7 +59,7 @@ function workProblems(sites: readonly WorkSite[]): string[] {
 
 const RANK = { R0: 0, R1: 1, R2: 2, R3: 3 } as const;
 const all = (): Array<CommandDef<unknown, unknown>> =>
-  [...kernelCommands, orgPurgeCommand({ store: {} as never }), ...financeCommands, ...socialCommands, ...crmCommands] as Array<CommandDef<unknown, unknown>>;
+  [...kernelCommands, orgPurgeCommand({ store: {} as never }), numberReseedCommand(), ...financeCommands, ...socialCommands, ...crmCommands] as Array<CommandDef<unknown, unknown>>;
 
 // Commands below R2 whose handlers emit an event that feeds a queue with egress, themselves or through a nested
 // command they run (ctx.run or ctx.tryRun, followed transitively). None since #1662 and #1698 (coordinator decision):

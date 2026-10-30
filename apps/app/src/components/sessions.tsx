@@ -21,7 +21,7 @@ import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
-import { ErrorText, Spinner } from './ui.tsx';
+import { ErrorText, RowsSkeleton } from './ui.tsx';
 
 // Signs this tab out; auth-js tells the other tabs, and main.tsx sends every tab to /login.
 // This browser's push subscription goes first (#1238), as with the menu's sign-out.
@@ -158,9 +158,7 @@ export function MySessions({ userId }: { userId: string }) {
       <p className="text-sm font-medium text-muted-foreground">{t('title')}</p>
       <p className="mt-1 text-xs text-subtle-foreground">{t('intro')}</p>
       {sessions.isLoading || current.isLoading ? (
-        <div className="mt-3">
-          <Spinner />
-        </div>
+        <RowsSkeleton rows={2} />
       ) : sessions.error ? (
         <div className="mt-3">
           <ErrorText>{sessionErrorMessage(sessions.error, 'self', root, locale)}</ErrorText>
@@ -298,9 +296,7 @@ function MemberSessionsPanel({ userId, name, onClose }: { userId: string; name: 
         </Button>
       </div>
       {sessions.isLoading ? (
-        <div className="mt-2">
-          <Spinner />
-        </div>
+        <RowsSkeleton rows={2} />
       ) : sessions.error ? (
         <div className="mt-2">
           <ErrorText>{sessionErrorMessage(sessions.error, 'member', root, locale)}</ErrorText>
