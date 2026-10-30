@@ -940,11 +940,12 @@ export class ArchiveMismatchError extends Error {
   }
 }
 
-// The line the worker alerts with while a restore acknowledgement is recent (#2020), in a passing run or a failing one.
+// What the worker alerts while a restore acknowledgement is recent (#2020), in a passing run or a failing one; the worker
+// posts it as its own ALERT line through opsAlert.
 export function restoreAckAlert(result: ArchiveVerification): string | null {
   if (!result.alertRestoreAck || result.restoreAck === null) return null;
   return (
-    `[archive] ALERT restore acknowledgement #${result.restoreAck}, written ${result.restoreAckWrittenAt ?? 'at a time the store cannot tell'}, ` +
+    `restore acknowledgement #${result.restoreAck}, written ${result.restoreAckWrittenAt ?? 'at a time the store cannot tell'}, ` +
     `excuses ${result.excused} row(s) the WORM archive holds: match it to a restore incident (docs/runbooks/worm-archive.md)`
   );
 }

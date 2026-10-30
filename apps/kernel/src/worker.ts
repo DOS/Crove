@@ -798,7 +798,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
         // the store's own write time, alerts on every run, passing or failing, so an operator matches it to a real
         // restore and a webhook down for a night loses nothing.
         const alert = restoreAckAlert(result);
-        if (alert) opsAlert(alert);
+        if (alert) opsAlert(`[archive] ALERT ${alert}`);
         if (!result.ok) throw new ArchiveMismatchError(result);
         const excused = result.restoreAck === null ? '' : `, excused ${result.excused} row(s) under restore acknowledgement #${result.restoreAck}`;
         console.log(`[archive] verified ${result.batches} batch(es), ${result.rows} row(s)${excused} in ${elapsed()}`);
