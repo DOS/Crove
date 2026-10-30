@@ -20,7 +20,7 @@ The queries in this runbook only read. The one write is the dead-letter retry in
 
 **Severity.** SEV1: users cannot sign in, or uploads and mail stop being processed, or data may have leaked. Tell the owner at once, whatever the hour. SEV2: one function is slow or degraded, or a few jobs failed. Tell the owner the same day. Every incident gets a short note in a GitHub issue afterwards: what broke, when, what fixed it.
 
-**The status page.** With `STATUS_FILE` set (README, "Monitoring and alerts"), users see `PUBLIC_URL/status`, which says for four functions whether they work. Each line comes from these prober checks, so a red line tells you which section to read:
+**The status page.** With `STATUS_FILE` set (README, "Monitoring and alerts"), users see `PUBLIC_URL/status`, which says for five functions whether they work. Each line comes from these prober checks, so a red line tells you which section to read:
 
 | Line on the page | Prober checks | Section |
 |---|---|---|
@@ -28,8 +28,7 @@ The queries in this runbook only read. The one write is the dead-letter retry in
 | Xử lý chứng từ tải lên (uploaded documents) | `heartbeat`, `job_age`, `dead_letters`, `jobs_schema` | 1, 3 |
 | Nhận hóa đơn qua email (invoices by email) | `inbound`, `heartbeat` | 2, 1 |
 | Cập nhật trực tiếp trên màn hình (live updates) | `outbox`, `notify_queue` | 2 |
-
-The page does not cover sign-in: when it loads, the API is up, and Supabase Auth has its own section (4).
+| Đăng nhập (signing in) | `auth` | 4 |
 
 ## 1. Stuck worker
 
@@ -161,7 +160,7 @@ The job's `name` says what failed and `output` holds the error.
 
 **Symptom.** Nobody can sign in, sign up or recover a password; the sign-in page answers "Dịch vụ đăng nhập không phản hồi" (the proxy's 503 `AUTH_UNAVAILABLE`). People already signed in keep working until their access token expires (at most 15 minutes in the compose stack, `GOTRUE_JWT_EXP=900`), because the token cannot be refreshed; then they are signed out. Approvals and other R3 actions need a fresh second factor, which needs Supabase Auth, so they fail too.
 
-**Alert.** No alert watches Supabase Auth directly yet. The deploy's smoke test checks it (`/auth/v1/health answers (Supabase Auth through the proxy)`), and the design partner usually notices first. A database outage also takes Auth down: check section 1, "The database".
+**Alert.** The prober asks Supabase Auth's `/health` on every probe, the way signing in reaches it (the kernel's `/auth/v1` proxy, or `PUBLIC_AUTH_URL` when Auth is hosted elsewhere), and pages after `PROBER_AUTH_MISSES` (default 2) failed answers in a row (one, on the first probe after the prober starts, so a restart during an outage keeps the alert open): `[Crove] ALERT ... Supabase Auth did not answer its health check 2 time(s) in a row (HTTP 503): nobody can sign in`, then `RESOLVED` once it answers again (#1994). The status page shows "Đăng nhập" as down. Under Compose the check goes through the API's `/auth/v1` proxy, so an `auth` alert with `connection failed` may also mean the API itself is down: look at the outside uptime check on `/healthz` (alerts.md, section 2). The deploy's smoke test checks it too (`/auth/v1/health answers (Supabase Auth through the proxy)`). A database outage also takes Auth down: check section 1, "The database".
 
 **Checks.**
 

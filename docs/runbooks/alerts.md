@@ -2,7 +2,7 @@
 
 How the owner of a Ludy deployment (the pilot setup, backlog item M1-9, issue #309) learns about an outage before the design partner calls. Three pieces, each set up once and tested once:
 
-1. **The prober** posts to a Telegram chat (or a Slack channel) the owner reads on the phone when background work stops moving: the relay, the job queue, the worker, the NOTIFY queue, the database, a failed backup.
+1. **The prober** posts to a Telegram chat (or a Slack channel) the owner reads on the phone when background work stops moving: the relay, the job queue, the worker, the NOTIFY queue, the database, Supabase Auth (sign-in), a failed backup.
 2. **An outside uptime check** requests `PUBLIC_URL/healthz` every 5 minutes from somewhere other than the server, and pages the owner when it fails: the API, the reverse proxy, the certificate or the whole host is down.
 3. **A heartbeat monitor** (a dead man's switch) expects a ping from the prober every probe interval, and pages the owner when the pings stop: the prober itself stopped, the host is down, the database cannot be read, or the alert path is broken (a revoked bot token, a deleted chat).
 
