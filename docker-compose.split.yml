@@ -1,6 +1,7 @@
 # Split roles on S3 storage (External-tenant gate T7): `api` and `worker` run as separate containers from the same
 # image, with STORAGE=s3 against MinIO and no shared files volume. An override of docker-compose.yml:
 #
+#   export CROVE_CONTEXT_TOKEN_KEY="$(openssl rand -base64 32)"
 #   docker compose -p crove-split -f docker-compose.yml -f docker-compose.split.yml up -d --build
 #   node tools/e2e/split-stack.mjs
 #   docker compose -p crove-split -f docker-compose.yml -f docker-compose.split.yml down -v
@@ -20,7 +21,9 @@ x-crove-env: &crove-env
   AUTH_STEP_UP: 'off'
   AUTH_UPSTREAM_URL: http://auth:9999
   DATABASE_URL: postgres://crove_app:${CROVE_APP_DB_PASSWORD:-local-app-password}@db:5432/postgres
-  CROVE_CONTEXT_TOKEN_KEY: ${CROVE_CONTEXT_TOKEN_KEY:-}
+  # The context token key (#1822) from the environment: api and worker mount no volume here (T7), so not the key file
+  # migrate would create. Generate one per run: CROVE_CONTEXT_TOKEN_KEY="$(openssl rand -base64 32)".
+  CROVE_CONTEXT_TOKEN_KEY: ${CROVE_CONTEXT_TOKEN_KEY:?set CROVE_CONTEXT_TOKEN_KEY, for example to the output of openssl rand -base64 32}
   PUBLIC_URL: http://localhost:${SPLIT_PORT:-18080}
   INBOUND_DOMAIN: inbound.crove.test
   INBOUND_SECRET: split-stack-inbound-secret-0123456789abcdef

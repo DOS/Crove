@@ -60,7 +60,6 @@ import {
   type QueryDef,
   type RuntimeOptions,
   type SessionStatusSource,
-  mintContextToken,
 } from '@crove/kernel-runtime';
 import { financeAgentPrograms, financeCommands, financeManifest, financeQueries } from '@crove/mod-finance';
 import { socialAgentPrograms, socialCommands, socialManifest, socialOverviewContributions, socialQueries } from '@crove/mod-social';
@@ -68,6 +67,7 @@ import { crmAgentPrograms, crmCommands, crmManifest, crmQueries } from '@crove/m
 import { notesCommands, notesManifest, notesQueries } from '@crove/mod-notes';
 import { createAuthenticator, type Authenticate } from './auth.ts';
 import { AVAILABLE_MODULES, assertExportKey, usageLimits, type Config, type ModuleId } from './config.ts';
+import { resolveContextTokenKey } from './context-token-key.ts';
 import { createCredentialBroker, noCredentialBroker } from './credentials.ts';
 import { rebindExports as rebindOrgExports } from './export-rebind.ts';
 import { numberReseedCommand, runRestoreReport } from './restore-report.ts';
@@ -210,13 +210,26 @@ export function moduleDefinitions(config: Config): ModuleDefinitions {
   return { commands: enabled.flatMap((m) => m.commands), queries: enabled.flatMap((m) => m.queries) };
 }
 
-// Fails the API's boot when the kernel's context token key is not the one the database holds (#1822): every user
-// command would fail otherwise. The database answers only whether a token's signature verifies.
-async function assertContextTokenKey(pool: ReturnType<typeof createPool>, key: string): Promise<void> {
-  const nil = '00000000-0000-4000-8000-000000000000';
-  const token = mintContextToken(key, { userId: nil, sessionId: null, orgId: nil, aal: 'aal1', mfaAt: null });
-  const { rows } = await pool.query<{ ok: boolean }>('SELECT crove_kernel.context_token_valid($1) AS ok', [token]);
-  if (rows[0]?.ok !== true) throw new Error('CROVE_CONTEXT_TOKEN_KEY is not the key the database holds: run the migrate step with it first');
+// The context token key from the config or its file (#1822), as a runtime option: none leaves the option out, so the
+// runtime falls back to CROVE_CONTEXT_TOKEN_KEY in the environment.
+function contextTokenKeyOption(config: Config): { contextTokenKey?: string } {
+  const key = resolveContextTokenKey(config, { create: false });
+  return key === undefined ? {} : { contextTokenKey: key };
+}
+
+// Fails the API's boot without a context token key, or with one the database does not hold (#1822): the database lets
+// crove_app enter a user's context only with a token signed by it, so every user request would fail. The database
+// answers only whether a token's signature verifies.
+async function assertContextTokenKey(runtime: ReturnType<typeof serverRuntime>): Promise<void> {
+  if (!runtime.hasContextTokenKey) {
+    throw new Error(
+      'CROVE_CONTEXT_TOKEN_KEY (or CROVE_CONTEXT_TOKEN_KEY_FILE, which the migrate step creates) is required: the database lets the API enter a ' +
+        "user's context only with a token signed by it (docs/runbooks/context-token-key.md)",
+    );
+  }
+  if (!(await runtime.contextTokenKeyInstalled())) {
+    throw new Error('CROVE_CONTEXT_TOKEN_KEY is not the key the database holds: run the migrate step with it first');
+  }
 }
 
 // The manifests of the modules CROVE_MODULES enables (plan §5.2). The runtime checks every command's declared writes
@@ -380,8 +393,10 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
       // Audit and idempotency rows hash a command's input under the deployment's key (#1732), so an exported or
       // archived row never confirms a guessed input.
       inputHash: 'keyed',
-      // User contexts entered with a token signed by the deployment's key (#1822), once one is configured.
-      contextTokenKey: config.CROVE_CONTEXT_TOKEN_KEY ?? null,
+      // User contexts entered with a token signed by the deployment's key (#1822). Without one in the config or its
+      // file, the runtime's own fallback (CROVE_CONTEXT_TOKEN_KEY in the environment); the API refuses to start with
+      // none at all.
+      ...contextTokenKeyOption(config),
       // Every user request is checked against its session (ADR-0028); the identity port never resolves to "no check".
       sessions: resolved.identity.sessions,
       stepUp: config.AUTH_STEP_UP,
@@ -438,7 +453,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
         stops.push(() => pool.end());
         await assertRlsEnforced(pool);
         await assertSystemContextAccess(pool, 'denied');
-        if (config.CROVE_CONTEXT_TOKEN_KEY) await assertContextTokenKey(pool, config.CROVE_CONTEXT_TOKEN_KEY);
+        await assertContextTokenKey(runtime);
         const authenticate = resolved.identity.authenticator(db);
         // Realtime invalidation (issue #69): one LISTEN connection per process; STREAM_MAX_CONNECTIONS=0 turns it off.
         let stream: StreamDeps | undefined;

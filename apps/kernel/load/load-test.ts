@@ -28,7 +28,7 @@
 //     (plus BACK_PRESSURE_SLACK_MS for the check itself), every background job held, interactive work running.
 //
 // Exit codes: 0 every target met, 1 a target missed, 2 the run failed.
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import { sql } from 'kysely';
@@ -36,7 +36,7 @@ import pg from 'pg';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelManifest, kernelQueries, upsertIdentity } from '@crove/kernel';
-import { Runtime, contentGeneration, fileKey, type Actor } from '@crove/kernel-runtime';
+import { Runtime, contentGeneration, fileKey, mintContextToken, type Actor } from '@crove/kernel-runtime';
 import { financeCommands, financeManifest, financeQueries } from '@crove/mod-finance';
 import { PgBoss } from 'pg-boss';
 import { BACK_PRESSURE_CHECK_MS, DEFAULT_OUTBOX_LAG_PAUSE_SECONDS, PausableWork, checkBackPressure, outboxLagSeconds } from '../src/back-pressure.ts';
@@ -578,6 +578,8 @@ export async function runLoad(args: LoadArgs, log: (line: string) => void = cons
   const base = new URL(args.adminUrl);
   base.pathname = `/${dbName}`;
   const adminUrl = base.toString();
+  // The context token key (#1822): the run's own unless one is set, installed by migrate and held by the runtime.
+  const contextTokenKey = process.env.CROVE_CONTEXT_TOKEN_KEY?.trim() || randomBytes(32).toString('base64');
   const appPassword = randomUUID();
   const workerPassword = randomUUID();
   let appPool: pg.Pool | undefined;
@@ -585,7 +587,7 @@ export async function runLoad(args: LoadArgs, log: (line: string) => void = cons
   try {
     log(`database ${dbName}: migrating`);
     // The image sets MIGRATIONS_DIR; a checkout uses the repository's migrations.
-    await migrate({ adminUrl, dir: process.env.MIGRATIONS_DIR ?? fileURLToPath(new URL('../../../supabase/migrations', import.meta.url)) });
+    await migrate({ adminUrl, dir: process.env.MIGRATIONS_DIR ?? fileURLToPath(new URL('../../../supabase/migrations', import.meta.url)), contextTokenKey });
     await setRolePasswords(adminUrl, { crove_app: appPassword, crove_worker: workerPassword });
     appPool = createPool({ connectionString: login(adminUrl, 'crove_app', appPassword), max: args.concurrency + 2 });
     // The relay, the lag sampler and the back-pressure check each hold one at a time.
@@ -594,7 +596,7 @@ export async function runLoad(args: LoadArgs, log: (line: string) => void = cons
     const worker: Db = createDb(workerPool);
     // Input hashes keyed as the server writes them (#1732), so the run measures their cost too.
     // The manifests of the modules it registers, as the server passes them (#1710, #1772).
-    const runtime = new Runtime(db, { manifests: [kernelManifest.tables, financeManifest.tables], sessions: createSessionStatusSource('off'), inputHash: 'keyed' }).register({
+    const runtime = new Runtime(db, { manifests: [kernelManifest.tables, financeManifest.tables], sessions: createSessionStatusSource('off'), inputHash: 'keyed', contextTokenKey }).register({
       commands: [...kernelCommands, ...financeCommands],
       queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries],
     });
@@ -620,7 +622,8 @@ export async function runLoad(args: LoadArgs, log: (line: string) => void = cons
     }
     // Parties to edit, read in the org's context (the app role sees tenant rows only there).
     const ids = await db.transaction().execute(async (trx) => {
-      await sql`SELECT crove_kernel.enter_context(${userId}::uuid, ${orgId}::uuid)`.execute(trx);
+      const token = mintContextToken(contextTokenKey, { userId, sessionId: null, orgId, aal: 'aal1', mfaAt: null });
+      await sql`SELECT crove_kernel.enter_user_context(${orgId}::uuid, ${token}::text)`.execute(trx);
       return (await sql<{ id: string; tax_code: string | null }>`SELECT id, tax_code FROM crove_kernel.party ORDER BY random() LIMIT ${args.commands}`.execute(trx)).rows;
     });
 

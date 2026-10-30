@@ -4,7 +4,7 @@
 // rotation keeps exactly one previous key, and the key itself is out of reach of every login role. Set
 // CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
 // Part of the invariant suite: CI runs this file from the base branch on protected-path PRs (AGENTS.md).
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -184,13 +184,60 @@ suite('context tokens: enter_user_context on PostgreSQL (#1822, ADR-0028 section
     await expect(enter(app, orgA, token(users.owner, orgA, { sessionId: revoked }))).rejects.toMatchObject({ code: '28000', message: 'SESSION_REVOKED' });
     await expect(enter(app, orgA, token(users.owner, orgA, { sessionId: revokedInA }))).rejects.toMatchObject({ code: '28000', message: 'SESSION_REVOKED_IN_ORG' });
     expect(await enter(app, orgA, token(users.owner, orgA, { sessionId: live }))).toBe(users.owner);
-    // A session the database has not recorded: let in until #1822 step 2, which requires an active session row for a
-    // session a token names (the kernel's session check records it in the same transaction), refused after it.
-    const unseen = await enter(app, orgA, token(users.owner, orgA, { sessionId: randomUUID() })).then(
-      (user) => user,
-      (error: { code?: string; message?: string }) => `${error.code}:${error.message}`,
-    );
-    expect([users.owner, '28000:SESSION_INVALID']).toContain(unseen);
+    // A session the database has not recorded, in the token this runtime mints: a v2 token (step 2) is refused, the
+    // kernel's session check recording the session it checked in the same transaction first; a v1 token (step 1's
+    // runtime against step 1's database) is let in.
+    const unrecorded = token(users.owner, orgA, { sessionId: randomUUID() });
+    if (unrecorded.startsWith('v2.')) {
+      await expect(enter(app, orgA, unrecorded)).rejects.toMatchObject({ code: '28000', message: 'SESSION_INVALID' });
+    } else {
+      expect(await enter(app, orgA, unrecorded)).toBe(users.owner);
+    }
+  });
+
+  it('checks the session the kernel checked: jwt and db tokens name one, recorded and active; db needs Supabase Auth', async () => {
+    const app = await connect(appUrl);
+    const live = randomUUID();
+    await withAdmin((a) => a.query(`INSERT INTO crove_kernel.auth_session (user_id, session_id) VALUES ($1, $2)`, [users.owner, live]));
+    const checked = (sessionId: string, sessionCheck: 'db' | 'jwt' | 'off') =>
+      mintContextToken(KEY, { userId: users.owner, orgId: orgA, sessionId, aal: 'aal1', mfaAt: null, sessionCheck });
+    expect(checked(live, 'jwt').split('.')[6]).toBe('jwt');
+    expect(await enter(app, orgA, checked(live, 'jwt'))).toBe(users.owner);
+    expect(await enter(app, orgA, checked(live, 'off'))).toBe(users.owner);
+    await expect(enter(app, orgA, checked(randomUUID(), 'jwt'))).rejects.toMatchObject({ code: '28000', message: 'SESSION_INVALID' });
+    // The db check also asks Supabase Auth, through the reader's grants: without them (this database has no auth
+    // schema) it fails closed.
+    await expect(enter(app, orgA, checked(live, 'db'))).rejects.toMatchObject({ code: '55000', message: 'AUTH_GRANTS_MISSING' });
+    // A check that names no session, signed with the key all the same, is malformed.
+    const sign = (message: string) => `${message}.${createHmac('sha256', contextTokenKeyBytes(KEY)).update(message).digest('hex')}`;
+    const exp = Math.floor(Date.now() / 1000) + 60;
+    for (const check of ['db', 'jwt', 'off']) {
+      await expect(enter(app, orgA, sign(`v2.${users.owner}.-.${orgA}.aal1.-.${check}.${exp}`)), check).rejects.toMatchObject({ code: '42501', message: 'CONTEXT_TOKEN_INVALID' });
+    }
+    // v1 (step 1's kernels, for a deploy's restarts and a rollback to step 1) is a token of no check; a v1 with a check
+    // field, or a v2 without one, is malformed.
+    expect(await enter(app, orgA, sign(`v1.${users.owner}.-.${orgA}.aal1.-.${exp}`))).toBe(users.owner);
+    // A v1 token that names a session gets step 2's session rules all the same: recorded and active, or refused.
+    expect(await enter(app, orgA, sign(`v1.${users.owner}.${live}.${orgA}.aal1.-.${exp}`))).toBe(users.owner);
+    await expect(enter(app, orgA, sign(`v1.${users.owner}.${randomUUID()}.${orgA}.aal1.-.${exp}`))).rejects.toMatchObject({
+      code: '28000',
+      message: 'SESSION_INVALID',
+    });
+    await expect(enter(app, orgA, sign(`v1.${users.owner}.${live}.${orgA}.aal1.-.jwt.${exp}`))).rejects.toMatchObject({ message: 'CONTEXT_TOKEN_INVALID' });
+    await expect(enter(app, orgA, sign(`v2.${users.owner}.-.${orgA}.aal1.-.${exp}`))).rejects.toMatchObject({ message: 'CONTEXT_TOKEN_INVALID' });
+  });
+
+  it('lets no login role call enter_context: raw SQL on crove_app cannot name the user it acts as', async () => {
+    const app = await connect(appUrl);
+    await expect(enter(app, orgA, token(users.owner, orgA))).resolves.toBe(users.owner);
+    await app.query('BEGIN');
+    try {
+      await expect(app.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [users.owner, orgA])).rejects.toThrow(/permission denied for function enter_context/);
+    } finally {
+      await app.query('ROLLBACK');
+    }
+    const worker = await connect(workerUrl);
+    await expect(worker.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [users.owner, orgA])).rejects.toThrow(/permission denied for function enter_context/);
   });
 
   it('keeps the key out of reach of every login role', async () => {
@@ -251,8 +298,8 @@ suite('context tokens: enter_user_context on PostgreSQL (#1822, ADR-0028 section
     const bytes = contextTokenKeyBytes(KEY);
     expect(tok).not.toContain(KEY);
     expect(tok).not.toContain(bytes.toString('hex'));
-    // v1 has 8 fields; #1822 step 2's v2 adds the session check the kernel ran.
-    expect([8, 9]).toContain(tok.split('.').length);
+    // v2 has the session check the kernel ran as a field of its own (9 fields); v1 has 8.
+    expect(tok.split('.')).toHaveLength(tok.startsWith('v2.') ? 9 : 8);
     // A key of the wrong length is refused by both readers without echoing it.
     const short = Buffer.from('a short secret value').toString('base64');
     for (const read of [contextTokenKeyBytes, runnerKeyBytes]) {
@@ -267,7 +314,7 @@ suite('context tokens: enter_user_context on PostgreSQL (#1822, ADR-0028 section
     }
   });
 
-  it('runs the runtime through tokens once it has a key, and through enter_context, while crove_app may call it, without one', async () => {
+  it('runs the runtime through tokens with its key, and refuses it without one or with another', async () => {
     const keyed = createPool({ connectionString: appUrl, max: 1 });
     const keyless = createPool({ connectionString: appUrl, max: 1 });
     const wrong = createPool({ connectionString: appUrl, max: 1 });
@@ -276,19 +323,8 @@ suite('context tokens: enter_user_context on PostgreSQL (#1822, ADR-0028 section
       new Runtime(createDb(pool), { manifests: TEST_MANIFESTS, contextTokenKey }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: 'in.test' }) });
     const ctx = { actor: asUser(users.owner), orgId: orgA };
     await expect(make(keyed, KEY).query('kernel.task.list', {}, ctx)).resolves.toBeDefined();
-    // Without a key the runtime calls enter_context: let in while crove_app may call it, refused once #1822 step 2
-    // revokes it.
-    const granted = await withAdmin(
-      async (a) =>
-        (await a.query<{ can: boolean }>(`SELECT has_function_privilege('crove_app', 'crove_kernel.enter_context(uuid,uuid)', 'EXECUTE') AS can`)).rows[0]?.can,
-    );
-    const keylessOutcome = await make(keyless, null)
-      .query('kernel.task.list', {}, ctx)
-      .then(
-        () => 'entered',
-        (error: unknown) => (error as { code?: string }).code ?? 'unknown',
-      );
-    expect(keylessOutcome).toBe(granted ? 'entered' : 'FORBIDDEN');
+    // Without a key the runtime calls enter_context, which crove_app may not: refused, never let in.
+    await expect(make(keyless, null).query('kernel.task.list', {}, ctx)).rejects.toMatchObject({ code: 'FORBIDDEN' });
     // A key the database does not hold: the token path is taken, and the database refuses it.
     await expect(make(wrong, randomBytes(32).toString('base64')).query('kernel.task.list', {}, ctx)).rejects.toMatchObject({ code: 'INTERNAL' });
   });

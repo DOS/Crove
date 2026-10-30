@@ -141,8 +141,12 @@ const schema = z.object({
   AUTH_JWT_SECRET: optional,
   // The context token key (#1822, ADR-0028 section 9): base64 of 32 to 64 random bytes (`node dist/main.js
   // context-token-key` prints one). The same value goes to the migrate step, which installs it in the database, and to
-  // the kernel, which signs a token with it for every user context it enters. Unset: today's enter_context.
+  // the kernel, which signs a token with it for every user context it enters. Required by the API: the database lets
+  // crove_app enter a user's context only with such a token. CROVE_CONTEXT_TOKEN_KEY wins; else
+  // CROVE_CONTEXT_TOKEN_KEY_FILE names a file holding it, which the migrate step creates with a fresh key when it is
+  // missing (the compose stack's `keys` volume) and every other role only reads.
   CROVE_CONTEXT_TOKEN_KEY: optional,
+  CROVE_CONTEXT_TOKEN_KEY_FILE: optional.pipe(z.string().startsWith('/', 'CROVE_CONTEXT_TOKEN_KEY_FILE is an absolute path').optional()),
   AUTH_JWKS_URL: optional,
   // Required (ADR-0028): the `iss` every access token must carry. Bundled Supabase Auth: GOTRUE_JWT_ISSUER.
   AUTH_ISSUER: optional,
@@ -564,17 +568,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     if (bytes.length < 32 || bytes.length > 64) throw new Error('CROVE_CONTEXT_TOKEN_KEY must be base64 of 32 to 64 random bytes');
   }
   if (!isLocalUrl(config.PUBLIC_URL)) {
-    if (config.CROVE_CONTEXT_TOKEN_KEY !== undefined) {
-      // Compared as bytes, so the unpadded or base64url spelling of the test key is the test key too.
-      const bytes = Buffer.from(config.CROVE_CONTEXT_TOKEN_KEY.trim(), 'base64');
-      if (SAMPLE_CONTEXT_TOKEN_KEYS.some((sample) => sample.equals(bytes))) {
-        throw new Error('CROVE_CONTEXT_TOKEN_KEY is the test suite key; generate a random key before exposing Crove');
-      }
-      // A key that decodes to printable text is a passphrase, not random bytes (one in about 10^14 random keys is).
-      if (bytes.every((byte) => byte >= 0x20 && byte <= 0x7e)) {
-        throw new Error('CROVE_CONTEXT_TOKEN_KEY decodes to printable text; generate random bytes (openssl rand -base64 32) before exposing Crove');
-      }
-    }
+    const problem = config.CROVE_CONTEXT_TOKEN_KEY === undefined ? null : contextTokenKeyProblem(config.CROVE_CONTEXT_TOKEN_KEY);
+    if (problem) throw new Error(problem);
     if (config.AUTH_JWT_SECRET && SAMPLE_SECRETS.has(config.AUTH_JWT_SECRET)) {
       throw new Error('AUTH_JWT_SECRET is a sample value; generate a random secret before exposing Crove');
     }
@@ -635,6 +630,20 @@ const SAMPLE_SECRETS = new Set(['local-only-jwt-secret-change-me-0123456789', 'c
 // The context token key the test suites use (vitest.config.ts, vitest.invariant.config.ts): public, so never a
 // deployment's.
 const SAMPLE_CONTEXT_TOKEN_KEYS = [Buffer.from('test-only-context-token-key-0123456789')];
+
+// Why a context token key may not serve a public URL (#1822), or null: the test suites' key, compared as bytes so its
+// unpadded or base64url spelling is the same key, or a passphrase (a key that decodes to printable text; one in about
+// 10^14 random keys does). For the setting and for the key file alike (context-token-key.ts).
+export function contextTokenKeyProblem(key: string): string | null {
+  const bytes = Buffer.from(key.trim(), 'base64');
+  if (SAMPLE_CONTEXT_TOKEN_KEYS.some((sample) => sample.equals(bytes))) {
+    return 'CROVE_CONTEXT_TOKEN_KEY is the test suite key; generate a random key before exposing Crove';
+  }
+  if (bytes.every((byte) => byte >= 0x20 && byte <= 0x7e)) {
+    return 'CROVE_CONTEXT_TOKEN_KEY decodes to printable text; generate random bytes (openssl rand -base64 32) before exposing Crove';
+  }
+  return null;
+}
 
 // Cloudflare's published Turnstile test site keys and secrets (1x00000000000000000000AA, 1x0000000000000000000000000000000AA
 // and their 2x and 3x siblings): siteverify passes any token for the always-pass pair, so they are refused on a public URL.

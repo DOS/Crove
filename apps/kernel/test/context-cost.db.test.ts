@@ -249,9 +249,11 @@ suite('context cost micro-benchmark (#117)', () => {
     const withoutRead = original.replace(/IF EXISTS \(\s*SELECT 1 FROM pg_catalog\.pg_locks[\s\S]*?END IF;/, '');
     expect(withoutRead).not.toContain('pg_locks');
 
-    // Server-side loop, no round trips: one transaction per iteration, each one enter_context and COMMIT.
+    // Server-side loop, no round trips: one transaction per iteration, each one enter_user_context and COMMIT. The
+    // token, minted for each loop (it lives 60 seconds), is the test suites': crove_app may not call enter_context
+    // (#1822), so the HMAC check is part of what this measures, as it is part of every request.
     const loop = (n: number) => `DO $d$ BEGIN FOR i IN 1..${n} LOOP
-        PERFORM crove_kernel.enter_context('${owner}'::uuid, '${orgId}'::uuid); COMMIT; END LOOP; END $d$`;
+        PERFORM crove_kernel.enter_user_context('${orgId}'::uuid, '${contextToken(owner, orgId)}'); COMMIT; END LOOP; END $d$`;
     // A request-shaped transaction with round trips; its latency in microseconds.
     const timedTransaction = async (c: pg.Client) => {
       const start = process.hrtime.bigint();

@@ -378,7 +378,9 @@ export type TryRunResult<O> = { status: 'ok'; value: O } | { status: 'refused'; 
 // Status of the session behind a user actor (ADR-0028), checked in the request transaction before the
 // tenant context is entered (orgId: that org, where an owner may have revoked the session for this member), and
 // before org-less work (orgId: null). Throws (or raises in SQL) 401, 403 or 503; never passes a session it cannot
-// vouch for.
+// vouch for. A check that passes has recorded the session in crove_kernel.auth_session in that transaction (through
+// crove_kernel.session_check): the context token names the session and the mode, and the database refuses a session
+// it has no active row for (SESSION_INVALID, 401; #1822 step 2), so a source that records nothing signs every user out.
 export interface SessionStatusSource {
   readonly mode: 'db' | 'jwt' | 'off';
   // true when the per-request check does not read Supabase Auth (jwt): every R3 command run by a user then needs
@@ -465,10 +467,11 @@ export interface RuntimeOptions {
   // migrated to a version before crove_kernel.command_input_hash exists.
   inputHash?: InputHashMode;
   // The deployment's context token key (#1822, ADR-0028 section 9): base64 of 32 to 64 random bytes, the one the
-  // migration runner installed in the database. Given, a user's context is entered with a token the runtime signs
-  // with it (crove_kernel.enter_user_context), which raw SQL on the API's login cannot make. Unset:
-  // CROVE_CONTEXT_TOKEN_KEY from the environment; null, or neither: today's crove_kernel.enter_context, until step 2
-  // of #1822 requires the key.
+  // migration runner installed in the database. A user's context is entered with a token the runtime signs with it
+  // (crove_kernel.enter_user_context), which raw SQL on the API's login cannot make. Unset: CROVE_CONTEXT_TOKEN_KEY
+  // from the environment. Without one (null, or neither) the runtime calls crove_kernel.enter_context, which the
+  // database refuses to crove_app since step 2: a user's context is never entered without a token. The API refuses to
+  // start without a key (hasContextTokenKey).
   contextTokenKey?: string | null;
   // The tables of the module manifests (ModuleManifest['tables'] of each module, #1710). register() checks each
   // declared write (CommandDef.writes) against them: the table is a manifest's and the classes it carries are exactly
@@ -1076,15 +1079,20 @@ export function contextTokenKeyBytes(value: string): Buffer {
 
 export interface ContextTokenClaims {
   userId: string;
+  // The session the kernel checked in this transaction, or null when it checked none (a runtime without a session
+  // source: tests and tools).
   sessionId: string | null;
   orgId: string;
   aal: Aal;
   // Unix seconds of the newest second factor, or null.
   mfaAt: number | null;
+  // The session check the kernel ran (SessionStatusSource.mode), or null (none). In db and jwt mode the database
+  // requires the session to be recorded and active, and in db mode valid in Supabase Auth too.
+  sessionCheck?: SessionStatusSource['mode'] | null;
 }
 
 // A context token (#1822, ADR-0028 section 9), signed with the deployment's key:
-//   v1.<user>.<session|->.<org>.<aal1|aal2>.<mfa epoch|->.<exp epoch>.<hmac-sha256 hex of everything before it>
+//   v2.<user>.<session|->.<org>.<aal1|aal2>.<mfa epoch|->.<db|jwt|off|->.<exp epoch>.<hmac-sha256 hex of everything before it>
 // crove_kernel.enter_user_context verifies it and enters that user's context in that org, nothing else.
 export function mintContextToken(key: Uint8Array | string, claims: ContextTokenClaims, nowMs: number = wallClock()): string {
   const bytes = typeof key === 'string' ? contextTokenKeyBytes(key) : Buffer.from(key);
@@ -1096,8 +1104,10 @@ export function mintContextToken(key: Uint8Array | string, claims: ContextTokenC
   // Epoch seconds, at most 12 digits as the database's pattern takes; anything else (milliseconds by mistake) is left out
   // rather than failing every request of the user.
   const mfa = typeof claims.mfaAt === 'number' && Number.isFinite(claims.mfaAt) && claims.mfaAt >= 0 && claims.mfaAt < 1e12 ? String(Math.floor(claims.mfaAt)) : '-';
+  const check = claims.sessionCheck === 'db' || claims.sessionCheck === 'jwt' || claims.sessionCheck === 'off' ? claims.sessionCheck : '-';
+  if (check !== '-' && session === null) throw new Error('context token: a session check names the session it checked');
   const exp = Math.floor(nowMs / 1000) + CONTEXT_TOKEN_TTL_S;
-  const message = `v1.${user}.${session ?? '-'}.${org}.${aal}.${mfa}.${exp}`;
+  const message = `v2.${user}.${session ?? '-'}.${org}.${aal}.${mfa}.${check}.${exp}`;
   return `${message}.${createHmac('sha256', bytes).update(message, 'utf8').digest('hex')}`;
 }
 
@@ -1370,6 +1380,21 @@ export class Runtime {
     return names?.length === 1 ? (names[0] ?? null) : null;
   }
 
+  // Whether the runtime has a context token key (#1822): the API refuses to start without one.
+  get hasContextTokenKey(): boolean {
+    return this.#contextTokenKey !== null;
+  }
+
+  // Whether the database's current context token key is the runtime's, through crove_kernel.context_token_valid (a
+  // signature check only, no context): the API's boot check. False without a key.
+  async contextTokenKeyInstalled(): Promise<boolean> {
+    if (this.#contextTokenKey === null) return false;
+    const nil = '00000000-0000-4000-8000-000000000000';
+    const token = mintContextToken(this.#contextTokenKey, { userId: nil, sessionId: null, orgId: nil, aal: 'aal1', mfaAt: null });
+    const { rows } = await sql<{ ok: boolean }>`SELECT crove_kernel.context_token_valid(${token}) AS ok`.execute(this.#cells.controlPlane());
+    return rows[0]?.ok === true;
+  }
+
   // The session status check, in the caller's transaction. Fails closed: a user actor without a session id is
   // refused whenever the runtime checks sessions.
   private async checkSession(trx: Transaction<Database>, actor: Actor, orgId: string | null): Promise<void> {
@@ -1413,11 +1438,21 @@ export class Runtime {
       };
     }
     if (this.#contextTokenKey !== null) {
-      // Signed right before it is used, as a bind parameter (never in a statement's text).
-      const token = mintContextToken(this.#contextTokenKey, { userId: actor.userId, sessionId: actor.sessionId ?? null, orgId, aal: actor.aal, mfaAt: actor.mfaAt ?? null });
+      // Signed right before it is used, as a bind parameter (never in a statement's text). The session goes in only
+      // when checkSession ran on it in this transaction, with the mode it ran in.
+      const checked = this.#sessions !== null && actor.sessionId ? actor.sessionId : null;
+      const token = mintContextToken(this.#contextTokenKey, {
+        userId: actor.userId,
+        sessionId: checked,
+        orgId,
+        aal: actor.aal,
+        mfaAt: actor.mfaAt ?? null,
+        sessionCheck: checked === null ? null : (this.#sessions?.mode ?? null),
+      });
       const { rows } = await sql<{ role: MemberRole }>`SELECT crove_kernel.enter_user_context(${orgId}::uuid, ${token}::text) AS role`.execute(trx);
       return { role: rows[0]?.role ?? null, agent: null };
     }
+    // No key: the database refuses this to crove_app (#1822 step 2), so a misconfigured runtime fails closed.
     const { rows } = await sql<{ role: MemberRole }>`SELECT crove_kernel.enter_context(${actor.userId}::uuid, ${orgId}::uuid) AS role`.execute(trx);
     return { role: rows[0]?.role ?? null, agent: null };
   }

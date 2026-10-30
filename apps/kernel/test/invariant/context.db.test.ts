@@ -315,9 +315,9 @@ suite('context re-entry guard on PostgreSQL (§4.5 item 1, T10)', () => {
     );
     expect(rows).toEqual([
       { fn: 'crove_kernel.context_reentry_guard()', config: ['search_path=pg_catalog, pg_temp'], app: false, worker: false, tenant: false },
-      // #1822: crove_app enters a user's context through enter_user_context; step 2 revokes enter_context from it, so
-      // either holds until then. Nobody else may call it, before or after.
-      { fn: 'crove_kernel.enter_context(uuid,uuid)', config: ['search_path=pg_catalog, pg_temp'], app: expect.any(Boolean), worker: false, tenant: false },
+      // #1822: no login role calls enter_context; crove_app enters a user's context through enter_user_context and a
+      // token the kernel signed, which calls it as its owner.
+      { fn: 'crove_kernel.enter_context(uuid,uuid)', config: ['search_path=pg_catalog, pg_temp'], app: false, worker: false, tenant: false },
       { fn: 'crove_kernel.enter_system_context(uuid)', config: ['search_path=pg_catalog, pg_temp'], app: false, worker: true, tenant: false },
     ]);
     const app = await connect(appUrl);

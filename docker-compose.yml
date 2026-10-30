@@ -31,8 +31,13 @@ services:
       AUTH_ISSUER: crove-auth
       ADMIN_DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:-local-postgres-password}@db:5432/postgres
       DATABASE_URL: postgres://crove_app:${CROVE_APP_DB_PASSWORD:-local-app-password}@db:5432/postgres
-      # The context token key (#1822): migrate installs it in the database; the same value goes to crove below.
+      # The context token key (#1822): migrate installs it in the database; the same value goes to crove below. Set
+      # CROVE_CONTEXT_TOKEN_KEY to bring your own; otherwise migrate creates a key file on the `context-token` volume
+      # at first start (docs/runbooks/context-token-key.md). A volume of its own: migrate never sees the `keys` one.
       CROVE_CONTEXT_TOKEN_KEY: ${CROVE_CONTEXT_TOKEN_KEY:-}
+      CROVE_CONTEXT_TOKEN_KEY_FILE: /data/context-token/key
+    volumes:
+      - context-token:/data/context-token
     depends_on:
       db:
         condition: service_healthy
@@ -122,8 +127,10 @@ services:
       AUTH_STEP_UP: ${AUTH_STEP_UP:-required}
       DATABASE_URL: postgres://crove_app:${CROVE_APP_DB_PASSWORD:-local-app-password}@db:5432/postgres
       WORKER_DATABASE_URL: postgres://crove_worker:${CROVE_WORKER_DB_PASSWORD:-local-worker-password}@db:5432/postgres
-      # Signs every user context the app enters (#1822, ADR-0028 section 9); the value migrate installed.
+      # Signs every user context the app enters (#1822, ADR-0028 section 9): the value migrate installed, from the
+      # setting or the key file migrate created. Required: the app does not start without it.
       CROVE_CONTEXT_TOKEN_KEY: ${CROVE_CONTEXT_TOKEN_KEY:-}
+      CROVE_CONTEXT_TOKEN_KEY_FILE: /data/context-token/key
       PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
       AUTH_UPSTREAM_URL: http://auth:9999
       # Modules to run (ADR-0031); empty runs every module.
@@ -281,6 +288,7 @@ services:
       - files:/data/files
       - archive:/data/archive
       - keys:/data/keys
+      - context-token:/data/context-token:ro
       - status:/data/status:ro
     ports:
       # Loopback only. Put a TLS reverse proxy in front (and set PUBLIC_URL) to serve other machines.
@@ -428,5 +436,6 @@ volumes:
   files:
   archive:
   keys:
+  context-token:
   # The prober's last result for the status page (#678): written by the prober, read by the API.
   status:

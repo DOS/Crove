@@ -18,6 +18,7 @@ import { financeQueries } from '@crove/mod-finance';
 import type { AuthUser } from '../src/auth.ts';
 import { loadConfig } from '../src/config.ts';
 import { createKernel, defaultAdapters, type IdentityPort } from '../src/kernel.ts';
+import { createSessionStatusSource } from '../src/sessions.ts';
 import { startExtractService } from './extract-service.ts';
 import { TEST_MANIFESTS } from './manifests.ts';
 
@@ -126,12 +127,16 @@ suite('composition root on PostgreSQL (ADR-0030)', () => {
     const headers: string[] = [];
     const checks: Array<{ sessionId: string; orgId: string | null }> = [];
     const revoked = new Set<string>();
+    // It ends in the real 'off' check, which records the session: the database lets a context token name only a
+    // recorded session (#1822).
+    const off = createSessionStatusSource('off');
     const sessions: SessionStatusSource = {
       mode: 'off',
       liveCheckForR3: false,
-      check: async (_trx, actor, checkedOrg) => {
+      check: async (trx, actor, checkedOrg) => {
         checks.push({ sessionId: actor.sessionId, orgId: checkedOrg });
         if (revoked.has(actor.sessionId)) throw new DomainError('UNAUTHENTICATED', 401, 'revoked');
+        await off.check(trx, actor, checkedOrg);
       },
     };
     const identity: IdentityPort = {

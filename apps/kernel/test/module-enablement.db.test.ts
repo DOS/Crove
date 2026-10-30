@@ -17,6 +17,7 @@ import type { AuthUser } from '../src/auth.ts';
 import { loadConfig } from '../src/config.ts';
 import { QUEUES } from '../src/jobs-schema.ts';
 import { createKernel, defaultAdapters, moduleDefinitions, type IdentityPort } from '../src/kernel.ts';
+import { createSessionStatusSource } from '../src/sessions.ts';
 import { startExtractService } from './extract-service.ts';
 import { TEST_MANIFESTS } from './manifests.ts';
 
@@ -197,7 +198,8 @@ suite('module enablement on PostgreSQL (plan Decision 12, ADR-0031)', () => {
     const port = await freePort();
     const config = configFor('kernel', port);
     const identity: IdentityPort = {
-      sessions: { mode: 'off', liveCheckForR3: false, check: async () => {} },
+      // The real 'off' check records the session, which the database requires of a context token's session (#1822).
+      sessions: createSessionStatusSource('off'),
       revoker: null,
       authenticator: () => async () => {
         const user: AuthUser = { userId: owner, email: 'modules-owner@example.com', name: null, aal: 'aal1', sessionId: SESSION, mfaAt: null };

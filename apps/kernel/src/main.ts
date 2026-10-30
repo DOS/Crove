@@ -28,6 +28,7 @@
 import { randomBytes } from 'node:crypto';
 import { applyAuthGrants, installDdlWatch, migrate, setRolePasswords } from '@crove/db/migrate';
 import { liveAuthUrl, loadConfig, type Config } from './config.ts';
+import { resolveContextTokenKey } from './context-token-key.ts';
 import { createKernel, defaultAdapters, type ServerRole } from './kernel.ts';
 import { describeMailer } from './mail.ts';
 import { runPilotCheck } from './pilot-check.ts';
@@ -47,8 +48,9 @@ async function runMigrate(config: Config) {
     dir: config.MIGRATIONS_DIR,
     log: (m) => console.log(`[migrate] ${m}`),
     ...(config.MIGRATE_LOCK_WAIT_SECONDS === undefined ? {} : { lockWaitMs: config.MIGRATE_LOCK_WAIT_SECONDS * 1000 }),
-    // Installed after the migrations, as a bind parameter (#1822); unset installs none.
-    contextTokenKey: config.CROVE_CONTEXT_TOKEN_KEY ?? null,
+    // Installed after the migrations, as a bind parameter (#1822): the setting, else its file, created with a fresh
+    // key when missing. Neither installs none, and the API then refuses to start.
+    contextTokenKey: resolveContextTokenKey(config, { create: true }) ?? null,
   });
   await setRolePasswords(adminUrl, {
     crove_app: config.CROVE_APP_DB_PASSWORD,
