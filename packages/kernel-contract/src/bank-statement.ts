@@ -94,6 +94,29 @@ export const zBankImportResult = z.object({
 });
 export type BankImportResult = z.infer<typeof zBankImportResult>;
 
+// A batch of bank transactions from a feed (ADR-0039, #2044): one bank account of one legal entity, each line as the
+// provider reports it, in any order. The finance module checks and stores them as it does a statement's lines
+// (ADR-0021 section 6): a reference makes the key, so a transaction that comes again, from the feed or in a statement
+// file, is stored once. The worker sends it (finance.bank.ingest, a system command); people never do.
+export const BANK_FEED_MAX_LINES = 5000;
+export const zBankFeedLine = z.object({
+  date: zLocalDate,
+  description: z.string().max(1000),
+  // Signed: money in positive, money out negative; at most 2 decimals, never zero.
+  amount: zMoney,
+  balance: zMoney.nullable(),
+  reference: z.string().trim().min(1).max(100).nullable(),
+});
+export type BankFeedLine = z.infer<typeof zBankFeedLine>;
+export const zBankFeedIngest = z.strictObject({
+  bankAccount: zAccountCode,
+  legalEntityId: zId,
+  // The adapter the lines came from, as a channel connection names its provider (ADR-0025).
+  source: z.string().regex(/^[a-z][a-z0-9_]{0,31}$/),
+  lines: z.array(zBankFeedLine).min(1).max(BANK_FEED_MAX_LINES),
+});
+export type BankFeedIngest = z.infer<typeof zBankFeedIngest>;
+
 // What became of a statement line (#326, stage 2a): nothing yet, a báo Có or báo Nợ proposal waiting for approval, or
 // the posted voucher that settles it. A voucher whose entry was reversed settles nothing, so its line is open again.
 export const zBankLineState = z.discriminatedUnion('status', [
