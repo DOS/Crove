@@ -4,7 +4,7 @@
 // credential reaches and how to pull an account's transactions since a cursor. Read-only by design: the interface has
 // no capability that moves money, and an adapter for a provider that also offers payments implements none of it.
 // Each adapter declares the hosts its fetch is bound to; the offline sandbox reaches none.
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
 export const BANK_FEED_PROVIDERS = ['bank_sandbox'] as const;
 export type BankFeedProviderId = (typeof BANK_FEED_PROVIDERS)[number];
@@ -46,13 +46,40 @@ export interface BankFeedLogin {
   secret: string;
 }
 
+// A signed notice a provider posts when something happened to its accounts (ADR-0039): the raw request, as the route
+// received it.
+export interface BankFeedWebhookRequest {
+  headers: Readonly<Record<string, string | undefined>>;
+  body: string;
+}
+
+// Why a notice was refused: its signature or timestamp is wrong (signature), or it is not one the adapter reads
+// (malformed). The route answers 401 and 400; nothing is stored.
+export class BankFeedWebhookRejected extends Error {
+  readonly reason: 'signature' | 'malformed';
+  constructor(reason: 'signature' | 'malformed') {
+    super(`bank feed webhook rejected: ${reason}`);
+    this.name = 'BankFeedWebhookRejected';
+    this.reason = reason;
+  }
+}
+
 export interface BankFeedProvider {
   readonly id: BankFeedProviderId;
   // The hosts this adapter's fetch is bound to.
   readonly hosts: readonly string[];
   accounts(secret: string): Promise<BankFeedAccount[]>;
   pull(secret: string, externalAccountId: string, cursor: string | null): Promise<BankFeedPull>;
+  // Checks a notice's signature before anything else and returns the provider's ids of the accounts it names, never
+  // more than WEBHOOK_MAX_ACCOUNTS. Throws BankFeedWebhookRejected. The notice is only a hint to pull: nothing in its
+  // body is stored as a transaction. An adapter without one takes no notices.
+  verifyWebhook?(request: BankFeedWebhookRequest, now: number): string[];
 }
+
+// The most accounts one notice may name.
+export const WEBHOOK_MAX_ACCOUNTS = 100;
+// A notice older (or newer) than this is refused, so a captured one cannot be replayed later.
+export const WEBHOOK_WINDOW_MS = 10 * 60_000;
 
 export type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -70,8 +97,8 @@ export function allowlistedFetch(hosts: readonly string[], fetchImpl: Fetch = fe
 
 // The adapters this deployment offers, by provider id: the sandbox when it is on (BANK_FEED_SANDBOX). A real adapter
 // is built here with allowlistedFetch(itsHosts, fetchImpl); none exists yet (Tingee is #2045).
-export function bankFeedProviders(options: { sandbox: boolean; now?: () => Date }): Readonly<Record<string, BankFeedProvider>> {
-  return options.sandbox ? { bank_sandbox: sandboxBankFeed(options.now) } : {};
+export function bankFeedProviders(options: { sandbox: boolean; now?: () => Date; sandboxWebhookSecret?: string | undefined }): Readonly<Record<string, BankFeedProvider>> {
+  return options.sandbox ? { bank_sandbox: sandboxBankFeed(options.now, options.sandboxWebhookSecret) } : {};
 }
 
 // The offline sandbox (ADR-0039): no network, so the connect, map and sync flow runs on a laptop and in tests. Its
@@ -103,7 +130,17 @@ function sandboxDay(account: string, day: string): BankFeedTransaction[] {
   return lines;
 }
 
-export function sandboxBankFeed(now: () => Date = () => new Date()): BankFeedProvider & { connect(displayName: string): BankFeedLogin } {
+// The sandbox's notice, in the shape a real provider's is (Tingee's, as its public documentation describes it): headers
+// x-request-timestamp (milliseconds) and x-signature, the hex HMAC-SHA256 under the deployment's secret of
+// `<timestamp>:<body>`; the body is JSON {"accounts": ["SBX-001", ...]}.
+export function signSandboxWebhook(secret: string, timestamp: number, body: string): string {
+  return createHmac('sha256', secret).update(`${timestamp}:${body}`).digest('hex');
+}
+
+export function sandboxBankFeed(
+  now: () => Date = () => new Date(),
+  webhookSecret?: string,
+): BankFeedProvider & { connect(displayName: string): BankFeedLogin } {
   const check = (secret: string) => {
     if (!SECRET.test(secret)) throw new Error('sandbox bank feed: invalid secret');
   };
@@ -116,6 +153,28 @@ export function sandboxBankFeed(now: () => Date = () => new Date()): BankFeedPro
       const login = createHash('sha256').update(secret).digest('hex').slice(0, 16);
       return { provider: 'bank_sandbox', externalAccountId: `sandbox-${login}`, displayName, secret };
     },
+    ...(webhookSecret
+      ? {
+          verifyWebhook(request: BankFeedWebhookRequest, at: number): string[] {
+            const timestamp = request.headers['x-request-timestamp'] ?? '';
+            const given = request.headers['x-signature'] ?? '';
+            if (!/^\d{10,16}$/.test(timestamp) || !/^[0-9a-f]{64}$/.test(given)) throw new BankFeedWebhookRejected('signature');
+            const expected = Buffer.from(signSandboxWebhook(webhookSecret, Number(timestamp), request.body), 'hex');
+            if (!timingSafeEqual(expected, Buffer.from(given, 'hex'))) throw new BankFeedWebhookRejected('signature');
+            if (Math.abs(at - Number(timestamp)) > WEBHOOK_WINDOW_MS) throw new BankFeedWebhookRejected('signature');
+            let accounts: unknown;
+            try {
+              accounts = (JSON.parse(request.body) as { accounts?: unknown }).accounts;
+            } catch {
+              throw new BankFeedWebhookRejected('malformed');
+            }
+            if (!Array.isArray(accounts) || accounts.length === 0 || accounts.length > WEBHOOK_MAX_ACCOUNTS || !accounts.every((a) => typeof a === 'string' && a.length >= 1 && a.length <= 200)) {
+              throw new BankFeedWebhookRejected('malformed');
+            }
+            return [...new Set(accounts as string[])];
+          },
+        }
+      : {}),
     async accounts(secret: string): Promise<BankFeedAccount[]> {
       check(secret);
       return [...SANDBOX_ACCOUNTS];

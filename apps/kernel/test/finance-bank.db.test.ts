@@ -21,7 +21,8 @@ import { createAuthenticator } from '../src/auth.ts';
 import { loadConfig } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
 import { runBankFeedSync } from '../src/bank-feed-sync.ts';
-import { bankFeedProviders } from '@crove/bank-feed';
+import { bankFeedProviders, signSandboxWebhook } from '@crove/bank-feed';
+import { RateLimiter } from '../src/rate-limit.ts';
 import { createSessionStatusSource } from '../src/sessions.ts';
 import { TEST_MANIFESTS } from './manifests.ts';
 
@@ -54,6 +55,7 @@ interface Account {
 }
 
 const suite = ADMIN ? describe : describe.skip;
+const WEBHOOK_SECRET = 'bank-feed-webhook-secret-0123456789-abcdef';
 
 suite('bank statement import (#326)', () => {
   const dbName = `crove_test_bank_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
@@ -62,6 +64,8 @@ suite('bank statement import (#326)', () => {
   let app: ReturnType<typeof createHttpApp>;
   // With the sandbox bank feed on (ADR-0039, #2044), and a credential key to seal its secret.
   let feedApp: ReturnType<typeof createHttpApp>;
+  // The same, with a tight limit on signed notices per address.
+  let limitedApp: ReturnType<typeof createHttpApp>;
   let vault: CredentialVault;
   // The API's runtime, and the worker's, which runs feed jobs as the system.
   let api: Runtime;
@@ -166,15 +170,10 @@ suite('bank statement import (#326)', () => {
     app = createHttpApp({ config, runtime, store: new MemoryStore(), authenticate: createAuthenticator(config, db), pool, aiEnabled: false });
     api = runtime;
     vault = new CredentialVault([parseVaultKey(randomBytes(32).toString('base64'))]);
-    feedApp = createHttpApp({
-      config,
-      runtime,
-      store: new MemoryStore(),
-      authenticate: createAuthenticator(config, db),
-      pool,
-      aiEnabled: false,
-      channels: { broker: vault, sandbox: false, bankFeedSandbox: true },
-    });
+    const notices = Object.fromEntries(Object.entries(bankFeedProviders({ sandbox: true, sandboxWebhookSecret: WEBHOOK_SECRET })).filter(([, p]) => p.verifyWebhook));
+    const feedDeps = { config, runtime, store: new MemoryStore(), authenticate: createAuthenticator(config, db), pool, aiEnabled: false, channels: { broker: vault, sandbox: false, bankFeedSandbox: true } };
+    feedApp = createHttpApp({ ...feedDeps, bankFeedWebhooks: notices });
+    limitedApp = createHttpApp({ ...feedDeps, bankFeedWebhooks: notices, bankFeedWebhookLimit: new RateLimiter({ perMinute: 2 }) });
     const workerUrl = new URL(adminUrl);
     workerUrl.username = 'crove_worker';
     workerUrl.password = 'test-worker-pw';
@@ -620,5 +619,111 @@ suite('bank statement import (#326)', () => {
         ).rows,
     );
     expect(callers.map((r) => r.role)).toEqual(['crove_worker']);
+  });
+
+  // ADR-0039, #2044 part 2b-ii: a provider's signed notice only asks for a pull.
+  const notice = (accounts: string[], over: { secret?: string; timestamp?: number; body?: string } = {}, on: ReturnType<typeof createHttpApp> = feedApp, provider = 'bank_sandbox') => {
+    const body = over.body ?? JSON.stringify({ accounts });
+    const timestamp = over.timestamp ?? Date.now();
+    return on.request(`/api/bank-feed/${provider}/webhook`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-request-timestamp': String(timestamp), 'x-signature': signSandboxWebhook(over.secret ?? WEBHOOK_SECRET, timestamp, body) },
+      body,
+    });
+  };
+  const waiting = () => admin(async (c) => Number((await c.query<{ n: string }>('SELECT count(*) AS n FROM crove_finance.bank_feed_notice_pending')).rows[0]?.n));
+  const claim = async () => {
+    const url = new URL(adminUrl);
+    url.username = 'crove_worker';
+    url.password = 'test-worker-pw';
+    const c = new pg.Client({ connectionString: url.toString() });
+    await c.connect();
+    try {
+      return (await c.query<{ org_id: string | null; connection_id: string | null; provider: string | null }>('SELECT * FROM crove_finance.bank_feed_notice_claim(100)')).rows;
+    } finally {
+      await c.end();
+    }
+  };
+
+  it("refuses a notice whose signature, timestamp or shape is wrong, and stores nothing of it", async () => {
+    await admin((c) => c.query('DELETE FROM crove_finance.bank_feed_notice_pending'));
+    const refused = async (response: Promise<Response> | Response) => ({ status: (await response).status });
+    expect(await refused(notice(['SBX-001'], { secret: 'another-secret-0123456789-abcdefghijklmn' }))).toEqual({ status: 401 });
+    expect(await refused(notice(['SBX-001'], { timestamp: Date.now() - 11 * 60_000 }))).toEqual({ status: 401 });
+    expect(await refused(notice(['SBX-001'], { timestamp: Date.now() + 11 * 60_000 }))).toEqual({ status: 401 });
+    // Signed, but not a notice: refused as malformed, never read as accounts.
+    expect(await refused(notice([], { body: 'not json' }))).toEqual({ status: 400 });
+    expect(await refused(notice([], { body: '{"accounts":[]}' }))).toEqual({ status: 400 });
+    // No headers at all.
+    expect((await feedApp.request('/api/bank-feed/bank_sandbox/webhook', { method: 'POST', body: '{"accounts":["SBX-001"]}' })).status).toBe(401);
+    // An adapter this deployment does not have, and a deployment without notices.
+    expect((await notice(['SBX-001'], {}, feedApp, 'bank_nothing')).status).toBe(404);
+    expect((await notice(['SBX-001'], {}, feedApp, 'constructor')).status).toBe(404);
+    expect((await notice(['SBX-001'], {}, app)).status).toBe(404);
+    expect(await waiting()).toBe(0);
+  });
+
+  it('turns a verified notice into one waiting row per account, and the worker into a sync of each connection that lists it', async () => {
+    await admin((c) => c.query('DELETE FROM crove_finance.bank_feed_notice_pending'));
+    const connectionId = String((await feed('connectSandbox', owner, { displayName: 'Ngân hàng có thông báo' })).body.connectionId);
+    await sync(connectionId);
+    const first = await notice(['SBX-001', 'SBX-777']);
+    expect(first.status).toBe(202);
+    expect(await first.json()).toEqual({ queued: 2 });
+    // The same notice again is the same waiting rows.
+    expect(await (await notice(['SBX-001', 'SBX-777'])).json()).toEqual({ queued: 0 });
+    expect(await waiting()).toBe(2);
+    // Claimed: a row for each active connection that lists SBX-001 (the org comes from the listing), and a row of nulls
+    // for SBX-777, which nothing lists. The claimed rows are gone.
+    const claimed = await claim();
+    expect(claimed.filter((r) => r.connection_id === connectionId)).toEqual([{ org_id: orgId, connection_id: connectionId, provider: 'bank_sandbox' }]);
+    expect(claimed.filter((r) => r.connection_id === null)).toEqual([{ org_id: null, connection_id: null, provider: null }]);
+    expect(claimed.every((r) => r.org_id === orgId || r.org_id === null)).toBe(true);
+    expect(await waiting()).toBe(0);
+    // A revoked connection is not synced for a notice.
+    await admin((c) => c.query(`UPDATE crove_kernel.channel_connection SET status = 'revoked' WHERE org_id = $1 AND id = $2`, [orgId, connectionId]));
+    await notice(['SBX-001']);
+    expect((await claim()).map((r) => r.connection_id)).not.toContain(connectionId);
+  });
+
+  it('limits the notices one address may post a minute', async () => {
+    const statuses: number[] = [];
+    for (let i = 0; i < 4; i++) statuses.push((await notice(['SBX-001'], {}, limitedApp)).status);
+    expect(statuses.slice(0, 2).every((s) => s === 202)).toBe(true);
+    expect(statuses.slice(2)).toEqual([429, 429]);
+    await admin((c) => c.query('DELETE FROM crove_finance.bank_feed_notice_pending'));
+  });
+
+  it("answers 503 when too many accounts are already waiting, and keeps the queue and its definers to the API and the worker", async () => {
+    await admin((c) => c.query(`INSERT INTO crove_finance.bank_feed_notice_pending (provider, external_account_id) SELECT 'bank_sandbox', 'backlog-' || n FROM generate_series(1, 10001) n`));
+    expect((await notice(['SBX-001'])).status).toBe(503);
+    await admin((c) => c.query('DELETE FROM crove_finance.bank_feed_notice_pending'));
+    const privileges = await admin(
+      async (c) =>
+        (
+          await c.query<{ fn: string; role: string }>(
+            `SELECT f AS fn, r AS role
+             FROM unnest(ARRAY['crove_finance.bank_feed_notice_enqueue(text, text[])', 'crove_finance.bank_feed_notice_claim(integer)']) f
+             CROSS JOIN unnest(ARRAY['crove_tenant', 'crove_app', 'crove_worker', 'crove_definer_tenant', 'crove_prober']) r
+             WHERE pg_catalog.has_function_privilege(r, f, 'EXECUTE') ORDER BY 1, 2`,
+          )
+        ).rows,
+    );
+    expect(privileges).toEqual([
+      { fn: 'crove_finance.bank_feed_notice_claim(integer)', role: 'crove_worker' },
+      { fn: 'crove_finance.bank_feed_notice_enqueue(text, text[])', role: 'crove_app' },
+    ]);
+    // The queue table itself is read and written by no login role.
+    const url = new URL(adminUrl);
+    url.username = 'crove_app';
+    url.password = 'test-app-pw';
+    const apiLogin = new pg.Client({ connectionString: url.toString() });
+    await apiLogin.connect();
+    try {
+      await expect(apiLogin.query('SELECT * FROM crove_finance.bank_feed_notice_pending')).rejects.toMatchObject({ code: '42501' });
+      await expect(apiLogin.query(`SELECT crove_finance.bank_feed_notice_enqueue('sandbox', ARRAY['x'])`)).rejects.toMatchObject({ code: '22P02' });
+    } finally {
+      await apiLogin.end();
+    }
   });
 });

@@ -471,6 +471,10 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
           ...(config.TAX_CODE_LOOKUP_URL ? { taxLookup: createTaxCodeLookup(config.TAX_CODE_LOOKUP_URL) } : {}),
           ...(config.TAX_PORTAL_SYNC === 'true' ? { portalSync: createPortalSync({ runtime, store, broker: resolved.broker, stepMs: config.TAX_PORTAL_STEP_SECONDS * 1000, client: createTaxPortalClient(config.TAX_PORTAL_URL ? { baseUrl: config.TAX_PORTAL_URL } : {}) }) } : {}),
           mailer: resolved.mail,
+          // The bank feed adapters that take signed notices (ADR-0039): the route exists only for these.
+          bankFeedWebhooks: Object.fromEntries(
+            Object.entries(bankFeedProviders({ sandbox: config.BANK_FEED_SANDBOX === 'true', sandboxWebhookSecret: config.BANK_FEED_SANDBOX_WEBHOOK_SECRET })).filter(([, p]) => p.verifyWebhook),
+          ),
           channels: { broker: resolved.broker, sandbox: config.CHANNEL_SANDBOX === 'true', bankFeedSandbox: config.BANK_FEED_SANDBOX === 'true', bluesky: config.CHANNEL_BLUESKY === 'true', telegram: config.CHANNEL_TELEGRAM === 'true', mastodon: config.CHANNEL_MASTODON === 'true', discord: config.CHANNEL_DISCORD === 'true', wordpress: config.CHANNEL_WORDPRESS === 'true', connectors: channelConnectors(config), publicUrl: config.PUBLIC_URL, ...(config.MEDIA_PEXELS_API_KEY ? { stockPhotos: createPexels({ apiKey: config.MEDIA_PEXELS_API_KEY, store }) } : {}), mediaUrls: createMediaUrls({ store }), ...(vapid ? { push: { publicKey: vapid.publicKey } } : {}) },
           ...(stream ? { stream } : {}),
           // An API process of its own waits in /readyz for its workers' build (#1952); the single "all" process is its
@@ -518,7 +522,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
             exportSealer: exportSealer(config),
             exportRetentionDays: config.EXPORT_RETENTION_DAYS,
             evidenceLockDays: config.EVIDENCE_LOCK_DAYS,
-            channels: { broker: resolved.broker, publishers: channelPublishers(config), refreshers: channelRefreshers(config), bankFeeds: bankFeedProviders({ sandbox: config.BANK_FEED_SANDBOX === 'true' }) },
+            channels: { broker: resolved.broker, publishers: channelPublishers(config), refreshers: channelRefreshers(config), bankFeeds: bankFeedProviders({ sandbox: config.BANK_FEED_SANDBOX === 'true', sandboxWebhookSecret: config.BANK_FEED_SANDBOX_WEBHOOK_SECRET }) },
             publicUrl: config.PUBLIC_URL,
             brand: config.BRAND_NAME,
             // Bounce reports reach this deployment only with both inbound settings (as for the invite mail).
