@@ -153,6 +153,28 @@ export const PERSONAL_DATA_COLUMNS = {
     handling: 'keep_legal',
     reason: 'The reason written on a journal voucher is part of the accounting voucher, append-only and kept by law (Accounting Law 88/2015, Art. 41)',
   },
+  // More free text (#1961): a task's title and description, which members and agents write, are replaced where they
+  // quote the value; a bank statement line and a journal line's memo are kept.
+  'crove_kernel.task.title': {
+    kind: 'free_text',
+    handling: 'erase',
+    reason: "A task's title, which may quote a person's email or phone; the value is replaced inside it",
+  },
+  'crove_kernel.task.description': {
+    kind: 'free_text',
+    handling: 'erase',
+    reason: "A task's description, which may quote a person's email or phone; the value is replaced inside it",
+  },
+  'crove_finance.bank_line.description': {
+    kind: 'free_text',
+    handling: 'keep_legal',
+    reason: "A line of an imported bank statement as the bank wrote it, evidence for the books; append-only and kept by law (Accounting Law 88/2015, Art. 41)",
+  },
+  'crove_finance.journal_line.memo': {
+    kind: 'free_text',
+    handling: 'keep_legal',
+    reason: 'The memo of a posted journal line is part of the books, append-only and anchored in the WORM archive with its entry',
+  },
   // Social.
   'crove_social.report_branding.display_name': { kind: 'name', handling: 'keep_org', reason: "The agency's name on its white-label client reports (#1053), the business itself" },
   'crove_social.report_schedule.recipients': { kind: 'email_list', handling: 'erase', reason: 'Addresses a scheduled client report is mailed to' },
@@ -307,11 +329,15 @@ export function heldFilesReason(until: Date | null): string {
   return `Original files behind posted entries that name this party: accounting evidence, ${kept} and never deleted by Crove (Accounting Law 88/2015, Art. 41)`;
 }
 
-// The fewest digits a value needs before the erasure replaces it inside activity lines (#1948): a shorter number may be
-// an amount or a voucher number there, so its lines are listed for the owner instead, with this reason.
+// The fewest digits a value needs before the erasure replaces it inside activity lines and tasks (#1948, #1961): a
+// shorter number may be an amount or a voucher number there, so those rows are listed for the owner instead, with this
+// reason.
 export const ACTIVITY_REDACT_MIN_DIGITS = 10;
+// What a quoted value becomes in free text the erasure changes, as crove_kernel.personal_data_redact_activity writes it.
+export const REDACTED_MARK = '[đã xóa]';
+const SHORT_NUMBER_COLUMNS = new Set(['crove_kernel.activity.summary', 'crove_kernel.task.title', 'crove_kernel.task.description']);
 export const ACTIVITY_SHORT_NUMBER_REASON =
-  'A number of fewer than 10 digits may also be an amount or a voucher number in a timeline line, so the erasure does not replace it there; check these lines and tell the person, or ask for a longer value';
+  'A number of fewer than 10 digits may also be an amount or a voucher number in a timeline line or a task, so the erasure does not replace it there; check these rows and tell the person, or ask for a longer value';
 
 // The name an erased party keeps: a party row cannot lose its name, and nothing in the books names it.
 export const ERASED_PARTY_NAME = 'Đã xóa theo yêu cầu';
@@ -442,6 +468,22 @@ export const personalDataErase = defineCommand({
       const { rows: redacted } = await sql<{ rows: number }>`
         SELECT crove_kernel.personal_data_redact_activity(${probe.kind}, ${probeValue(probe)}) AS rows`.execute(ctx.trx);
       add('crove_kernel.activity.summary', Number(redacted[0]?.rows ?? 0));
+
+      // Tasks that quote the person (#1961): the value is replaced in the title and the description, as the owner (an
+      // owner's update passes the task guards, which hold agents; taint, lease, status and entity stay as they are).
+      // The lengths stay within the columns' limits, in case the mark is longer than a short address.
+      const title = freeTextMatch(probe, sql.ref('t.title'));
+      const description = freeTextMatch(probe, sql.ref('t.description'));
+      const { rows: tasks } = await sql<{ title: boolean; description: boolean }>`
+        UPDATE crove_kernel.task t
+           SET title = CASE WHEN ${title} THEN pg_catalog.left(${freeTextRedact(probe, sql.ref('t.title'), REDACTED_MARK)}, 300) ELSE t.title END,
+               description = CASE WHEN ${description} THEN pg_catalog.left(${freeTextRedact(probe, sql.ref('t.description'), REDACTED_MARK)}, 10000)
+                                  ELSE t.description END
+          FROM crove_kernel.task o
+         WHERE o.org_id = t.org_id AND o.id = t.id AND t.org_id = ${ctx.orgId}::uuid AND (${title} OR coalesce(${description}, false))
+         RETURNING ${freeTextMatch(probe, sql.ref('o.title'))} AS title, coalesce(${freeTextMatch(probe, sql.ref('o.description'))}, false) AS description`.execute(ctx.trx);
+      add('crove_kernel.task.title', tasks.filter((t) => t.title).length);
+      add('crove_kernel.task.description', tasks.filter((t) => t.description).length);
     }
 
     // What stays, with its reason: the finder's answer after the erasure (the cleared values no longer match).
@@ -450,7 +492,7 @@ export const personalDataErase = defineCommand({
     // the others).
     const kept = new Map<string, { column: string; rows: number; reason: string }>();
     for (const m of after.matches) {
-      const reason = shortNumber && m.column === 'crove_kernel.activity.summary' ? ACTIVITY_SHORT_NUMBER_REASON : m.reason;
+      const reason = shortNumber && SHORT_NUMBER_COLUMNS.has(m.column) ? ACTIVITY_SHORT_NUMBER_REASON : m.reason;
       const group = `${m.column}\n${reason}`;
       const k = kept.get(group) ?? { column: m.column, rows: 0, reason };
       k.rows += 1;
