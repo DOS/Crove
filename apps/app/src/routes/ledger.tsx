@@ -142,7 +142,27 @@ function AccountLedger({ period, accountCode }: { period: string; accountCode: s
         t('columns.debit'),
         t('columns.credit'),
         t('columns.balance'),
-      ]}>
+      ]}
+      foot={
+        <>
+          <TableRow>
+            <TableCell className="px-4 py-3 text-foreground" colSpan={6}>
+              {t('turnoverRow')}
+            </TableCell>
+            <TableCell className={NUM}>{f.money(ledger.debit)}</TableCell>
+            <TableCell className={NUM}>{f.money(ledger.credit)}</TableCell>
+            <TableCell className="px-4 py-3" />
+          </TableRow>
+          <TableRow>
+            <TableCell className="px-4 py-3 text-foreground" colSpan={8}>
+              {t('closingRow')}
+            </TableCell>
+            <TableCell className={NUM}>
+              <Balance value={ledger.closing} />
+            </TableCell>
+          </TableRow>
+        </>
+      }>
       <TableRow>
         <TableCell className="px-4 py-3" colSpan={8}>
           <span className="text-muted-foreground">{t('openingRow')}</span>
@@ -180,22 +200,6 @@ function AccountLedger({ period, accountCode }: { period: string; accountCode: s
           </TableCell>
         </TableRow>
       )}
-      <TableRow className="font-medium">
-        <TableCell className="px-4 py-3 text-foreground" colSpan={6}>
-          {t('turnoverRow')}
-        </TableCell>
-        <TableCell className={NUM}>{f.money(ledger.debit)}</TableCell>
-        <TableCell className={NUM}>{f.money(ledger.credit)}</TableCell>
-        <TableCell className="px-4 py-3" />
-      </TableRow>
-      <TableRow className="font-medium">
-        <TableCell className="px-4 py-3 text-foreground" colSpan={8}>
-          {t('closingRow')}
-        </TableCell>
-        <TableCell className={NUM}>
-          <Balance value={ledger.closing} />
-        </TableCell>
-      </TableRow>
     </DataTable>
   );
 }

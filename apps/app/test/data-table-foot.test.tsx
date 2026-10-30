@@ -30,12 +30,27 @@ describe('DataTable foot', () => {
     );
     const tfoot = /<tfoot[^>]*class="([^"]*)"[^>]*>(.*?)<\/tfoot>/.exec(html);
     expect(tfoot).not.toBeNull();
-    for (const c of TOTAL_RULE.split(' ')) expect(tfoot?.[1]).toContain(c);
     // Twice the hairline: a heavier rule, not only another color.
-    expect(TOTAL_RULE).toContain('border-t-2');
+    expect(TOTAL_RULE.split(' ')).toContain('border-t-2');
+    const classes = tfoot?.[1]?.split(' ') ?? [];
+    for (const c of TOTAL_RULE.split(' ')) expect(classes).toContain(c);
     expect(tfoot?.[2]).toContain('Tổng cộng');
     expect(html.indexOf('</tbody>')).toBeLessThan(html.indexOf('<tfoot'));
     expect(/<tbody[^>]*>(.*?)<\/tbody>/.exec(html)?.[1]).not.toContain('Tổng cộng');
+  });
+
+  it('keeps the rule on a total that is the last row of the body, as a statement ends', () => {
+    const html = renderToStaticMarkup(
+      <DataTable head={['Mục']}>
+        <TableRow className={TOTAL_RULE}>
+          <TableCell>Tổng cộng nguồn vốn</TableCell>
+        </TableRow>
+      </DataTable>,
+    );
+    const tbody = (/<tbody[^>]*class="([^"]*)"/.exec(html)?.[1] ?? '').replaceAll('&amp;', '&');
+    // The body clears the last row's bottom hairline only, never its top border.
+    expect(tbody).toContain('[&_tr:last-child]:border-b-0');
+    expect(tbody).not.toContain('[&_tr:last-child]:border-0');
   });
 
   it('renders no tfoot for a table without totals', () => {
