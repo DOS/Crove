@@ -2,7 +2,7 @@
 // so only the HTTP status is trusted: 401/403 is a configuration problem, 429 and 5xx are worth a retry, and
 // any other 4xx means the request itself is wrong and will fail again. The AI SDK retries 429/5xx on its own
 // and then throws a RetryError; the last attempt's error decides.
-import { APICallError, RetryError } from 'ai';
+import { APICallError, NoObjectGeneratedError, RetryError } from 'ai';
 
 export type AiErrorKind = 'auth' | 'rate_limit' | 'unavailable' | 'invalid_request' | 'timeout' | 'network' | 'unknown';
 
@@ -42,4 +42,13 @@ export function classifyAiError(error: unknown): AiErrorInfo {
   }
   if (last instanceof Error && last.name === 'TimeoutError') return info('timeout', true, null);
   return info('unknown', false, null);
+}
+
+// Whether a reading that failed every attempt failed because of the document rather than the service (#1998): the
+// endpoint refused the request itself (a 4xx other than 401, 403, 408 and 429: an image over its size limit, text over
+// the model's context) or the model's answer never fit the invoice schema. The prober pages only for the service
+// (auth, rate limit, an endpoint down, network, timeout, and every error that is not the AI's).
+export function aiDocumentFailure(error: unknown): boolean {
+  const last = RetryError.isInstance(error) ? error.lastError : error;
+  return NoObjectGeneratedError.isInstance(last) || classifyAiError(error).kind === 'invalid_request';
 }
