@@ -382,11 +382,11 @@ suite('legal entities on PostgreSQL (#1278)', () => {
     const household = await org('Hộ kinh doanh Mới');
     await household.exec(household.owner, 'kernel.org.set_tax_code', { taxCode: '0101234564' });
     expect(await kindOf(household)).toBe('company');
-    await household.exec(household.owner, 'kernel.org.set_tax_code', { taxCode: '079091001235' });
+    await household.exec(household.owner, 'kernel.org.set_tax_code', { taxCode: '000091001235' });
     expect(await kindOf(household)).toBe('household');
     // Again, or with another 12-digit code: nothing more changes, and the audit says so only once.
-    await household.exec(household.owner, 'kernel.org.set_tax_code', { taxCode: '079091001235' });
-    await household.exec(household.owner, 'kernel.org.set_tax_code', { taxCode: '079091001236' });
+    await household.exec(household.owner, 'kernel.org.set_tax_code', { taxCode: '000091001235' });
+    await household.exec(household.owner, 'kernel.org.set_tax_code', { taxCode: '000091001236' });
     expect(await kindOf(household)).toBe('household');
     expect((await taxAudits(household)).map((d) => d.defaultEntityKind ?? null)).toEqual([null, 'household', null, null]);
     // Back to a 10-digit code: the kind stays what it became.
@@ -398,14 +398,14 @@ suite('legal entities on PostgreSQL (#1278)', () => {
     const [main] = await chosen.list(chosen.owner);
     await chosen.exec(chosen.owner, 'kernel.legal_entity.update', { legalEntityId: main!.id, name: main!.name, kind: 'branch', taxCode: null, parentId: null });
     await chosen.exec(chosen.owner, 'kernel.legal_entity.update', { legalEntityId: main!.id, name: main!.name, kind: 'company', taxCode: null, parentId: null });
-    await chosen.exec(chosen.owner, 'kernel.org.set_tax_code', { taxCode: '079091001237' });
+    await chosen.exec(chosen.owner, 'kernel.org.set_tax_code', { taxCode: '000091001237' });
     expect(await kindOf(chosen)).toBe('company');
     expect((await taxAudits(chosen))[0]).not.toHaveProperty('defaultEntityKind');
     // A rename alone is no choice of kind.
     const renamed = await org('Hộ Đổi Tên');
     const [renamedMain] = await renamed.list(renamed.owner);
     await renamed.exec(renamed.owner, 'kernel.legal_entity.update', { legalEntityId: renamedMain!.id, name: 'Hộ Đổi Tên Hai', kind: 'company', taxCode: null, parentId: null });
-    await renamed.exec(renamed.owner, 'kernel.org.set_tax_code', { taxCode: '079091001238' });
+    await renamed.exec(renamed.owner, 'kernel.org.set_tax_code', { taxCode: '000091001238' });
     expect(await kindOf(renamed)).toBe('household');
   });
 
