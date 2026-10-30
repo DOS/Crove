@@ -227,7 +227,8 @@ suite('journal reversal through the API, and voided purchase documents (#165)', 
     expect(detail.body?.payload?.checks).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'duplicate', status: 'fail' })]));
     await expect(approve(String(copy.proposalId), 1, { acceptFailedChecks: true })).rejects.toMatchObject({ code: 'DUPLICATE_INVOICE', status: 409 });
     await runtime.execute('kernel.proposal.reject', { id: copy.proposalId }, { actor: asUser(owner.userId), orgId: org.orgId });
-    // The copy's file carries its proposal's rejection (#2009).
+    // The copy's file carries its proposal's rejection (#2009); the app shows it on a file read as proposed, while a
+    // file marked as a duplicate keeps its duplicate chip.
     const recent = (await rpc('files/recent', await tokenFor(owner), undefined)).body as Array<{ proposalId: string | null; proposalStatus: string | null }>;
     expect(recent.find((f) => f.proposalId === copy.proposalId)).toMatchObject({ proposalStatus: 'rejected' });
 
