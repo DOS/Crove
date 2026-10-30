@@ -87,10 +87,7 @@ export const DEPS_REACH: Readonly<Record<string, readonly Reach[]>> = {
 // directory runs from the base branch on a protected-path PR, so a new field lands in two steps (#1663): its
 // classification here first, which passes both the PR's own copy and the base one, then the field in a later PR, whose
 // base copy already knows it. Remove the entry once the field is on the base branch.
-export const PENDING_DEPS: Readonly<Record<string, string>> = {
-  // WorkerDeps.build, the worker's build for /readyz (worker build >= API build).
-  build: '#1952',
-};
+export const PENDING_DEPS: Readonly<Record<string, string>> = {};
 
 // What the classification of WorkerDeps gets wrong (#1663), given its top-level fields: a field DEPS_REACH does not
 // classify fails (the safety direction: a new dependency is classified before it is used), and so does an entry for a

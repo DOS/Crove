@@ -169,7 +169,9 @@ jobs:
           repo="ghcr.io/${GITHUB_REPOSITORY,,}"
           printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$ACTOR" --password-stdin
           labels=(--label "org.opencontainers.image.source=$SOURCE" --label "org.opencontainers.image.revision=$SHA" --label "org.opencontainers.image.version=$RELEASE")
-          docker build "${labels[@]}" --build-arg "CROVE_BUILD=$SHA" -t "$repo:$RELEASE" .
+          # The commit's date orders builds for the API's /readyz (worker build >= API build, #1952).
+          built_at="$(git show -s --format=%cI "$SHA")"
+          docker build "${labels[@]}" --build-arg "CROVE_BUILD=$SHA" --build-arg "CROVE_BUILD_TIME=$built_at" -t "$repo:$RELEASE" .
           docker build "${labels[@]}" -f apps/extract/Dockerfile -t "$repo-extract:$RELEASE" .
           docker push --quiet "$repo:$RELEASE"
           docker push --quiet "$repo-extract:$RELEASE"

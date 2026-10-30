@@ -306,6 +306,8 @@ export interface WorkerDeps {
   revoker?: SessionRevoker | null;
   // Names this worker in crove_kernel.worker_heartbeat (default: the host name, the container id under Docker).
   instance?: string;
+  // The build it records there (#1952); default: none known.
+  build?: WorkerBuild;
   // Days of crove_kernel.refusal_tally windows kept (default DEFAULT_REFUSAL_TALLY_RETENTION_DAYS).
   refusalTallyRetentionDays?: number;
   // The built-in program of each agent template (ADR-0029 section 8), by template key.
@@ -408,12 +410,19 @@ export function workerApplicationName(instance: string): string {
   return `crove-worker:${instance}`.slice(0, 63);
 }
 
+// The build a worker runs (#1952): CROVE_BUILD and CROVE_BUILD_TIME, null for a local build.
+export interface WorkerBuild {
+  id: string | null;
+  time: string | null;
+}
+
 /**
- * Records that this worker is alive and the modules whose queues it works (crove_kernel.worker_beat, crove_worker
- * only): the prober ages only those queues, so a module left out does not read as stuck workers (#1877).
+ * Records that this worker is alive, the modules whose queues it works and the build it runs
+ * (crove_kernel.worker_beat, crove_worker only): the prober ages only those queues, so a module left out does not read
+ * as stuck workers (#1877), and the API's /readyz waits while a live worker runs an older build (#1952).
  */
-export async function beat(workerDb: Db, instance: string, modules: readonly string[]): Promise<void> {
-  await sql`SELECT crove_kernel.worker_beat(${instance.slice(0, 128)}, ${[...modules]}::text[])`.execute(workerDb);
+export async function beat(workerDb: Db, instance: string, modules: readonly string[], build: WorkerBuild = { id: null, time: null }): Promise<void> {
+  await sql`SELECT crove_kernel.worker_beat(${instance.slice(0, 128)}, ${[...modules]}::text[], ${build.id}::text, ${build.time}::timestamptz)`.execute(workerDb);
 }
 
 /**
@@ -1680,7 +1689,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   // One beat at a time, in order: the stop's beat below lands after any beat still in flight, never before it (#1887).
   let beats: Promise<void> = Promise.resolve();
   const heartbeat = (modules: readonly string[] = worked) =>
-    (beats = beats.then(() => beat(deps.workerDb, instance, modules)).catch((error) => console.error('[heartbeat]', error)));
+    (beats = beats.then(() => beat(deps.workerDb, instance, modules, deps.build)).catch((error) => console.error('[heartbeat]', error)));
   const heartbeatTimer = setInterval(() => void heartbeat(), HEARTBEAT_INTERVAL_MS);
   await heartbeat();
   // Back-pressure (#894): checked every 10 s; one check at a time, none after stop. Its start and end go to the alert
