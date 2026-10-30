@@ -14,9 +14,10 @@
 -- replacement or an adjustment invoice, linked to the original (#916). Every other source keeps its revisions (#1283).
 --
 -- A CHECK on crove_finance.journal_entry, so it holds for every writer: post_journal_entry, whose own checks (the next
--- revision, the previous one reversed) come first, and the database owner alike. Added NOT VALID, then validated
--- (SHARE UPDATE EXCLUSIVE: postings go on meanwhile). A database holding such a row refuses the validation and this
--- migration with it; fix the row by hand first (there is no caller that writes one).
+-- revision, the previous one reversed) come first, and the database owner alike. Added NOT VALID here, which holds
+-- every new row to it at once and reads no existing row, so the table is locked only for the catalog change. The next
+-- migration (20261107120000_crove_finance_document_one_revision_validate.sql) validates it in a transaction of its own,
+-- under SHARE UPDATE EXCLUSIVE, so postings go on during the scan.
 SET LOCAL lock_timeout = '2s';
 
 DO $$
@@ -27,4 +28,3 @@ BEGIN
       ADD CONSTRAINT journal_entry_document_one_revision CHECK (source_type <> 'finance.purchase_document' OR source_revision = 1) NOT VALID;
   END IF;
 END $$;
-ALTER TABLE crove_finance.journal_entry VALIDATE CONSTRAINT journal_entry_document_one_revision;
