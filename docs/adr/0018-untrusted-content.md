@@ -44,6 +44,8 @@ The plan decided the controls in §7.6, §7.7 and §4.7. The external security r
 
 **No credentials, by refusal.** The service refuses to start with any environment variable outside an allowlist (its own settings, `NODE_ENV`, and what the node image and the container runtime set), naming the variables and never their values. A marker file written into the image (`/etc/crove-extract-image`) makes the allowlist unconditional there, so overriding `NODE_ENV` cannot turn it off. Outside the image, an explicit development run only warns about credential-like names.
 
+**No entity is ever declared.** Every XML reader of the sandbox (the e-invoice, the feed and the tax-portal workbook) refuses DOCTYPE and ENTITY declarations before it parses, so a document cannot define an entity and none can be expanded. The e-invoice reader decodes the predefined XML entities and character references, and with them HTML entity names, which `fast-xml-parser` brings with its option; the signature check treats a file that uses one as unverified. The feed and workbook readers decode the predefined ones by hand. The tests are the billion-laughs case in [`extract.test.ts`](../../apps/extract/test/extract.test.ts), the refusals in [`einvoice-xml.test.ts`](../../apps/extract/test/einvoice-xml.test.ts), [`feed.test.ts`](../../apps/extract/test/feed.test.ts) and [`portal-list.test.ts`](../../apps/extract/test/portal-list.test.ts), and the container's [`smoke.mjs`](../../apps/extract/test/container/smoke.mjs).
+
 **Answers are untrusted too.** The contract is a set of strict zod objects: unknown keys and oversized strings and arrays are refused. The client refuses redirects, malformed answers and answers over 64 MiB (`createExtractClient`), and the finance module validates the reading again and runs the deterministic invoice checks before anything becomes a proposal.
 
 ### 2. Uploads and storage
@@ -122,10 +124,7 @@ The sandbox reduces an HTML mail body to text and caps it (`mailText` in [`parse
 - **The signature check** has the gaps listed in the trust README, and applies to XML purchase invoices only.
 - **The sender of an email is not authenticated** (section 3).
 - **Feed refreshes** run on a timer outside a queue, so the queue egress test does not cover them; they use the guard.
-- **Stale text.**
-  - Plan §7.6 says per-org limits are checked "before any S3 or DB write" (the API stores the blob first and the worker applies the org's limits), that an e-invoice is "verified" only against an official source (what is built is the signature check above), and that SPF and DKIM are read.
-  - Two code comments say entity processing is off in the e-invoice parser ([`einvoice-xml.ts`](../../apps/extract/src/einvoice-xml.ts), [`parse.ts`](../../apps/extract/src/parse.ts)). It decodes the five predefined entities and character references, which the signature check needs, while DOCTYPE and ENTITY declarations are refused before parsing in every XML reader of the sandbox, so no entity can be declared.
-  - The error text for an unknown `kind` lists four of the eight kinds.
+- **Stale text in the plan.** Plan §7.6 says per-org limits are checked "before any S3 or DB write" (the API stores the blob first and the worker applies the org's limits), that an e-invoice is "verified" only against an official source (what is built is the signature check above), and that SPF and DKIM are read.
 
 ## Evidence
 
