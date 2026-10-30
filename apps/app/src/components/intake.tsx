@@ -144,10 +144,13 @@ export function useIntake(): Intake {
   // Files read into a proposal still to be decided (#2009): asked about again when a proposal changes (the stream's
   // proposal hint), not polled, so the chip follows the approval or the rejection made in the Inbox.
   const undecided = undecidedIds(items);
+  // A key of their own: the poll's cached answer for the same ids may be older than the read, and must never come back
+  // as this one's.
   const watched = useQueries({
-    queries: Array.from({ length: Math.ceil(undecided.length / MAX_BATCH_FILES) }, (_, i) =>
-      orpc.files.batch.queryOptions({ input: { ids: undecided.slice(i * MAX_BATCH_FILES, (i + 1) * MAX_BATCH_FILES) } }),
-    ),
+    queries: Array.from({ length: Math.ceil(undecided.length / MAX_BATCH_FILES) }, (_, i) => {
+      const options = orpc.files.batch.queryOptions({ input: { ids: undecided.slice(i * MAX_BATCH_FILES, (i + 1) * MAX_BATCH_FILES) } });
+      return { ...options, queryKey: [...options.queryKey, 'watch'] as unknown as typeof options.queryKey };
+    }),
   });
   const decided = watched.map((query) => query.dataUpdatedAt).join(',');
   const watchedLatest = useRef(watched);

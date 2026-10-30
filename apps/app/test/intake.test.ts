@@ -104,7 +104,7 @@ describe('bulk intake state', () => {
     expect(undecidedIds(items)).toEqual([]);
   });
 
-  it("takes a watched file's own state when it moved on: failed after the decision, or read again (#2032)", () => {
+  it("takes a watched file's own state once a later read settled it, never back to being read (#2032)", () => {
     const plain = uploaded(newItem('a', 'a.xml'), { fileId: ID(1), duplicate: false });
     const other = uploaded(newItem('b', 'b.xml'), { fileId: ID(2), duplicate: false });
     let items = applyBatch(
@@ -119,9 +119,9 @@ describe('bulk intake state', () => {
       { ...status(ID(2), 'processing'), proposalId: ID(8), proposalStatus: 'pending' },
     ]);
     expect(items[0]).toMatchObject({ state: 'failed', error: 'Không đọc được', proposalStatus: 'rejected' });
-    // Being read again: back on the poll until it settles.
-    expect(items[1]).toMatchObject({ state: 'processing' });
-    expect(pendingIds(items)).toEqual([ID(2)]);
+    // Being read again (or an older answer that says so): the item keeps what it showed and is not polled again.
+    expect(items[1]).toMatchObject({ state: 'proposed', proposalStatus: 'pending' });
+    expect(pendingIds(items)).toEqual([]);
   });
 
   it('turns an opened archive into its entries and polls it while an entry is being read', () => {

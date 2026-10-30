@@ -78,7 +78,7 @@ describe('invalidateHint', () => {
     for (const type of ['file', 'extraction'] as const) {
       const { qc, stale } = seeded();
       await invalidateHint(qc, { type, id: FILE });
-      expect(stale()).toEqual(['detail1', 'files', 'inboxDone', 'inboxPending']);
+      expect(stale()).toEqual(['batch', 'detail1', 'files', 'inboxDone', 'inboxPending']);
     }
   });
 
