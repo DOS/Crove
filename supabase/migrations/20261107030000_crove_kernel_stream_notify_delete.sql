@@ -80,4 +80,3 @@ BEGIN
   RETURN NULL;
 END $$;
 REVOKE ALL ON FUNCTION crove_kernel.stream_notify() FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant, crove_prober;
-
