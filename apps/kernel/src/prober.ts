@@ -68,7 +68,7 @@ const schema = z.object({
   // the tables that send stream hints. PostgreSQL itself starts warning in its log at 50.
   PROBER_MAX_NOTIFY_QUEUE_PERCENT: z.coerce.number().int().min(0).max(100).default(50),
   // The WORM archive (#1997): the nightly verification older than this (26 h: a day and the slack of one late run), or
-  // the oldest audit event or journal entry not yet archived older than this. The archiver keeps ARCHIVE_LAG_SECONDS
+  // the oldest audit event not yet archived older than this. The archiver keeps ARCHIVE_LAG_SECONDS
   // (the worker's value, 600 s by default) on purpose, so the lag limit defaults to the larger of 3600 s and that plus
   // 15 minutes. 0 turns either check off.
   PROBER_MAX_ARCHIVE_VERIFY_AGE_SECONDS: seconds(93_600),
@@ -279,7 +279,7 @@ export function evaluateHealth(h: HealthSnapshot, t: Thresholds, deadLetterWindo
       check: 'archive_verify',
       value: h.archive_verify_age_seconds,
       threshold: verifyLimit,
-      message: `the WORM archive was last verified ${hours(h.archive_verify_age_seconds)} ago (limit ${hours(verifyLimit)}): the nightly verification is not running (docs/runbooks/worm-archive.md)`,
+      message: `the WORM archive last passed verification ${hours(h.archive_verify_age_seconds)} ago (limit ${hours(verifyLimit)}): the nightly verification is not running or keeps failing (docs/runbooks/worm-archive.md)`,
     });
   }
   const lagLimit = t.archiveLagSeconds ?? 0;
@@ -288,7 +288,7 @@ export function evaluateHealth(h: HealthSnapshot, t: Thresholds, deadLetterWindo
       check: 'archive_lag',
       value: h.archive_lag_seconds,
       threshold: lagLimit,
-      message: `the oldest audit event or journal entry not yet in the WORM archive is ${s(h.archive_lag_seconds)} old (limit ${s(lagLimit)}): the archiver is behind or stopped (docs/runbooks/worm-archive.md)`,
+      message: `the oldest audit event not yet in the WORM archive is ${s(h.archive_lag_seconds)} old (limit ${s(lagLimit)}): the archiver is behind or stopped (docs/runbooks/worm-archive.md)`,
     });
   }
   if (h.notify_queue_usage * 100 > t.notifyQueuePercent) {

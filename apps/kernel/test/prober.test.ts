@@ -117,13 +117,13 @@ describe('health thresholds', () => {
         check: 'archive_verify',
         value: 180_000,
         threshold: 93_600,
-        message: 'the WORM archive was last verified 50 h ago (limit 26 h): the nightly verification is not running (docs/runbooks/worm-archive.md)',
+        message: 'the WORM archive last passed verification 50 h ago (limit 26 h): the nightly verification is not running or keeps failing (docs/runbooks/worm-archive.md)',
       },
       {
         check: 'archive_lag',
         value: 7200,
         threshold: 3600,
-        message: 'the oldest audit event or journal entry not yet in the WORM archive is 7200 s old (limit 3600 s): the archiver is behind or stopped (docs/runbooks/worm-archive.md)',
+        message: 'the oldest audit event not yet in the WORM archive is 7200 s old (limit 3600 s): the archiver is behind or stopped (docs/runbooks/worm-archive.md)',
       },
     ]);
     // 0 turns a check off; null (no batch yet, every row archived) is not a finding.

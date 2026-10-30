@@ -185,6 +185,13 @@ suite('prober on PostgreSQL', () => {
     // Never verified: aged from the first batch, two days, over a 26-hour limit.
     expect(anchored.archive_verify_age_seconds).toBeGreaterThan(2 * 86_400 - 60);
     expect(evaluateHealth(anchored, archive, 3600).map((f) => f.check)).toContain('archive_verify');
+    // A run that failed resets nothing: a verifier that keeps failing alerts as stale too.
+    await admin((c) =>
+      c.query(`INSERT INTO crove_kernel.archive_verification (ok, batches, rows_checked, problems, verified_at) VALUES (false, 1, 0, '[]', now() - interval '10 minutes')`),
+    );
+    const failing = await readHealth(proberUrl, 3600);
+    expect(failing.archive_verify_age_seconds).toBeGreaterThan(2 * 86_400 - 60);
+    expect(evaluateHealth(failing, archive, 3600).map((f) => f.check)).toContain('archive_verify');
     await admin((c) => c.query(`INSERT INTO crove_kernel.archive_verification (ok, batches, rows_checked, verified_at) VALUES (true, 1, 0, now() - interval '1 hour')`));
     const verified = await readHealth(proberUrl, 3600);
     expect(verified.archive_verify_age_seconds).toBeGreaterThan(3500);

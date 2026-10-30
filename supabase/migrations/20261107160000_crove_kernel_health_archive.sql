@@ -4,19 +4,23 @@
 -- (docs/runbooks/worm-archive.md). Idempotent; applied files stay untouched.
 --
 -- crove_kernel.health(int)   as in 20261106030000, with two more columns at the end:
---   archive_verify_age_seconds  seconds since the newest crove_kernel.archive_verification run, or, before the first,
---                               since the first archive batch was written; NULL while the archive holds no batch.
---   archive_lag_seconds         the age of the oldest audit event or journal entry not yet in an archive batch; NULL
---                               when every row is anchored.
--- Both are aggregates over tables that hold no tenant data in what is returned (times only). Each is one index lookup
--- (archive_verification_time_idx, archive_batch's primary key, audit_event_occurred_idx) or a BRIN range scan from the
--- newest batch's end (journal_entry_created_brin), whose cost grows only with the rows not yet archived (the same scan
--- the archiver runs every minute), so health() stays fast.
+--   archive_verify_age_seconds  seconds since the newest crove_kernel.archive_verification run that passed (ok), or,
+--                               before the first, since the first archive batch was written; NULL while the archive
+--                               holds no batch. A verification that keeps failing ages like one that stopped running.
+--   archive_lag_seconds         the age of the oldest audit event not yet in an archive batch; NULL when every one is
+--                               anchored. Journal entries are archived by the same windows, and every one is written by a
+--                               command whose audit row carries the same transaction time, so the oldest unarchived
+--                               audit event is never younger than the oldest unarchived entry: reading the ledger (BRIN
+--                               only on created_at, a scan that grows when the archiver stalls) is not needed.
+-- Both are aggregates over tables that hold no tenant data in what is returned (times only), each one index lookup
+-- (archive_verification_time_idx, archive_batch's primary key, audit_event_occurred_idx), so health() stays fast.
 --
 -- A function's result columns cannot change in place, so it is dropped and created again, with the same grant:
--- EXECUTE for crove_prober alone. The invariant suite accepts both column lists since #2024 (step 1).
+-- EXECUTE for crove_prober alone. Nothing is removed: two columns are added at the end, and every caller selects
+-- columns by name. The invariant suite accepts both column lists since #2024 (step 1).
 SET LOCAL lock_timeout = '2s';
 
+-- crove:contract adr=0013
 DROP FUNCTION IF EXISTS crove_kernel.health(int);
 CREATE FUNCTION crove_kernel.health(p_dead_letter_window_seconds int DEFAULT 3600)
 RETURNS TABLE (
@@ -91,20 +95,20 @@ BEGIN
   SELECT EXTRACT(EPOCH FROM checked_at - pg_catalog.max(h.beat_at))::double precision INTO worker_heartbeat_age_seconds
   FROM crove_kernel.worker_heartbeat h;
 
-  -- The nightly verification of the WORM archive (#1997): the age of the newest run, or, before the first run, of the
-  -- first batch (the verifier owes a run within a day of it); NULL while the archive holds no batch. Index lookups only.
+  -- The nightly verification of the WORM archive (#1997): the age of the newest run that passed, or, before the first,
+  -- of the first batch (the verifier owes a run within a day of it); NULL while the archive holds no batch. A failing run
+  -- resets nothing, so a verifier that keeps failing alerts as stale too. Index lookups only.
   SELECT EXTRACT(EPOCH FROM checked_at - COALESCE(
-           (SELECT v.verified_at FROM crove_kernel.archive_verification v ORDER BY v.verified_at DESC LIMIT 1),
+           (SELECT v.verified_at FROM crove_kernel.archive_verification v WHERE v.ok ORDER BY v.verified_at DESC LIMIT 1),
            (SELECT b.written_at FROM crove_kernel.archive_batch b ORDER BY b.seq LIMIT 1)))::double precision
     INTO archive_verify_age_seconds;
-  -- How far the archive is behind (#1997): the age of the oldest audit event or journal entry not yet in a batch, the
-  -- times the archiver cuts windows by; NULL when every row is anchored. It normally stays near ARCHIVE_LAG_SECONDS
-  -- (600 s), which the archiver waits so an open transaction is not cut off. One row from each table's time index,
+  -- How far the archive is behind (#1997): the age of the oldest audit event not yet in a batch (a journal entry's own
+  -- audit row is never younger, above); NULL when every one is anchored. It normally stays near ARCHIVE_LAG_SECONDS
+  -- (600 s), which the archiver waits so an open transaction is not cut off. One row from the btree on occurred_at,
   -- read from the newest batch's end on.
   SELECT b.window_to INTO v_archived_to FROM crove_kernel.archive_batch b ORDER BY b.seq DESC LIMIT 1;
-  SELECT EXTRACT(EPOCH FROM checked_at - LEAST(
-           (SELECT a.occurred_at FROM crove_kernel.audit_event a WHERE a.occurred_at >= COALESCE(v_archived_to, '-infinity') ORDER BY a.occurred_at LIMIT 1),
-           (SELECT e.created_at FROM crove_finance.journal_entry e WHERE e.created_at >= COALESCE(v_archived_to, '-infinity') ORDER BY e.created_at LIMIT 1)))::double precision
+  SELECT EXTRACT(EPOCH FROM checked_at - (
+           SELECT a.occurred_at FROM crove_kernel.audit_event a WHERE a.occurred_at >= COALESCE(v_archived_to, '-infinity') ORDER BY a.occurred_at LIMIT 1))::double precision
     INTO archive_lag_seconds;
 
   RETURN NEXT;

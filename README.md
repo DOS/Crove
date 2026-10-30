@@ -94,8 +94,8 @@ The image's `prober` role checks that background work is moving and alerts you w
 | Freshest worker heartbeat (the worker writes one every 30 s); none at all also alerts | 120 s | `PROBER_MAX_HEARTBEAT_AGE_SECONDS` |
 | How full the NOTIFY queue is (`pg_notification_queue_usage()`): it fills when a listening session stops reading, and once full every write that sends a stream hint fails | 50% | `PROBER_MAX_NOTIFY_QUEUE_PERCENT` |
 | The database cannot be reached or `health()` fails | always | |
-| The WORM archive's nightly verification: time since the newest run (before the first, since the first batch) | 26 h (`0`: off) | `PROBER_MAX_ARCHIVE_VERIFY_AGE_SECONDS` |
-| The WORM archive's lag: the oldest audit event or journal entry not yet in a batch (it normally stays near `ARCHIVE_LAG_SECONDS`, 600 s) | the larger of 3600 s and `ARCHIVE_LAG_SECONDS` plus 900 s (`0`: off) | `PROBER_MAX_ARCHIVE_LAG_SECONDS` |
+| The WORM archive's nightly verification: time since the newest run that passed (before the first, since the first batch), so a verifier that keeps failing alerts too | 26 h (`0`: off) | `PROBER_MAX_ARCHIVE_VERIFY_AGE_SECONDS` |
+| The WORM archive's lag: the oldest audit event not yet in a batch (a journal entry's audit row is never younger) (it normally stays near `ARCHIVE_LAG_SECONDS`, 600 s) | the larger of 3600 s and `ARCHIVE_LAG_SECONDS` plus 900 s (`0`: off) | `PROBER_MAX_ARCHIVE_LAG_SECONDS` |
 | Supabase Auth's `/health` does not answer 2xx in a row, asked where signing in reaches it: `PROBER_AUTH_URL`, else `PUBLIC_AUTH_URL`, else `PUBLIC_URL/auth/v1` (Compose: the kernel's proxy, `http://crove:8080/auth/v1`; the split layout: `http://api:8080/auth/v1`). Hosted Supabase needs `PUBLIC_AUTH_ANON_KEY`. With one probe a run (cron), one miss alerts; so does the first probe after a `--every` loop starts, so a restart during an outage keeps the alert open | 2 misses (`0`: off), 10 s each | `PROBER_AUTH_MISSES`, `PROBER_AUTH_TIMEOUT_SECONDS` |
 
 Every probe logs what fails, but it notifies only on news:
