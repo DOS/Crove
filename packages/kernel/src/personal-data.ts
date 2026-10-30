@@ -340,7 +340,6 @@ export const ERASED_TEXT_MARK = '[đã xóa]';
 // Private items one notice names at most, and so authors (each has one at least); a request that matches more is
 // refused, never named in part.
 export const PERSONAL_DATA_NOTICE_ITEMS = 1000;
-export const PERSONAL_DATA_NOTICE_AUTHORS = PERSONAL_DATA_NOTICE_ITEMS;
 // Why an erasure keeps a private item that mentions the value: no notice named it as it is now (written or changed since
 // the last one), or the notice's notification has not reached its author yet, so the author does not know yet.
 export const UNTOLD_PRIVATE_REASON = 'A private item whose author was not told yet (written or changed since the last notice, or its notification not sent yet): send the notice, wait, then erase again';

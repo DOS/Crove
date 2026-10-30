@@ -18,7 +18,7 @@ import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext } from '@crove/kernel-runtime';
 import { eligibleApprovers } from './approval.ts';
 import { uploaderEntity } from './extraction.ts';
-import { PERSONAL_DATA_NOTICE_AUTHORS } from './personal-data.ts';
+import { PERSONAL_DATA_NOTICE_ITEMS } from './personal-data.ts';
 import { REROUTED_EVENT_TASKS } from './task-reroute.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
@@ -227,7 +227,7 @@ export const notificationDispatch = defineCommand({
         // to-dos mention the person, never which, what they say or who the person is. The owner who sent it is left
         // out, as for every notification (they know).
         const e = z
-          .object({ authors: z.array(z.object({ userId: zId, notes: z.number().int().nonnegative(), todos: z.number().int().nonnegative() })).min(1).max(PERSONAL_DATA_NOTICE_AUTHORS) })
+          .object({ authors: z.array(z.object({ userId: zId, notes: z.number().int().nonnegative(), todos: z.number().int().nonnegative() })).min(1).max(PERSONAL_DATA_NOTICE_ITEMS) })
           .safeParse(event.payload);
         if (!e.success) return { sent: 0 };
         let sent = 0;

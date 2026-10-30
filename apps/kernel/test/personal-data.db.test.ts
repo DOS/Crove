@@ -250,9 +250,9 @@ suite('finding a person in the org (#923)', () => {
       (
         await admin((c) =>
           c.query<{ id: string }>(
-            `SELECT id FROM crove_notes.note WHERE org_id = $1 AND visibility = 'private' AND author_user_id = ANY($2)
+            `SELECT id FROM crove_notes.note WHERE org_id = $1 AND visibility = 'private' AND author_user_id = ANY($2) AND id = ANY($4)
              UNION ALL SELECT id FROM crove_notes.todo WHERE org_id = $1 AND id = ANY($3)`,
-            [org.orgId, [org.member], [memberTodo, adminTodo]],
+            [org.orgId, [org.member], [memberTodo, adminTodo], [...memberNotes, unrelated, later]],
           ),
         )
       ).rows
