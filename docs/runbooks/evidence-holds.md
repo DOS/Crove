@@ -30,6 +30,7 @@ A failed file is tried again after 5 minutes, then 10, 20 and so on, at least on
 ## Settings and bucket
 
 - `STORAGE=s3` with a bucket that has **Object Lock enabled** (it implies versioning, which evidence buckets need anyway). AWS can enable Object Lock on an existing versioned bucket; MinIO only on a new bucket, so create one with `--with-lock` and copy the objects with their versions, or keep holds off.
+- `pnpm pilot:check` reads the bucket's Object Lock with these settings and fails when holds are on and the bucket has none (#1996, [pilot-readiness.md](pilot-readiness.md) section 4).
 - The credentials need `s3:GetBucketObjectLockConfiguration` on the bucket, and `s3:GetObjectRetention` and `s3:PutObjectRetention` on `org/*`. Never give them `s3:BypassGovernanceRetention`.
 - `EVIDENCE_LOCK_DAYS=0` turns holds off.
 - **Local disk** has no per-object retention: the worker logs `the file store has no per-object retention (local disk): posted files get no retention hold` at start and sets none. Ludy still never deletes an `org/` file; backups are the protection there.
