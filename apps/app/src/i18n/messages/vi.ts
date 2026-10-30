@@ -787,6 +787,7 @@ export const vi = {
     taxCodePlaceholder: '0101234567-001',
     taxCodeInvalid: 'Mã số thuế không hợp lệ: 10 chữ số, 10 chữ số kèm 3 chữ số đơn vị phụ thuộc, hoặc 12 chữ số',
     defaultTaxCodeHint: 'Đổi ở mục Mã số thuế của tổ chức',
+    defaultNameHint: 'Đây là tên của tổ chức: đổi tên ở đây là đổi tên tổ chức.',
     parent: 'Trực thuộc',
     noParent: 'Không trực thuộc pháp nhân nào',
   },

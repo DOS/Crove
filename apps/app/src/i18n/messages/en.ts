@@ -789,6 +789,7 @@ export const en = {
     taxCodePlaceholder: '0101234567-001',
     taxCodeInvalid: 'Not a valid tax code: 10 digits, 10 digits and a 3-digit dependent unit, or 12 digits.',
     defaultTaxCodeHint: "Change it under the organization's Tax code",
+    defaultNameHint: "This is the organization's name: renaming it here renames the organization.",
     parent: 'Under',
     noParent: 'Not under another legal entity',
   },
