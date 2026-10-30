@@ -1,10 +1,10 @@
-// The audit log screen's filter (#672) and its command labels (#1654).
+// The audit log screen's filter (#672), its filters in the URL (#1445) and its command labels (#1654).
 import { describe, expect, it } from 'vitest';
 import { en } from '../src/i18n/messages/en.ts';
 import { vi } from '../src/i18n/messages/vi.ts';
-import { auditFilter, commandLabel, nextAuditCursor, withCommandLabels } from '../src/lib/audit.ts';
+import { auditFilter, auditForm, commandLabel, nextAuditCursor, parseAuditSearch, withCommandLabels } from '../src/lib/audit.ts';
 
-const empty = { actor: '', command: '', outcome: '', target: '', from: '', to: '' };
+const empty = { actor: '', command: '', outcome: '', target: '', targetType: '', from: '', to: '' };
 
 describe('audit filter', () => {
   it('sends only what the server accepts', () => {
@@ -18,6 +18,26 @@ describe('audit filter', () => {
     });
     expect(auditFilter({ ...empty, target: ' 0192F0AA-1111-7222-8333-944445555666 ' })).toEqual({ targetId: '0192f0aa-1111-7222-8333-944445555666' });
     expect(auditFilter({ ...empty, target: '0192f0aa', outcome: 'maybe', from: '1/10/2026' })).toEqual({});
+    // A target's type narrows a whole target id only.
+    expect(auditFilter({ ...empty, target: '0192f0aa-1111-7222-8333-944445555666', targetType: 'kernel.proposal' })).toEqual({
+      targetId: '0192f0aa-1111-7222-8333-944445555666',
+      targetType: 'kernel.proposal',
+    });
+    expect(auditFilter({ ...empty, target: '0192f0aa', targetType: 'kernel.proposal' })).toEqual({});
+    expect(auditFilter({ ...empty, target: '0192f0aa-1111-7222-8333-944445555666', targetType: 'Kernel Proposal' })).toEqual({ targetId: '0192f0aa-1111-7222-8333-944445555666' });
+  });
+
+  it('reads its filters from the URL, a proposal link included, and drops what is not well formed (#1445)', () => {
+    const id = '0192F0AA-1111-7222-8333-944445555666';
+    const search = parseAuditSearch({ targetType: 'kernel.proposal', targetId: id });
+    expect(search).toEqual({ targetType: 'kernel.proposal', targetId: id.toLowerCase() });
+    expect(auditFilter(auditForm(search))).toEqual({ targetType: 'kernel.proposal', targetId: id.toLowerCase() });
+    expect(
+      parseAuditSearch({ actor: 'system', command: 'finance.', outcome: 'denied', from: '2026-10-01', to: '2026-10-31', extra: 'x' }),
+    ).toEqual({ actor: 'system', command: 'finance.', outcome: 'denied', from: '2026-10-01', to: '2026-10-31' });
+    expect(parseAuditSearch({ actor: 'someone', command: 'DROP TABLE', outcome: 'maybe', targetType: 'proposal', targetId: 'x', from: '1/10/2026', to: 5 })).toEqual({});
+    // A type with no id to narrow is not kept in the form.
+    expect(auditForm(parseAuditSearch({ targetType: 'kernel.proposal' }))).toEqual(empty);
   });
 
   it('pages after the last row while more follow', () => {

@@ -14,9 +14,10 @@
 //     the same way from `allocationsFrom`, every number allocation and void of the gapless numbering and each
 //     voucher's number, number period and allocation (crove_kernel.archive_allocation_hashes). Version 5 (#1623) adds,
 //     the same way from `seriesFrom`, every number series with the reset policy in force for its doc type
-//     (crove_kernel.archive_series_hashes), so switching a doc type's reset once it has numbers shows. Each batch
-//     verifies with the version it was written with; a batch of a lower version after a higher one means rows went
-//     unanchored.
+//     (crove_kernel.archive_series_hashes), so switching a doc type's reset once it has numbers shows. Version 6
+//     (#1337) adds, the same way from `revisionsFrom`, every journal entry's source revision and payload hash
+//     (crove_kernel.archive_revision_hashes), so editing either shows. Each batch verifies with the version it was
+//     written with; a batch of a lower version after a higher one means rows went unanchored.
 //   - verifyArchive, nightly: reads every batch back from the store, checks the chain, and recomputes every row hash
 //     from the database. A changed, missing or added row, a broken chain, a window gap, or a store and database that
 //     disagree fail the run: the job fails without a retry, and the prober alerts on the dead letter. So does an
@@ -199,7 +200,7 @@ export class S3ArchiveStore implements ArchiveStore {
 
 export interface ArchiveBatch {
   format: 'crove-archive';
-  version: 1 | 2 | 3 | 4 | 5;
+  version: 1 | 2 | 3 | 4 | 5 | 6;
   seq: number;
   window: { from: string; to: string };
   // Versions 2 and up: where its voucher numbers and voids start (the epoch, or the window's start).
@@ -208,8 +209,10 @@ export interface ArchiveBatch {
   entitiesFrom?: string;
   // Versions 4 and up: where its number allocations, voids and voucher numbers start (the epoch, or the window's start).
   allocationsFrom?: string;
-  // Version 5: where its number series and their reset policies start (the epoch, or the window's start).
+  // Versions 5 and up: where its number series and their reset policies start (the epoch, or the window's start).
   seriesFrom?: string;
+  // Version 6: where its journal entries' source revisions and payload hashes start (the epoch, or the window's start).
+  revisionsFrom?: string;
   prevChainSha256: string;
   // [ref, row hash], sorted by ref.
   rows: Array<[string, string]>;
@@ -234,10 +237,11 @@ const byRef = (a: [string, string], b: [string, string]) => (a[0] < b[0] ? -1 : 
 // The rows of a batch as the database holds them now: version 1 rows of the window, plus from version 2 the numbers and
 // voids from numbersFrom, plus from version 3 the legal entity rows from entitiesFrom, plus from version 4 the number
 // allocations, their voids and the vouchers' number periods from allocationsFrom, plus from version 5 the number series
-// with their reset policies from seriesFrom.
+// with their reset policies from seriesFrom, plus from version 6 the journal entries' source revisions and payload
+// hashes from revisionsFrom.
 async function rowHashes(
   db: Db,
-  batch: Pick<ArchiveBatch, 'version' | 'window' | 'numbersFrom' | 'entitiesFrom' | 'allocationsFrom' | 'seriesFrom'>,
+  batch: Pick<ArchiveBatch, 'version' | 'window' | 'numbersFrom' | 'entitiesFrom' | 'allocationsFrom' | 'seriesFrom' | 'revisionsFrom'>,
 ): Promise<Array<[string, string]>> {
   const { from, to } = batch.window;
   const { rows } = await sql<{ ref: string; row_sha256: string }>`
@@ -270,7 +274,14 @@ async function rowHashes(
             SELECT ref, row_sha256 FROM crove_kernel.archive_series_hashes(${batch.seriesFrom ?? from}::timestamptz, ${to}::timestamptz)`.execute(db)
         ).rows
       : [];
-  return [...rows, ...numbers, ...entities, ...allocations, ...series].map((r): [string, string] => [r.ref, r.row_sha256]).sort(byRef);
+  const revisions =
+    batch.version >= 6
+      ? (
+          await sql<{ ref: string; row_sha256: string }>`
+            SELECT ref, row_sha256 FROM crove_kernel.archive_revision_hashes(${batch.revisionsFrom ?? from}::timestamptz, ${to}::timestamptz)`.execute(db)
+        ).rows
+      : [];
+  return [...rows, ...numbers, ...entities, ...allocations, ...series, ...revisions].map((r): [string, string] => [r.ref, r.row_sha256]).sort(byRef);
 }
 
 // Where a batch's numbers start: the epoch when it is the first batch of version 2 or above, its window's start after.
@@ -281,8 +292,11 @@ const entitiesFromAfter = (previous: ArchiveBatch | null, from: string) => ((pre
 // Where a batch's number allocations start: the epoch when it is the first batch of version 4 or above, its window's
 // start after.
 const allocationsFromAfter = (previous: ArchiveBatch | null, from: string) => ((previous?.version ?? 1) >= 4 ? from : EPOCH);
-// Where a batch's number series start: the epoch when it is the first batch of version 5, its window's start after.
+// Where a batch's number series start: the epoch when it is the first batch of version 5 or above, its window's start
+// after.
 const seriesFromAfter = (previous: ArchiveBatch | null, from: string) => ((previous?.version ?? 1) >= 5 ? from : EPOCH);
+// Where a batch's source revisions start: the epoch when it is the first batch of version 6, its window's start after.
+const revisionsFromAfter = (previous: ArchiveBatch | null, from: string) => ((previous?.version ?? 1) >= 6 ? from : EPOCH);
 
 function parseBatch(bytes: Uint8Array): ArchiveBatch | null {
   try {
@@ -293,7 +307,9 @@ function parseBatch(bytes: Uint8Array): ArchiveBatch | null {
     if (value.version === 3) return typeof value.numbersFrom === 'string' && typeof value.entitiesFrom === 'string' ? value : null;
     const v4 = typeof value.numbersFrom === 'string' && typeof value.entitiesFrom === 'string' && typeof value.allocationsFrom === 'string';
     if (value.version === 4) return v4 ? value : null;
-    return value.version === 5 && v4 && typeof value.seriesFrom === 'string' ? value : null;
+    const v5 = v4 && typeof value.seriesFrom === 'string';
+    if (value.version === 5) return v5 ? value : null;
+    return value.version === 6 && v5 && typeof value.revisionsFrom === 'string' ? value : null;
   } catch {
     return null;
   }
@@ -341,18 +357,19 @@ export async function writeArchive(db: Db, store: ArchiveStore, options: { lagSe
     } else {
       const end = Math.min(next.horizon.getTime(), next.first_row_at.getTime() + ARCHIVE_WINDOW_MS);
       const to = new Date(end).toISOString();
-      // The head's batch tells whether this one is the first of version 2, 3, 4 or 5. When it cannot be read (the
-      // verifier reports that), this batch takes the numbers, entities, allocations and series from the epoch again:
-      // anchoring a row twice loses nothing.
+      // The head's batch tells whether this one is the first of version 2, 3, 4, 5 or 6. When it cannot be read (the
+      // verifier reports that), this batch takes the numbers, entities, allocations, series and revisions from the
+      // epoch again: anchoring a row twice loses nothing.
       const previousBytes = head ? await store.get(archiveKey(seq - 1)) : null;
       const previous = previousBytes ? parseBatch(previousBytes) : null;
       const shape = {
-        version: 5 as const,
+        version: 6 as const,
         window: { from, to },
         numbersFrom: numbersFromAfter(previous, from),
         entitiesFrom: entitiesFromAfter(previous, from),
         allocationsFrom: allocationsFromAfter(previous, from),
         seriesFrom: seriesFromAfter(previous, from),
+        revisionsFrom: revisionsFromAfter(previous, from),
       };
       const rows = await rowHashes(db, shape);
       const batchHash = batchSha256(rows);
@@ -402,6 +419,7 @@ export interface ArchiveProblem {
     | 'entities_gap'
     | 'allocations_gap'
     | 'series_gap'
+    | 'revisions_gap'
     | 'series_period_mismatch';
   seq: number;
   ref?: string;
@@ -451,13 +469,14 @@ export async function verifyArchive(db: Db, store: ArchiveStore): Promise<Archiv
     if (batch.prevChainSha256 !== prev) note({ code: 'chain_broken', seq });
     if (batch.window.from !== prevTo) note({ code: 'window_gap', seq });
     // Numbers are anchored from the first version 2 batch on, legal entities from the first version 3 batch on, number
-    // allocations from the first version 4 batch on and number series from the first version 5 batch on, each from
-    // where the last one stopped.
+    // allocations from the first version 4 batch on, number series from the first version 5 batch on and source
+    // revisions from the first version 6 batch on, each from where the last one stopped.
     if (batch.version < (previous?.version ?? 1)) note({ code: 'version_regressed', seq });
     if (batch.version >= 2 && batch.numbersFrom !== numbersFromAfter(previous, batch.window.from)) note({ code: 'numbers_gap', seq });
     if (batch.version >= 3 && batch.entitiesFrom !== entitiesFromAfter(previous, batch.window.from)) note({ code: 'entities_gap', seq });
     if (batch.version >= 4 && batch.allocationsFrom !== allocationsFromAfter(previous, batch.window.from)) note({ code: 'allocations_gap', seq });
     if (batch.version >= 5 && batch.seriesFrom !== seriesFromAfter(previous, batch.window.from)) note({ code: 'series_gap', seq });
+    if (batch.version >= 6 && batch.revisionsFrom !== revisionsFromAfter(previous, batch.window.from)) note({ code: 'revisions_gap', seq });
     const batchHash = batchSha256(batch.rows);
     if (batchHash !== batch.batchSha256) note({ code: 'batch_hash_mismatch', seq });
     if (chainSha256(batch.prevChainSha256, seq, batch.window.from, batch.window.to, batch.batchSha256) !== batch.chainSha256) {

@@ -1,7 +1,10 @@
 // The org's audit log for owners and admins (#672): every command's audit row, newest first, filtered by who, what,
 // outcome, object and days, a page at a time, and the filtered list as a CSV file (the server builds and audits it).
 // Commands show by their label in the screen's language, with the name under it (#1654); the file gets a label column.
+// The filters start from the URL (#1445), so a link opens it filtered: a proposal's decision links here by its id, and
+// the log then lists the decision and the rows of what it ran.
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery } from '@tanstack/react-query';
+import { useSearch } from '@tanstack/react-router';
 import { useState } from 'react';
 import { useLocale, useMessages, useTranslations } from 'use-intl';
 import { AUDIT_OUTCOMES, type AuditCursor, type AuditFilter, type AuditOutcome, type AuditPage } from '@crove/kernel-contract';
@@ -14,7 +17,7 @@ import { DateInput } from '../components/date-input.tsx';
 import { DataTable, Empty, ErrorText, PageHeader, Spinner, TableSkeleton } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc } from '../lib/api.ts';
-import { auditFilter, commandLabel, nextAuditCursor, withCommandLabels, type AuditFilterForm } from '../lib/audit.ts';
+import { auditFilter, auditForm, commandLabel, nextAuditCursor, withCommandLabels, type AuditFilterForm, type AuditSearch } from '../lib/audit.ts';
 
 const OUTCOME_BADGE: Record<AuditOutcome, 'success' | 'warning' | 'destructive' | 'secondary'> = {
   ok: 'success',
@@ -23,7 +26,7 @@ const OUTCOME_BADGE: Record<AuditOutcome, 'success' | 'warning' | 'destructive' 
   failed: 'destructive',
 };
 
-const EMPTY: AuditFilterForm = { actor: '', command: '', outcome: '', target: '', from: '', to: '' };
+const EMPTY: AuditFilterForm = { actor: '', command: '', outcome: '', target: '', targetType: '', from: '', to: '' };
 
 // A command by its label, with its name under it for whoever searches the code or the file; a name with no label (a
 // command no longer registered) as it is.
@@ -37,14 +40,20 @@ function CommandName({ label, name }: { label: string | null; name: string }) {
   );
 }
 
+// The filters of the URL start the screen's form; another link to the screen starts it again.
 export function AuditPage() {
+  const search: AuditSearch = useSearch({ strict: false });
+  return <AuditLog key={JSON.stringify(search)} search={search} />;
+}
+
+function AuditLog({ search }: { search: AuditSearch }) {
   const t = useTranslations('audit');
   const f = useFormat();
   const locale = useLocale();
   const labels = useMessages().commands;
   const org = useQuery(orpc.org.get.queryOptions());
   const canRead = org.data?.role === 'owner' || org.data?.role === 'admin';
-  const [form, setForm] = useState<AuditFilterForm>(EMPTY);
+  const [form, setForm] = useState<AuditFilterForm>(() => auditForm(search));
   const filter: AuditFilter = auditFilter(form);
   const commands = useQuery({ ...orpc.org.auditCommands.queryOptions(), enabled: canRead });
   const commandOptions = (commands.data ?? [])
@@ -74,7 +83,9 @@ export function AuditPage() {
       setTimeout(() => URL.revokeObjectURL(url), 10_000);
     },
   });
-  const set = (key: keyof AuditFilterForm) => (e: { target: { value: string } }) => setForm((prev) => ({ ...prev, [key]: e.target.value }));
+  // A changed target id drops the type a link gave it.
+  const set = (key: keyof AuditFilterForm) => (e: { target: { value: string } }) =>
+    setForm((prev) => ({ ...prev, [key]: e.target.value, ...(key === 'target' ? { targetType: '' } : {}) }));
 
   if (org.isLoading) return <Spinner />;
   if (org.error) return <ErrorText>{errorMessage(org.error)}</ErrorText>;
@@ -151,6 +162,7 @@ export function AuditPage() {
         )}
       </div>
       {form.target.trim() !== '' && !filter.targetId && <p className="mb-3 text-xs text-warning">{t('targetInvalid')}</p>}
+      {filter.targetType && <p className="mb-3 text-xs text-subtle-foreground">{t('targetTypeOnly', { type: filter.targetType })}</p>}
       {log.isLoading ? (
         <TableSkeleton columns={5} />
       ) : log.error && rows.length === 0 ? (
@@ -176,7 +188,7 @@ export function AuditPage() {
                 <TableCell className="px-4 py-3 font-mono text-xs text-muted-foreground">
                   {r.targetType && <span className="block">{r.targetType}</span>}
                   {r.targetId && (
-                    <button type="button" className="text-link hover:underline" onClick={() => setForm((prev) => ({ ...prev, target: r.targetId ?? '' }))}>
+                    <button type="button" className="text-link hover:underline" onClick={() => setForm((prev) => ({ ...prev, target: r.targetId ?? '', targetType: '' }))}>
                       {r.targetId.slice(0, 8)}
                     </button>
                   )}

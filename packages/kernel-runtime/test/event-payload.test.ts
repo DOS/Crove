@@ -23,7 +23,6 @@ describe('eventPayloadProblem', () => {
         taskIds: ['0193a3f4-5b6c-7d8e-9f01-23456789abcd'],
         nested: { scope: 'global', empty: '' },
         bankAccount: '112100001',
-        agent_task: { title: 'Khách hủy lịch hẹn: Tư vấn thuế', ref: { type: 'crm.booking', id: '0193a3f4-5b6c-7d8e-9f01-23456789abcd' } },
         absent: undefined,
       }),
     ).toBeNull();
@@ -39,7 +38,6 @@ describe('eventPayloadProblem', () => {
       [{ to: { email: 'x' } }, 'payload.to.email: a key that names personal data'],
       [{ recipients: ['a'] }, 'payload.recipients: a key that names personal data'],
       [{ display_name: 'Lan' }, 'payload.display_name: a key that names personal data'],
-      [{ agent_task: { title: 'x'.repeat(301) } }, 'payload.agent_task.title: longer than 300 characters'],
       [{ title: 'Rà soát bài' }, 'payload.title: a string that is neither an id nor a code'],
       [{ reason: 'refresh refused (invalid_grant)' }, 'payload.reason: a string that is neither an id nor a code'],
       [{ list: ['ok', 'two words'] }, 'payload.list[1]: a string that is neither an id nor a code'],
@@ -65,9 +63,18 @@ describe('eventPayloadProblem', () => {
     expect(eventPayloadProblem(normalizeEventPayload({ code: 'Rate limit hit, retry later' }))).toBeNull();
   });
 
-  it('lets an exempt value through only for its event type', () => {
-    expect(eventPayloadProblem({ subject: 'auth0|abc' }, 'kernel.session.revoked')).toBeNull();
-    expect(eventPayloadProblem({ subject: 'auth0|abc' }, 'kernel.member.removed')).toBe('payload.subject: a string that is neither an id nor a code');
+  it("lets a task title through only as its event type's template (#1970)", () => {
+    const task = (title: string) => ({ post_id: '0193a3f4-5b6c-7d8e-9f01-23456789abcd', agent_task: { title, ref: { type: 'social.post', id: '0193a3f4-5b6c-7d8e-9f01-23456789abcd' } } });
+    expect(eventPayloadProblem(task('Rà soát bài gửi duyệt: 2 kênh'), 'social.post.submitted')).toBeNull();
+    expect(eventPayloadProblem({ agent_task: { title: 'Khách hủy lịch hẹn' } }, 'crm.booking.cancelled')).toBeNull();
+    const refused = 'payload.agent_task.title: a string that is neither an id nor a code';
+    // Another type's template, a template with an org's words added, and the template under another key.
+    expect(eventPayloadProblem(task('Rà soát bài gửi duyệt: 2 kênh'), 'crm.booking.cancelled')).toBe(refused);
+    expect(eventPayloadProblem({ agent_task: { title: 'Khách hủy lịch hẹn: Tư vấn với chị Lan' } }, 'crm.booking.cancelled')).toBe(refused);
+    expect(eventPayloadProblem(task('Rà soát bài gửi duyệt: 2 kênh'), 'social.post.created')).toBe(refused);
+    expect(eventPayloadProblem({ title: 'Khách hủy lịch hẹn' }, 'crm.booking.cancelled')).toBe('payload.title: a string that is neither an id nor a code');
+    // The session revoke carries no identity provider subject any more: a non-uuid one is refused like any text.
+    expect(eventPayloadProblem({ subject: 'auth0|abc' }, 'kernel.session.revoked')).toBe('payload.subject: a string that is neither an id nor a code');
   });
 
   it('refuses a payload nested too deep', () => {
