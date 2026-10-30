@@ -1,6 +1,6 @@
 # 0017. Personal data in rows that cannot change: crypto-shredding with a per-subject key
 
-- Status: Accepted (coordinator, 2026-10-30); Q1 to Q3 open (section 9). Build: [#1949](https://github.com/DOS/Ludy/issues/1949)
+- Status: Accepted (coordinator, 2026-10-30); Q1 to Q3 open (section 9, [#1958](https://github.com/DOS/Ludy/issues/1958)). Build: [#1949](https://github.com/DOS/Ludy/issues/1949)
 - Date: 2026-10-30
 - Deciders: coordinator (design); owner (JOY) for the open questions in section 9
 - Scope: the crypto-shredding part of ADR-0017. The plan lists ADR-0017 as "Data classification, PII, crypto-shredding, deletion map, PDPL" (plan §16). The data classes are plan §5.2 (#1599), the deletion map is plan §7.9, and the personal-data registry, finder and erase are #923 (`packages/kernel/src/personal-data.ts`, [personal-data-requests.md](../runbooks/personal-data-requests.md)). This file records the decision for the values those cannot reach.
@@ -158,15 +158,15 @@ From now on only. Nothing already written is rewritten by this decision. What st
 
 - **Q1. Members' own free text.**
   - Are task comments and post approval comments a member's personal data, to be erased on their request after they leave, or the org's work record?
-  - Who decides: the lawyer (#62), through the owner. Issue: (to be linked by the coordinator).
+  - Who decides: the lawyer (#62), through the owner. Issue: [#1958](https://github.com/DOS/Ludy/issues/1958).
   - Until then they stay as they are and the erase result lists them as kept.
 - **Q2. Proposals and extractions that never reached the books.**
   - These are rejected, expired or failed proposals, frozen by their guards and kept until the org purge.
   - Should a retention purge delete them after a period? Or should their party values be sealed under the party's `contact:` subject from now on? Sealing reaches into the approval path, which reads the payload to execute it.
-  - Who decides: the owner, on the coordinator's recommendation. The recommendation is a retention purge. Issue: (to be linked by the coordinator).
+  - Who decides: the owner, on the coordinator's recommendation. The recommendation is a retention purge. Issue: [#1958](https://github.com/DOS/Ludy/issues/1958).
 - **Q3. Legacy activity summaries.**
   - May a forward migration replace the summaries written before #1826 and #1839 with neutral text?
-  - It rewrites existing rows, so it needs the owner's approval. Issue: (to be linked by the coordinator).
+  - It rewrites existing rows, so it needs the owner's approval. Issue: [#1958](https://github.com/DOS/Ludy/issues/1958).
 
 ## Consequences
 
