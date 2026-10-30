@@ -30,10 +30,11 @@ const EXEMPT: Record<string, ReadonlySet<string>> = {
   'kernel.session.revoked': new Set(['payload.subject']),
 };
 
-// A code made of `value`: other characters become `_`, nothing leads but a letter or a digit, at most 60 characters,
-// `other` when nothing is left.
+// A code made of `value`: only its leading word of letters and underscores, at most 60 characters, `other` when there
+// is none. Nothing after it is kept: a provider's message may go on to name an account ("refused for <email>"), and
+// turning the rest into a code would keep it.
 export function eventCode(value: string): string {
-  const code = value.replace(/[^A-Za-z0-9_.:-]+/g, '_').replace(/^[^A-Za-z0-9]+/, '').slice(0, 60);
+  const code = /^\s*([A-Za-z_]+)/.exec(value)?.[1]?.slice(0, 60) ?? '';
   return code === '' ? 'other' : code;
 }
 

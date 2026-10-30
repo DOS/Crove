@@ -51,12 +51,16 @@ describe('eventPayloadProblem', () => {
 
   it('reduces a code a provider gave to a code, under the code keys only', () => {
     expect(normalizeEventPayload({ code: 'refresh refused (invalid_grant)', reason: '(oops) x', error: 'Lỗi', nested: { errorCode: 'a b' }, title: 'a b' })).toEqual({
-      code: 'refresh_refused_invalid_grant_',
-      reason: 'oops_x',
-      error: 'L_i',
-      nested: { errorCode: 'a_b' },
+      code: 'refresh',
+      reason: 'other',
+      error: 'L',
+      nested: { errorCode: 'a' },
       title: 'a b',
     });
+    // Only the leading word: what follows may name an account, and never reaches the event.
+    expect(normalizeEventPayload({ reason: 'refused for ketoan@example.com' })).toEqual({ reason: 'refused' });
+    expect(normalizeEventPayload({ reason: 'invalid_grant:ketoan@example.com' })).toEqual({ reason: 'invalid_grant' });
+    expect(JSON.stringify(normalizeEventPayload({ code: 'Account Nguyen Van A (0901234567) blocked' }))).not.toMatch(/Nguyen|0901234567/);
     expect(eventCode('(((')).toBe('other');
     expect(eventPayloadProblem(normalizeEventPayload({ code: 'Rate limit hit, retry later' }))).toBeNull();
   });
