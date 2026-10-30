@@ -2,7 +2,7 @@
 -- Crove kernel (issue #2044, ADR-0039): the org purge deletes a closing org's bank feed accounts. Idempotent; applied
 -- files stay untouched.
 --
--- crove_finance.bank_feed_account (20261108030000) maps a bank feed connection's accounts to the org's bank accounts.
+-- crove_finance.bank_feed_account (20261108060000) maps a bank feed connection's accounts to the org's bank accounts.
 -- It names no person and nothing the books keep, so it goes with the org's other working rows, before the channel
 -- connections it references. Otherwise this is the body of 20261107130000 (the newest), with its signature, owner,
 -- grants and every list and step it had.
