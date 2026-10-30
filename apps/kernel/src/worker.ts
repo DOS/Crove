@@ -41,6 +41,7 @@ import { PERIOD_BALANCE_VERIFY_CRON, runPeriodBalanceReconciliation } from './pe
 import { runYearArchive } from './year-archive.ts';
 import { ARCHIVE_VERIFY_CRON, ARCHIVE_WRITE_CRON, runArchiveVerification, writeArchive, type ArchiveStore } from './worm.ts';
 import type { SessionRevoker, SignOutTarget } from './sessions.ts';
+import { opsAlert } from './ops-alert.ts';
 
 const SOCIAL_PUBLISH_RETRY_LIMIT = 2;
 // The worker looks for due variants this often; a post goes out within this long of its time.
@@ -482,7 +483,7 @@ export async function runSignOut(revoker: SessionRevoker | null | undefined, tar
     console.log(`[signout] ${label} done in Supabase Auth`);
   } catch (error) {
     if (retryCount < SIGN_OUT_RETRY_LIMIT) throw error;
-    console.error(`[signout] ALERT ${label}: Supabase Auth sign-out failed after ${retryCount + 1} attempts; revoked in Crove only`, error);
+    opsAlert(`[signout] ALERT ${label}: Supabase Auth sign-out failed after ${retryCount + 1} attempts; revoked in Crove only`, error);
   }
 }
 
@@ -600,7 +601,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       console.log(`[year-archive] org ${orgId} year ${year}: ${done.recorded ? 'built' : 'already built'}`);
     } catch (error) {
       if (job.retryCount < YEAR_ARCHIVE_RETRY_LIMIT) throw error;
-      console.error(`[year-archive] ALERT archive of org ${orgId} year ${year} failed after ${job.retryCount + 1} attempts`, error);
+      opsAlert(`[year-archive] ALERT archive of org ${orgId} year ${year} failed after ${job.retryCount + 1} attempts`, error);
     }
   }));
 
@@ -691,7 +692,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     // A job the previous release's relay made from an event of this one has the subject `undefined` and no user: its
     // session cannot be signed out upstream.
     if (job.data.subject === 'undefined') {
-      console.error(`[signout] ALERT ${label}: the job names no account (made by the previous release from a newer event); revoked in Crove only`);
+      opsAlert(`[signout] ALERT ${label}: the job names no account (made by the previous release from a newer event); revoked in Crove only`);
       return;
     }
     let subject: string | null;
@@ -699,7 +700,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       subject = job.data.subject ?? (job.data.userId ? await authSubject(deps.workerDb, job.data.userId) : null);
     } catch (error) {
       if (job.retryCount < SIGN_OUT_RETRY_LIMIT) throw error;
-      console.error(`[signout] ALERT ${label}: the account's subject could not be read after ${job.retryCount + 1} attempts; revoked in Crove only`, error);
+      opsAlert(`[signout] ALERT ${label}: the account's subject could not be read after ${job.retryCount + 1} attempts; revoked in Crove only`, error);
       return;
     }
     if (!subject) {
@@ -722,7 +723,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       console.log(`[org-export] org ${orgId}: ${record.parts.length} part(s), ${record.fileCount} file(s), ${record.encryption}, expires ${record.expiresAt}`);
     } catch (error) {
       if (job.retryCount < ORG_EXPORT_RETRY_LIMIT) throw error;
-      console.error(`[org-export] ALERT export of org ${orgId} failed after ${job.retryCount + 1} attempts`, error);
+      opsAlert(`[org-export] ALERT export of org ${orgId} failed after ${job.retryCount + 1} attempts`, error);
     }
   });
 
@@ -751,7 +752,8 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
           const outbox = await archiveOutbox(deps.workerDb, deps.archive.store);
           console.log(`[retention] outbox archived=${outbox.archived} purged=${outbox.purged}${outbox.deferred ? ` deferred=${outbox.deferred}` : ''}`);
         } catch (error) {
-          console.error(`[retention] ALERT outbox archive failed: ${error instanceof Error ? error.message : 'unknown error'}`);
+          // The error (a database or bucket message may quote values) stays in the log; the post says where to look.
+          opsAlert('[retention] ALERT outbox archive failed; the error is in the worker log', error);
         }
       }
     }
@@ -1310,7 +1312,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       const done = await runEvidenceHolds({ runtime: deps.runtime, workerDb: deps.workerDb, store: deps.store }, evidenceLockDays, holdState);
       if (done.held + done.failed > 0) console.log(`[evidence-hold] held ${done.held}, failed ${done.failed}`);
     } catch (error) {
-      console.error('[evidence-hold] ALERT sweep failed', error instanceof Error ? error.message : error);
+      opsAlert('[evidence-hold] ALERT sweep failed; the error is in the worker log', error);
     } finally {
       holding = false;
     }

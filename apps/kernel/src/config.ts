@@ -215,6 +215,8 @@ const schema = z.object({
   // orgs, or the deployment sees more than SECURITY_ALERT_REFUSAL_THRESHOLD refusals, within
   // SECURITY_ALERT_WINDOW_SECONDS, and on every owner or admin grant; a lasting signal repeats after
   // SECURITY_ALERT_REPEAT_MINUTES. Alerts go to the log, and to ALERT_WEBHOOK_URL when it is set (the prober's chat).
+  // The same window holds the operational ALERT lines of each process (a failed export, a stopped sweep: #1993) to one
+  // post per kind.
   SECURITY_ALERT_WINDOW_SECONDS: z.coerce.number().int().min(60).max(86_400).default(300),
   SECURITY_ALERT_ORG_THRESHOLD: z.coerce.number().int().min(1).max(1_000_000).default(20),
   SECURITY_ALERT_REFUSAL_THRESHOLD: z.coerce.number().int().min(1).max(1_000_000).default(500),

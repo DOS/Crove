@@ -30,3 +30,7 @@ A stack review on 2026-10-13 (docs/recommendations) found the Next.js app shell 
 - Open spike: whether Supabase Auth runs on the plain `postgres:17` image or needs Supabase's Postgres image.
 - Cloud-only parts of the plan body (DOS prerequisites, Cloud topology, costs) move to `crove-cloud` when it is created.
 - One neutral name lets developers adopt the core without buying into DOS, while Cloud still sells through DOS ID and DOS.AI.
+
+## Update 2026-10-30: domains
+
+The owner renamed the product to Ludy on 2026-10-28 (#1682) and moved the domains on 2026-10-30: the landing page is served on `ludy.vn` (canonical) and `ludy.so`, and the hosted app moves to `app.ludy.vn`. The names `crove.com` and `app.crove.com` in decision 5 are kept as the historical record.

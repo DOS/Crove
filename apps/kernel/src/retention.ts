@@ -4,6 +4,13 @@ import { sql } from 'kysely';
 import type { Db } from '@crove/db';
 import { EXPORT_EXPIRY_GRACE_HOURS } from '@crove/kernel';
 import type { BlobStore, ListedBlob, ListPrefix, Runtime, StagingSweep } from '@crove/kernel-runtime';
+import { opsAlert } from './ops-alert.ts';
+
+// Where an ALERT line goes: the operational alerts (log and webhook, #1993) when the job logs to the console, else the
+// log a caller passed (a test's).
+function alertTo(log: Pick<Console, 'error'>): (line: string, error?: unknown) => void {
+  return log === console ? opsAlert : (line, error) => (error === undefined ? log.error(line) : log.error(line, error));
+}
 
 // Every day at 02:30 in Vietnam, outside working hours.
 export const RETENTION_CRON = '30 2 * * *';
@@ -39,7 +46,7 @@ export async function runRetention(workerDb: Db, batch = RETENTION_BATCH, log: P
     remaining = rows.filter((r) => r.more).map((r) => r.store);
     const stuck = rows.filter((r) => r.more && r.deleted === 0).map((r) => r.store);
     if (stuck.length > 0) {
-      log.error(`[retention] ALERT purge deleted 0 rows while expired rows remain: ${stuck.join(', ')}`);
+      alertTo(log)(`[retention] ALERT purge deleted 0 rows while expired rows remain: ${stuck.join(', ')}`);
       break;
     }
     if (remaining.length === 0) break;
@@ -80,12 +87,12 @@ export async function sweepStaging(
       // A call that deleted nothing found only young objects in its window: calling again would list the same keys.
       if (!result.more || result.deleted === 0 || call >= maxCalls) {
         log.log(`[retention] staging objects deleted=${deleted}`);
-        if (result.more) log.error(`[retention] ALERT staging objects remain after deleting ${deleted}; set a lifecycle rule on staging/ (ADR-0013)`);
+        if (result.more) alertTo(log)(`[retention] ALERT staging objects remain after deleting ${deleted}; set a lifecycle rule on staging/ (ADR-0013)`);
         return { deleted, more: result.more };
       }
     }
   } catch (error) {
-    log.error(`[retention] ALERT staging sweep failed after deleting ${deleted}`, error);
+    alertTo(log)(`[retention] ALERT staging sweep failed after deleting ${deleted}`, error);
     return null;
   }
 }
@@ -152,12 +159,12 @@ async function sweepPrefix(store: BlobStore, options: SweepOptions): Promise<Blo
       if (after === null || page >= options.maxPages) {
         const more = after !== null;
         options.log.log(`[retention] ${options.label} deleted=${deleted} kept=${kept}`);
-        if (more) options.log.error(`[retention] ALERT ${options.label}: blobs remain after ${page} pages (deleted ${deleted}); the next run continues`);
+        if (more) alertTo(options.log)(`[retention] ALERT ${options.label}: blobs remain after ${page} pages (deleted ${deleted}); the next run continues`);
         return { deleted, kept, more };
       }
     }
   } catch (error) {
-    options.log.error(`[retention] ALERT ${options.label} sweep failed after deleting ${deleted}`, error);
+    alertTo(options.log)(`[retention] ALERT ${options.label} sweep failed after deleting ${deleted}`, error);
     return null;
   }
 }

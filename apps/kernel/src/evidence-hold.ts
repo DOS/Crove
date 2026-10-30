@@ -9,6 +9,7 @@
 import { sql } from 'kysely';
 import type { Db } from '@crove/db';
 import { BlobIntegrityError, BlobNotFoundError, type BlobStore, type Runtime, type SystemActor } from '@crove/kernel-runtime';
+import { opsAlert } from './ops-alert.ts';
 
 export const EVIDENCE_HOLD_SWEEP_MS = 5 * 60_000;
 const BATCH = 100;
@@ -53,7 +54,7 @@ export async function runEvidenceHolds(
     out.waiting = rows.length;
     if (now() - state.unavailableReportedAt >= ALERT_EVERY_MS) {
       state.unavailableReportedAt = now();
-      console.error(
+      opsAlert(
         `[evidence-hold] ALERT the bucket has no Object Lock: ${rows.length}${rows.length === BATCH ? '+' : ''} posted file(s) wait for their retention hold ` +
           '(docs/runbooks/evidence-holds.md)',
       );
@@ -74,6 +75,6 @@ export async function runEvidenceHolds(
     await deps.runtime.execute('kernel.file.hold.record', { fileId: row.file_id, heldUntil: heldUntil.toISOString() }, scope);
     out.held += 1;
   }
-  if (out.failed > 0) console.error(`[evidence-hold] ALERT ${out.failed} retention hold(s) failed; see hold_error on crove_kernel.file (docs/runbooks/evidence-holds.md)`);
+  if (out.failed > 0) opsAlert(`[evidence-hold] ALERT ${out.failed} retention hold(s) failed; see hold_error on crove_kernel.file (docs/runbooks/evidence-holds.md)`);
   return out;
 }
