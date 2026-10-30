@@ -28,15 +28,16 @@ const source = (lists: string[], deletes: string[] = [], partial: string[] = [])
 describe('the tables crove_kernel.org_purge deletes (#1217)', () => {
   it('reads the lists and the DELETE statements of the newest definition, whole or in part', () => {
     const { whole, partial } = purgedTables(newestSource);
-    for (const table of ['crove_notes.link', 'crove_kernel.inbox_item', 'crove_crm.event_type', 'crove_social.media_archive', 'crove_kernel.tenant_member']) {
+    // The append-only working rows are deleted whole, under the purge's own mark (#1032).
+    for (const table of ['crove_notes.link', 'crove_kernel.inbox_item', 'crove_crm.event_type', 'crove_social.media_archive', 'crove_kernel.tenant_member', 'crove_kernel.task_comment', 'crove_social.post_approval']) {
       expect(whole.has(table), table).toBe(true);
     }
-    // What pinned rows keep: kept proposals, approved posts, the books' parties and files.
+    // What kept rows keep: kept proposals with their tasks and approved posts, the books' parties and files.
     for (const table of ['crove_kernel.proposal', 'crove_social.post', 'crove_social.post_variant', 'crove_kernel.task', 'crove_kernel.party', 'crove_kernel.file']) {
       expect(partial.has(table), table).toBe(true);
     }
-    // Named only as counts of pinned rows, or updated: not deleted.
-    for (const table of ['crove_kernel.task_comment', 'crove_social.post_approval', 'crove_kernel.tenant']) {
+    // Updated, never deleted.
+    for (const table of ['crove_kernel.tenant']) {
       expect(whole.has(table) || partial.has(table), table).toBe(false);
     }
   });

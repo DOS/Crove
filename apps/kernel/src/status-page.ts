@@ -12,6 +12,8 @@ export const STATUS_COMPONENTS = [
   { id: 'documents', label: 'Xử lý chứng từ tải lên', checks: ['heartbeat', 'job_age', 'dead_letters', 'jobs_schema'] },
   { id: 'email', label: 'Nhận hóa đơn qua email', checks: ['inbound', 'heartbeat'] },
   { id: 'updates', label: 'Cập nhật trực tiếp trên màn hình', checks: ['outbox', 'notify_queue'] },
+  // Supabase Auth's health check (#1994): unknown unless the probe asked Auth (authChecked).
+  { id: 'signin', label: 'Đăng nhập', checks: ['auth'] },
 ] as const;
 
 // A probe older than this is no news: the prober or the volume is gone. Three default probe intervals (300 s).
@@ -19,18 +21,22 @@ export const STATUS_STALE_SECONDS = 900;
 // The file is tiny; anything larger is not one the prober wrote.
 const MAX_STATUS_BYTES = 16 * 1024;
 
-const statusSchema = z.strictObject({
+// A field it does not know is dropped, not refused: after a rollback the API may run an older build than the prober,
+// which writes fields that build has never heard of (#1994's authChecked), and the page must still show the rest.
+const statusSchema = z.object({
   version: z.literal(1),
   checkedAt: z.iso.datetime(),
   // false: the prober could not read the database (its "probe" finding).
   databaseOk: z.boolean(),
   // The checks that failed, by name (only when the database could be read).
   failing: z.array(z.string().regex(/^[a-z_]{1,32}$/)).max(32),
+  // The probe asked Supabase Auth (#1994); absent from a prober without the check, or with it off.
+  authChecked: z.boolean().optional(),
 });
 export type ProbeStatus = z.infer<typeof statusSchema>;
 
-export function probeStatus(at: Date, failing: string[] | null): ProbeStatus {
-  return { version: 1, checkedAt: at.toISOString(), databaseOk: failing !== null, failing: failing ?? [] };
+export function probeStatus(at: Date, failing: string[] | null, authChecked = false): ProbeStatus {
+  return { version: 1, checkedAt: at.toISOString(), databaseOk: failing !== null, failing: failing ?? [], ...(authChecked ? { authChecked } : {}) };
 }
 
 // Written next to the file and renamed over it, so a reader never sees half a file.
@@ -74,7 +80,11 @@ export function statusView(status: ProbeStatus | null, now: Date): StatusView {
     ...STATUS_COMPONENTS.map((c) => ({
       id: c.id,
       label: c.label,
-      state: (!fresh || !status.databaseOk ? 'unknown' : c.checks.some((check) => status.failing.includes(check)) ? 'problem' : 'ok') as ComponentState,
+      state: (!fresh || !status.databaseOk || (c.id === 'signin' && status.authChecked !== true)
+        ? 'unknown'
+        : c.checks.some((check) => status.failing.includes(check))
+          ? 'problem'
+          : 'ok') as ComponentState,
     })),
   ];
   const overall = !fresh ? 'unknown' : rows.some((r) => r.state === 'problem') ? 'problem' : 'ok';

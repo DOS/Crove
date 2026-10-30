@@ -226,6 +226,18 @@ suite('tasks a chart or role change would strand (#1799)', () => {
     // It is among the lead's own tasks now.
     const mine = await app.query<{ tasks: Array<{ id: string }> }>('kernel.task.list', { mine: true }, { actor: asUser(lead), orgId });
     expect(mine.tasks.map((t) => t.id)).toContain(ofDefault);
+    // The notice names the task by its title as it reads when shown, and keeps no copy of it (#1977): a title the
+    // personal-data erasure redacts reads redacted in the notice too.
+    const notice = async () =>
+      (await app.query<{ items: Array<{ subjectId: string | null; detail: Record<string, string> }> }>('kernel.notification.list', {}, { actor: asUser(lead), orgId })).items.find(
+        (i) => i.subjectId === ofDefault,
+      );
+    const titleOf = async () => (await admin((c) => c.query<{ title: string }>('SELECT title FROM crove_kernel.task WHERE id = $1', [ofDefault]))).rows[0]?.title;
+    expect((await notice())?.detail).toEqual({ title: await titleOf() });
+    const stored = await admin((c) => c.query<{ detail: Record<string, unknown> }>(`SELECT detail FROM crove_kernel.notification WHERE kind = 'kernel.task_rerouted' AND subject_id = $1`, [ofDefault]));
+    expect(stored.rows).toEqual([{ detail: {} }]);
+    await admin((c) => c.query(`UPDATE crove_kernel.task SET title = 'Việc đã ẩn' WHERE id = $1`, [ofDefault]));
+    expect((await notice())?.detail).toEqual({ title: 'Việc đã ẩn' });
     // Its activity row takes the task's entity: a member limited to the branch does not read it.
     const seen = async (user: string) => {
       const c = new pg.Client({ connectionString: appUrl() });

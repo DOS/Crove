@@ -74,6 +74,8 @@ async function appScreens(page: Page): Promise<string[]> {
   const sidebar = page.getByRole('complementary');
   const apps = sidebar.getByRole('list', { name: 'Ứng dụng' });
   const links = new Set<string>();
+  // The switcher fills once the org and its modules load: count only then, or a slow load counts none.
+  await expect(apps.getByRole('link').nth(1)).toBeVisible();
   const appCount = await apps.getByRole('link').count();
   expect(appCount).toBeGreaterThan(1);
   for (let i = 0; i < appCount; i++) {
@@ -188,6 +190,8 @@ test('every sidebar screen and the detail pages pass the 360px and axe walk on a
   // the month before today by default, which holds the invoice only while that is September.
   details.push(
     `/o/${slug}/inbox?status=executed`,
+    // The activity log as the approved proposal's link opens it (#1445): the screen is not in the sidebar.
+    `/o/${slug}/audit?targetId=${details[0]?.split('/').pop() ?? ''}`,
     `/o/${slug}/ledger?period=2026-09`,
     `/o/${slug}/ledger?period=2026-09&report=parties`,
     `/o/${slug}/vat?period=2026-09`,

@@ -16,10 +16,11 @@ import { ConfirmDialog } from '../components/confirm-dialog.tsx';
 import { DateInput } from '../components/date-input.tsx';
 import { useLegalEntity } from '../components/entity-switcher.tsx';
 import { StepUpPrompt } from '../components/two-factor.tsx';
-import { ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
+import { CardSkeleton, DocumentSkeleton, ErrorText, ListSkeleton, PageHeader, ProposalSkeleton, RowsSkeleton, Spinner } from '../components/ui.tsx';
 import { accountLabel, pickableAccounts } from '../lib/accounts.ts';
 import { errorMessage, fetchFile, isStepUpRequired, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
+import { PROPOSAL_STATUS_VARIANT } from '../lib/status.ts';
 import { isZeroAmount, linesBalance, previewPurchaseJournal, previewSalesJournal } from '../lib/decimal.ts';
 import { nextDay, postingDateAllowed } from '../lib/period-lock.ts';
 import { useFormat } from '../i18n/provider.tsx';
@@ -63,7 +64,7 @@ function FilePreview({ fileId, contentType, filename }: { fileId: string; conten
     };
   }, [fileId]);
   if (error) return <ErrorText>{errorMessage(error)}</ErrorText>;
-  if (!url) return <Spinner />;
+  if (!url) return <DocumentSkeleton image={contentType.startsWith('image/')} />;
   if (contentType.startsWith('image/')) return <img src={url} alt={filename} className="w-full rounded-lg border" />;
   if (contentType === 'application/pdf')
     return (
@@ -105,7 +106,7 @@ function ReversalCard({ reversal, slug }: { reversal: { entryId: string; entryDa
         </div>
       </div>
       {entry.isLoading ? (
-        <Spinner />
+        <CardSkeleton />
       ) : entry.error ? (
         <ErrorText>{errorMessage(entry.error)}</ErrorText>
       ) : entry.data ? (
@@ -311,8 +312,8 @@ function InboxQueue({ slug, current }: { slug: string; current: string }) {
     <section aria-label={t('queue')} className="sticky top-6 max-h-[calc(100dvh-3rem)] overflow-y-auto rounded-lg border bg-card">
       <p className="border-b px-3 py-2 text-xs font-medium text-subtle-foreground">{t('queue')}</p>
       {pending.isPending ? (
-        <div className="p-3">
-          <Spinner />
+        <div className="px-3">
+          <RowsSkeleton />
         </div>
       ) : pending.error ? (
         // A failed load is not an empty queue.
@@ -364,6 +365,9 @@ function InboxDetail({ slug, id, split }: { slug: string; id: string; split: boo
   // The chart of accounts is the finance module's; without it (CROVE_MODULES) the screen does not ask for it.
   const finance = getConfig().modules.includes('finance');
   const accounts = useQuery({ ...orpc.accounts.list.queryOptions(), enabled: finance });
+  // The audit log is for owners and admins (kernel.audit.list), so only they get the link to a decision's rows (#1445).
+  const org = useQuery(orpc.org.get.queryOptions());
+  const canReadAudit = org.data?.role === 'owner' || org.data?.role === 'admin';
   const [lineAccounts, setLineAccounts] = useState<Record<number, string>>({});
   const [idempotencyKey] = useState(() => crypto.randomUUID());
   // The rate typed for a foreign-currency invoice read without one (#918).
@@ -530,7 +534,7 @@ function InboxDetail({ slug, id, split }: { slug: string; id: string; split: boo
   };
   useReviewShortcuts(handlers);
 
-  if (detail.isLoading) return <Spinner />;
+  if (detail.isLoading) return <ProposalSkeleton />;
   if (detail.error) return <ErrorText>{errorMessage(detail.error)}</ErrorText>;
   if (!item) return null;
   // A foreign-currency invoice converted at a rate is shown in VND, its amounts as booked (#918).
@@ -683,16 +687,23 @@ function InboxDetail({ slug, id, split }: { slug: string; id: string; split: boo
             {t('resubmit')}
           </ConfirmDialog>
         )}
-        <Badge variant={item.status === 'executed' ? 'success' : item.status === 'expired' ? 'warning' : 'secondary'}>
-          {item.status === 'executed'
-            ? t('executedAt', { at: f.dateTime(item.decidedAt) })
-            : item.status === 'rejected'
-              ? t('rejected')
-              : item.status === 'expired'
-                ? t('expired')
-                : item.status}
+        {/* Every status in words, in its one chip (DESIGN.md §4.4, #2000). */}
+        <Badge variant={PROPOSAL_STATUS_VARIANT[item.status]}>
+          {item.status === 'executed' ? t('executedAt', { at: f.dateTime(item.decidedAt) }) : t(`status.${item.status}`)}
         </Badge>
         {item.voided && <Badge variant="destructive">{t('voidedBadge')}</Badge>}
+        {/* DESIGN.md §5.1: every decision links to its audit log entry. By id alone, the log lists the decision (the
+            proposal as object) and what it ran (the rows that name the proposal), as kernel.audit.list matches it. */}
+        {canReadAudit && (
+          <Link
+            to="/o/$slug/audit"
+            params={{ slug }}
+            search={{ targetId: id }}
+            className="inline-flex min-h-11 items-center text-sm text-link hover:underline"
+          >
+            {t('auditLink')}
+          </Link>
+        )}
       </>
     )
   );
@@ -1140,7 +1151,7 @@ function ProposalTimeline({ id, documentId }: { id: string; documentId: string |
     <Card className="mt-6 block p-4" data-testid="timeline">
       <p className="mb-3 text-sm font-medium text-muted-foreground">{t('timeline')}</p>
       {timeline.isLoading ? (
-        <Spinner />
+        <ListSkeleton rows={2} />
       ) : timeline.error ? (
         <ErrorText>{errorMessage(timeline.error)}</ErrorText>
       ) : items.length === 0 ? (

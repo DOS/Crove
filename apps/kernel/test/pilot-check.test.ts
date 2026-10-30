@@ -1,9 +1,9 @@
 // Pilot readiness preflight (issue #308): the settings checks, the live probe with a fake fetch, and the exit codes.
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
-import { vaultKeyId } from '@crove/kernel-runtime';
-import { KNOWN_DEFAULTS, PILOT_EXIT, REQUIRED_SECRETS, checkEnv, parsePilotArgs, probeDeployment, runPilotCheck, type CheckResult, type Env, type Fetch } from '../src/pilot-check.ts';
+import { describe, expect, it, vi } from 'vitest';
+import { vaultKeyId, type S3Sender } from '@crove/kernel-runtime';
+import { KNOWN_DEFAULTS, PILOT_EXIT, REQUIRED_SECRETS, checkEnv, parsePilotArgs, probeBuildChecks, probeDeployment, objectLockProbe, probeEvidenceHolds, runPilotCheck, type CheckResult, type Env, type Fetch } from '../src/pilot-check.ts';
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 
@@ -409,5 +409,183 @@ describe('pilot-check command', () => {
     expect(lines.join('\n')).toMatch(/^FAIL +Sign-up limited/m);
     expect(lines.join('\n')).toContain('NOT READY: 1 check(s) failed');
     expect(await runPilotCheck(['--bogus'], READY, fakeFetch({}), print)).toBe(PILOT_EXIT.error);
+  });
+});
+
+// #1995: the RLS matrix item reads the CI of the build the deployment runs, from GitHub, instead of asking the person.
+describe('pilot-check CI of the deployed build (#1995)', () => {
+  const SHA = 'a'.repeat(40);
+  const VERSION = 'https://crove.example.com/version';
+  const CHECKS = `https://api.github.com/repos/DOS/Ludy/commits/${SHA}/check-runs?per_page=100`;
+  const run = (name: string, conclusion: string | null = 'success', status = 'completed') => ({ name, status, conclusion });
+  const green = [run('Lint, typecheck, test'), run('Database tests (shard 1 of 2)'), run('Database tests (shard 2 of 2)'), run('Database tests (heavy files)'), run('Secret scan')];
+  const routes = (checkRuns: unknown[], build: unknown = SHA) => ({ [VERSION]: json({ build, migrationsMissing: [] }), [CHECKS]: json({ total_count: checkRuns.length, check_runs: checkRuns }) });
+
+  it('passes when the gate and every database-test check finished green on that commit', async () => {
+    expect(await probeBuildChecks('https://crove.example.com', {}, fakeFetch(routes(green)))).toEqual({
+      item: 'RLS matrix',
+      status: 'pass',
+      message: `CI passed on the deployed build DOS/Ludy@${SHA.slice(0, 12)}: Database tests (heavy files), Database tests (shard 1 of 2), Database tests (shard 2 of 2), Lint, typecheck, test`,
+    });
+  });
+
+  it('fails naming the checks that did not pass', async () => {
+    const red = [...green.slice(0, 1), run('Database tests (shard 1 of 2)', 'failure'), ...green.slice(2)];
+    const result = await probeBuildChecks('https://crove.example.com', {}, fakeFetch(routes(red)));
+    expect(result.status).toBe('fail');
+    expect(result.message).toContain('Database tests (shard 1 of 2) (failure)');
+  });
+
+  it('leaves it to the person when it cannot tell', async () => {
+    const status = async (r: Record<string, Route>, env: Env = {}) => (await probeBuildChecks('https://crove.example.com', env, fakeFetch(r))).status;
+    // Still running, never run, no commit as the build, GitHub refusing, nothing answering.
+    expect(await status(routes([...green.slice(1), run('Lint, typecheck, test', null, 'in_progress')]))).toBe('manual');
+    expect(await status(routes([run('Secret scan')]))).toBe('manual');
+    expect(await status(routes(green, 'dev'))).toBe('manual');
+    expect(await status({ [VERSION]: json({ build: SHA }), [CHECKS]: json({ message: 'Not Found' }, 404) })).toBe('manual');
+    expect(await status({})).toBe('manual');
+    // A source repository that is not owner/name is the operator's mistake.
+    for (const repo of ['not a repo', '../x', 'acme/..', 'acme/.']) expect(await status(routes(green), { CROVE_SOURCE_REPO: repo }), repo).toBe('fail');
+    // More checks than one page: it cannot tell.
+    expect(await status({ [VERSION]: json({ build: SHA }), [CHECKS]: json({ total_count: 140, check_runs: green }) })).toBe('manual');
+  });
+
+  it('prints nothing the instance answers but a commit id, and names the rate limit', async () => {
+    const result = await probeBuildChecks('https://crove.example.com', {}, fakeFetch(routes(green, '\u001b[32mPASS fake\nline')));
+    expect(result.status).toBe('manual');
+    expect(result.message).not.toContain('fake');
+    // The database down: /version answers 503 but still names the build.
+    expect((await probeBuildChecks('https://crove.example.com', {}, fakeFetch({ ...routes(green), [VERSION]: json({ build: SHA, migrationsMissing: null }, 503) }))).status).toBe('pass');
+    const limited: Fetch = async (input) => (input === VERSION ? Response.json({ build: SHA }) : new Response('{}', { status: 403, headers: { 'x-ratelimit-remaining': '0' } }));
+    expect((await probeBuildChecks('https://crove.example.com', {}, limited)).message).toContain('export GITHUB_TOKEN');
+  });
+
+  it('fails a check that was cancelled or skipped, as it is not a pass', async () => {
+    for (const conclusion of ['cancelled', 'skipped', 'neutral', 'timed_out']) {
+      const result = await probeBuildChecks('https://crove.example.com', {}, fakeFetch(routes([...green.slice(0, 1), run('Database tests (shard 1 of 2)', conclusion), ...green.slice(2)])));
+      expect(result.status, conclusion).toBe('fail');
+    }
+  });
+
+  it('asks the fork CROVE_SOURCE_REPO names, with GITHUB_TOKEN when it is set', async () => {
+    const seen: Array<{ url: string; auth: string | null }> = [];
+    const fork = `https://api.github.com/repos/acme/ludy/commits/${SHA}/check-runs?per_page=100`;
+    const fetchFn: Fetch = async (input, init) => {
+      seen.push({ url: input, auth: new Headers(init?.headers).get('authorization') });
+      return input === VERSION ? Response.json({ build: SHA }) : Response.json({ check_runs: green });
+    };
+    expect((await probeBuildChecks('https://crove.example.com', { CROVE_SOURCE_REPO: 'acme/ludy', GITHUB_TOKEN: 'ghp_test' }, fetchFn)).status).toBe('pass');
+    // The token goes to GitHub only, never to the instance.
+    expect(seen).toEqual([
+      { url: VERSION, auth: null },
+      { url: fork, auth: 'Bearer ghp_test' },
+    ]);
+  });
+
+  it('replaces the manual RLS matrix line of the run with --url', async () => {
+    const lines: string[] = [];
+    const print = (line: string) => lines.push(line);
+    expect(await runPilotCheck(['--url', 'https://crove.example.com'], READY, fakeFetch({ ...healthy, ...routes(green) }), print)).toBe(PILOT_EXIT.ok);
+    const out = lines.join('\n');
+    expect(out).toMatch(/^PASS +RLS matrix +CI passed on the deployed build/m);
+    expect(out).not.toMatch(/^MANUAL +RLS matrix/m);
+  });
+});
+
+// #1996: the evidence holds item asks the files bucket for its Object Lock, the way the worker does, when holds are on.
+describe('pilot-check evidence holds (#1996)', () => {
+  const S3: Env = { STORAGE: 's3', S3_BUCKET: 'crove-files', S3_ENDPOINT: 'https://s3.example.com', S3_ACCESS_KEY_ID: 'key', S3_SECRET_ACCESS_KEY: fake('s3-secret') };
+
+  it('passes a bucket with Object Lock and fails one without', async () => {
+    expect(await probeEvidenceHolds(S3, async () => true)).toMatchObject({ item: 'Evidence holds', status: 'pass' });
+    const without = await probeEvidenceHolds(S3, async () => false);
+    expect(without).toMatchObject({ item: 'Evidence holds', status: 'fail' });
+    expect(without?.message).toContain('crove-files has no Object Lock');
+  });
+
+  it('leaves it to the person when the bucket does not answer, naming the permission and never the error text', async () => {
+    const denied = Object.assign(new Error('Access Denied for key AKIA... on crove-files'), { name: 'AccessDenied', $metadata: { httpStatusCode: 403 } });
+    const result = await probeEvidenceHolds(S3, async () => {
+      throw denied;
+    });
+    expect(result).toMatchObject({ item: 'Evidence holds', status: 'manual' });
+    expect(result?.message).toContain('AccessDenied (403)');
+    expect(result?.message).toContain('s3:GetBucketObjectLockConfiguration');
+    expect(result?.message).not.toContain('AKIA');
+  });
+
+  it('asks nothing when holds are off or files are on local disk', async () => {
+    const asked = vi.fn(async () => true);
+    expect(await probeEvidenceHolds({ ...S3, EVIDENCE_LOCK_DAYS: '0' }, asked)).toBeNull();
+    expect(await probeEvidenceHolds({ ...S3, STORAGE: 'local' }, asked)).toBeNull();
+    expect(await probeEvidenceHolds({}, asked)).toBeNull();
+    expect(await probeEvidenceHolds({ ...S3, S3_BUCKET: '' }, asked)).toBeNull();
+    expect(asked).not.toHaveBeenCalled();
+  });
+
+  it('names the network code of an unreachable bucket, and the permission only when the call is refused', async () => {
+    const unreachable = Object.assign(new Error('getaddrinfo ENOTFOUND minio'), { cause: { code: 'ENOTFOUND' } });
+    const result = await probeEvidenceHolds(S3, async () => {
+      throw unreachable;
+    });
+    expect(result).toMatchObject({ status: 'manual' });
+    expect(result?.message).toContain('(Error (ENOTFOUND))');
+    expect(result?.message).not.toContain('s3:GetBucketObjectLockConfiguration');
+  });
+
+  it('gives up on a bucket that does not answer within the probe timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = probeEvidenceHolds(S3, () => new Promise<boolean>(() => {}));
+      await vi.advanceTimersByTimeAsync(10_000);
+      const result = await pending;
+      expect(result).toMatchObject({ status: 'manual' });
+      expect(result?.message).toContain('(Timeout)');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // A fake S3 client: answers GetObjectLockConfiguration as told and records every command it is sent.
+  const fakeS3 = (answer: () => unknown) => {
+    const sent: Array<{ name: string; input: unknown }> = [];
+    const client = {
+      send: async (command: { constructor: { name: string }; input: unknown }) => {
+        sent.push({ name: command.constructor.name, input: command.input });
+        return answer();
+      },
+    } as unknown as S3Sender;
+    return { client, sent };
+  };
+  const s3Error = (name: string, status: number) => Object.assign(new Error(`${name} for key AKIA-not-printed`), { name, $metadata: { httpStatusCode: status } });
+  const run = async (client: S3Sender) => {
+    const lines: string[] = [];
+    await runPilotCheck([], { ...READY, ...S3 }, fakeFetch({}), (line) => lines.push(line), objectLockProbe(client));
+    return lines.join('\n');
+  };
+
+  it('replaces the manual line of the run with what the bucket answers, writing nothing to it', async () => {
+    const on = fakeS3(() => ({ ObjectLockConfiguration: { ObjectLockEnabled: 'Enabled' } }));
+    const passed = await run(on.client);
+    expect(passed).toMatch(/^PASS +Evidence holds +the files bucket crove-files has Object Lock enabled/m);
+    expect(passed).not.toMatch(/^MANUAL +Evidence holds/m);
+    // One read of the bucket's configuration, nothing else: no object is written, held or deleted.
+    expect(on.sent).toEqual([{ name: 'GetObjectLockConfigurationCommand', input: { Bucket: 'crove-files' } }]);
+
+    const off = fakeS3(() => {
+      throw s3Error('ObjectLockConfigurationNotFoundError', 404);
+    });
+    expect(await run(off.client)).toMatch(/^FAIL +Evidence holds +the files bucket crove-files has no Object Lock/m);
+    expect(await run(fakeS3(() => ({ ObjectLockConfiguration: {} })).client)).toMatch(/^FAIL +Evidence holds/m);
+
+    const denied = await run(fakeS3(() => {
+      throw s3Error('AccessDenied', 403);
+    }).client);
+    expect(denied).toMatch(/^MANUAL +Evidence holds +could not read the Object Lock of the files bucket crove-files \(AccessDenied \(403\); the keys need s3:GetBucketObjectLockConfiguration on it\)/m);
+    expect(denied).not.toContain('AKIA');
+    // A missing bucket is no answer either, not "no Object Lock".
+    expect(await run(fakeS3(() => {
+      throw s3Error('NoSuchBucket', 404);
+    }).client)).toMatch(/^MANUAL +Evidence holds .*NoSuchBucket \(404\)/m);
   });
 });

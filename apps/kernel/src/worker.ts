@@ -41,6 +41,7 @@ import { PERIOD_BALANCE_VERIFY_CRON, runPeriodBalanceReconciliation } from './pe
 import { runYearArchive } from './year-archive.ts';
 import { ARCHIVE_VERIFY_CRON, ARCHIVE_WRITE_CRON, runArchiveVerification, writeArchive, type ArchiveStore } from './worm.ts';
 import type { SessionRevoker, SignOutTarget } from './sessions.ts';
+import { opsAlert } from './ops-alert.ts';
 
 const SOCIAL_PUBLISH_RETRY_LIMIT = 2;
 // The worker looks for due variants this often; a post goes out within this long of its time.
@@ -456,6 +457,16 @@ export async function pruneSecurityEvents(workerDb: Db): Promise<number> {
   }
 }
 
+// The sign-out job's data: the user whose session it is (#1970), or, for a job made from an event emitted before the
+// switch, the identity provider subject itself. The job table holds no subject otherwise.
+export type SignOutJob = { userId?: string; subject?: string; sessionId: string; scope: 'local' | 'global' };
+
+// The identity provider subject of a user account (crove_kernel.user_auth_subject, crove_worker only), or null.
+export async function authSubject(workerDb: Db, userId: string): Promise<string | null> {
+  const { rows } = await sql<{ subject: string | null }>`SELECT crove_kernel.user_auth_subject(${userId}::uuid) AS subject`.execute(workerDb);
+  return rows[0]?.subject ?? null;
+}
+
 /**
  * One attempt of the Supabase Auth sign-out job. Best effort: the revoked record already blocks the session in
  * Crove. A failure is rethrown so pg-boss retries it with backoff; the last one is logged as an ALERT for the
@@ -472,7 +483,7 @@ export async function runSignOut(revoker: SessionRevoker | null | undefined, tar
     console.log(`[signout] ${label} done in Supabase Auth`);
   } catch (error) {
     if (retryCount < SIGN_OUT_RETRY_LIMIT) throw error;
-    console.error(`[signout] ALERT ${label}: Supabase Auth sign-out failed after ${retryCount + 1} attempts; revoked in Crove only`, error);
+    opsAlert(`[signout] ALERT ${label}: Supabase Auth sign-out failed after ${retryCount + 1} attempts; revoked in Crove only`, error);
   }
 }
 
@@ -590,7 +601,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       console.log(`[year-archive] org ${orgId} year ${year}: ${done.recorded ? 'built' : 'already built'}`);
     } catch (error) {
       if (job.retryCount < YEAR_ARCHIVE_RETRY_LIMIT) throw error;
-      console.error(`[year-archive] ALERT archive of org ${orgId} year ${year} failed after ${job.retryCount + 1} attempts`, error);
+      opsAlert(`[year-archive] ALERT archive of org ${orgId} year ${year} failed after ${job.retryCount + 1} attempts`, error);
     }
   }));
 
@@ -674,9 +685,29 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   const mailTimer = mail ? setInterval(() => void mailSweep(), MAIL_SWEEP_MS) : null;
   void mailSweep();
 
-  await boss.work<SignOutTarget>(QUEUES.signOut, { batchSize: 1 }, async ([job]) => {
+  await boss.work<SignOutJob>(QUEUES.signOut, { batchSize: 1 }, async ([job]) => {
     if (!job) return;
-    await runSignOut(deps.revoker, job.data, job.retryCount);
+    const { sessionId, scope } = job.data;
+    const label = `${scope} sign-out of session ${sessionId.slice(0, 8)}`;
+    // A job the previous release's relay made from an event of this one has the subject `undefined` and no user: its
+    // session cannot be signed out upstream.
+    if (job.data.subject === 'undefined') {
+      opsAlert(`[signout] ALERT ${label}: the job names no account (made by the previous release from a newer event); revoked in Crove only`);
+      return;
+    }
+    let subject: string | null;
+    try {
+      subject = job.data.subject ?? (job.data.userId ? await authSubject(deps.workerDb, job.data.userId) : null);
+    } catch (error) {
+      if (job.retryCount < SIGN_OUT_RETRY_LIMIT) throw error;
+      opsAlert(`[signout] ALERT ${label}: the account's subject could not be read after ${job.retryCount + 1} attempts; revoked in Crove only`, error);
+      return;
+    }
+    if (!subject) {
+      console.warn(`[signout] ${label}: the account has no identity provider subject; revoked in Crove only`);
+      return;
+    }
+    await runSignOut(deps.revoker, { subject, sessionId, scope }, job.retryCount);
   });
 
   // Org export after kernel.org.offboard (issue #38). After the last failed attempt the owner can ask again (the same
@@ -692,7 +723,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       console.log(`[org-export] org ${orgId}: ${record.parts.length} part(s), ${record.fileCount} file(s), ${record.encryption}, expires ${record.expiresAt}`);
     } catch (error) {
       if (job.retryCount < ORG_EXPORT_RETRY_LIMIT) throw error;
-      console.error(`[org-export] ALERT export of org ${orgId} failed after ${job.retryCount + 1} attempts`, error);
+      opsAlert(`[org-export] ALERT export of org ${orgId} failed after ${job.retryCount + 1} attempts`, error);
     }
   });
 
@@ -721,7 +752,8 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
           const outbox = await archiveOutbox(deps.workerDb, deps.archive.store);
           console.log(`[retention] outbox archived=${outbox.archived} purged=${outbox.purged}${outbox.deferred ? ` deferred=${outbox.deferred}` : ''}`);
         } catch (error) {
-          console.error(`[retention] ALERT outbox archive failed: ${error instanceof Error ? error.message : 'unknown error'}`);
+          // The error (a database or bucket message may quote values) stays in the log; the post says where to look.
+          opsAlert('[retention] ALERT outbox archive failed; the error is in the worker log', error);
         }
       }
     }
@@ -1280,7 +1312,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       const done = await runEvidenceHolds({ runtime: deps.runtime, workerDb: deps.workerDb, store: deps.store }, evidenceLockDays, holdState);
       if (done.held + done.failed > 0) console.log(`[evidence-hold] held ${done.held}, failed ${done.failed}`);
     } catch (error) {
-      console.error('[evidence-hold] ALERT sweep failed', error instanceof Error ? error.message : error);
+      opsAlert('[evidence-hold] ALERT sweep failed; the error is in the worker log', error);
     } finally {
       holding = false;
     }
@@ -1617,8 +1649,10 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                 });
               }
               if (row.type === 'kernel.session.revoked') {
-                const target: SignOutTarget = {
-                  subject: String(row.payload.subject),
+                // The event names the user; the job reads the subject (#1970). An event emitted before the switch still
+                // carries the subject itself.
+                const target: SignOutJob = {
+                  ...(typeof row.payload.subject === 'string' ? { subject: row.payload.subject } : { userId: String(row.payload.userId) }),
                   sessionId: String(row.payload.sessionId),
                   scope: row.payload.scope === 'global' ? 'global' : 'local',
                 };

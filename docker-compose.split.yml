@@ -140,6 +140,11 @@ services:
       crove-extract:
         condition: service_healthy
 
+  # The prober (profile `prober`) asks Supabase Auth through the API's /auth/v1 proxy: `crove` does not run here (#1994).
+  prober:
+    environment:
+      PROBER_AUTH_URL: ${PROBER_AUTH_URL:-http://api:8080/auth/v1}
+
   # Not needed here (sign-up is auto-confirmed); published ports would clash with a running default stack.
   mailpit:
     ports: !reset []

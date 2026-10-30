@@ -119,6 +119,24 @@ suite('org purge on PostgreSQL (#1024)', () => {
         )
       ).rows[0]?.id;
       await c.query(`INSERT INTO crove_kernel.task_comment (org_id, task_id, body, author_type) VALUES ($1, $2, 'Đã xem', 'system')`, [org.orgId, pinned]);
+      // An approved Social post (append-only approval, #1032): its approval, variant, post and channel connection.
+      const connection = randomUUID();
+      await c.query(
+        'INSERT INTO crove_kernel.channel_connection (org_id, id, provider, external_account_id, display_name, connected_by) VALUES ($1, $2, $3, $4, $5, $6)',
+        [org.orgId, connection, 'sandbox', `acct-${tag}`, 'Kênh', owner],
+      );
+      const post = (await c.query<{ id: string }>(`INSERT INTO crove_social.post (org_id, body, author_user_id) VALUES ($1, 'Bài đã duyệt', $2) RETURNING id`, [org.orgId, owner])).rows[0]?.id;
+      const hash = `sha256:${'a'.repeat(64)}`;
+      const variant = (
+        await c.query<{ id: string }>(
+          `INSERT INTO crove_social.post_variant (org_id, post_id, channel_connection_id, provider, content_hash, status) VALUES ($1, $2, $3, 'sandbox', $4, 'approved') RETURNING id`,
+          [org.orgId, post, connection, hash],
+        )
+      ).rows[0]?.id;
+      await c.query(
+        `INSERT INTO crove_social.post_approval (org_id, post_id, variant_id, revision, content_hash, decision, decided_by, snapshot) VALUES ($1, $2, $3, 1, $4, 'approved', $5, '{}')`,
+        [org.orgId, post, variant, hash, member],
+      );
       const free = (await c.query<{ id: string }>(`INSERT INTO crove_kernel.task (org_id, title, source, created_by_type) VALUES ($1, 'Free', 'human', 'system') RETURNING id`, [org.orgId])).rows[0]?.id;
       // A customer only a ledger line names (a sale on 131): no foreign key points at it.
       const ledgerParty = (await c.query<{ id: string }>(`INSERT INTO crove_kernel.party (org_id, kind, name, email) VALUES ($1, 'organization', 'Khách nợ', $2) RETURNING id`, [org.orgId, `ledger-${tag}@purge.test`])).rows[0]?.id;
@@ -299,7 +317,7 @@ suite('org purge on PostgreSQL (#1024)', () => {
     expect(await count('crove_kernel.tenant_member', t.org.orgId)).toBe(2);
   });
 
-  it('keeps the books and what append-only rows pin, deletes the rest with its blobs, and closes the org', async () => {
+  it('keeps the books, deletes the rest with its blobs, the append-only working rows included, and closes the org', async () => {
     const s = await seed('Công ty Rời đi');
     const other = await seed('Công ty Ở lại');
     await offboard(s.org.orgId);
@@ -338,12 +356,12 @@ suite('org purge on PostgreSQL (#1024)', () => {
     expect(await one('SELECT id FROM crove_kernel.party WHERE org_id = $1 AND id = $2', [s.org.orgId, s.ledgerParty])).toEqual({ id: s.ledgerParty });
     // The booked invoice's proposal stays (the approval trail); the stray one is deleted.
     expect(await admin(async (c) => (await c.query('SELECT id FROM crove_kernel.proposal WHERE org_id = $1', [s.org.orgId])).rows)).toEqual([{ id: s.proposalId }]);
-    // The comment pins its task, the parent and the assignee position; the free task is gone.
-    expect(await admin(async (c) => (await c.query('SELECT id FROM crove_kernel.task WHERE org_id = $1 ORDER BY id', [s.org.orgId])).rows.map((r) => r.id).sort())).toEqual(
-      [s.parent, s.pinned].sort(),
-    );
-    expect(after['crove_kernel.task_comment']).toBe(1);
-    expect(after['crove_kernel.position']).toBe(1);
+    // The task comment and the post approval are deleted (#1032), and so is what they used to pin: the commented task,
+    // its parent and assignee position, the approved variant, its post and channel connection.
+    for (const table of ['crove_kernel.task_comment', 'crove_kernel.task', 'crove_kernel.position', 'crove_social.post_approval', 'crove_social.post_variant', 'crove_social.post', 'crove_kernel.channel_connection']) {
+      expect([table, before[table]]).not.toEqual([table, 0]);
+      expect([table, after[table] ?? 0]).toEqual([table, 0]);
+    }
     // Members, invites, proposals, extractions, activity: gone. Every other table of the org is empty.
     const keptTables = new Set([
       'crove_kernel.tenant',
@@ -357,9 +375,6 @@ suite('org purge on PostgreSQL (#1024)', () => {
       'crove_kernel.file',
       'crove_kernel.party',
       'crove_kernel.proposal',
-      'crove_kernel.task',
-      'crove_kernel.task_comment',
-      'crove_kernel.position',
       'crove_kernel.number_allocation',
       'crove_kernel.number_series',
       'crove_kernel.number_series_policy',
@@ -389,8 +404,26 @@ suite('org purge on PostgreSQL (#1024)', () => {
         minDays: 30,
         blobs: { deleted: 1, held: 0 },
         counts: {
-          deleted: expect.objectContaining({ 'crove_kernel.tenant_member': 2, 'crove_kernel.file': 1, 'crove_kernel.party': 1, 'crove_kernel.task': 1, 'crove_kernel.proposal': 1, 'crove_social.push_subscription': 1, 'crove_social.saved_view': 1, 'crove_social.media_archive': 2, 'crove_notes.note': 2, 'crove_notes.link': 1, 'crove_notes.todo': 1 }),
-          pinned: expect.objectContaining({ 'crove_kernel.task_comment': 1, 'crove_kernel.task': 2, 'crove_kernel.position': 1 }),
+          deleted: expect.objectContaining({
+            'crove_kernel.tenant_member': 2,
+            'crove_kernel.file': 1,
+            'crove_kernel.party': 1,
+            'crove_kernel.task': 3,
+            'crove_kernel.task_comment': 1,
+            'crove_kernel.position': 1,
+            'crove_kernel.proposal': 1,
+            'crove_social.post_approval': 1,
+            'crove_social.post_variant': 1,
+            'crove_social.post': 1,
+            'crove_kernel.channel_connection': 1,
+            'crove_social.push_subscription': 1,
+            'crove_social.saved_view': 1,
+            'crove_social.media_archive': 2,
+            'crove_notes.note': 2,
+            'crove_notes.link': 1,
+            'crove_notes.todo': 1,
+          }),
+          pinned: expect.objectContaining({ 'crove_kernel.task_comment': 0, 'crove_kernel.task': 0, 'crove_kernel.position': 0, 'crove_social.post_approval': 0, 'crove_social.post_variant': 0 }),
           anonymized: { 'crove_kernel.party': 2 },
           keptFiles: 1,
           keptParties: 2,
@@ -399,7 +432,13 @@ suite('org purge on PostgreSQL (#1024)', () => {
       },
     });
     const text = JSON.stringify(audits[0]?.detail);
-    for (const secret of [s.ownerEmail, s.partyEmail, 'Đã xem', 'booked.xml', 'loose.xml', 'Mật khẩu']) expect(text).not.toContain(secret);
+    for (const secret of [s.ownerEmail, s.partyEmail, 'Đã xem', 'Bài đã duyệt', 'booked.xml', 'loose.xml', 'Mật khẩu']) expect(text).not.toContain(secret);
+
+    // Every other writer still meets the append-only rule on the two tables, the database owner's session included.
+    const otherComment = await one('SELECT org_id, id FROM crove_kernel.task_comment WHERE org_id = $1 LIMIT 1', [other.org.orgId]);
+    await expect(admin((c) => c.query('DELETE FROM crove_kernel.task_comment WHERE org_id = $1', [other.org.orgId]))).rejects.toThrow(/append-only/);
+    await expect(admin((c) => c.query('UPDATE crove_social.post_approval SET comment = $2 WHERE org_id = $1', [other.org.orgId, 'x']))).rejects.toThrow(/append-only/);
+    expect(await one('SELECT org_id, id FROM crove_kernel.task_comment WHERE org_id = $1 LIMIT 1', [other.org.orgId])).toEqual(otherComment);
 
     // The other org is untouched, its blobs included.
     expect(await snapshot(other.org.orgId)).toEqual(otherBefore);
@@ -481,6 +520,47 @@ suite('org purge on PostgreSQL (#1024)', () => {
       await inFlight.end();
       await late.end();
     }
+  });
+
+  // The append-only guard of task comments and post approvals lets a DELETE through only inside org_purge (#1032): the
+  // worker login in the system context of an offboarding org, with the purge's mark forged for that org, deletes and
+  // updates nothing by itself.
+  it('refuses the worker its own deletes of task comments and post approvals, the purge mark forged', async () => {
+    const s = await seed('Công ty Giả dấu');
+    await offboard(s.org.orgId);
+    const login = new URL(adminUrl);
+    login.username = 'crove_worker';
+    login.password = 'test-worker-pw';
+    const before = { comments: await count('crove_kernel.task_comment', s.org.orgId), approvals: await count('crove_social.post_approval', s.org.orgId) };
+    expect(before.comments).toBeGreaterThan(0);
+    expect(before.approvals).toBeGreaterThan(0);
+    const client = new pg.Client({ connectionString: login.toString() });
+    await client.connect();
+    try {
+      for (const statement of [
+        'DELETE FROM crove_kernel.task_comment WHERE org_id = $1',
+        'DELETE FROM crove_social.post_approval WHERE org_id = $1',
+        "UPDATE crove_kernel.task_comment SET body = 'x' WHERE org_id = $1",
+        "UPDATE crove_social.post_approval SET comment = 'x' WHERE org_id = $1",
+      ]) {
+        await client.query('BEGIN');
+        try {
+          await client.query('SELECT crove_kernel.enter_system_context($1)', [s.org.orgId]);
+          await client.query("SELECT pg_catalog.set_config('crove.org_purge', $1, true)", [s.org.orgId]);
+          const outcome = await client.query(statement, [s.org.orgId]).then(
+            (r) => `${r.rowCount ?? 0} row(s)`,
+            (e: Error) => e.message,
+          );
+          // Refused by the guard, or by the worker's grants or row policies before it: never a row changed.
+          expect([statement, outcome]).toEqual([statement, expect.stringMatching(/append-only|permission denied|^0 row\(s\)$/)]);
+        } finally {
+          await client.query('ROLLBACK');
+        }
+      }
+    } finally {
+      await client.end();
+    }
+    expect({ comments: await count('crove_kernel.task_comment', s.org.orgId), approvals: await count('crove_social.post_approval', s.org.orgId) }).toEqual(before);
   });
 
   it('leaves a held blob in place and reports it', async () => {

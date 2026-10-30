@@ -16,7 +16,7 @@ import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-se
 import { TableCell, TableRow } from '@crove/ui/components/table';
 import { useChosenEntity } from '../components/entity-switcher.tsx';
 import { DateInput } from '../components/date-input.tsx';
-import { DataTable, Empty, ErrorText, Notice, PageHeader, Spinner, TableSkeleton } from '../components/ui.tsx';
+import { CardSkeleton, DataTable, Empty, ErrorText, Notice, PageHeader, Spinner, TableSkeleton } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { VoucherFormCard } from './vouchers.tsx';
@@ -154,7 +154,7 @@ function StatementImport({ bankAccount, onImported }: { bankAccount: string; onI
                   </AlertDescription>
                 </Alert>
               )}
-              <DataTable head={[t('columns.row'), t('columns.date'), t('columns.reference'), t('columns.description'), t('columns.moneyIn'), t('columns.moneyOut'), t('columns.balance'), t('columns.status')]}>
+              <DataTable numeric={[4, 5, 6]} head={[t('columns.row'), t('columns.date'), t('columns.reference'), t('columns.description'), t('columns.moneyIn'), t('columns.moneyOut'), t('columns.balance'), t('columns.status')]}>
                 {data.rows.slice(0, PREVIEW_ROWS).map((row) => {
                   const out = row.amount?.startsWith('-') ?? false;
                   return (
@@ -197,7 +197,7 @@ function StatementImport({ bankAccount, onImported }: { bankAccount: string; onI
 function LineVoucher({ slug, line, onClose }: { slug: string; line: BankLine; onClose: () => void }) {
   const t = useTranslations('vouchers');
   const made = useQuery(orpc.bank.lineVoucher.queryOptions({ input: { bankLineId: line.id } }));
-  if (made.isLoading) return <Spinner />;
+  if (made.isLoading) return <CardSkeleton className="mb-6" />;
   if (made.error) return <ErrorText>{errorMessage(made.error)}</ErrorText>;
   if (!made.data) return null;
   if (!made.data.voucher) {
@@ -223,9 +223,10 @@ function LineState({ slug, line, canEnter, onEnter }: { slug: string; line: Bank
   }
   if (line.state.status === 'proposed') {
     return (
-      <Link to="/o/$slug/inbox/$id" params={{ slug, id: line.state.proposalId }} className="text-link underline">
+      // The proposal waiting for a person, in its chip (DESIGN.md §4.4, #2000); the chip is the link that opens it.
+      <Badge variant="proposal" className="hover:underline" render={<Link to="/o/$slug/inbox/$id" params={{ slug, id: line.state.proposalId }} />}>
         {t('state.proposed')}
-      </Link>
+      </Badge>
     );
   }
   if (!canEnter) return <span className="text-subtle-foreground">{t('state.open')}</span>;
@@ -406,7 +407,19 @@ export function BankPage() {
             <Empty title={t('empty')} hint={canImport ? t('emptyHint') : undefined} />
           ) : lines.data ? (
             <DataTable
+              numeric={[3, 4, 5]}
               head={[t('columns.date'), t('columns.reference'), t('columns.description'), t('columns.moneyIn'), t('columns.moneyOut'), t('columns.balance'), t('voucherColumn')]}
+              foot={
+                <TableRow>
+                  <TableCell className="px-4 py-3 text-foreground" colSpan={3}>
+                    {t('total')}
+                  </TableCell>
+                  <TableCell className={NUM}>{f.money(lines.data.moneyIn)}</TableCell>
+                  <TableCell className={NUM}>{f.money(lines.data.moneyOut)}</TableCell>
+                  <TableCell className="px-4 py-3" />
+                  <TableCell className="px-4 py-3" />
+                </TableRow>
+              }
             >
               {lines.data.lines.map((line) => (
                 <TableRow key={line.id}>
@@ -428,15 +441,6 @@ export function BankPage() {
                   </TableCell>
                 </TableRow>
               ))}
-              <TableRow className="font-medium">
-                <TableCell className="px-4 py-3 text-foreground" colSpan={3}>
-                  {t('total')}
-                </TableCell>
-                <TableCell className={NUM}>{f.money(lines.data.moneyIn)}</TableCell>
-                <TableCell className={NUM}>{f.money(lines.data.moneyOut)}</TableCell>
-                <TableCell className="px-4 py-3" />
-                <TableCell className="px-4 py-3" />
-              </TableRow>
             </DataTable>
           ) : null}
         </>

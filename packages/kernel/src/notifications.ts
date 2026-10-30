@@ -17,6 +17,8 @@ import { zId, zNotificationKind } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext } from '@crove/kernel-runtime';
 import { eligibleApprovers } from './approval.ts';
+import { uploaderEntity } from './extraction.ts';
+import { PERSONAL_DATA_NOTICE_ITEMS } from './personal-data.ts';
 import { REROUTED_EVENT_TASKS } from './task-reroute.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
@@ -33,6 +35,9 @@ export const NOTIFICATION_KIND = /^[a-z]+\.[a-z0-9_]+$/;
 export const APPROVAL_WAITING = 'kernel.approval_waiting';
 export const FILE_UNREADABLE = 'kernel.file_unreadable';
 export const TASK_REROUTED = 'kernel.task_rerouted';
+// An owner's notice before a personal-data erasure (#1678, ADR-0037 section 5): how many of my private notes and
+// to-dos mention a person who asked to be erased. Not one a member can turn off: the erasure waits on it.
+export const PERSONAL_DATA_NOTICE = 'kernel.personal_data_notice';
 
 export interface NotifyInput {
   // '<module>.<kind>', for example 'finance.bank_attention'.
@@ -46,12 +51,16 @@ export interface NotifyInput {
   // The legal entity it belongs to (#1280): a member limited to other entities never sees it. Default: the org's
   // default entity.
   legalEntityId?: string | null;
-  // The few words the line shows (a title, a file name, a period); strings only, 2 KB at most.
+  // What the line needs besides its subject: ids, codes, counts, a period; strings only, 2 KB at most. Never a copy of a
+  // title, a name or other free text: kernel.notification.list reads the subject's when it shows the notice, so an
+  // erasure that redacts it leaves no copy here (#1977).
   detail?: Record<string, string>;
   // The outbox event it comes from.
   eventId?: string | null;
   // The member who acted: never told about their own action.
   actor?: string | null;
+  // Sent even to a member who turned the kind off (a notice an action waits on).
+  required?: boolean;
 }
 
 export async function notifyMembers(ctx: CommandContext, input: NotifyInput): Promise<number> {
@@ -59,11 +68,11 @@ export async function notifyMembers(ctx: CommandContext, input: NotifyInput): Pr
   if (!NOTIFICATION_KIND.test(input.kind)) throw new Error(`not a notification kind: ${input.kind}`);
   const wanted = [...new Set(input.users)].filter((u) => u !== input.actor);
   if (wanted.length === 0) return 0;
-  // Members now, who have not turned this kind off.
+  // Members now, who have not turned this kind off (unless it is required).
   const { rows } = await sql<{ user_id: string }>`
     SELECT m.user_id FROM crove_kernel.tenant_member m
     WHERE m.org_id = ${ctx.orgId} AND m.user_id = ANY(${wanted}::uuid[])
-      AND NOT EXISTS (SELECT 1 FROM crove_kernel.notification_mute x WHERE x.org_id = m.org_id AND x.user_id = m.user_id AND x.kind = ${input.kind})`.execute(ctx.trx);
+      ${input.required === true ? sql`` : sql`AND NOT EXISTS (SELECT 1 FROM crove_kernel.notification_mute x WHERE x.org_id = m.org_id AND x.user_id = m.user_id AND x.kind = ${input.kind})`}`.execute(ctx.trx);
   if (rows.length === 0) return 0;
   const users = rows.map((r) => r.user_id);
   const inserted = await ctx.trx
@@ -113,7 +122,7 @@ export async function outboxEvent(ctx: Pick<CommandContext, 'trx' | 'orgId'>, ev
 }
 
 // The events kernel.notification.dispatch handles.
-export const KERNEL_NOTIFYING_EVENTS = ['kernel.proposal.created', 'kernel.file.read_failed', 'kernel.task.rerouted'] as const;
+export const KERNEL_NOTIFYING_EVENTS = ['kernel.proposal.created', 'kernel.file.read_failed', 'kernel.task.rerouted', 'kernel.personal_data.notified'] as const;
 
 export const notificationDispatch = defineCommand({
   name: 'kernel.notification.dispatch',
@@ -130,7 +139,7 @@ export const notificationDispatch = defineCommand({
         if (!e.success) return { sent: 0 };
         const proposal = await ctx.trx
           .selectFrom('crove_kernel.proposal')
-          .select(['id', 'command', 'title', 'status', 'legal_entity_id'])
+          .select(['id', 'command', 'status', 'legal_entity_id'])
           .where('org_id', '=', ctx.orgId)
           .where('id', '=', e.data.proposalId)
           .executeTakeFirst();
@@ -141,9 +150,9 @@ export const notificationDispatch = defineCommand({
           users: await eligibleApprovers(ctx.trx, ctx.orgId, proposal.command),
           key: `proposal:${proposal.id}`,
           subject: { type: 'kernel.proposal', id: proposal.id },
-          // The proposal's entity (#1538): a notice names its title.
+          // The proposal's entity (#1538). Its title is read when the notice is shown, never copied (#1977).
           legalEntityId: proposal.legal_entity_id,
-          detail: { title: proposal.title.slice(0, 200) },
+          detail: {},
           eventId: event.id,
           actor: event.actor,
         });
@@ -155,7 +164,7 @@ export const notificationDispatch = defineCommand({
         const file = await ctx.trx
           .selectFrom('crove_kernel.file as f')
           .leftJoin('crove_kernel.extraction as x', (join) => join.onRef('x.org_id', '=', 'f.org_id').onRef('x.file_id', '=', 'f.id').on('x.version', '=', e.data.version))
-          .select(['f.id', 'f.filename', 'f.created_by', 'x.requested_by', 'x.legal_entity_id'])
+          .select(['f.id', 'f.created_by', 'x.requested_by', 'x.legal_entity_id'])
           .where('f.org_id', '=', ctx.orgId)
           .where('f.id', '=', e.data.fileId)
           .executeTakeFirst();
@@ -168,7 +177,8 @@ export const notificationDispatch = defineCommand({
           key: `file_unreadable:${file.id}:${e.data.version}`,
           subject: { type: 'kernel.file', id: file.id },
           legalEntityId: file.legal_entity_id,
-          detail: { filename: file.filename.slice(0, 200) },
+          // The file's name is read when the notice is shown (#1977).
+          detail: {},
           eventId: event.id,
         });
         return { sent };
@@ -182,7 +192,7 @@ export const notificationDispatch = defineCommand({
         // waits for nobody.
         const waiting = await ctx.trx
           .selectFrom('crove_kernel.task')
-          .select(['id', 'title'])
+          .select('id')
           .where('org_id', '=', ctx.orgId)
           .where('id', 'in', e.data.taskIds)
           .where((eb) => (e.data.toPositionId === null ? eb('assignee_position_id', 'is', null) : eb('assignee_position_id', '=', e.data.toPositionId)))
@@ -205,14 +215,36 @@ export const notificationDispatch = defineCommand({
           // One task opens itself; several open the task list.
           subject: waiting.length === 1 && e.data.count === 1 ? { type: 'kernel.task', id: first.id } : null,
           legalEntityId: e.data.legalEntityId,
-          // The event lists the first ids only: when every listed one still waits, so do the rest it counts.
-          detail:
-            waiting.length === 1 && e.data.count === 1
-              ? { title: first.title.slice(0, 200) }
-              : { count: String(waiting.length === e.data.taskIds.length ? e.data.count : waiting.length) },
+          // The event lists the first ids only: when every listed one still waits, so do the rest it counts. One task's
+          // title is read when the notice is shown (#1977).
+          detail: waiting.length === 1 && e.data.count === 1 ? {} : { count: String(waiting.length === e.data.taskIds.length ? e.data.count : waiting.length) },
           eventId: event.id,
           actor: event.actor,
         });
+        return { sent };
+      }
+      case 'kernel.personal_data.notified': {
+        // Each author named by an owner's notice (kernel.personal_data.notify): how many of their private notes and
+        // to-dos mention the person, never which, what they say or who the person is. The owner who sent it is left
+        // out, as for every notification (they know).
+        const e = z
+          .object({ authors: z.array(z.object({ userId: zId, notes: z.number().int().nonnegative(), todos: z.number().int().nonnegative() })).min(1).max(PERSONAL_DATA_NOTICE_ITEMS) })
+          .safeParse(event.payload);
+        if (!e.success) return { sent: 0 };
+        let sent = 0;
+        for (const author of e.data.authors) {
+          sent += await notifyMembers(ctx, {
+            kind: PERSONAL_DATA_NOTICE,
+            users: [author.userId],
+            key: `personal_data_notice:${event.id}`,
+            // Under an entity the author sees (the notification's le_scope policy, #1280), as a to-do's reminder is.
+            legalEntityId: await uploaderEntity(ctx, author.userId),
+            detail: { notes: String(author.notes), todos: String(author.todos) },
+            eventId: event.id,
+            actor: event.actor,
+            required: true,
+          });
+        }
         return { sent };
       }
       default:
@@ -237,7 +269,11 @@ function requireUser(ctx: Pick<CommandContext, 'actor'>): string {
 }
 
 // The viewer's newest notifications, how many are unread (up to NOTIFICATION_UNREAD_CAP + 1) and the kinds they turned
-// off. A proposal that is no longer pending is not waiting for anyone, so its notification is shown read.
+// off. A proposal that is no longer pending is not waiting for anyone, so its notification is shown read. The subject's
+// title (a proposal's or task's) or file name is read here, as the viewer may read it, never kept with the notice: a
+// value the personal-data erasure redacts in the task leaves no copy behind (#1977). A notice written before keeps the
+// copy it was written with, which is shown only when its subject is gone; dropping those copies is an owner decision
+// (#1958).
 export const notificationList = defineQuery({
   name: 'kernel.notification.list',
   input: z.object({}),
@@ -252,10 +288,19 @@ export const notificationList = defineQuery({
       subject_type: string | null;
       subject_id: string | null;
       detail: Record<string, unknown>;
+      subject_title: string | null;
+      subject_filename: string | null;
       created_at: Date;
       read: boolean;
     }>`
-      SELECT n.id, n.kind, n.subject_type, n.subject_id, n.detail, n.created_at, (n.read_at IS NOT NULL OR ${settled}) AS read
+      SELECT n.id, n.kind, n.subject_type, n.subject_id, n.detail, n.created_at, (n.read_at IS NOT NULL OR ${settled}) AS read,
+             CASE n.subject_type
+               WHEN 'kernel.proposal' THEN (SELECT p.title FROM crove_kernel.proposal p WHERE p.org_id = n.org_id AND p.id = n.subject_id)
+               WHEN 'kernel.task' THEN (SELECT t.title FROM crove_kernel.task t WHERE t.org_id = n.org_id AND t.id = n.subject_id)
+             END AS subject_title,
+             CASE WHEN n.subject_type = 'kernel.file'
+               THEN (SELECT f.filename FROM crove_kernel.file f WHERE f.org_id = n.org_id AND f.id = n.subject_id)
+             END AS subject_filename
       FROM crove_kernel.notification n
       WHERE n.org_id = ${ctx.orgId} AND n.user_id = ${me}
       ORDER BY n.created_at DESC, n.id DESC
@@ -273,7 +318,11 @@ export const notificationList = defineQuery({
         kind: r.kind,
         subjectType: r.subject_type,
         subjectId: r.subject_id,
-        detail: Object.fromEntries(Object.entries(r.detail ?? {}).filter((e): e is [string, string] => typeof e[1] === 'string')),
+        detail: {
+          ...Object.fromEntries(Object.entries(r.detail ?? {}).filter((e): e is [string, string] => typeof e[1] === 'string')),
+          ...(r.subject_title !== null ? { title: r.subject_title.slice(0, 200) } : {}),
+          ...(r.subject_filename !== null ? { filename: r.subject_filename.slice(0, 200) } : {}),
+        },
         createdAt: r.created_at.toISOString(),
         read: r.read,
       })),

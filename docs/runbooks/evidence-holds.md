@@ -30,12 +30,15 @@ A failed file is tried again after 5 minutes, then 10, 20 and so on, at least on
 ## Settings and bucket
 
 - `STORAGE=s3` with a bucket that has **Object Lock enabled** (it implies versioning, which evidence buckets need anyway). AWS can enable Object Lock on an existing versioned bucket; MinIO only on a new bucket, so create one with `--with-lock` and copy the objects with their versions, or keep holds off.
+- `pnpm pilot:check` reads the bucket's Object Lock with these settings and fails when holds are on and the bucket has none (#1996, [pilot-readiness.md](pilot-readiness.md) section 4).
 - The credentials need `s3:GetBucketObjectLockConfiguration` on the bucket, and `s3:GetObjectRetention` and `s3:PutObjectRetention` on `org/*`. Never give them `s3:BypassGovernanceRetention`.
 - `EVIDENCE_LOCK_DAYS=0` turns holds off.
 - **Local disk** has no per-object retention: the worker logs `the file store has no per-object retention (local disk): posted files get no retention hold` at start and sets none. Ludy still never deletes an `org/` file; backups are the protection there.
 - **GCS** (interoperability endpoint) has no Object Lock API; use a bucket retention policy instead. **Cloudflare R2** without versioning (`S3_VERSIONING=off`) cannot lock a version; use an R2 bucket lock rule on `org/`. In both cases the worker reports that the bucket has no Object Lock (below).
 
 ## Alerts
+
+Each line below is in the worker log and, with `ALERT_WEBHOOK_URL` set, posted to the alert webhook once an hour per kind and process (#1993). So is `[http] ALERT evidence integrity: ...` from the API: a stored file whose bytes no longer match its hash, an incident ([incidents.md](incidents.md)).
 
 | Log line | Meaning | What to do |
 |---|---|---|

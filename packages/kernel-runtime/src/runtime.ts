@@ -1812,7 +1812,8 @@ export class Runtime {
           refuseClosed('ctx.emit');
           if (!type.startsWith(`${def.name.split('.')[0]}.`)) throw new Error(`command ${def.name} cannot emit ${type}`);
           // Ids and codes only (#1949): an event outlives every erasure, in the outbox and its archive.
-          const checked = normalizeEventPayload(payload);
+          // Checked as it will be stored: as its JSON (a value's toJSON decides what the database sees).
+          const checked = normalizeEventPayload(JSON.parse(JSON.stringify(payload)));
           const problem = eventPayloadProblem(checked, type);
           if (problem) throw new Error(`command ${def.name} cannot emit ${type} with ${problem}`);
           const { rows } = await aside(() => sql<{ id: string }>`SELECT crove_kernel.emit(${type}, ${JSON.stringify(checked)}::jsonb, ${commandId}::uuid) AS id`.execute(trx));

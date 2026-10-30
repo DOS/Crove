@@ -10,7 +10,7 @@ import { Card } from '@crove/ui/components/card';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { TableCell, TableRow } from '@crove/ui/components/table';
 import { useChosenEntity } from '../components/entity-switcher.tsx';
-import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
+import { CardSkeleton, DataTable, Empty, ErrorText, ListSkeleton, PageHeader, Spinner } from '../components/ui.tsx';
 import { PortalSyncPanel } from '../components/portal-sync.tsx';
 import { getConfig } from '../lib/auth.ts';
 import { canSyncFromPortal } from '../lib/portal-sync.ts';
@@ -57,10 +57,10 @@ function ItemRow({ item, slug }: { item: ReconcileItem; slug: string }) {
         {sellerName}
         {sellerTaxCode && <span className="block font-mono text-xs text-subtle-foreground">{sellerTaxCode}</span>}
       </TableCell>
-      <TableCell className="px-4 py-3 text-foreground tabular-nums">
+      <TableCell className="px-4 py-3 text-right text-foreground tabular-nums">
         {item.portal?.total != null ? f.money(item.portal.total, item.portal.currency) : <span className="text-subtle-foreground">{t('noAmount')}</span>}
       </TableCell>
-      <TableCell className="px-4 py-3 text-foreground tabular-nums">{item.crove ? f.money(item.crove.total, item.crove.currency) : '-'}</TableCell>
+      <TableCell className="px-4 py-3 text-right text-foreground tabular-nums">{item.crove ? f.money(item.crove.total, item.crove.currency) : '-'}</TableCell>
       <TableCell className="px-4 py-3">
         <div className="flex flex-wrap items-center gap-1">
           {item.portal?.statusLabel && <Badge variant={item.portal.status === 'cancelled' || item.portal.status === 'replaced' ? 'destructive' : 'outline'}>{item.portal.statusLabel}</Badge>}
@@ -90,7 +90,7 @@ function Section({ outcome, items, total, folded, slug }: { outcome: ReconcileOu
   // The server lists the first items of a long section; the count and the summary still cover all of them.
   const truncated = total > items.length ? <p className="mt-2 text-sm text-muted-foreground">{t('truncatedSection', { shown: items.length, total })}</p> : null;
   const table = (
-    <DataTable head={[t('columns.issueDate'), t('columns.invoice'), t('columns.seller'), t('columns.portalTotal'), t('columns.croveTotal'), t('columns.notes')]}>
+    <DataTable numeric={[3, 4]} head={[t('columns.issueDate'), t('columns.invoice'), t('columns.seller'), t('columns.portalTotal'), t('columns.croveTotal'), t('columns.notes')]}>
       {items.map((item) => (
         <ItemRow key={`${item.portal?.listId ?? 'crove'}-${item.portal?.rowNo ?? item.crove?.id}`} item={item} slug={slug} />
       ))}
@@ -132,7 +132,7 @@ function MissingInvoiceRequest({ period, missing, editor, canManage, slug }: { p
   const entity = useChosenEntity();
   const reminder = useMutation(orpc.missingInvoices.setReminder.mutationOptions({ onSettled: refresh }));
   const data = status.data;
-  if (status.isLoading) return <Spinner />;
+  if (status.isLoading) return <CardSkeleton />;
   if (status.error) return <ErrorText>{errorMessage(status.error)}</ErrorText>;
   if (!data) return null;
   const contact = data.contactEmail;
@@ -360,7 +360,7 @@ export function PortalListPage() {
       )}
 
       {report.isPending ? (
-        <Spinner />
+        <ListSkeleton />
       ) : report.error ? (
         <ErrorText>{errorMessage(report.error)}</ErrorText>
       ) : data ? (

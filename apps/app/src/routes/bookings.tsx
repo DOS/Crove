@@ -14,7 +14,7 @@ import { Tabs, TabsList, TabsTrigger } from '@crove/ui/components/tabs';
 import { BookingFeedCard } from '../components/booking-feed.tsx';
 import { BookingSuggestCard } from '../components/booking-suggest.tsx';
 import { RecordNotesPanel, notesInstalled } from '../components/notes-panel.tsx';
-import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
+import { DataTable, Empty, ErrorText, PageHeader, Spinner, TableSkeleton } from '../components/ui.tsx';
 import { useLocaleSetting } from '../i18n/provider.tsx';
 import { errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { visitorTimeZone } from '../lib/booking.ts';
@@ -190,7 +190,7 @@ export function BookingsPage() {
       {org.error || bookings.error ? (
         <ErrorText>{errorMessage(org.error ?? bookings.error)}</ErrorText>
       ) : !bookings.data ? (
-        <Spinner />
+        <TableSkeleton columns={5} />
       ) : bookings.data.length === 0 ? (
         <Empty title={t(period === 'upcoming' ? 'emptyUpcoming' : 'emptyPast')} hint={t('emptyHint')} />
       ) : (

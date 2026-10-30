@@ -28,6 +28,7 @@ import type { Db } from '@crove/db';
 import { inboxPruneCutoffs } from '@crove/kernel';
 import { DomainError, type Runtime } from '@crove/kernel-runtime';
 import { keyOrg } from './job-keys.ts';
+import { opsAlert } from './ops-alert.ts';
 
 // Orgs one page of the daily prune names, and pages one run takes at most (past them it logs an ALERT).
 const INBOX_PRUNE_PAGE = 500;
@@ -126,6 +127,6 @@ export async function pruneInboxItems(deps: { runtime: Runtime; workerDb: Db }):
     if (rows.length < INBOX_PRUNE_PAGE) return removed;
     after = rows[rows.length - 1]?.org_id ?? null;
   }
-  console.error(`[inbox-prune] ALERT more than ${INBOX_PRUNE_PAGES * INBOX_PRUNE_PAGE} orgs to prune; the rest wait for the next night`);
+  opsAlert(`[inbox-prune] ALERT more than ${INBOX_PRUNE_PAGES * INBOX_PRUNE_PAGE} orgs to prune; the rest wait for the next night`);
   return removed;
 }

@@ -152,7 +152,7 @@ suite('prober privileges', () => {
     const prober = await connect(loginUrl('crove_prober', 'test-prober-pw'));
     const { rows } = await prober.query('SELECT * FROM crove_kernel.health()');
     expect(rows).toHaveLength(1);
-    expect(Object.keys(rows[0] as object)).toEqual([
+    const columns = [
       'checked_at',
       'outbox_pending',
       'outbox_oldest_age_seconds',
@@ -163,7 +163,11 @@ suite('prober privileges', () => {
       'job_oldest_queued_age_seconds',
       'dead_letter_count',
       'worker_heartbeat_age_seconds',
-    ]);
+    ];
+    // #1997 adds two ages of the WORM archive (aggregates, no tenant data): this copy accepts health() with or without
+    // them, so the migration that adds them can land while this suite runs from base; its PR then pins the longer list.
+    const archive = ['archive_verify_age_seconds', 'archive_lag_seconds'];
+    expect([columns, [...columns, ...archive]]).toContainEqual(Object.keys(rows[0] as object));
     const refused = [
       'SELECT 1 FROM crove_kernel.tenant LIMIT 1',
       'SELECT 1 FROM crove_kernel.outbox_event LIMIT 1',

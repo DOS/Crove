@@ -24,6 +24,10 @@ vi.mock('../src/lib/api.ts', async () => {
   return { orpc: node([]), client: {}, queryClient: client.current, errorMessage: (e: unknown) => String(e) };
 });
 
+// The URL's filters (#1445), as the router hands them to the page.
+const search = vi.hoisted(() => ({ current: {} as Record<string, string> }));
+vi.mock('@tanstack/react-router', async (importOriginal) => ({ ...(await importOriginal<object>()), useSearch: () => search.current }));
+
 const { AuditPage } = await import('../src/routes/audit.tsx');
 
 const row = (id: string, command: string): AuditEntry => ({
@@ -68,5 +72,16 @@ describe('AuditPage command labels', () => {
     expect(html).toContain('value="kernel.proposal.approve">Approve a proposal</option>');
     expect(html).toContain('value="kernel.retired.command">kernel.retired.command</option>');
     expect(html).toMatch(/<span class="font-mono text-xs">kernel\.retired\.command<\/span>/);
+  });
+});
+
+describe('AuditPage filters from the URL (#1445)', () => {
+  it('starts the target filter from a link, as a decided proposal opens it', () => {
+    search.current = { targetId: '0192f0aa-1111-7222-8333-944445555666' };
+    try {
+      expect(render('vi')).toContain('value="0192f0aa-1111-7222-8333-944445555666"');
+    } finally {
+      search.current = {};
+    }
   });
 });

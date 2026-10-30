@@ -222,6 +222,8 @@ export const KERNEL_ERROR_CODES = [
   'REVISION_OUT_OF_ORDER',
   'SOURCE_STILL_POSTED',
   'REVERSAL_REVISION',
+  // A purchase or sale document posted again (#1928).
+  'DOCUMENT_REPOST',
   // The legal entity whose books a call is for (#1280).
   'LEGAL_ENTITY_REQUIRED',
   'LEGAL_ENTITY_NOT_ALLOWED',
@@ -273,6 +275,8 @@ export const KERNEL_ERROR_CODES = [
   'JOURNAL_VOUCHER_INVALID',
   // The personal-data finder (#923).
   'PERSONAL_DATA_QUERY',
+  // The notice to the authors of private items before an erasure (#1678).
+  'PERSONAL_DATA_NOTICE_TOO_MANY',
   // Year-end closing (#889).
   'YEAR_NOT_ENDED',
   'YEAR_CLOSED',

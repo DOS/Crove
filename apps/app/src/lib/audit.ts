@@ -7,23 +7,71 @@ export interface AuditFilterForm {
   command: string;
   outcome: string;
   target: string;
+  // The target's type, from a link (#1445): it narrows the target id, and goes when the id is changed.
+  targetType: string;
   from: string;
   to: string;
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
+// As zAuditFilter's targetType and zAuditCommand.
+const TARGET_TYPE = /^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$/;
+const COMMAND = /^[a-z][a-z0-9_]*(\.[a-z0-9_]+)*\.?$/;
 
 // Only what the server would accept: a target that is not a whole id is left out (the screen says so) rather than sent.
 export function auditFilter(form: AuditFilterForm): AuditFilter {
   const target = form.target.trim().toLowerCase();
+  const targetId = UUID.test(target) ? target : null;
   return {
     ...(form.actor ? { actor: form.actor } : {}),
     ...(form.command ? { command: form.command } : {}),
     ...((AUDIT_OUTCOMES as readonly string[]).includes(form.outcome) ? { outcome: form.outcome as AuditOutcome } : {}),
-    ...(UUID.test(target) ? { targetId: target } : {}),
+    ...(targetId ? { targetId } : {}),
+    ...(targetId && TARGET_TYPE.test(form.targetType) ? { targetType: form.targetType } : {}),
     ...(DATE.test(form.from) ? { from: form.from } : {}),
     ...(DATE.test(form.to) ? { to: form.to } : {}),
+  };
+}
+
+// The audit screen's filters in its URL (#1445): a link opens it filtered, for example from a proposal
+// (?targetType=kernel.proposal&targetId=<id>). What is not a well-formed value is dropped.
+export interface AuditSearch {
+  actor?: string;
+  command?: string;
+  outcome?: AuditOutcome;
+  targetType?: string;
+  targetId?: string;
+  from?: string;
+  to?: string;
+}
+
+export function parseAuditSearch(search: Record<string, unknown>): AuditSearch {
+  const text = (value: unknown, pattern: RegExp, max = 120) => (typeof value === 'string' && value.length <= max && pattern.test(value) ? value : undefined);
+  const actor = typeof search.actor === 'string' && (search.actor === 'system' || UUID.test(search.actor)) ? search.actor.toLowerCase() : undefined;
+  const outcome = typeof search.outcome === 'string' && (AUDIT_OUTCOMES as readonly string[]).includes(search.outcome) ? (search.outcome as AuditOutcome) : undefined;
+  const found: Record<keyof AuditSearch, string | undefined> = {
+    actor,
+    command: text(search.command, COMMAND),
+    outcome,
+    targetType: text(search.targetType, TARGET_TYPE),
+    targetId: typeof search.targetId === 'string' && UUID.test(search.targetId) ? search.targetId.toLowerCase() : undefined,
+    from: text(search.from, DATE, 10),
+    to: text(search.to, DATE, 10),
+  };
+  return Object.fromEntries(Object.entries(found).filter(([, v]) => v !== undefined)) as AuditSearch;
+}
+
+// The form a search starts: its values, every other field empty.
+export function auditForm(search: AuditSearch): AuditFilterForm {
+  return {
+    actor: search.actor ?? '',
+    command: search.command ?? '',
+    outcome: search.outcome ?? '',
+    target: search.targetId ?? '',
+    targetType: search.targetId ? (search.targetType ?? '') : '',
+    from: search.from ?? '',
+    to: search.to ?? '',
   };
 }
 

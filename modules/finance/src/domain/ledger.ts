@@ -53,6 +53,7 @@ export type LedgerErrorCode =
   | 'IDEMPOTENCY_CONFLICT'
   | 'REVISION_OUT_OF_ORDER'
   | 'SOURCE_STILL_POSTED'
+  | 'DOCUMENT_REPOST'
   | 'INVALID_REVERSAL'
   | 'ENTRY_NOT_FOUND'
   | 'REVERSAL_NOT_REVERSIBLE';
@@ -166,6 +167,8 @@ function checkReversal(state: LedgerState, request: PostingRequest, lines: LineI
   return mirrored ? null : refuse('INVALID_REVERSAL', 'a reversal swaps the debit and credit of every line of the entry it reverses');
 }
 
+export const DOCUMENT_SOURCE_TYPE = 'finance.purchase_document';
+
 // Posts one entry. Order of checks: the request on its own (currency, lines, scale, balance), then
 // idempotency (same source and revision: a replay if the payload hash matches, else a conflict), then the
 // revision rule (next revision only, after the previous one was reversed), then the reversal rules.
@@ -193,6 +196,11 @@ export function postEntry(state: LedgerState, request: PostingRequest, newId: ()
   if (source.revision !== expected) return refuse('REVISION_OUT_OF_ORDER', `expected revision ${expected}, got ${source.revision}`);
   if (latest && !reversalOf(state, latest.id)) {
     return refuse('SOURCE_STILL_POSTED', `reverse revision ${latest.source.revision} of ${source.type}/${source.id} first`);
+  }
+  // A purchase or sale document is posted once (#1928, the CHECK journal_entry_document_one_revision): it has one void,
+  // so a revision 2 could never be reversed; a wrong invoice is replaced by a new document (#916).
+  if (source.type === DOCUMENT_SOURCE_TYPE && source.revision > 1) {
+    return refuse('DOCUMENT_REPOST', `${source.type}/${source.id} is posted once; record its replacement as a new document`);
   }
 
   const reversalProblem = checkReversal(state, normalized, lines);

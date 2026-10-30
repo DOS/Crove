@@ -985,12 +985,8 @@ export const revokeSession = defineCommand({
       FROM crove_kernel.session_revoke(${input.userId}::uuid, ${input.sessionId ?? null}::uuid, ${input.reason ?? null}, ${current}::uuid)`.execute(ctx.trx);
     for (const row of rows) {
       if (!row.sign_out || !row.auth_subject) continue;
-      await ctx.emit('kernel.session.revoked', {
-        userId: input.userId,
-        subject: row.auth_subject,
-        sessionId: row.revoked_session,
-        scope: row.sign_out,
-      });
+      // Ids only (#1970): the sign-out job reads the account's identity provider subject itself.
+      await ctx.emit('kernel.session.revoked', { userId: input.userId, sessionId: row.revoked_session, scope: row.sign_out });
     }
     const scope = input.all ? 'tất cả phiên đăng nhập' : 'một phiên đăng nhập';
     await ctx.activity('kernel.user', input.userId, 'session.revoked', `Thu hồi ${scope} (${rows.length})`);

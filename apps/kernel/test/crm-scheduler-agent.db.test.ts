@@ -146,7 +146,7 @@ suite('the crm.scheduler agent on PostgreSQL (#1434)', () => {
     expect(first).toEqual({ events: 1, tasks: 1 });
     expect((await o.dispatchCancels()).tasks).toBe(0);
     const tasks = await admin(async (c) => (await c.query(`SELECT title, kind, source, source_ref, tainted FROM crove_kernel.task WHERE org_id = $1`, [o.orgId])).rows);
-    expect(tasks).toEqual([{ title: 'Khách hủy lịch hẹn: Tư vấn thuế', kind: 'general', source: 'event', source_ref: { type: 'crm.booking', id: cancelled }, tainted: true }]);
+    expect(tasks).toEqual([{ title: 'Khách hủy lịch hẹn', kind: 'general', source: 'event', source_ref: { type: 'crm.booking', id: cancelled }, tainted: true }]);
 
     // What the page offers now: the freed 10:00 among the next slots; 9:00 stays taken.
     const next = await app.query<NextSlots>('crm.booking.next_slots', { bookingId: cancelled }, { actor: asUser(o.member), orgId: o.orgId });

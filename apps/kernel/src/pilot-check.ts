@@ -1,13 +1,13 @@
 // The `pilot-check` image role (issue #308, backlog review 2026-10-17 M1-8): a preflight for a deployment that a
-// consenting design partner will use. It reads the deployment's settings (the .env that docker compose reads) and,
-// with --url, probes the running instance. It fails loudly on anything the pilot readiness checklist forbids and lists
+// consenting design partner will use. It reads the deployment's settings (the .env that docker compose reads), asks the
+// files bucket for its Object Lock when evidence holds are on, and, with --url, probes the running instance. It fails loudly on anything the pilot readiness checklist forbids and lists
 // the items only a person can confirm (docs/runbooks/pilot-readiness.md).
 //
 //   pilot-check [--url https://crove.example.com]
 //
 // Exit codes: 0 every automatic check passed, 1 a check failed, 2 the check could not run (bad arguments).
 import { randomBytes } from 'node:crypto';
-import { parseVaultKey } from '@crove/kernel-runtime';
+import { S3BlobStore, parseVaultKey, type S3Sender } from '@crove/kernel-runtime';
 import { parseExportKey } from './export-seal.ts';
 import { loadProberConfig } from './prober.ts';
 
@@ -345,7 +345,7 @@ export function checkEnv(env: Env): CheckResult[] {
     {
       item: 'RLS matrix',
       status: 'manual',
-      message: 'confirm the CI db job and the invariant suite (rls-matrix.db.test.ts, T8) are green on the commit you deploy',
+      message: `${RLS_MANUAL} (with --url, pilot-check reads them from GitHub)`,
     },
     ...(backupKey
       ? []
@@ -370,8 +370,9 @@ export function checkEnv(env: Env): CheckResult[] {
       status: 'manual',
       message: 'confirm a restore onto a scratch stack passed this month (restore.sh ends with "restore of <run> passed") and note the RPO and RTO it shows (docs/runbooks/backup-and-restore.md)',
     },
-    // Evidence holds (#1009): the worker can hold posted invoice files only on an S3 bucket with Object Lock, which
-    // nothing here can see; without it, it logs one ALERT a day and posting goes on.
+    // Evidence holds (#1009): the worker can hold posted invoice files only on an S3 bucket with Object Lock; without
+    // it, it logs one ALERT a day and posting goes on. runPilotCheck replaces this line with the bucket's answer when
+    // holds are on (probeEvidenceHolds, #1996).
     {
       item: 'Evidence holds',
       status: 'manual',
@@ -559,11 +560,167 @@ export function formatResults(unordered: readonly CheckResult[]): string {
   return lines.join('\n');
 }
 
+// The source repository whose CI ran the commit a deployment reports (#1995): DOS/Ludy unless CROVE_SOURCE_REPO names a
+// fork, as owner/name.
+export const DEFAULT_SOURCE_REPO = 'DOS/Ludy';
+// The checks of the ci workflow that hold the RLS matrix and the rest of the database tests (T8), and the gate that
+// gathers them with lint, typecheck and the unit tests; on main they run on every push.
+const DATABASE_CHECKS = /^Database tests\b/;
+const GATE_CHECK = 'Lint, typecheck, test';
+const RLS_MANUAL = 'confirm the CI db job and the invariant suite (rls-matrix.db.test.ts, T8) are green on the commit you deploy';
+
+interface CheckRun {
+  name: string;
+  status: string;
+  conclusion: string | null;
+}
+
+/**
+ * Whether CI passed on the build the deployment runs (#1995): the commit /version reports, the ci workflow's database
+ * tests (the RLS matrix among them) and its gate, read from GitHub's API for the source repository. PASS when all
+ * finished green, FAIL naming the ones that did not, MANUAL when it cannot tell (no build id, a commit GitHub does not
+ * know, checks still running, the API out of reach): the person checks by hand, as before. GITHUB_TOKEN, when set,
+ * raises the API's rate limit; a public repository needs none.
+ */
+export async function probeBuildChecks(origin: string, env: Env, fetchFn: Fetch = fetch): Promise<CheckResult> {
+  const manual = (why: string): CheckResult => ({ item: 'RLS matrix', status: 'manual', message: `${why}: ${RLS_MANUAL}` });
+  const init = (extra: RequestInit = {}): RequestInit => ({ signal: AbortSignal.timeout(PROBE_TIMEOUT_MS), ...extra });
+  const repo = value(env, 'CROVE_SOURCE_REPO') ?? DEFAULT_SOURCE_REPO;
+  if (!/^(?!\.{1,2}\/)[A-Za-z0-9_.-]{1,100}\/(?!\.{1,2}$)[A-Za-z0-9_.-]{1,100}$/.test(repo)) return { item: 'RLS matrix', status: 'fail', message: `CROVE_SOURCE_REPO is owner/name of a GitHub repository, not ${repo}` };
+  let build: string;
+  try {
+    // A 503 (the database is down) still names the build. What the instance answers is never printed: only a commit id
+    // that matches is used.
+    const response = await fetchFn(`${origin}/version`, init({ redirect: 'error' }));
+    const answer = (await response.json().catch(() => ({}))) as { build?: unknown };
+    if (typeof answer.build !== 'string' || !/^[0-9a-f]{40}$/.test(answer.build)) {
+      return manual(response.ok ? 'the instance reports no commit id as its build (a local build)' : `${origin}/version answered ${response.status} without a commit id`);
+    }
+    build = answer.build;
+  } catch (error) {
+    return manual(`${origin}/version failed: ${reason(error)}`);
+  }
+  const short = build.slice(0, 12);
+  const token = value(env, 'GITHUB_TOKEN');
+  let runs: CheckRun[];
+  try {
+    const response = await fetchFn(
+      `https://api.github.com/repos/${repo}/commits/${build}/check-runs?per_page=100`,
+      init({ redirect: 'error', headers: { accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28', ...(token ? { authorization: `Bearer ${token}` } : {}) } }),
+    );
+    if (!response.ok) {
+      const limited = response.status === 429 || (response.status === 403 && response.headers.get('x-ratelimit-remaining') === '0');
+      return manual(`GitHub answered ${response.status} for the checks of ${repo}@${short}${limited ? ' (rate limited: export GITHUB_TOKEN and run again)' : ''}`);
+    }
+    const page = (await response.json()) as { total_count?: number; check_runs?: CheckRun[] };
+    runs = page.check_runs ?? [];
+    if (typeof page.total_count === 'number' && page.total_count > runs.length) {
+      return manual(`${repo}@${short} has ${page.total_count} checks, more than one page of GitHub's answer`);
+    }
+  } catch (error) {
+    return manual(`could not read the checks of ${repo}@${short} from GitHub: ${reason(error)}`);
+  }
+  const wanted = runs.filter((r) => DATABASE_CHECKS.test(r.name) || r.name === GATE_CHECK);
+  if (!wanted.some((r) => r.name === GATE_CHECK) || !wanted.some((r) => DATABASE_CHECKS.test(r.name))) {
+    return manual(`${repo}@${short} has no ${GATE_CHECK} or database-test check (a commit CI never ran)`);
+  }
+  const failed = wanted.filter((r) => r.status === 'completed' && r.conclusion !== 'success').map((r) => `${r.name} (${r.conclusion ?? 'no conclusion'})`);
+  if (failed.length > 0) return { item: 'RLS matrix', status: 'fail', message: `CI did not pass on the deployed build ${repo}@${short}: ${[...new Set(failed)].sort().join(', ')}` };
+  if (wanted.some((r) => r.status !== 'completed')) return manual(`CI is still running on the deployed build ${repo}@${short}`);
+  return { item: 'RLS matrix', status: 'pass', message: `CI passed on the deployed build ${repo}@${short}: ${[...new Set(wanted.map((r) => r.name))].sort().join(', ')}` };
+}
+
+// Whether the files bucket can hold objects (#1996): its Object Lock, read the way the worker reads it before it sets a
+// retention hold (S3BlobStore's holds.available). True or false; throws when the bucket does not answer.
+export type ObjectLockProbe = (env: Env) => Promise<boolean>;
+
+// With a client, that client is asked instead of one built from the settings (tests); connect also tells GCS, which has
+// no Object Lock API, from S3.
+export function objectLockProbe(client?: S3Sender): ObjectLockProbe {
+  return async (env) => {
+    const options = {
+      bucket: value(env, 'S3_BUCKET') ?? '',
+      region: value(env, 'S3_REGION') ?? 'us-east-1',
+      endpoint: value(env, 'S3_ENDPOINT'),
+      accessKeyId: value(env, 'S3_ACCESS_KEY_ID'),
+      secretAccessKey: value(env, 'S3_SECRET_ACCESS_KEY'),
+      forcePathStyle: value(env, 'S3_FORCE_PATH_STYLE') === 'true',
+      presign: false,
+    };
+    const store = client ? new S3BlobStore(client, options.bucket) : S3BlobStore.connect(options);
+    return store.holds.available();
+  };
+}
+
+export const filesBucketObjectLock: ObjectLockProbe = objectLockProbe();
+
+type S3Failure = { name?: unknown; code?: unknown; cause?: { code?: unknown }; $metadata?: { httpStatusCode?: unknown } };
+
+// The name of an S3 error with its HTTP status, or the system code of a network one (ENOTFOUND), never its message
+// (which may quote the request).
+function s3Reason(error: unknown): string {
+  const failure = (error ?? {}) as S3Failure;
+  const status = failure.$metadata?.httpStatusCode;
+  const code = typeof failure.code === 'string' ? failure.code : failure.cause?.code;
+  const detail = typeof status === 'number' ? ` (${status})` : typeof code === 'string' ? ` (${code})` : '';
+  return `${typeof failure.name === 'string' ? failure.name : 'error'}${detail}`;
+}
+
+// A refused call: the keys lack the permission, rather than the bucket being out of reach.
+function s3Refused(error: unknown): boolean {
+  const failure = (error ?? {}) as S3Failure;
+  return failure.$metadata?.httpStatusCode === 403 || failure.name === 'AccessDenied';
+}
+
+/**
+ * The evidence holds item (#1996) when posted invoice files should get a retention hold (STORAGE=s3, EVIDENCE_LOCK_DAYS
+ * above 0): PASS when the files bucket has Object Lock enabled, FAIL when it has not (the worker would hold nothing),
+ * MANUAL when the bucket does not answer (keys without s3:GetBucketObjectLockConfiguration, the bucket out of reach).
+ * Null otherwise: the manual line of checkEnv stands. Nothing is written to the bucket.
+ */
+export async function probeEvidenceHolds(env: Env, probe: ObjectLockProbe = filesBucketObjectLock): Promise<CheckResult | null> {
+  if (value(env, 'STORAGE') !== 's3' || !(Number(value(env, 'EVIDENCE_LOCK_DAYS') ?? '3650') > 0)) return null;
+  const bucket = value(env, 'S3_BUCKET');
+  if (!bucket) return null;
+  let enabled: boolean;
+  try {
+    enabled = await Promise.race([
+      probe(env),
+      new Promise<never>((_, reject) => setTimeout(() => reject(Object.assign(new Error('no answer'), { name: 'Timeout' })), PROBE_TIMEOUT_MS).unref()),
+    ]);
+  } catch (error) {
+    return {
+      item: 'Evidence holds',
+      status: 'manual',
+      message:
+        `could not read the Object Lock of the files bucket ${bucket} (${s3Reason(error)}` +
+        `${s3Refused(error) ? '; the keys need s3:GetBucketObjectLockConfiguration on it' : ''}): ` +
+        'confirm the files bucket has Object Lock enabled and the worker log shows no "[evidence-hold] ALERT" (docs/runbooks/evidence-holds.md)',
+    };
+  }
+  return enabled
+    ? {
+        item: 'Evidence holds',
+        status: 'pass',
+        message:
+          `the files bucket ${bucket} has Object Lock enabled, so the worker can hold posted invoice files; ` +
+          'a hold that fails (keys without s3:PutObjectRetention) logs "[evidence-hold] ALERT", posted to ALERT_WEBHOOK_URL when set',
+      }
+    : {
+        item: 'Evidence holds',
+        status: 'fail',
+        message:
+          `the files bucket ${bucket} has no Object Lock: posted invoice files would get no retention hold; ` +
+          'enable Object Lock on it, or keep evidence another way (a GCS retention policy, an R2 bucket lock) and set EVIDENCE_LOCK_DAYS=0 (docs/runbooks/evidence-holds.md)',
+      };
+}
+
 export async function runPilotCheck(
   argv: readonly string[],
   env: Env = process.env,
   fetchFn: Fetch = fetch,
   print: (line: string) => void = console.log,
+  objectLock: ObjectLockProbe = filesBucketObjectLock,
 ): Promise<number> {
   let args: PilotArgs;
   try {
@@ -572,8 +729,16 @@ export async function runPilotCheck(
     print(`[pilot-check] ${error instanceof Error ? error.message : String(error)}`);
     return PILOT_EXIT.error;
   }
-  const results = checkEnv(env);
-  if (args.url) results.push(...(await probeDeployment(args.url, fetchFn)));
+  let results = checkEnv(env);
+  // The files bucket's Object Lock (#1996) replaces the manual evidence holds line when holds are on.
+  const holds = await probeEvidenceHolds(env, objectLock);
+  if (holds) results = [...results.filter((r) => !(r.item === 'Evidence holds' && r.status === 'manual')), holds];
+  if (args.url) {
+    results.push(...(await probeDeployment(args.url, fetchFn)));
+    // The CI of the deployed build (#1995) replaces the manual RLS matrix line.
+    const ci = await probeBuildChecks(args.url, env, fetchFn);
+    results = [...results.filter((r) => !(r.item === 'RLS matrix' && r.status === 'manual')), ci];
+  }
   print(formatResults(results));
   return results.some((r) => r.status === 'fail') ? PILOT_EXIT.failed : PILOT_EXIT.ok;
 }
