@@ -209,6 +209,7 @@ import {
   zNoteSummary,
   zNoteUpdate,
   zNoteWritten,
+  zNotesExport,
   zMyWork,
   zMyWorkInput,
   zTodo,
@@ -460,6 +461,8 @@ export const contract = {
     linkRemove: oc.input(zNoteLinkRemove).output(zNoteLinkWritten),
     // How many private notes each member has, for an owner or admin before removing one; no text.
     privateCounts: oc.input(z.strictObject({})).output(z.array(zNotePrivateCount)),
+    // The caller's own notes and to-dos, whole, for their download (#1678): never anyone else's.
+    exportMine: oc.input(z.strictObject({})).output(zNotesExport),
     // The caller's own to-dos (#1673), which nobody else reads: not another member, an owner or an admin.
     todos: {
       list: oc.input(zTodoList).output(z.array(zTodoSummary)),

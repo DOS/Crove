@@ -294,3 +294,50 @@ export function todoStanding(t: { dueOn: string | null; dueAt: Date | null; time
   const group = todoDueGroup(t.dueOn, zonedDate(t.timeZone, now.getTime()));
   return { group, overdue: group === 'overdue' || (group === 'today' && t.dueAt !== null && t.dueAt.getTime() < now.getTime()) };
 }
+
+// The member's own notes and to-dos, whole, for their download (#1678, notes.md section 5: "Tải về", ADR-0037 section 5:
+// their access and portability): every note they wrote, private or shared, archived or in the trash, with its links,
+// and every to-do of theirs. Nobody else's, whatever the caller's role. At most NOTES_EXPORT_LIMIT of each and
+// NOTES_EXPORT_TEXT characters of their text in all, the newest first; truncated says more were left out.
+export const NOTES_EXPORT_LIMIT = 2000;
+export const NOTES_EXPORT_TEXT = 20_000_000;
+export const zNotesExport = z.object({
+  exportedAt: z.string(),
+  notes: z.array(
+    z.object({
+      id: z.string(),
+      visibility: z.enum(NOTE_VISIBILITIES),
+      title: z.string(),
+      body: z.string(),
+      tags: z.array(z.string()),
+      pinned: z.boolean(),
+      createdAt: z.string(),
+      updatedAt: z.string(),
+      archivedAt: z.string().nullable(),
+      deletedAt: z.string().nullable(),
+      links: z.array(z.object({ targetType: z.string(), targetId: z.string() })),
+    }),
+  ),
+  todos: z.array(
+    z.object({
+      id: z.string(),
+      title: z.string(),
+      details: z.string(),
+      checklist: z.array(z.object({ text: z.string(), done: z.boolean() })),
+      status: z.enum(TODO_STATUSES),
+      dueOn: z.string().nullable(),
+      dueAt: z.string().nullable(),
+      timeZone: z.string(),
+      remindAt: z.string().nullable(),
+      createdAt: z.string(),
+      updatedAt: z.string(),
+      doneAt: z.string().nullable(),
+      deletedAt: z.string().nullable(),
+      // The note it was made from and the team task it was handed over as, when there are.
+      sourceNoteId: z.string().nullable(),
+      taskId: z.string().nullable(),
+    }),
+  ),
+  truncated: z.boolean(),
+});
+export type NotesExport = z.infer<typeof zNotesExport>;
