@@ -1469,9 +1469,7 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
         name: 't1710e.inner',
         input: z.object({}),
         risk: 'R1',
-        // An agent approves the proposal, so the command it runs is one an agent may run.
-        access: [],
-        agent: { roles: 'any' },
+        access: 'system',
         writes: [INTERNAL_1697],
         handler: async (ctx) => {
           await ctx.emit('t1710e.inner_happened', { n: 1 });

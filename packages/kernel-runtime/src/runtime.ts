@@ -167,7 +167,9 @@ export interface CommandDef<I = unknown, O = unknown> {
   // not have, an unknown class, a table listed twice or an empty column list, and, on a runtime given the manifests
   // (RuntimeOptions.manifests), a table no manifest has or classes that are not its manifest's (#1710). An empty list
   // says the command writes no table (only the runtime's rows for it). An agent's proposal of the command is
-  // flagged P04 when a declared column is `contact` or `payment`, and also when the command declares no writes at all
+  // flagged P04 when a declared column is `contact` or `payment` (read per table since #1785: a declared table that
+  // holds such a column counts as written there, whichever columns the command names, and the execution check compares
+  // tables, not columns), and also when the command declares no writes at all
   // (nothing says it writes none). A proposal command whose declared writes have no such column may run, as a nested
   // command at any depth, only commands that declare none either: the runtime refuses any other at execution, so a
   // nested write cannot escape P04. Events it emits are not writes: a command that handles them runs on its own, under
@@ -215,7 +217,7 @@ const P04_DATA_CLASSES: readonly string[] = ['contact', 'payment'];
 // payment column. Deny by default: such a command emits none until an event is listed here, and an event is listed only
 // with a review of every handler it reaches (the invariant suite pins this list, so a change to it is a protected-path
 // change). Empty: no proposal command declares its writes yet. A frozen array, read into a set once, so nothing can add
-// an event at run time.
+// an event at run time. The list is not scoped to a command: an event listed is allowed for every such command.
 export const P04_CLEAN_EVENTS: readonly string[] = Object.freeze([]);
 const CLEAN_EVENTS: ReadonlySet<string> = new Set(P04_CLEAN_EVENTS);
 
