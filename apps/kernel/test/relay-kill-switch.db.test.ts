@@ -228,7 +228,7 @@ suite('a kill switch per relay type on PostgreSQL (#1696)', () => {
   // Statistics that know the outbox as it is now, as autovacuum would take them after the claim's marks (#2074).
   const analyze = () => admin((c) => c.query('ANALYZE crove_kernel.outbox_pending, crove_kernel.outbox_event'));
   // Rounds of the backlog test: 1 in every run, 20 to show it stable (#2074).
-  const ROUNDS = 20;
+  const ROUNDS = 1;
 
   it('passes a large held backlog without walking it on every claim (#1713)', { timeout: ROUNDS * 30_000 }, async () => {
     for (let round = 0; round < ROUNDS; round++) {
