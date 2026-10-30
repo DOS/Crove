@@ -735,8 +735,11 @@ suite('bank statement import (#326)', () => {
     await sync(connectionId);
     const entity = await defaultEntity();
     const at = (account: string) => ({ connectionId, externalAccountId: account, bankAccount: '1121', legalEntityId: entity, idempotencyKey: randomUUID() });
-    expect((await feed('map', owner, at('SBX-001'))).status).toBe(200);
-    await admin((c) => c.query(`CREATE POLICY crove_test_hidden_2079 ON crove_finance.bank_feed_account AS RESTRICTIVE FOR SELECT TO crove_tenant USING (external_account_id <> 'SBX-001')`));
+    const mapped = await feed('map', owner, at('SBX-001'));
+    expect(mapped.status).toBe(200);
+    // Hides that one row by its id: the row an insert proposes must pass a SELECT policy too (RETURNING), as the caller's
+    // own entity's rows do, so a policy on the account id would refuse the insert itself.
+    await admin((c) => c.query(`CREATE POLICY crove_test_hidden_2079 ON crove_finance.bank_feed_account AS RESTRICTIVE FOR SELECT TO crove_tenant USING (id <> '${mapped.body.feedAccountId}'::uuid)`));
     try {
       expect(await feed('map', owner, at('SBX-001'))).toMatchObject({ status: 409, body: { code: 'BANK_FEED_ACCOUNT_MAPPED' } });
       // Another account of the connection maps as usual, and the one mapping stays.
