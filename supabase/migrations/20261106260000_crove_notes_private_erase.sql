@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: AGPL-3.0-only
 -- Crove notes (issue #1678, notes step N9, ADR-0037 section 5): telling the authors of private notes and to-dos that
 -- mention a person's email address, phone number, tax code or national ID, and then deleting those items on the
 -- person's erasure request, without anyone but the author ever reading them. Idempotent; applied files stay untouched.

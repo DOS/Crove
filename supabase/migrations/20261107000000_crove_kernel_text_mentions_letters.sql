@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: AGPL-3.0-only
 -- Crove kernel (issue #1678 review of #1955): an email address in free text is matched as a whole address on letters
 -- outside ASCII too. Idempotent; applied files stay untouched.
 --
