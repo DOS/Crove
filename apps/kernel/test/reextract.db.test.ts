@@ -170,7 +170,7 @@ suite('re-extraction on PostgreSQL (issue #40)', () => {
     reads.push(invoice('7001', 'Đọc được ở lần hai'));
     const { proposalId } = await extractAndPropose({ runtime: workerRuntime, store, extractor: ai, extract }, orgA, fileId, version);
     expect(proposalId).toBeTruthy();
-    expect(await recent(fileId)).toMatchObject({ status: 'proposed', version: 2, proposalId, canReextract: true });
+    expect(await recent(fileId)).toMatchObject({ status: 'proposed', version: 2, proposalId, proposalStatus: 'pending', canReextract: true });
   });
 
   it('shows a lost re-read of a file without a proposal as failed, with a message', async () => {

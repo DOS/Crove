@@ -634,6 +634,9 @@ export const zFileStatus = z.object({
   // The newest run's error, when that run failed.
   error: z.string().nullable(),
   proposalId: zId.nullable(),
+  // That proposal's status (#2009): a proposed file waiting for a person, posted or rejected, so the Inbox tells them
+  // apart (DESIGN.md principle 2). Null when the file has no proposal.
+  proposalStatus: zProposalStatus.nullable(),
   // The newest extraction run's number (1 for the first read), null while the file has not been read yet.
   version: z.number().int().nullable(),
   canReextract: z.boolean(),

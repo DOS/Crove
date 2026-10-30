@@ -1,7 +1,22 @@
 // Bulk intake state (issue #314): what the Inbox shows for each file of an upload batch, and when it stops polling.
 import { describe, expect, it } from 'vitest';
 import type { BatchFile, FileStatus } from '@crove/kernel-contract';
-import { ARCHIVES_PER_POLL, MAX_INTAKE_FILES, applyBatch, eachLimited, fitsBatch, isSettled, newItem, pendingIds, pollGroups, precheck, summarize, uploaded } from '../src/lib/intake.ts';
+import {
+  ARCHIVES_PER_POLL,
+  MAX_INTAKE_FILES,
+  applyBatch,
+  eachLimited,
+  fitsBatch,
+  isSettled,
+  newItem,
+  pendingIds,
+  pollGroups,
+  precheck,
+  summarize,
+  undecidedIds,
+  uploaded,
+  withProposalStatuses,
+} from '../src/lib/intake.ts';
 
 const ID = (n: number) => `00000000-0000-7000-8000-${String(n).padStart(12, '0')}`;
 const status = (id: string, value: FileStatus['status'], error: string | null = null): FileStatus => ({
@@ -11,6 +26,7 @@ const status = (id: string, value: FileStatus['status'], error: string | null = 
   status: value,
   error,
   proposalId: null,
+  proposalStatus: null,
   version: 1,
   canReextract: false,
   createdAt: '2026-10-18T00:00:00.000Z',
@@ -47,6 +63,44 @@ describe('bulk intake state', () => {
     // A later answer that leaves a settled file out does not undo it.
     expect(applyBatch(items, []).map((i) => i.state)).toEqual(['proposed', 'duplicate', 'upload_failed']);
     expect(summarize(items)).toEqual({ total: 3, settled: 3, proposed: 1, duplicate: 1, failed: 1 });
+  });
+
+  it("carries a proposed file's proposal status, so its chip tells posted from waiting (#2009)", () => {
+    const item = uploaded(newItem('a', 'a.xml'), { fileId: ID(1), duplicate: false });
+    expect(item.proposalStatus).toBeNull();
+    const waiting = applyBatch([item], [{ ...batchFile(ID(1), 'proposed'), proposalId: ID(9), proposalStatus: 'pending' }]);
+    expect(waiting[0]).toMatchObject({ state: 'proposed', proposalStatus: 'pending' });
+    const posted = applyBatch(waiting, [{ ...batchFile(ID(1), 'proposed'), proposalId: ID(9), proposalStatus: 'executed' }]);
+    expect(posted[0]).toMatchObject({ state: 'proposed', proposalStatus: 'executed' });
+    // An archive's entries carry theirs too.
+    const zip = uploaded(newItem('z', 'z.zip'), { fileId: ID(2), duplicate: false });
+    const entry = { name: 'x.xml', outcome: 'stored' as const, reason: null, file: { ...status(ID(3), 'proposed'), proposalId: ID(8), proposalStatus: 'rejected' as const } };
+    const [opened] = applyBatch([zip], [batchFile(ID(2), 'expanded', [entry])]);
+    expect(opened?.entries[0]).toMatchObject({ state: 'proposed', proposalStatus: 'rejected' });
+  });
+
+  it('asks again about files whose proposal waits, and takes the decision made later (#2009)', () => {
+    const zip = uploaded(newItem('z', 'z.zip'), { fileId: ID(2), duplicate: false });
+    const waitingEntry = { name: 'x.xml', outcome: 'stored' as const, reason: null, file: { ...status(ID(3), 'proposed'), proposalId: ID(8), proposalStatus: 'pending' as const } };
+    const postedEntry = { name: 'y.xml', outcome: 'stored' as const, reason: null, file: { ...status(ID(4), 'proposed'), proposalId: ID(7), proposalStatus: 'executed' as const } };
+    const plain = uploaded(newItem('a', 'a.xml'), { fileId: ID(1), duplicate: false });
+    let items = applyBatch(
+      [plain, zip],
+      [
+        { ...batchFile(ID(1), 'proposed'), proposalId: ID(9), proposalStatus: 'pending' },
+        batchFile(ID(2), 'expanded', [waitingEntry, postedEntry]),
+      ],
+    );
+    // Settled, so no longer polled; the two still waiting are watched, the posted one is not.
+    expect(pendingIds(items)).toEqual([]);
+    expect(undecidedIds(items)).toEqual([ID(1), ID(3)]);
+    items = withProposalStatuses(items, [
+      { ...status(ID(1), 'proposed'), proposalId: ID(9), proposalStatus: 'executed' },
+      { ...status(ID(3), 'proposed'), proposalId: ID(8), proposalStatus: 'rejected' },
+    ]);
+    expect(items[0]).toMatchObject({ proposalStatus: 'executed' });
+    expect(items[1]?.entries.map((e) => e.proposalStatus)).toEqual(['rejected', 'executed']);
+    expect(undecidedIds(items)).toEqual([]);
   });
 
   it('turns an opened archive into its entries and polls it while an entry is being read', () => {
