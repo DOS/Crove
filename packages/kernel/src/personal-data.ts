@@ -178,6 +178,38 @@ export function personalDataProbe(value: string): Probe | null {
   return null;
 }
 
+// A person's email, phone or ID inside free text (#1948, shared with notes step N9, #1678): the TypeScript twins of
+// crove_kernel.pii_text_pattern, pii_text_matches and pii_text_redact (migration 20261106200000_crove_kernel_pii_text.sql
+// says how a value matches). piiTextPattern answers the same expression the database builds, so a definer and a check
+// in code agree; apps/kernel/test/pii-text-cases.ts runs one case table against both.
+export const PII_REDACTED = '[đã xóa]';
+
+export function piiTextPattern(value: string): string | null {
+  const trimmed = value.replace(/^\s+|\s+$/g, '');
+  if (/^[^\s@]+@[^\s@]+$/.test(trimmed)) {
+    return `(?<![a-z0-9._%+-])${trimmed.toLowerCase().replace(/[\].^$*+?()[{}|\\]/g, '\\$&')}(?![a-z0-9_-]|\\.[a-z0-9])`;
+  }
+  if (!/^[+(\d][\d\s().-]{7,24}$/.test(trimmed)) return null;
+  const digits = trimmed.replace(/\D/g, '');
+  if (digits.length < 8 || digits.length > 15) return null;
+  const forms = [digits];
+  if (digits.startsWith('84') && digits.length >= 10) forms.push(`0${digits.slice(2)}`);
+  else if (digits.startsWith('0')) forms.push(`84${digits.slice(1)}`);
+  // A form with 84 in front may be written with a +.
+  const alternatives = forms.map((form) => (form.startsWith('84') ? '\\+?' : '') + [...form].join('[\\s.()-]{0,2}'));
+  return `(?<![0-9])(?:${alternatives.join('|')})(?![0-9])`;
+}
+
+export function piiTextMatches(text: string | null, value: string): boolean {
+  const pattern = piiTextPattern(value);
+  return pattern !== null && text !== null && new RegExp(pattern, 'i').test(text);
+}
+
+export function piiTextRedact(text: string, value: string): string {
+  const pattern = piiTextPattern(value);
+  return pattern === null ? text : text.replace(new RegExp(pattern, 'gi'), PII_REDACTED);
+}
+
 // The columns a probe is compared with, and how. Phone numbers match with or without Vietnam's +84.
 function columnMatch(kind: PersonalDataKind, probe: Probe, column: RawBuilder<unknown>): RawBuilder<boolean> | null {
   if (probe.kind === 'email') {
