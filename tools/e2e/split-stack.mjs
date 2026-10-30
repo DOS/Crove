@@ -298,20 +298,25 @@ async function main() {
   const marker = { format: 'crove-verify-marker', version: 1, verifiedAt: verifiedAt.toISOString(), batches: 1, chainSha256: batch.chainSha256 };
   docker([...COMPOSE, 'exec', '-T', 'minio', 'mc', 'pipe', `local/${ARCHIVE_BUCKET}/${markerKey}`], { input: JSON.stringify(marker), stdio: ['pipe', 'pipe', 'pipe'] });
   // One probe of the real prober image, in the stack's network, with the environment docker-compose.split.yml gives it.
+  // --no-deps: the database and MinIO are up, and the one-shot migrate and minio-init that the prober depends on are not
+  // run a second time against a live stack.
   const probe = (extra = []) => {
-    const run = spawnSync('docker', [...COMPOSE, '--profile', 'prober', 'run', '--rm', '-T', ...extra, 'prober', 'prober'], { encoding: 'utf8', timeout: 120_000 });
-    return `${run.stdout ?? ''}${run.stderr ?? ''}`;
+    const run = spawnSync('docker', [...COMPOSE, '--profile', 'prober', 'run', '--rm', '-T', '--no-deps', ...extra, 'prober', 'prober'], { encoding: 'utf8', timeout: 120_000 });
+    const output = `${run.stdout ?? ''}${run.stderr ?? ''}`;
+    // The prober's own lines first: compose's progress lines would otherwise fill a failure message before them.
+    const lines = output.split('\n').filter((line) => line.startsWith('[prober]'));
+    return { output, summary: `exit ${run.status}${run.error ? ` (${run.error.message})` : ''}: ${(lines.length > 0 ? lines.join(' | ') : output.slice(-800)).slice(0, 1200)}` };
   };
   const ran = /\[prober\] (?:ok:|FAIL )/;
   const trusted = probe();
-  assert(ran.test(trusted), `the prober ran its checks (output: ${trusted.slice(0, 600)})`);
-  assert(!/FAIL archive_marker/.test(trusted), `the prober reads and trusts the marker with its own read-only user (output: ${trusted.slice(0, 600)})`);
+  assert(ran.test(trusted.output), `the prober ran its checks (${trusted.summary})`);
+  assert(!/FAIL archive_marker/.test(trusted.output), `the prober reads and trusts the marker with its own read-only user (${trusted.summary})`);
   log('the prober read the verification marker with its read-only user');
   // A marker the store wrote more than a second ago is too old for a one-second limit: the finding is about its age, so the
   // marker and the batch it names were read, not refused (a refused read says "could not read").
   await sleep(3_000);
   const old = probe(['-e', 'PROBER_MAX_ARCHIVE_MARKER_AGE_SECONDS=1']);
-  assert(/FAIL archive_marker: the WORM archive store wrote the newest verification marker/.test(old), `the prober judges the marker by its age (output: ${old.slice(0, 600)})`);
+  assert(/FAIL archive_marker: the WORM archive store wrote the newest verification marker/.test(old.output), `the prober judges the marker by its age (${old.summary})`);
   log('the prober judged the marker by the store\'s write time');
   log('passed');
 }

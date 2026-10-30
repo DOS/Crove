@@ -134,6 +134,10 @@ describe('pilot-check settings', () => {
     expect(withWorkerKey).toEqual([expect.stringContaining('PROBER_ARCHIVE_S3_DEFAULT_CHAIN=true')]);
     expect(JSON.stringify(withWorkerKey)).not.toContain(worker.S3_ACCESS_KEY_ID);
     expect(failing({ ...READY, ARCHIVE_STORE: 's3', ARCHIVE_S3_BUCKET: 'crove-archive', ...worker, PROBER_ARCHIVE_S3_DEFAULT_CHAIN: 'true' })).toEqual([]);
+    // A prober key that is the worker's key is the same mistake whatever Compose passes: reported.
+    expect(
+      failing({ ...READY, ARCHIVE_STORE: 's3', ARCHIVE_S3_BUCKET: 'crove-archive', ...worker, PROBER_ARCHIVE_S3_ACCESS_KEY_ID: worker.S3_ACCESS_KEY_ID, PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY: fake('reader-secret') }),
+    ).toEqual([expect.stringContaining("PROBER_ARCHIVE_S3_ACCESS_KEY_ID is the worker's S3_ACCESS_KEY_ID")]);
     expect(failing({ ...READY, ARCHIVE_STORE: 's3', ARCHIVE_S3_BUCKET: 'crove-archive', ...worker, PROBER_ARCHIVE_S3_ACCESS_KEY_ID: fake('reader'), PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY: fake('reader-secret') })).toEqual([]);
   });
 

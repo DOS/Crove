@@ -139,6 +139,14 @@ describe('health thresholds', () => {
       archiveVerifyAgeSeconds: 93_600,
     });
     expect(loadProberConfig({ PROBER_MAX_OUTBOX_AGE_SECONDS: '0' }).thresholds.outboxAgeSeconds).toBe(0);
+    // The same for the counts and percentages: an empty .env line is the default, not a check turned off.
+    expect(
+      loadProberConfig({ PROBER_MAX_NOTIFY_QUEUE_PERCENT: '', PROBER_MAX_EXTRACTION_FAILURES: ' ', PROBER_MAX_DEAD_LETTERS: '', PROBER_EXTRACTION_WINDOW_SECONDS: '', ALERT_REPEAT_MINUTES: '', PROBER_AUTH_MISSES: '' }),
+    ).toMatchObject({
+      thresholds: { notifyQueuePercent: 50, extractionFailures: 2, deadLetters: 0, extractionWindowSeconds: 3600 },
+      repeatSeconds: 3600,
+      authMisses: 2,
+    });
   });
 
   it('reports a WORM verification older than its limit and an archive behind its limit, and neither when off or unknown (#1997)', () => {

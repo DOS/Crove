@@ -54,7 +54,7 @@ const schema = z.object({
   ...WEBHOOK_ENV,
   // While the same problem lasts, notify again every this many minutes; 0 notifies only when it starts, changes
   // or ends.
-  ALERT_REPEAT_MINUTES: z.coerce.number().int().min(0).max(10_080).default(60),
+  ALERT_REPEAT_MINUTES: z.preprocess(unsetWhenBlank, z.coerce.number().int().min(0).max(10_080).default(60)),
   // An outside heartbeat monitor's ping URL (Healthchecks.io, Uptime Kuma push, Better Stack heartbeat): a GET after
   // each probe that read the database and delivered what it owed. Like the webhook, it usually carries a secret.
   PROBER_HEARTBEAT_URL: optional.pipe(z.url({ protocol: /^https?$/ }).optional()),
@@ -67,11 +67,11 @@ const schema = z.object({
   PROBER_MAX_OUTBOX_AGE_SECONDS: seconds(300),
   PROBER_MAX_JOB_AGE_SECONDS: seconds(900),
   PROBER_MAX_HEARTBEAT_AGE_SECONDS: seconds(120),
-  PROBER_MAX_DEAD_LETTERS: z.coerce.number().int().min(0).max(10_000).default(0),
+  PROBER_MAX_DEAD_LETTERS: z.preprocess(unsetWhenBlank, z.coerce.number().int().min(0).max(10_000).default(0)),
   // How full the cluster's NOTIFY queue may be, in percent (issue #281). It fills when a listening session stops
   // reading (one stuck in a transaction, say); once full, every commit that sends a NOTIFY fails, including writes to
   // the tables that send stream hints. PostgreSQL itself starts warning in its log at 50.
-  PROBER_MAX_NOTIFY_QUEUE_PERCENT: z.coerce.number().int().min(0).max(100).default(50),
+  PROBER_MAX_NOTIFY_QUEUE_PERCENT: z.preprocess(unsetWhenBlank, z.coerce.number().int().min(0).max(100).default(50)),
   // The WORM archive (#1997): the nightly verification older than this (26 h: a day and the slack of one late run), or
   // the oldest audit event not yet archived older than this. The archiver keeps ARCHIVE_LAG_SECONDS
   // (the worker's value, 600 s by default) on purpose, so the lag limit defaults to the larger of 3600 s and that plus
@@ -82,8 +82,8 @@ const schema = z.object({
   // AI document extraction (#1998): more than this many readings in PROBER_EXTRACTION_WINDOW_SECONDS whose every
   // attempt failed (the AI provider refused or did not answer, the parser sandbox was down) alert; a document that
   // cannot be read never does. 0 turns the check off.
-  PROBER_MAX_EXTRACTION_FAILURES: z.coerce.number().int().min(0).max(10_000).default(2),
-  PROBER_EXTRACTION_WINDOW_SECONDS: z.coerce.number().int().min(60).max(86_400).default(3600),
+  PROBER_MAX_EXTRACTION_FAILURES: z.preprocess(unsetWhenBlank, z.coerce.number().int().min(0).max(10_000).default(2)),
+  PROBER_EXTRACTION_WINDOW_SECONDS: z.preprocess(unsetWhenBlank, z.coerce.number().int().min(60).max(86_400).default(3600)),
   // Failed jobs count for this long. Default: the probe interval plus 60 s with --every (each dead letter alerts
   // once, or twice when it lands in the overlap, never zero times), 3600 otherwise. With cron, set it to the
   // cron interval plus 60.
@@ -99,8 +99,8 @@ const schema = z.object({
   // The publishable key a hosted Supabase project asks for on every request (sent as `apikey`); not a secret.
   PUBLIC_AUTH_ANON_KEY: optional,
   // How many probes in a row Auth must fail to answer before it alerts (one blip is not an outage); 0: no Auth check.
-  PROBER_AUTH_MISSES: z.coerce.number().int().min(0).max(100).default(2),
-  PROBER_AUTH_TIMEOUT_SECONDS: z.coerce.number().int().min(1).max(60).default(10),
+  PROBER_AUTH_MISSES: z.preprocess(unsetWhenBlank, z.coerce.number().int().min(0).max(100).default(2)),
+  PROBER_AUTH_TIMEOUT_SECONDS: z.preprocess(unsetWhenBlank, z.coerce.number().int().min(1).max(60).default(10)),
 });
 
 // The verification marker check's own settings (#2082), parsed apart from the rest (#2094): a bad one disables only that
@@ -269,7 +269,9 @@ function archiveMarkerSettings(env: NodeJS.ProcessEnv): ProberConfig['archiveMar
         workerKey: true,
         error:
           "ARCHIVE_STORE=s3 and S3_ACCESS_KEY_ID (the worker's key) is set, but the prober's own PROBER_ARCHIVE_S3_ACCESS_KEY_ID and PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY are not: " +
-          "set them to a read-only key, or unset S3_ACCESS_KEY_ID in the prober's environment and set PROBER_ARCHIVE_S3_DEFAULT_CHAIN=true to use the default credential chain",
+          (defaultChain
+            ? "unset S3_ACCESS_KEY_ID in the prober's environment (PROBER_ARCHIVE_S3_DEFAULT_CHAIN=true is set, but the worker's key in the environment is refused all the same), or set the prober's own read-only key"
+            : "set them to a read-only key, or unset S3_ACCESS_KEY_ID in the prober's environment and set PROBER_ARCHIVE_S3_DEFAULT_CHAIN=true to use the default credential chain"),
       };
     }
     // No key of its own: the default credential chain only when asked for (#2098). It resolves to whatever the process
