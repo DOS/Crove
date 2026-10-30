@@ -25,8 +25,13 @@ import {
   restoreAckKey,
   restoreAckStoreAlert,
   restoreReport,
+  readVerifyMarker,
+  VERIFY_MARKER_PREFIX,
   verifyArchive,
+  verifyMarkerExpired,
+  verifyMarkerKey,
   writeArchive,
+  writeVerifyMarker,
   type ArchiveBatch,
   type ArchiveHigh,
   type RestoreAck,
@@ -137,6 +142,18 @@ describe('S3 archive store versions (#2020)', () => {
         ['restores/v1/000000000002.json', 1],
       ]),
     );
+    // Every key's write time from one listing (#2082): its oldest version, a key with only a delete marker left out.
+    sent.length = 0;
+    expect(await store.writtenTimes('restores/v1/')).toEqual(
+      new Map([
+        ['restores/v1/000000000001.json', at(10)],
+        ['restores/v1/000000000001.json.bak', at(1)],
+      ]),
+    );
+    expect(sent.map((s) => s.input)).toEqual([
+      { Bucket: 'b', Prefix: 'restores/v1/', KeyMarker: undefined, VersionIdMarker: undefined },
+      { Bucket: 'b', Prefix: 'restores/v1/', KeyMarker: 'k', VersionIdMarker: 'v' },
+    ]);
     // A key with no version has no write time.
     const empty = new S3ArchiveStore({ client: fakeS3(() => ({ Versions: [], IsTruncated: false })).client, bucket: 'b', lockMode: 'COMPLIANCE', retentionDays: 1 });
     expect(await empty.writtenAt('chain/v1/000000000009.json')).toBeNull();
@@ -1043,6 +1060,107 @@ describe('series highs and the restore report (#2007)', () => {
     expect(await restoreAckStoreAlert(writableStore(batches, { [restoreAckKey(1)]: 'not json' }), at(1))).toContain(restoreAckKey(1));
     const { writtenAt: _blindAt, ...blindStore } = store();
     expect(await restoreAckStoreAlert(blindStore, at(30))).toContain('at a time the store cannot tell');
+  });
+
+  it('writes a verification marker for a run that passed, with the chain head and no tenant data, and reads it back from the store alone (#2082)', async () => {
+    const batches = chainOf([
+      { version: 7, rows: keptRows, highs: [high('5')] },
+      { version: 7, rows: lostRows, highs: [high('6')] },
+    ]);
+    const db = dbOf({ batches, recorded: 2, present: { [EPOCH]: keptRows, [at(1)]: lostRows }, highs: { [EPOCH]: [high('5')], [at(1)]: [high('6')] }, series: [{ series_id: SERIES, next_number: '7' }] });
+    const store = writableStore(batches);
+    const passed = await verifyArchive(db, store);
+    expect(passed.problems).toEqual([]);
+    expect(passed).toMatchObject({ ok: true, batches: 2, headChainSha256: batches[1]!.chainSha256 });
+
+    // Before the first marker, the store says when it wrote its first batch, so the prober can tell a new deployment
+    // from a verification that never passed.
+    expect(await readVerifyMarker(store)).toEqual({ key: null, writtenAt: null, problem: null, rewritten: [], firstBatchAt: await store.writtenAt!(archiveKey(1)) });
+
+    const now = new Date('2026-10-30T02:15:07.123Z');
+    const key = await writeVerifyMarker(store, passed, now);
+    expect(key).toBe('verify/v1/20261030T021507Z.json');
+    expect(key).toBe(verifyMarkerKey(now));
+    // Only the time, the batch count and the chain hash: nothing of an org.
+    const body = JSON.parse(new TextDecoder().decode(store.objects.get(key!)!)) as Record<string, unknown>;
+    expect(body).toEqual({ format: 'crove-verify-marker', version: 1, verifiedAt: now.toISOString(), batches: 2, chainSha256: batches[1]!.chainSha256 });
+    expect(JSON.stringify(body)).not.toContain(ORG);
+    // Create-only: a second run in the same second writes nothing over it.
+    expect(await writeVerifyMarker(store, passed, now)).toBeNull();
+    // A run that did not pass writes none.
+    expect(await writeVerifyMarker(store, { ...passed, ok: false }, new Date('2026-10-31T02:15:07Z'))).toBeNull();
+    expect(await store.list(VERIFY_MARKER_PREFIX)).toEqual([key]);
+
+    // The prober reads the newest marker and the store's own write time for it, not the time the marker states.
+    const read = await readVerifyMarker(store);
+    expect(read).toEqual({ key, writtenAt: await store.writtenAt!(key!), problem: null, rewritten: [], firstBatchAt: null });
+
+    // A newer marker that names a chain hash the store's batch does not hold, or that does not parse, is a problem.
+    const forged = writableStore(batches, {
+      [key!]: body,
+      'verify/v1/20261031T021507Z.json': { ...body, chainSha256: batches[0]!.chainSha256 },
+    });
+    expect((await readVerifyMarker(forged)).problem).toBe('it names a chain hash that batch 2 in the store does not hold');
+    const beyond = writableStore(batches, { 'verify/v1/20261031T021507Z.json': { ...body, batches: 3 } });
+    expect((await readVerifyMarker(beyond)).problem).toBe('it names a chain hash that batch 3 in the store does not hold');
+    const garbled = writableStore(batches, { 'verify/v1/20261031T021507Z.json': 'not json' });
+    expect((await readVerifyMarker(garbled)).problem).toBe('it does not read as a verification marker');
+    // A store with no batch yet: a marker of an empty run names no chain hash, and holds.
+    const empty = writableStore([]);
+    expect(await writeVerifyMarker(empty, { ...passed, batches: 0, headChainSha256: null }, now)).toBe(key);
+    expect((await readVerifyMarker(empty)).problem).toBeNull();
+  });
+
+  it('reports a marker key with more than one version, in the verifier and from the store alone, and leaves an expired one and the restore check alone (#2082)', async () => {
+    const batches = chainOf([
+      { version: 7, rows: keptRows, highs: [high('5')] },
+      { version: 7, rows: lostRows, highs: [high('6')] },
+    ]);
+    const db = dbOf({ batches, recorded: 2, present: { [EPOCH]: keptRows, [at(1)]: lostRows }, highs: { [EPOCH]: [high('5')], [at(1)]: [high('6')] }, series: [{ series_id: SERIES, next_number: '7' }] });
+    const now = new Date('2026-10-30T12:00:00Z');
+    const options = { now: () => now };
+    const key = 'verify/v1/20261030T020000Z.json';
+    const body = { format: 'crove-verify-marker', version: 1, verifiedAt: '2026-10-30T02:00:00.000Z', batches: 2, chainSha256: batches[1]!.chainSha256 };
+    const base = writableStore(batches, { [key]: body });
+    // A store that keeps versions: the given counts per key (delete markers included, as S3 lists them).
+    const counted = (versions: Record<string, number>): ArchiveStore & { objects: Map<string, Uint8Array> } => ({
+      ...base,
+      versionCounts: async (prefix) => new Map(Object.entries(versions).filter(([k]) => k.startsWith(prefix))),
+    });
+
+    // One version each: nothing to report, from the verifier or from the store alone.
+    const single = counted({ [key]: 1, [archiveKey(1)]: 1, [archiveKey(2)]: 1 });
+    expect(await verifyArchive(db, single, options)).toMatchObject({ ok: true, problems: [] });
+    expect((await readVerifyMarker(single, now)).rewritten).toEqual([]);
+
+    // A marker written over (two versions) and another deleted (a delete marker over its version): both are findings.
+    const other = 'verify/v1/20261029T020000Z.json';
+    const rewritten = counted({ [key]: 2, [other]: 2, [archiveKey(1)]: 1, [archiveKey(2)]: 1 });
+    expect(await verifyArchive(db, rewritten, options)).toMatchObject({
+      ok: false,
+      problems: [
+        { code: 'object_versions', seq: 0, ref: key },
+        { code: 'object_versions', seq: 0, ref: other },
+      ],
+    });
+    expect(await readVerifyMarker(rewritten, now)).toMatchObject({ key, rewritten: [other, key] });
+    // The restore check is about what a restore restores, not about markers.
+    expect((await restoreReport(db, rewritten)).problems.filter((p) => p.code === 'object_versions')).toEqual([]);
+
+    // A deleted newest marker is gone from the listing, but its delete marker still counts.
+    const deleted = { ...counted({ [key]: 2 }), list: async (prefix: string) => (prefix.startsWith('verify/') ? [] : base.list(prefix)) };
+    expect(await readVerifyMarker(deleted, now)).toMatchObject({ key: null, rewritten: [key] });
+
+    // A marker past its 400 days may have been expired by a lifecycle rule, which leaves a delete marker: not reported.
+    // One inside them is, and so is one whose key names no time.
+    const expired = 'verify/v1/20250901T020000Z.json';
+    const lastYear = 'verify/v1/20251001T020000Z.json';
+    const lifecycle = counted({ [key]: 1, [expired]: 2, [lastYear]: 2 });
+    expect((await verifyArchive(db, lifecycle, options)).problems).toEqual([{ code: 'object_versions', seq: 0, ref: lastYear }]);
+    expect((await readVerifyMarker(lifecycle, now)).rewritten).toEqual([lastYear]);
+    expect(verifyMarkerExpired(expired, now)).toBe(true);
+    expect(verifyMarkerExpired(lastYear, now)).toBe(false);
+    expect(verifyMarkerExpired('verify/v1/garbled.json', now)).toBe(false);
   });
 
   it('accepts a row lost with a time before the backup point, as a transaction still open at the backup is (#2020)', async () => {

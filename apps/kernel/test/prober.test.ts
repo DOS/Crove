@@ -5,6 +5,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { memoryAlertGate } from '../src/alert-gate.ts';
 import { alertPayload, deliverAlert } from '../src/alert.ts';
 import { EXIT, checkAuth, evaluateHealth, initialAuthState, loadProberConfig, parseProberArgs, probeOnce, runProber, type HealthSnapshot, type ProberConfig } from '../src/prober.ts';
+import type { AlertGate } from '../src/alert-gate.ts';
+import { archiveKey, type ArchiveStore } from '../src/worm.ts';
 
 const SECRET_HOOK = 'https://hooks.example.test/services/T000/B000/secret-token-123';
 const SECRET_PING = 'https://hc.example.test/ping/secret-check-456';
@@ -650,5 +652,210 @@ describe('test alert', () => {
       ok: false,
       error: 'webhook at hooks.example.test failed: The operation was aborted due to timeout',
     });
+  });
+});
+
+describe('WORM verification marker (#2082)', () => {
+  const DAY = 86_400_000;
+  const now = new Date('2026-10-30T12:00:00Z');
+  const marker = (verifiedAt: Date) => ({ format: 'crove-verify-marker', version: 1, verifiedAt: verifiedAt.toISOString(), batches: 0, chainSha256: null });
+  // A store holding objects the store wrote at the given times; `failing` makes every read throw, as a refused key does.
+  function storeOf(objects: Record<string, { body: unknown; at: Date }>, failing = false): ArchiveStore {
+    const fail = () => {
+      if (failing) throw new Error('AccessDenied: s3:ListBucketVersions\nnot allowed');
+    };
+    return {
+      put: async () => {
+        throw new Error('the prober never writes');
+      },
+      get: async (key) => {
+        fail();
+        const o = objects[key];
+        return o ? new TextEncoder().encode(typeof o.body === 'string' ? o.body : JSON.stringify(o.body)) : null;
+      },
+      list: async (prefix) => {
+        fail();
+        return Object.keys(objects)
+          .filter((k) => k.startsWith(prefix))
+          .sort();
+      },
+      writtenAt: async (key) => objects[key]?.at ?? null,
+      describe: () => 'memory',
+    };
+  }
+  const settings = { maxAgeSeconds: 93_600, store: { kind: 'local' as const, dir: '/data/archive' } };
+  const fresh = storeOf({ 'verify/v1/20261030T020000Z.json': { body: marker(new Date(now.getTime() - DAY / 2)), at: new Date(now.getTime() - DAY / 2) } });
+  // The marker says it is new; the store wrote it two days ago, and the store's time is the one that counts.
+  const stale = storeOf({ 'verify/v1/20261028T020000Z.json': { body: marker(now), at: new Date(now.getTime() - 2 * DAY) } });
+  // A gate the database's owner forged: it reports every problem as already notified.
+  const forged: AlertGate = { decide: async () => ({ decision: 'suppressed', previousProblem: null, problemSince: null, lastNotifiedAt: null }), settle: async () => {} };
+
+  it('reads the store settings: off by default and at 0, the archive directory, or the bucket with a read-only key of its own', () => {
+    expect(loadProberConfig({}).archiveMarker).toBeUndefined();
+    expect(loadProberConfig({ ARCHIVE_DIR: '/data/archive' }).archiveMarker).toEqual(settings);
+    expect(loadProberConfig({ ARCHIVE_DIR: '/data/archive', PROBER_MAX_ARCHIVE_MARKER_AGE_SECONDS: '0' }).archiveMarker).toBeUndefined();
+    // The worker's own key is in the environment of a prober run from the shared .env: it must never be used.
+    const s3 = { ARCHIVE_STORE: 's3', ARCHIVE_S3_BUCKET: 'archive', S3_ENDPOINT: 'https://s3.example.test', S3_FORCE_PATH_STYLE: 'true', S3_ACCESS_KEY_ID: 'worker', S3_SECRET_ACCESS_KEY: 'w' };
+    expect(loadProberConfig({ ...s3, PROBER_ARCHIVE_S3_ACCESS_KEY_ID: 'reader', PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY: 'r' }).archiveMarker).toEqual({
+      maxAgeSeconds: 93_600,
+      store: { kind: 's3', bucket: 'archive', region: 'us-east-1', endpoint: 'https://s3.example.test', forcePathStyle: true, accessKeyId: 'reader', secretAccessKey: 'r' },
+    });
+    // Neither of the prober's pair set: the default credential chain, never the worker's S3_* key.
+    expect(loadProberConfig(s3).archiveMarker).toEqual({
+      maxAgeSeconds: 93_600,
+      store: { kind: 's3', bucket: 'archive', region: 'us-east-1', endpoint: 'https://s3.example.test', forcePathStyle: true, accessKeyId: undefined, secretAccessKey: undefined },
+    });
+    // A setting the check cannot use is reported as one, and refused at the start of the probes (see below).
+    expect(loadProberConfig({ ARCHIVE_STORE: 's3' }).archiveMarker).toEqual({ maxAgeSeconds: 93_600, error: 'ARCHIVE_STORE=s3 needs ARCHIVE_S3_BUCKET' });
+    expect(loadProberConfig({ ...s3, PROBER_ARCHIVE_S3_ACCESS_KEY_ID: 'reader' }).archiveMarker).toMatchObject({ error: expect.stringMatching(/PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY/) });
+    expect(loadProberConfig({ ...s3, PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY: 'r' }).archiveMarker).toMatchObject({ error: expect.stringMatching(/PROBER_ARCHIVE_S3_ACCESS_KEY_ID/) });
+  });
+
+  it('is quiet while the newest marker is recent by the store, and alerts once when it grows old, through a gate outside the database', async () => {
+    const io = capture();
+    const hook = webhook();
+    const cfg = config({ archiveMarker: settings });
+    const deps = { ...io, fetch: hook.fetch, readHealth: async () => healthy, now: () => now, markerGate: memoryAlertGate(3600) };
+    expect(await probeOnce(cfg, { ...deps, archiveStore: fresh })).toBe(EXIT.ok);
+    expect(hook.calls).toEqual([]);
+
+    const statuses: unknown[] = [];
+    const writeStatus = async (_path: string, status: unknown) => {
+      statuses.push(status);
+    };
+    // The database's own gate says it was notified already: the marker alert goes out all the same.
+    expect(await probeOnce({ ...cfg, statusFile: '/data/status/probe.json' }, { ...deps, gate: forged, archiveStore: stale, writeStatus })).toBe(EXIT.unhealthy);
+    expect(hook.calls).toHaveLength(1);
+    expect(hook.body(0).crove.findings).toEqual([
+      {
+        check: 'archive_marker',
+        value: 172_800,
+        threshold: 93_600,
+        message: 'the WORM archive store wrote the newest verification marker 48 h ago (limit 26 h): the nightly verification has not passed since, or never finished (docs/runbooks/worm-archive.md)',
+      },
+    ]);
+    expect(statuses).toEqual([expect.objectContaining({ databaseOk: true, failing: ['archive_marker'] })]);
+    // Once per repeat window, like every alert.
+    expect(await probeOnce(cfg, { ...deps, archiveStore: stale })).toBe(EXIT.unhealthy);
+    expect(hook.calls).toHaveLength(1);
+    // A new marker resolves it.
+    expect(await probeOnce(cfg, { ...deps, archiveStore: fresh })).toBe(EXIT.ok);
+    expect(hook.body(1).crove).toMatchObject({ kind: 'resolved', previous: ['archive_marker'] });
+  });
+
+  it('alerts when the database cannot be read too, and when the store cannot be read, on one line', async () => {
+    const io = capture();
+    const hook = webhook();
+    const down = async (): Promise<HealthSnapshot> => {
+      throw new Error('connect ECONNREFUSED');
+    };
+    expect(await probeOnce(config({ archiveMarker: settings }), { ...io, fetch: hook.fetch, readHealth: down, now: () => now, archiveStore: stale })).toBe(EXIT.probeFailed);
+    expect(hook.calls.map((_, i) => hook.body(i).crove.findings[0].check)).toEqual(['archive_marker', 'probe']);
+
+    const refused = await probeOnce(config({ archiveMarker: settings }), { ...io, fetch: hook.fetch, readHealth: async () => healthy, now: () => now, archiveStore: storeOf({}, true) });
+    expect(refused).toBe(EXIT.unhealthy);
+    expect(hook.body(2).crove.findings[0]).toMatchObject({
+      check: 'archive_marker',
+      value: null,
+      message: 'the prober could not read the verification marker from the WORM archive store: AccessDenied: s3:ListBucketVersions not allowed (docs/runbooks/worm-archive.md)',
+    });
+
+    // A store that never answers holds up neither the database checks nor the status file.
+    const hung: ArchiveStore = { ...storeOf({}), list: () => new Promise<string[]>(() => {}) };
+    const statuses: unknown[] = [];
+    const writeStatus = async (_path: string, status: unknown) => {
+      statuses.push(status);
+    };
+    const sick = { ...healthy, worker_heartbeat_age_seconds: 900 };
+    const code = await probeOnce(config({ archiveMarker: settings, statusFile: '/data/status/probe.json' }), {
+      ...io,
+      fetch: hook.fetch,
+      readHealth: async () => sick,
+      now: () => now,
+      archiveStore: hung,
+      markerTimeoutMs: 20,
+      writeStatus,
+    });
+    expect(code).toBe(EXIT.unhealthy);
+    expect(hook.body(3).crove.findings[0].message).toBe('the prober could not read the verification marker from the WORM archive store: no answer within 0 s (docs/runbooks/worm-archive.md)');
+    expect(hook.body(4).crove.findings.map((f: { check: string }) => f.check)).toEqual(['heartbeat']);
+    expect(statuses).toEqual([expect.objectContaining({ failing: ['heartbeat', 'archive_marker'] })]);
+  });
+
+  it('refuses to run the probes with marker settings it cannot use, and still sends the backup and test alerts (#2082)', async () => {
+    const io = capture();
+    const hook = webhook();
+    const env = { PROBER_DATABASE_URL: 'postgres://crove_prober:pw@db:5432/postgres', ALERT_WEBHOOK_URL: SECRET_HOOK, ARCHIVE_STORE: 's3' };
+    const deps = { ...io, fetch: hook.fetch, readHealth: async () => healthy };
+    // One probe a run (cron) and the loop both stop at the start, before any probe or alert.
+    expect(await runProber([], env, deps)).toBe(EXIT.probeFailed);
+    expect(await runProber(['--every', '60'], env, deps)).toBe(EXIT.probeFailed);
+    expect(io.err).toEqual(Array(2).fill('[prober] invalid prober configuration: ARCHIVE_STORE=s3 needs ARCHIVE_S3_BUCKET'));
+    expect(hook.calls).toEqual([]);
+    // The backup failure and the test alert never depend on the marker settings.
+    expect(await runProber(['--backup-failed', 'disk full'], env, deps)).toBe(EXIT.ok);
+    expect(await runProber(['--test-alert'], env, deps)).toBe(EXIT.ok);
+    expect(hook.calls).toHaveLength(2);
+  });
+
+  it('reports a marker key the store keeps more than one version of, but not one a lifecycle rule expired (#2082)', async () => {
+    const io = capture();
+    const hook = webhook();
+    const versioned = (counts: Record<string, number>): ArchiveStore => ({ ...fresh, versionCounts: async () => new Map(Object.entries(counts)) });
+    const run = (store: ArchiveStore) =>
+      probeOnce(config({ archiveMarker: settings }), { ...io, fetch: hook.fetch, readHealth: async () => healthy, now: () => now, archiveStore: store, markerGate: memoryAlertGate(3600) });
+    const newest = 'verify/v1/20261030T020000Z.json';
+    expect(await run(versioned({ [newest]: 1 }))).toBe(EXIT.ok);
+    expect(await run(versioned({ [newest]: 2, 'verify/v1/20261029T020000Z.json': 2 }))).toBe(EXIT.unhealthy);
+    expect(hook.body(0).crove.findings).toEqual([
+      {
+        check: 'archive_marker',
+        value: null,
+        threshold: 93_600,
+        message:
+          'the WORM archive store keeps more than one version of verification marker verify/v1/20261029T020000Z.json, verify/v1/20261030T020000Z.json: a marker was written over, or deleted and written again (docs/runbooks/worm-archive.md)',
+      },
+    ]);
+    // A marker past its 400 days leaves a delete marker when a lifecycle rule expires it: not a finding.
+    expect(await run(versioned({ [newest]: 1, 'verify/v1/20250901T020000Z.json': 2 }))).toBe(EXIT.ok);
+    expect(hook.calls).toHaveLength(1);
+  });
+
+  it("reports settings it cannot use, and picks the newest marker by the store's time, not by its key", async () => {
+    const io = capture();
+    const hook = webhook();
+    const misconfigured = { maxAgeSeconds: 93_600, error: 'ARCHIVE_STORE=s3 needs ARCHIVE_S3_BUCKET' };
+    expect(await probeOnce(config({ archiveMarker: misconfigured }), { ...io, fetch: hook.fetch, readHealth: async () => healthy, now: () => now })).toBe(EXIT.unhealthy);
+    expect(hook.body(0).crove.findings[0].message).toBe(
+      'the prober cannot check the WORM verification marker: ARCHIVE_STORE=s3 needs ARCHIVE_S3_BUCKET (docs/runbooks/worm-archive.md)',
+    );
+    // A marker named from a clock that ran a year ahead, written two days ago, and today's, named from the right clock:
+    // today's counts.
+    const skewed = storeOf({
+      'verify/v1/20271030T020000Z.json': { body: marker(now), at: new Date(now.getTime() - 2 * DAY) },
+      'verify/v1/20261030T020000Z.json': { body: marker(now), at: new Date(now.getTime() - DAY / 2) },
+    });
+    expect(await probeOnce(config({ archiveMarker: settings }), { ...io, fetch: hook.fetch, readHealth: async () => healthy, now: () => now, archiveStore: skewed })).toBe(EXIT.ok);
+  });
+
+  it('reports a marker it cannot trust, and with no marker yet waits the limit after the first batch and after the probe loop started', async () => {
+    const io = capture();
+    const run = async (store: ArchiveStore, startedAt?: Date) => {
+      const hook = webhook();
+      const code = await probeOnce(config({ archiveMarker: settings }), { ...io, fetch: hook.fetch, readHealth: async () => healthy, now: () => now, archiveStore: store, ...(startedAt ? { startedAt } : {}) });
+      return { code, finding: hook.calls.length ? hook.body(0).crove.findings[0] : null };
+    };
+    const twoDays = new Date(now.getTime() - 2 * DAY);
+    const batch = { [archiveKey(1)]: { body: 'a batch', at: twoDays } };
+    // A marker naming a batch the store does not hold.
+    const beyond = await run(storeOf({ ...batch, 'verify/v1/20261030T020000Z.json': { body: { ...marker(now), batches: 2, chainSha256: 'a'.repeat(64) }, at: now } }));
+    expect(beyond.finding?.message).toMatch(/^the newest WORM verification marker verify\/v1\/20261030T020000Z\.json cannot be trusted: it names a chain hash that batch 2/);
+    // No marker, a batch two days old: no verification ever passed.
+    expect((await run(storeOf(batch))).finding?.message).toMatch(/^the WORM archive store holds no verification marker, and wrote its first batch 48 h ago/);
+    // ... unless the probe loop started less than the limit ago (the first nightly run after an upgrade writes one).
+    expect(await run(storeOf(batch), new Date(now.getTime() - DAY))).toEqual({ code: EXIT.ok, finding: null });
+    expect((await run(storeOf(batch), twoDays)).code).toBe(EXIT.unhealthy);
+    // Nothing archived yet: nothing to verify.
+    expect(await run(storeOf({}))).toEqual({ code: EXIT.ok, finding: null });
   });
 });

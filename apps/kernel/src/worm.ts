@@ -78,6 +78,8 @@ export interface ArchiveStore {
   // When the store wrote the object, by its own clock, or null when there is none: S3's LastModified, which the writer
   // cannot set, or the file's modification time. The restore acknowledgements are checked against it (#2020).
   writtenAt?(key: string): Promise<Date | null>;
+  // writtenAt of every key under the prefix, in one listing where the store can (#2082).
+  writtenTimes?(prefix: string): Promise<Map<string, Date>>;
   // How many versions each key under the prefix has, delete markers included, where the store keeps versions (S3 with
   // Object Lock). A WORM object has exactly one: a second means a PUT over it, or a delete (#2020).
   versionCounts?(prefix: string): Promise<Map<string, number>>;
@@ -138,6 +140,15 @@ export class LocalArchiveStore implements ArchiveStore {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
       throw error;
     }
+  }
+
+  async writtenTimes(prefix: string): Promise<Map<string, Date>> {
+    const times = new Map<string, Date>();
+    for (const key of await this.list(prefix)) {
+      const at = await this.writtenAt(key);
+      if (at) times.set(key, at);
+    }
+    return times;
   }
 
   describe(): string {
@@ -243,6 +254,23 @@ export class S3ArchiveStore implements ArchiveStore {
       [keyMarker, versionMarker] = page.IsTruncated ? [page.NextKeyMarker, page.NextVersionIdMarker] : [undefined, undefined];
     } while (keyMarker !== undefined);
     return oldest;
+  }
+
+  // writtenAt of every key under the prefix, from one listing of its versions.
+  async writtenTimes(prefix: string): Promise<Map<string, Date>> {
+    const times = new Map<string, Date>();
+    let keyMarker: string | undefined;
+    let versionMarker: string | undefined;
+    do {
+      const page = await this.client.send(new ListObjectVersionsCommand({ Bucket: this.bucket, Prefix: prefix, KeyMarker: keyMarker, VersionIdMarker: versionMarker }));
+      for (const v of page.Versions ?? []) {
+        if (!v.Key || !v.LastModified) continue;
+        const known = times.get(v.Key);
+        if (!known || v.LastModified < known) times.set(v.Key, v.LastModified);
+      }
+      [keyMarker, versionMarker] = page.IsTruncated ? [page.NextKeyMarker, page.NextVersionIdMarker] : [undefined, undefined];
+    } while (keyMarker !== undefined);
+    return times;
   }
 
   describe(): string {
@@ -566,6 +594,8 @@ export interface ArchiveVerification {
   restoreAck: number | null;
   restoreAckWrittenAt: string | null;
   alertRestoreAck: boolean;
+  // The chain hash of the newest batch the run read (null with none): what its verification marker names (#2082).
+  headChainSha256: string | null;
 }
 
 // After a restore (#2020): the rows a restore lost, written to the archive store by the restore check
@@ -649,12 +679,20 @@ function parseRestoreAck(bytes: Uint8Array): RestoreAck | null {
 const refKey = ([seq, ref]: [number, string]) => `${seq} ${ref}`;
 
 // Every batch and acknowledgement key with more than one version, where the store keeps versions: a PUT over a WORM
-// object, or a delete, which Object Lock keeps in view but does not stop with the writer's key (#2020).
-async function multiVersionProblems(store: ArchiveStore): Promise<ArchiveProblem[]> {
+// object, or a delete, which Object Lock keeps in view but does not stop with the writer's key (#2020). With `markersAt`
+// the verification markers inside their retention too (#2082): the prober's freshness rests on the newest, so one written
+// over, or deleted and written again, is a finding; an older one may have been expired by a lifecycle rule. The restore
+// check leaves markers out: they are no part of what a restore restores.
+async function multiVersionProblems(store: ArchiveStore, markersAt?: Date): Promise<ArchiveProblem[]> {
   if (!store.versionCounts) return [];
   const problems: ArchiveProblem[] = [];
   for (const prefix of [ARCHIVE_PREFIX, RESTORE_ACK_PREFIX]) {
     for (const [key, count] of await store.versionCounts(prefix)) if (count > 1) problems.push({ code: 'object_versions', seq: 0, ref: key });
+  }
+  if (markersAt) {
+    for (const [key, count] of await store.versionCounts(VERIFY_MARKER_PREFIX)) {
+      if (count > 1 && !verifyMarkerExpired(key, markersAt)) problems.push({ code: 'object_versions', seq: 0, ref: key });
+    }
   }
   return problems;
 }
@@ -786,7 +824,7 @@ export async function verifyArchive(
   // reads as one (restoreHolds).
   const acks = await restoreAckChain(store);
   for (const problem of acks.problems) note(problem);
-  for (const problem of await multiVersionProblems(store)) note(problem);
+  for (const problem of await multiVersionProblems(store, (options.now ?? (() => new Date()))())) note(problem);
   const excuses = new Set((acks.ack?.refs ?? []).map(refKey));
   const listed: Array<{ seq: number; ref: string; code: 'row_missing' | 'row_changed' }> = [];
   const windows = new Map<number, ArchiveBatch['window']>();
@@ -919,6 +957,7 @@ export async function verifyArchive(
     restoreAck,
     restoreAckWrittenAt: ackWritten ? ackWritten.toISOString() : null,
     alertRestoreAck,
+    headChainSha256: seq > 0 ? prev : null,
   };
   return result;
 }
@@ -938,6 +977,120 @@ export class ArchiveMismatchError extends Error {
     this.problems = result.problems;
     this.result = result;
   }
+}
+
+// The heartbeat of the nightly verification outside the database (#2082). The database owner can stop a verification
+// run from finishing (terminate its session, hold a lock, delete its pg-boss job) and can write archive_verification
+// rows of their own, so a signal that lives in the database cannot prove the verification ran. Each run that passes
+// writes a marker to the archive store instead: verify/v1/<UTC time>.json, create-only like a batch (Object Lock on s3),
+// holding only when the run verified, the newest batch's sequence and its chain hash, no tenant data. The prober reads
+// the newest marker from the store (readVerifyMarker) and alerts when the store wrote it more than about 26 hours ago,
+// or when it names a chain hash the store's batch does not hold. The marker's time that counts is the store's own
+// write time (the oldest version's LastModified on s3), which the writer cannot set.
+export const VERIFY_MARKER_PREFIX = 'verify/v1/';
+// Markers are kept this many days: the alert reads only the newest, and a year of them shows the history.
+export const VERIFY_MARKER_RETENTION_DAYS = 400;
+
+export interface VerifyMarker {
+  format: 'crove-verify-marker';
+  version: 1;
+  verifiedAt: string;
+  batches: number;
+  chainSha256: string | null;
+}
+
+export const verifyMarkerKey = (at: Date) => `${VERIFY_MARKER_PREFIX}${at.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z')}.json`;
+
+// Whether a marker is past its Object Lock retention (VERIFY_MARKER_RETENTION_DAYS), by the time its key names: a
+// lifecycle rule may have expired it, which leaves a delete marker, not a second version to report. A key that names no
+// time is never expired.
+export function verifyMarkerExpired(key: string, now: Date): boolean {
+  const named = /^verify\/v1\/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z\.json$/.exec(key);
+  if (!named) return false;
+  const [year, month, day, hour, minute, second] = named.slice(1).map(Number) as [number, number, number, number, number, number];
+  return now.getTime() - Date.UTC(year, month - 1, day, hour, minute, second) > VERIFY_MARKER_RETENTION_DAYS * 86_400_000;
+}
+
+// Writes the marker of a run that passed; returns its key, or null for a run that did not pass (it writes none, so the
+// prober alerts once the newest marker grows old). A second run in the same second finds the key taken and writes none.
+export async function writeVerifyMarker(store: ArchiveStore, result: ArchiveVerification, now: Date = new Date()): Promise<string | null> {
+  if (!result.ok) return null;
+  const marker: VerifyMarker = { format: 'crove-verify-marker', version: 1, verifiedAt: now.toISOString(), batches: result.batches, chainSha256: result.headChainSha256 };
+  const key = verifyMarkerKey(now);
+  try {
+    await store.put(key, new TextEncoder().encode(JSON.stringify(marker)), { retentionDays: VERIFY_MARKER_RETENTION_DAYS });
+  } catch (error) {
+    if (error instanceof ArchiveObjectExistsError) return null;
+    throw error;
+  }
+  return key;
+}
+
+function parseVerifyMarker(bytes: Uint8Array): VerifyMarker | null {
+  try {
+    const value = JSON.parse(new TextDecoder().decode(bytes)) as VerifyMarker;
+    if (!value || value.format !== 'crove-verify-marker' || value.version !== 1 || typeof value.verifiedAt !== 'string') return null;
+    if (!Number.isSafeInteger(value.batches) || value.batches < 0) return null;
+    if (value.chainSha256 !== null && (typeof value.chainSha256 !== 'string' || !/^[0-9a-f]{64}$/.test(value.chainSha256))) return null;
+    return value;
+  } catch {
+    return null;
+  }
+}
+
+export interface VerifyMarkerState {
+  // The newest marker's key and when the store wrote it (null: no marker yet, or a store that cannot tell).
+  key: string | null;
+  writtenAt: Date | null;
+  // Why the marker cannot be trusted, if it cannot: it does not parse, or it names a chain hash the store's batch of
+  // that sequence does not hold.
+  problem: string | null;
+  // The marker keys, inside their retention, that the store keeps more than one version of: written over, or deleted and
+  // written again, which the writer's key can do and Object Lock keeps in view.
+  rewritten: string[];
+  // With no marker yet: when the store wrote its first batch (null with none), so a fresh deployment does not alert
+  // before its first nightly run.
+  firstBatchAt: Date | null;
+}
+
+// The newest verification marker in the store, read from the store alone (#2082): the prober's out-of-band check. Newest
+// by the store's own write time, not by key: a key names the worker's clock, and one marker written while that clock ran
+// ahead (or every marker while it runs behind) would otherwise stay "newest" for as long as it is kept.
+export async function readVerifyMarker(store: ArchiveStore, now: Date = new Date()): Promise<VerifyMarkerState> {
+  const writtenAt = async (key: string) => (store.writtenAt ? await store.writtenAt(key) : null);
+  const keys = await store.list(VERIFY_MARKER_PREFIX);
+  // Counted over every version and delete marker, so a deleted newest marker, gone from `keys`, shows too.
+  const rewritten = store.versionCounts
+    ? [...(await store.versionCounts(VERIFY_MARKER_PREFIX))]
+        .filter(([key, count]) => count > 1 && !verifyMarkerExpired(key, now))
+        .map(([key]) => key)
+        .sort()
+    : [];
+  if (keys.length === 0) return { key: null, writtenAt: null, problem: null, rewritten, firstBatchAt: await writtenAt(archiveKey(1)) };
+  const times = new Map<string, Date>();
+  if (store.writtenTimes) for (const [k, at] of await store.writtenTimes(VERIFY_MARKER_PREFIX)) times.set(k, at);
+  else if (store.writtenAt) {
+    for (const k of keys) {
+      const at = await store.writtenAt(k);
+      if (at) times.set(k, at);
+    }
+  }
+  // With no write time at all, the last key, which the check then reports as one the store cannot date.
+  let key = keys.at(-1)!;
+  let newest: Date | null = null;
+  for (const k of keys) {
+    const at = times.get(k);
+    if (at && (!newest || at >= newest)) [key, newest] = [k, at];
+  }
+  const bytes = await store.get(key);
+  const marker = bytes ? parseVerifyMarker(bytes) : null;
+  let problem: string | null = marker ? null : 'it does not read as a verification marker';
+  if (marker && marker.batches > 0) {
+    const batchBytes = await store.get(archiveKey(marker.batches));
+    const batch = batchBytes ? parseBatch(batchBytes) : null;
+    if (!batch || batch.chainSha256 !== marker.chainSha256) problem = `it names a chain hash that batch ${marker.batches} in the store does not hold`;
+  }
+  return { key, writtenAt: newest, problem, rewritten, firstBatchAt: null };
 }
 
 // What the worker alerts before a verification run reads the database (#2020): the newest object under restores/v1/, by

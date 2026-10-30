@@ -22,8 +22,9 @@ export type AlertState = 'new' | 'changed' | 'repeat';
 export interface Finding {
   // backup: a failed backup run, reported by tools/backup/backup.sh through `prober --backup-failed` (issue #307). auth:
   // Supabase Auth did not answer its health check (issue #1994). archive_verify, archive_lag: the WORM archive's nightly
-  // verification stopped, or the archive fell behind (issue #1997). extraction: document readings kept failing at the
-  // reading service (issue #1998).
+  // verification stopped, or the archive fell behind (issue #1997). archive_marker: the newest verification marker in the
+  // WORM store is old or cannot be trusted, read from the store alone (issue #2082). extraction: document readings kept
+  // failing at the reading service (issue #1998).
   check:
     | 'outbox'
     | 'inbound'
@@ -37,6 +38,7 @@ export interface Finding {
     | 'auth'
     | 'archive_verify'
     | 'archive_lag'
+    | 'archive_marker'
     | 'extraction';
   message: string;
   value: number | null;

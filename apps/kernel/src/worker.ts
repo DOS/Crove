@@ -46,6 +46,7 @@ import {
   restoreAckAlert,
   restoreAckStoreAlert,
   verifyArchive,
+  writeVerifyMarker,
   writeArchive,
   type ArchiveStore,
 } from './worm.ts';
@@ -826,6 +827,12 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
         const alert = restoreAckAlert(result);
         if (alert) opsAlert(`[archive] ALERT ${alert}`);
         if (!result.ok) throw new ArchiveMismatchError(result);
+        // The out-of-band heartbeat (#2082): a marker in the archive store, which the prober reads without the database.
+        try {
+          await writeVerifyMarker(store, result);
+        } catch (error) {
+          opsAlert(`[archive] ALERT the verification passed, but its marker could not be written to the archive store: the prober will report it stale`, error);
+        }
         const excused = result.restoreAck === null ? '' : `, excused ${result.excused} row(s) under restore acknowledgement #${result.restoreAck}`;
         console.log(`[archive] verified ${result.batches} batch(es), ${result.rows} row(s)${excused} in ${elapsed()}`);
       } catch (error) {
