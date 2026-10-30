@@ -89,7 +89,7 @@ import { createTaxCodeLookup } from './tax-lookup.ts';
 import { createPortalSync } from './portal-sync.ts';
 import { createTaxPortalClient, testPortalAllowed } from './tax-portal.ts';
 import { startWorker, workerApplicationName } from './worker.ts';
-import { configureOpsAlerts } from './ops-alert.ts';
+import { configureOpsAlerts, flushOpsAlerts } from './ops-alert.ts';
 import { createPushSender, loadVapidKeys } from './web-push.ts';
 import { WORKER_LAG_EXIT_MS, WORKER_LAG_SUSTAIN_MS, startLagWatchdog } from './back-pressure.ts';
 
@@ -412,6 +412,11 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
       if (removed > 0) console.log(`[storage] removed ${removed} stale temporary file(s)`);
     }
     const stops: Array<() => Promise<void>> = [];
+    // Run last (stops run in reverse): the alerts the other stops raised are posted before the process ends.
+    stops.push(async () => {
+      await flushOpsAlerts();
+      configureOpsAlerts(null);
+    });
     // Safe to call twice (SIGTERM then SIGINT): the second call finds nothing left to stop.
     const stopAll = async () => {
       const pending = stops.splice(0).reverse();
@@ -652,7 +657,7 @@ function securityAlerts(config: Config): { target: WebhookTarget | null; thresho
     );
     return { target, thresholds };
   } catch (error) {
-    console.error(`[security] ALERT ${error instanceof Error ? error.message : String(error)}; security alerts go to the log only`);
+    console.error(`[security] ALERT ${error instanceof Error ? error.message : String(error)}; security and operational alerts go to the log only`);
     return { target: null, thresholds };
   }
 }

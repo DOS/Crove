@@ -37,7 +37,7 @@ A failed file is tried again after 5 minutes, then 10, 20 and so on, at least on
 
 ## Alerts
 
-Each line below is in the worker log and, with `ALERT_WEBHOOK_URL` set, posted to the alert webhook once an hour per kind (#1993). So is `[http] ALERT evidence integrity: ...` from the API: a stored file whose bytes no longer match its hash, an incident ([incidents.md](incidents.md)).
+Each line below is in the worker log and, with `ALERT_WEBHOOK_URL` set, posted to the alert webhook once an hour per kind and process (#1993). So is `[http] ALERT evidence integrity: ...` from the API: a stored file whose bytes no longer match its hash, an incident ([incidents.md](incidents.md)).
 
 | Log line | Meaning | What to do |
 |---|---|---|

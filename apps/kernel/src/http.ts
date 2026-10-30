@@ -243,7 +243,8 @@ function storeProblem(error: unknown): DomainError | null {
 function problem(c: Context, error: unknown) {
   const store = storeProblem(error);
   const domain = error instanceof DomainError ? error : (store ?? new DomainError('INTERNAL', 500, 'Lỗi hệ thống'));
-  if (error instanceof BlobIntegrityError) opsAlert(`[http] ALERT evidence integrity: ${error.message}`);
+  // The file's key holds its content hash: in the log (with the error), never in the posted line.
+  if (error instanceof BlobIntegrityError) opsAlert('[http] ALERT evidence integrity: a stored file does not match its recorded sha256', error);
   else if (domain.status === 500 || store) console.error('[http]', error);
   return c.json({ code: domain.code, message: domain.message }, domain.status);
 }
