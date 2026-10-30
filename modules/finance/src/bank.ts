@@ -18,6 +18,7 @@ import type { MemberRole } from '@crove/db';
 import {
   zBankFeedIngest,
   zBankStatementImport,
+  type BankFeedIngest,
   zId,
   zLedgerPeriod,
   type BankImportPreview,
@@ -217,36 +218,40 @@ export const bankIngest = defineCommand({
   risk: 'R1',
   sideEffect: 'internal',
   access: 'system',
-  handler: async (ctx, input): Promise<BankImportResult> => {
-    await bankAccount(ctx, input.bankAccount, true);
-    const legalEntityId = await resolveLegalEntity(ctx, input.legalEntityId);
-    const read = readFeedLines(input.lines);
-    if (!read.ok) throw new DomainError('BANK_FEED_INVALID', 422, 'Nguồn giao dịch ngân hàng gửi dòng không hợp lệ', { rows: read.rows });
-    await lockAccount(ctx, legalEntityId, input.bankAccount);
-    const { stored, chain } = await storedAround(ctx, legalEntityId, input.bankAccount, read.lines, read.keys);
-    const { statuses, toStore, breaks } = checkLines(read.lines, read.keys, stored, chain);
-    const importId = await storeLines(ctx, legalEntityId, input.bankAccount, toStore);
-    // A batch the account already has stores nothing; its importId then names no line, as an import of a known file.
-    // The feed's lines were checked whole above, so none is invalid.
-    const counts = { new: 0, duplicate: 0, ambiguous: 0, invalid: 0 };
-    for (const status of statuses) counts[status]++;
-    const dates = read.lines.map((l) => l.date);
-    ctx.audit({ bankAccount: input.bankAccount, importId, source: input.source, from: dates[0], to: dates.at(-1), ...counts, breaks: breaks.length });
-    // Only a pull that stored lines shows on the account's timeline (the import shows every file a person brought).
-    if (counts.new + counts.ambiguous > 0) {
-      await ctx.activity(
-        'finance.bank_account',
-        importId,
-        'bank.feed_received',
-        `Nhận giao dịch ngân hàng ${input.bankAccount} (${input.source}): ${counts.new + counts.ambiguous} dòng mới, ${counts.duplicate} dòng đã có`,
-        { legalEntityId },
-      );
-    }
-    // Lines that need a look: the owners and admins are told, as for an import (#671).
-    if (counts.ambiguous > 0) await ctx.emit('finance.bank.imported', { importId, bankAccount: input.bankAccount, ambiguous: counts.ambiguous });
-    return { importId, counts, breaks };
-  },
+  handler: (ctx, input): Promise<BankImportResult> => ingestFeedLines(ctx, input),
 });
+
+// A feed's lines checked and stored as one import of the account (ADR-0039 point 1): finance.bank.ingest, and the
+// pull of a mapped bank feed account (finance.bank_feed.record_pull), which names the account and entity itself.
+export async function ingestFeedLines(ctx: CommandContext, input: BankFeedIngest): Promise<BankImportResult> {
+  await bankAccount(ctx, input.bankAccount, true);
+  const legalEntityId = await resolveLegalEntity(ctx, input.legalEntityId);
+  const read = readFeedLines(input.lines);
+  if (!read.ok) throw new DomainError('BANK_FEED_INVALID', 422, 'Nguồn giao dịch ngân hàng gửi dòng không hợp lệ', { rows: read.rows });
+  await lockAccount(ctx, legalEntityId, input.bankAccount);
+  const { stored, chain } = await storedAround(ctx, legalEntityId, input.bankAccount, read.lines, read.keys);
+  const { statuses, toStore, breaks } = checkLines(read.lines, read.keys, stored, chain);
+  const importId = await storeLines(ctx, legalEntityId, input.bankAccount, toStore);
+  // A batch the account already has stores nothing; its importId then names no line, as an import of a known file.
+  // The feed's lines were checked whole above, so none is invalid.
+  const counts = { new: 0, duplicate: 0, ambiguous: 0, invalid: 0 };
+  for (const status of statuses) counts[status]++;
+  const dates = read.lines.map((l) => l.date);
+  ctx.audit({ bankAccount: input.bankAccount, importId, source: input.source, from: dates[0], to: dates.at(-1), ...counts, breaks: breaks.length });
+  // Only a pull that stored lines shows on the account's timeline (the import shows every file a person brought).
+  if (counts.new + counts.ambiguous > 0) {
+    await ctx.activity(
+      'finance.bank_account',
+      importId,
+      'bank.feed_received',
+      `Nhận giao dịch ngân hàng ${input.bankAccount} (${input.source}): ${counts.new + counts.ambiguous} dòng mới, ${counts.duplicate} dòng đã có`,
+      { legalEntityId },
+    );
+  }
+  // Lines that need a look: the owners and admins are told, as for an import (#671).
+  if (counts.ambiguous > 0) await ctx.emit('finance.bank.imported', { importId, bankAccount: input.bankAccount, ambiguous: counts.ambiguous });
+  return { importId, counts, breaks };
+}
 
 export const bankLines = defineQuery({
   name: 'finance.bank.lines',

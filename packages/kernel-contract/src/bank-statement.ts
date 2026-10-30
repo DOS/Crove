@@ -243,3 +243,16 @@ export const zBankFeedAccountView = z.object({
   lastSyncedAt: z.string().nullable(),
 });
 export type BankFeedAccountView = z.infer<typeof zBankFeedAccountView>;
+
+// The accounts a bank feed connection reaches, as the worker listed them with its credential (#2044 part 2b).
+export const BANK_FEED_MAX_ACCOUNTS = 50;
+export const zBankFeedListedAccount = z.object({ externalAccountId: z.string().trim().min(1).max(200), displayName: z.string().trim().min(1).max(200) });
+export type BankFeedListedAccount = z.infer<typeof zBankFeedListedAccount>;
+export const zBankFeedRecordAccounts = z.strictObject({ connectionId: zId, accounts: z.array(zBankFeedListedAccount).max(BANK_FEED_MAX_ACCOUNTS) });
+// One page a pull brought for a mapped account, and where the next pull starts.
+export const zBankFeedRecordPull = z.strictObject({
+  feedAccountId: zId,
+  lines: z.array(zBankFeedLine).max(BANK_FEED_MAX_LINES),
+  cursor: z.string().min(1).max(500),
+});
+export type BankFeedRecordPull = z.infer<typeof zBankFeedRecordPull>;
