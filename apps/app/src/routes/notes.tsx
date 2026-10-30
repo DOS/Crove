@@ -22,7 +22,7 @@ import { useFormat } from '../i18n/provider.tsx';
 import { client, clientForOrg, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { Markdown } from '../lib/markdown.tsx';
 import { applyFormat, shortcutFormat, type MarkdownFormat } from '../lib/markdown-edit.ts';
-import { createAutosaver, type NoteValues, type SaveState } from '../lib/note-autosave.ts';
+import { createAutosaver, type Autosaver, type NoteValues, type SaveState } from '../lib/note-autosave.ts';
 import { notesMarkdown, saveText } from '../lib/notes-export.ts';
 import { listOfNote, looksLikePassword, parseTags, tagCounts, type NotesSearch } from '../lib/notes.ts';
 
@@ -40,6 +40,9 @@ const FORMATS: ReadonlyArray<{ format: MarkdownFormat; key: string; aria: string
 const MOD = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.userAgent) ? '⌘' : 'Ctrl+';
 
 // A note's tags as buttons: each shows the notes with that tag (#1739).
+// The open editors' savers: a download first saves what they hold (#1678), so the file has what the screen shows.
+const openSavers = new Set<Autosaver>();
+
 function TagChips({ tags, onTag }: { tags: readonly string[]; onTag: (tag: string) => void }) {
   const t = useTranslations('notes');
   if (tags.length === 0) return null;
@@ -113,7 +116,9 @@ function Editor({
     const leave = () => void saver.flush();
     document.addEventListener('visibilitychange', away);
     window.addEventListener('pagehide', leave);
+    openSavers.add(saver);
     return () => {
+      openSavers.delete(saver);
       document.removeEventListener('visibilitychange', away);
       window.removeEventListener('pagehide', leave);
       void saver.flush();
@@ -363,10 +368,17 @@ export function NotesPage() {
     </Button>
   ) : undefined;
   // My own notes and to-dos, whole, as a file (#1678): whoever has a role in the org, a viewer who once wrote notes too.
-  const exportMine = useMutation({ mutationFn: () => client.notes.exportMine({}) });
+  // Edits still waiting to save go first (a failed save shows in its editor; the file then has the saved text).
+  const exportMine = useMutation({
+    mutationFn: async (_format: 'md' | 'json') => {
+      await Promise.allSettled([...openSavers].map((s) => s.flush()));
+      return client.notes.exportMine({});
+    },
+  });
   const download = async (format: 'md' | 'json') => {
-    const data = await exportMine.mutateAsync();
-    const name = `ghi-chu-${data.exportedAt.slice(0, 10)}`;
+    const data = await exportMine.mutateAsync(format);
+    // The org and the day on this device's clock in the name, so files of two orgs or two days never clash.
+    const name = `${t('export.fileName')}-${slug}-${new Date().toLocaleDateString('sv-SE')}`;
     if (format === 'json') {
       saveText(`${name}.json`, `${JSON.stringify(data, null, 2)}\n`, 'application/json');
       return;
@@ -397,10 +409,11 @@ export function NotesPage() {
     role !== undefined ? (
       <div className="flex flex-wrap gap-2">
         <Button variant="outline" disabled={exportMine.isPending} onClick={() => void download('md').catch(() => undefined)}>
-          {exportMine.isPending && <Spinner className="text-current" />}
+          {exportMine.isPending && exportMine.variables === 'md' && <Spinner className="text-current" />}
           {t('export.markdown')}
         </Button>
         <Button variant="outline" disabled={exportMine.isPending} onClick={() => void download('json').catch(() => undefined)}>
+          {exportMine.isPending && exportMine.variables === 'json' && <Spinner className="text-current" />}
           {t('export.json')}
         </Button>
         {newButton}

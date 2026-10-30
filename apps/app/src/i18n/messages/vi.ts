@@ -589,7 +589,8 @@ export const vi = {
       due: 'Hạn',
       remind: 'Nhắc lúc',
       done: 'Xong lúc',
-      truncated: 'Chỉ có 2000 ghi chú và 2000 việc mới nhất; hãy liên hệ hỗ trợ để lấy phần còn lại.',
+      truncated: 'Tệp này chỉ có các mục mới nhất (tối đa 2000 ghi chú, 2000 việc và 20 triệu ký tự). Các mục cũ hơn vẫn ở trong Ghi chú: mở từng mục để chép lại.',
+      fileName: 'ghi-chu',
     },
     views: {
       mine: 'Của tôi',

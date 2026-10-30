@@ -278,7 +278,7 @@ suite('notes on PostgreSQL (#1671)', () => {
       visibility: 'private',
       title: PRIVATE_TITLE,
       body: PRIVATE_BODY,
-      tags: ['Ngân hàng'],
+      tags: ['ngân hàng'],
       deletedAt: null,
       links: [{ targetType: 'kernel.party', targetId: o.party }],
     });

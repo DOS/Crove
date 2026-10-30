@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // A member's own notes and to-dos as a file for their download (#1678, notes.md section 5 "Tải về"): Markdown to read,
 // JSON to move them elsewhere. Built in the browser from notes.mine.export; no React imports, so it is unit tested.
 import type { NotesExport } from '@crove/kernel-contract';
@@ -24,6 +25,8 @@ export interface NotesExportWords {
 }
 
 const line = (label: string, value: string) => `- ${label}: ${value}`;
+// A title or a step on one line, so a line break in it never starts a heading or an item of its own.
+const flat = (text: string) => text.replace(/\s+/g, ' ').trim();
 
 /** The Markdown file: each note under its title with its facts, then its body as written; each to-do with its steps. */
 export function notesMarkdown(data: NotesExport, w: NotesExportWords): string {
@@ -31,7 +34,7 @@ export function notesMarkdown(data: NotesExport, w: NotesExportWords): string {
   if (data.truncated) out.push('', `> ${w.truncated}`);
   out.push('', `## ${w.notes} (${data.notes.length})`);
   for (const n of data.notes) {
-    out.push('', `### ${n.title}`, '', line(n.visibility === 'org' ? w.shared : w.private, n.id));
+    out.push('', `### ${flat(n.title)}`, '', line(n.visibility === 'org' ? w.shared : w.private, n.id));
     if (n.tags.length > 0) out.push(line(w.tags, n.tags.join(', ')));
     if (n.pinned) out.push(`- ${w.pinned}`);
     if (n.archivedAt) out.push(line(w.archived, n.archivedAt));
@@ -42,7 +45,7 @@ export function notesMarkdown(data: NotesExport, w: NotesExportWords): string {
   }
   out.push('', `## ${w.todos} (${data.todos.length})`);
   for (const t of data.todos) {
-    out.push('', `### [${t.status === 'done' ? 'x' : ' '}] ${t.title}`, '', line(w.status[t.status], t.id));
+    out.push('', `### [${t.status === 'done' ? 'x' : ' '}] ${flat(t.title)}`, '', line(w.status[t.status], t.id));
     if (t.dueAt) out.push(line(w.due, `${t.dueAt} (${t.timeZone})`));
     else if (t.dueOn) out.push(line(w.due, t.dueOn));
     if (t.remindAt) out.push(line(w.remind, t.remindAt));
@@ -50,7 +53,7 @@ export function notesMarkdown(data: NotesExport, w: NotesExportWords): string {
     if (t.deletedAt) out.push(line(w.trashed, t.deletedAt));
     out.push(line(w.created, t.createdAt), line(w.updated, t.updatedAt));
     if (t.details.trim()) out.push('', t.details.trimEnd());
-    if (t.checklist.length > 0) out.push('', ...t.checklist.map((s) => `- [${s.done ? 'x' : ' '}] ${s.text}`));
+    if (t.checklist.length > 0) out.push('', ...t.checklist.map((s) => `- [${s.done ? 'x' : ' '}] ${flat(s.text)}`));
   }
   return `${out.join('\n')}\n`;
 }

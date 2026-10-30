@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // A member's own notes and to-dos as Markdown (#1678): each note under its title with its facts and its body as
 // written, each to-do as a checkbox line with its steps.
 import { describe, expect, it } from 'vitest';
@@ -73,6 +74,8 @@ const DATA: NotesExport = {
       updatedAt: '2026-10-06T00:00:00.000Z',
       doneAt: '2026-10-06T00:00:00.000Z',
       deletedAt: null,
+      sourceNoteId: null,
+      taskId: null,
     },
   ],
   truncated: false,
@@ -123,6 +126,18 @@ describe('notes download as Markdown (#1678)', () => {
         '',
       ].join('\n'),
     );
+  });
+
+  it('keeps a title and a step on one line', () => {
+    const odd: NotesExport = {
+      ...DATA,
+      notes: [{ ...DATA.notes[0]!, title: 'Khách\n## Việc (0)' }],
+      todos: [{ ...DATA.todos[0]!, checklist: [{ text: 'a\n- [x] b', done: false }] }],
+    };
+    const md = notesMarkdown(odd, WORDS);
+    expect(md).toContain('### Khách ## Việc (0)\n');
+    expect(md).toContain('- [ ] a - [x] b\n');
+    expect(md.match(/^## /gm)).toHaveLength(2);
   });
 
   it('says when the list was cut', () => {

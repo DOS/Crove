@@ -297,9 +297,10 @@ export function todoStanding(t: { dueOn: string | null; dueAt: Date | null; time
 
 // The member's own notes and to-dos, whole, for their download (#1678, notes.md section 5: "Tải về", ADR-0037 section 5:
 // their access and portability): every note they wrote, private or shared, archived or in the trash, with its links,
-// and every to-do of theirs. Nobody else's, whatever the caller's role. At most NOTES_EXPORT_LIMIT of each, the newest
-// first; truncated says more were left out.
+// and every to-do of theirs. Nobody else's, whatever the caller's role. At most NOTES_EXPORT_LIMIT of each and
+// NOTES_EXPORT_TEXT characters of their text in all, the newest first; truncated says more were left out.
 export const NOTES_EXPORT_LIMIT = 2000;
+export const NOTES_EXPORT_TEXT = 20_000_000;
 export const zNotesExport = z.object({
   exportedAt: z.string(),
   notes: z.array(
@@ -332,6 +333,9 @@ export const zNotesExport = z.object({
       updatedAt: z.string(),
       doneAt: z.string().nullable(),
       deletedAt: z.string().nullable(),
+      // The note it was made from and the team task it was handed over as, when there are.
+      sourceNoteId: z.string().nullable(),
+      taskId: z.string().nullable(),
     }),
   ),
   truncated: z.boolean(),

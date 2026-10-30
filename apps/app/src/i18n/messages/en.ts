@@ -591,7 +591,8 @@ export const en = {
       due: 'Due',
       remind: 'Reminder at',
       done: 'Done at',
-      truncated: 'Only the newest 2000 notes and 2000 to-dos are here; contact support for the rest.',
+      truncated: 'This file holds the newest items only (at most 2000 notes, 2000 to-dos and 20 million characters). Older ones are still in Notes: open each to copy it.',
+      fileName: 'notes',
     },
     views: {
       mine: 'Mine',
