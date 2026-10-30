@@ -27,6 +27,7 @@ const status = (id: string, value: FileStatus['status'], error: string | null = 
   error,
   proposalId: null,
   proposalStatus: null,
+  voided: false,
   version: 1,
   canReextract: false,
   createdAt: '2026-10-18T00:00:00.000Z',

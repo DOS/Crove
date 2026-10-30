@@ -106,6 +106,12 @@ export async function fileStatuses(ctx: QueryContext, filter: FileStatusFilter):
   return rows.map((r) => {
     const archive = isArchiveType(r.content_type);
     const waiting = !r.extraction_status && r.waiting;
+    const isVoided = r.proposal_status === 'executed' && r.proposal_id !== null && voided.has(r.proposal_id);
+    // A newer reading that failed (or was left behind) after the proposal was decided, by a rejection, an expiry, a
+    // failed run or a voided posting (#2032): the file's latest outcome is that failure, shown with its re-read, not
+    // the old decision. A failed re-read of a proposal still to be decided keeps the proposal, which still stands.
+    const lastRunFailed = r.extraction_status === 'failed' || (r.extraction_status === 'pending' && !r.in_flight);
+    const decided = r.proposal_status !== null && r.proposal_status !== 'pending' && r.proposal_status !== 'approved' && (r.proposal_status !== 'executed' || isVoided);
     const status: FileStatus['status'] = waiting
       ? 'waiting'
       : !r.extraction_status || r.in_flight
@@ -114,7 +120,7 @@ export async function fileStatuses(ctx: QueryContext, filter: FileStatusFilter):
           ? r.extraction_status === 'done'
             ? 'expanded'
             : 'failed'
-          : r.proposal_id
+          : r.proposal_id && !(lastRunFailed && decided)
             ? r.duplicate_of
               ? 'duplicate'
               : 'proposed'
@@ -134,6 +140,7 @@ export async function fileStatuses(ctx: QueryContext, filter: FileStatusFilter):
               : null,
         proposalId: r.proposal_id,
         proposalStatus: r.proposal_status ?? null,
+        voided: isVoided,
         version: r.version ?? null,
         // The same checks kernel.file.reextract makes; an archive is opened once and never read again.
         canReextract:
@@ -141,7 +148,7 @@ export async function fileStatuses(ctx: QueryContext, filter: FileStatusFilter):
           !archive &&
           Boolean(r.extraction_status) &&
           !r.in_flight &&
-          (r.proposal_status !== 'executed' || (r.proposal_id !== null && voided.has(r.proposal_id))) &&
+          (r.proposal_status !== 'executed' || isVoided) &&
           (r.version ?? 0) < MAX_EXTRACTION_VERSIONS,
         createdAt: r.created_at.toISOString(),
       },
