@@ -108,7 +108,13 @@ export function VoucherFormCard({ slug, onClose, fromLine }: { slug: string; onC
   const inflow = isInflow(type);
   const refusedProblem = voucherProblem(request.error);
 
+  // A line's error can depend on the cash account and a party's on the lines: changing one hides the others' errors
+  // until they are checked again.
+  const editLines = (from = 0) => lines.slice(from).forEach((l) => fields.edit(`line:${l.key}`));
   const changeType = (next: VoucherType) => {
+    fields.edit('cashAccount');
+    fields.edit('party');
+    editLines();
     // The usual counter account follows the type while the user has not changed it.
     setLines((current) => current.map((l) => (l.account === defaultCounterAccount(type) ? { ...l, account: defaultCounterAccount(next) } : l)));
     setType(next);
@@ -199,9 +205,8 @@ export function VoucherFormCard({ slug, onClose, fromLine }: { slug: string; onC
             <label className="block">
               <span className="text-subtle-foreground">{t('form.date')}</span>
               <DateInput
+                {...control('date')}
                 required
-                id={idOf('date')}
-                aria-describedby={fields.of('date') ? fieldErrorId(idOf('date')) : undefined}
                 value={date}
                 disabled={prefill !== null}
                 onChange={(next) => {
@@ -226,6 +231,7 @@ export function VoucherFormCard({ slug, onClose, fromLine }: { slug: string; onC
                 onChange={(e) => {
                   setCashAccount(e.target.value);
                   fields.edit('cashAccount');
+                  editLines();
                 }}
               >
                 {cashChoices.map((a) => (
@@ -286,7 +292,6 @@ export function VoucherFormCard({ slug, onClose, fromLine }: { slug: string; onC
               <span className="text-subtle-foreground">{inflow ? t('form.descriptionReceipt') : t('form.descriptionPayment')}</span>
               <Input
                 {...control('description')}
-                required
                 maxLength={300}
                 value={description}
                 onChange={(e) => {
@@ -322,6 +327,7 @@ export function VoucherFormCard({ slug, onClose, fromLine }: { slug: string; onC
                       onChange={(e) => {
                         setLine(l.key, { account: e.target.value });
                         fields.edit(lineField);
+                        fields.edit('party');
                       }}
                     >
                       {pickableAccounts(chart, l.account).map((a) => (
@@ -355,7 +361,11 @@ export function VoucherFormCard({ slug, onClose, fromLine }: { slug: string; onC
                       variant="ghost"
                       disabled={lines.length === 1}
                       aria-label={t('form.removeLine', { line: String(i + 1) })}
-                      onClick={() => setLines((current) => current.filter((x) => x.key !== l.key))}
+                      onClick={() => {
+                        editLines(i);
+                        fields.edit('party');
+                        setLines((current) => current.filter((x) => x.key !== l.key));
+                      }}
                     >
                       ✕
                     </Button>

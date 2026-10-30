@@ -88,6 +88,10 @@ describe('AgentsPage', () => {
   it('gives owners every control', () => {
     const html = page('owner');
     for (const shown of [en.agents.stop, en.agents.addPosition, en.agents.holder, en.agents.save, en.agents.install, en.agents.setBudget]) expect(html).toContain(`>${shown}<`);
+    // The budget form words its own errors under its fields (#2004), not the browser's, and shows none before a check.
+    const budget = html.slice(html.lastIndexOf('<form', html.indexOf(`>${en.agents.setBudget}<`)));
+    expect(budget).toMatch(/^<form[^>]*novalidate/i);
+    expect(budget).not.toContain('-error"');
   });
 
   it('gives admins Stop AI and the budgets to read, nothing that changes the chart', () => {

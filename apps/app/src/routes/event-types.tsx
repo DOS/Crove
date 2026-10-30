@@ -66,7 +66,7 @@ function EventTypeForm({
   const ids = useId();
   const idOf = (field: EventTypeCheckedField) => `${ids}-${field}`;
   const fields = useFieldErrors<EventTypeCheckedField>((field) =>
-    !eventTypeFieldInvalid(draft, field) ? null : field === 'coHostUserIds' ? t('coHostsNeeded') : t('invalidField', { field: t(`fields.${field}`) }),
+    !eventTypeFieldInvalid(draft, field) ? null : field === 'coHostUserIds' ? t('coHostsNeeded') : t('numberInvalid'),
   );
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();

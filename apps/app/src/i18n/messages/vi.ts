@@ -774,7 +774,7 @@ export const vi = {
     noLimit: 'Không giới hạn',
     titlePlaceholder: 'Ví dụ: Tư vấn thuế 30 phút',
     descriptionPlaceholder: 'Mô tả ngắn cho khách (không bắt buộc)',
-    invalidField: '{field}: hãy nhập một số hợp lệ',
+    numberInvalid: 'Hãy nhập một số hợp lệ.',
     fields: {
       title: 'Tên',
       slug: 'Đường dẫn',

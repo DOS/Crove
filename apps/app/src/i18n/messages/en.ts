@@ -776,7 +776,7 @@ export const en = {
     noLimit: 'No limit',
     titlePlaceholder: 'For example: Tax advice, 30 minutes',
     descriptionPlaceholder: 'A short description for clients (optional)',
-    invalidField: '{field}: enter a valid number',
+    numberInvalid: 'Enter a valid number.',
     fields: {
       title: 'Name',
       slug: 'Link',

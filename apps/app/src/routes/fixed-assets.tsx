@@ -14,7 +14,8 @@ import { AmountInput } from '../components/amount-input.tsx';
 import { DateInput } from '../components/date-input.tsx';
 import { useChosenEntity } from '../components/entity-switcher.tsx';
 import { DataTable, Empty, ErrorText, FieldError, fieldControl, fieldErrorId, focusFirstInvalid, PageHeader, Spinner, TableSkeleton, useFieldErrors } from '../components/ui.tsx';
-import { useFormat } from '../i18n/provider.tsx';
+import { useFormat, useLocaleSetting } from '../i18n/provider.tsx';
+import { groupAmount } from '../lib/amount-input.ts';
 import { apiFetch, errorMessage, getCurrentOrg, orpc, queryClient } from '../lib/api.ts';
 import { exportQuery } from '../lib/legal-entity-choice.ts';
 import {
@@ -40,6 +41,7 @@ import { canEnterVoucher } from '../lib/vouchers.ts';
 function AssetFormCard({ onClose }: { onClose: () => void }) {
   const root = useTranslations();
   const t = useTranslations('fixedAssets');
+  const { locale } = useLocaleSetting();
   const [form, setForm] = useState<FixedAssetForm>(() => ({
     kind: 'fixed_asset',
     name: '',
@@ -149,7 +151,7 @@ function AssetFormCard({ onClose }: { onClose: () => void }) {
                 value={form.cost}
                 onChange={(cost) => edited('cost', { cost })}
                 onBlur={(e) => fields.blur('cost', e.target.value)}
-                placeholder="36.000.000"
+                placeholder={groupAmount('36000000', locale)}
               />
             </label>
             <FieldError id={idOf('cost')} className="mt-1">
@@ -180,8 +182,7 @@ function AssetFormCard({ onClose }: { onClose: () => void }) {
               <span className="text-subtle-foreground">{t('startMonth')}</span>
               <DateInput
                 kind="month"
-                id={idOf('startMonth')}
-                aria-describedby={fields.of('startMonth') ? fieldErrorId(idOf('startMonth')) : undefined}
+                {...control('startMonth')}
                 className="mt-1 w-full"
                 value={form.startMonth}
                 onChange={(startMonth) => edited('startMonth', { startMonth })}
