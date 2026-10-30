@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { createServer, type Socket } from 'node:net';
 import {
   DeleteObjectCommand,
   GetObjectCommand,
@@ -362,6 +363,63 @@ describe('S3 client requests', () => {
     const headers = await capturedPut('https://storage.googleapis.com');
     expect(headers['x-goog-if-generation-match']).toBe('0');
     expect(headers['if-none-match']).toBeUndefined();
+  });
+});
+
+describe('S3 client timeouts (#2094)', () => {
+  const credentials = { bucket: 'b', region: 'us-east-1', accessKeyId: 'k', secretAccessKey: 's', forcePathStyle: true };
+
+  // A server that takes the connection and never answers.
+  async function silentServer() {
+    const sockets: Socket[] = [];
+    const server = createServer((socket) => {
+      sockets.push(socket);
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('no port');
+    return {
+      endpoint: `http://127.0.0.1:${address.port}`,
+      accepted: () => sockets.length,
+      close: async () => {
+        for (const socket of sockets) socket.destroy();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      },
+    };
+  }
+
+  it('fails a call to a store that never answers, instead of waiting for ever', async () => {
+    const silent = await silentServer();
+    try {
+      const client = createS3Client({ ...credentials, endpoint: silent.endpoint }, undefined, { connectionTimeoutMs: 500, requestTimeoutMs: 200, maxAttempts: 1 });
+      const started = Date.now();
+      await expect(client.send(new ListObjectsV2Command({ Bucket: 'b' }))).rejects.toMatchObject({ name: 'TimeoutError' });
+      expect(Date.now() - started).toBeLessThan(4000);
+      // It reached the server, which took the connection: the timeout is the request's, not a failure to connect.
+      expect(silent.accepted()).toBeGreaterThan(0);
+      // And the handler was given what was asked for, the connection timeout included.
+      const configured = await (client.config.requestHandler as { httpHandlerConfigs: () => Record<string, unknown> }).httpHandlerConfigs();
+      expect(configured).toMatchObject({ connectionTimeout: 500, requestTimeout: 200, throwOnRequestTimeout: true });
+    } finally {
+      await silent.close();
+    }
+  });
+
+  it('ends a call when its abort signal fires, with no timeout set', async () => {
+    const silent = await silentServer();
+    try {
+      const client = createS3Client({ ...credentials, endpoint: silent.endpoint });
+      const controller = new AbortController();
+      const call = client.send(new ListObjectsV2Command({ Bucket: 'b' }), { abortSignal: controller.signal });
+      setTimeout(() => controller.abort(), 100);
+      await expect(call).rejects.toMatchObject({ name: 'AbortError' });
+    } finally {
+      await silent.close();
+    }
+  });
+
+  it('takes the number of attempts asked for', async () => {
+    expect(await createS3Client(credentials, undefined, { maxAttempts: 2 }).config.maxAttempts()).toBe(2);
   });
 });
 

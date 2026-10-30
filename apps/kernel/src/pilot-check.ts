@@ -248,7 +248,13 @@ export function checkEnv(env: Env): CheckResult[] {
   // The prober's own rules (a Telegram webhook needs the chat id, limits are whole numbers), once the URLs are sound.
   if (!alerts.some((p) => p !== null)) {
     try {
-      loadProberConfig({ ...env });
+      const prober = loadProberConfig({ ...env });
+      // A setting the marker check cannot use disables only that check (#2094), so the load no longer throws: say so here.
+      // Not the refusal over the worker's S3_ACCESS_KEY_ID, which the shared .env always has and Compose never passes to
+      // the prober.
+      if (prober.archiveMarker && 'error' in prober.archiveMarker && !prober.archiveMarker.workerKey) {
+        alerts.push(`the prober would not check the WORM verification marker: ${prober.archiveMarker.error} (docs/runbooks/worm-archive.md)`);
+      }
     } catch (error) {
       alerts.push(error instanceof Error ? error.message : String(error));
     }
