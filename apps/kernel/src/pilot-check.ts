@@ -7,7 +7,7 @@
 //
 // Exit codes: 0 every automatic check passed, 1 a check failed, 2 the check could not run (bad arguments).
 import { randomBytes } from 'node:crypto';
-import { parseVaultKey } from '@crove/kernel-runtime';
+import { S3BlobStore, parseVaultKey } from '@crove/kernel-runtime';
 import { parseExportKey } from './export-seal.ts';
 import { loadProberConfig } from './prober.ts';
 
@@ -370,8 +370,9 @@ export function checkEnv(env: Env): CheckResult[] {
       status: 'manual',
       message: 'confirm a restore onto a scratch stack passed this month (restore.sh ends with "restore of <run> passed") and note the RPO and RTO it shows (docs/runbooks/backup-and-restore.md)',
     },
-    // Evidence holds (#1009): the worker can hold posted invoice files only on an S3 bucket with Object Lock, which
-    // nothing here can see; without it, it logs one ALERT a day and posting goes on.
+    // Evidence holds (#1009): the worker can hold posted invoice files only on an S3 bucket with Object Lock; without
+    // it, it logs one ALERT a day and posting goes on. runPilotCheck replaces this line with the bucket's answer when
+    // holds are on (probeEvidenceHolds, #1996).
     {
       item: 'Evidence holds',
       status: 'manual',
@@ -629,11 +630,72 @@ export async function probeBuildChecks(origin: string, env: Env, fetchFn: Fetch 
   return { item: 'RLS matrix', status: 'pass', message: `CI passed on the deployed build ${repo}@${short}: ${[...new Set(wanted.map((r) => r.name))].sort().join(', ')}` };
 }
 
+// Whether the files bucket can hold objects (#1996): its Object Lock, read the way the worker reads it before it sets a
+// retention hold (S3BlobStore's holds.available). True or false; throws when the bucket does not answer.
+export type ObjectLockProbe = (env: Env) => Promise<boolean>;
+
+export const filesBucketObjectLock: ObjectLockProbe = async (env) => {
+  const store = S3BlobStore.connect({
+    bucket: value(env, 'S3_BUCKET') ?? '',
+    region: value(env, 'S3_REGION') ?? 'us-east-1',
+    endpoint: value(env, 'S3_ENDPOINT'),
+    accessKeyId: value(env, 'S3_ACCESS_KEY_ID'),
+    secretAccessKey: value(env, 'S3_SECRET_ACCESS_KEY'),
+    forcePathStyle: value(env, 'S3_FORCE_PATH_STYLE') === 'true',
+    presign: false,
+  });
+  return store.holds.available();
+};
+
+// The name and HTTP status of an S3 error, never its message (which may quote the request).
+function s3Reason(error: unknown): string {
+  const named = error as { name?: unknown; $metadata?: { httpStatusCode?: unknown } };
+  const status = typeof named.$metadata?.httpStatusCode === 'number' ? ` (${named.$metadata.httpStatusCode})` : '';
+  return `${typeof named.name === 'string' ? named.name : 'error'}${status}`;
+}
+
+/**
+ * The evidence holds item (#1996) when posted invoice files should get a retention hold (STORAGE=s3, EVIDENCE_LOCK_DAYS
+ * above 0): PASS when the files bucket has Object Lock enabled, FAIL when it has not (the worker would hold nothing),
+ * MANUAL when the bucket does not answer (keys without s3:GetBucketObjectLockConfiguration, the bucket out of reach).
+ * Null otherwise: the manual line of checkEnv stands. Nothing is written to the bucket.
+ */
+export async function probeEvidenceHolds(env: Env, probe: ObjectLockProbe = filesBucketObjectLock): Promise<CheckResult | null> {
+  if (value(env, 'STORAGE') !== 's3' || !(Number(value(env, 'EVIDENCE_LOCK_DAYS') ?? '3650') > 0)) return null;
+  const bucket = value(env, 'S3_BUCKET');
+  if (!bucket) return null;
+  let enabled: boolean;
+  try {
+    enabled = await Promise.race([
+      probe(env),
+      new Promise<never>((_, reject) => setTimeout(() => reject(Object.assign(new Error('no answer'), { name: 'Timeout' })), PROBE_TIMEOUT_MS).unref()),
+    ]);
+  } catch (error) {
+    return {
+      item: 'Evidence holds',
+      status: 'manual',
+      message:
+        `could not read the Object Lock of the files bucket ${bucket} (${s3Reason(error)}; the keys need s3:GetBucketObjectLockConfiguration): ` +
+        'confirm the files bucket has Object Lock enabled and the worker log shows no "[evidence-hold] ALERT" (docs/runbooks/evidence-holds.md)',
+    };
+  }
+  return enabled
+    ? { item: 'Evidence holds', status: 'pass', message: `the files bucket ${bucket} has Object Lock enabled: posted invoice files get their retention hold` }
+    : {
+        item: 'Evidence holds',
+        status: 'fail',
+        message:
+          `the files bucket ${bucket} has no Object Lock: posted invoice files would get no retention hold; ` +
+          'enable Object Lock on it, or keep evidence another way (a GCS retention policy, an R2 bucket lock) and set EVIDENCE_LOCK_DAYS=0 (docs/runbooks/evidence-holds.md)',
+      };
+}
+
 export async function runPilotCheck(
   argv: readonly string[],
   env: Env = process.env,
   fetchFn: Fetch = fetch,
   print: (line: string) => void = console.log,
+  objectLock: ObjectLockProbe = filesBucketObjectLock,
 ): Promise<number> {
   let args: PilotArgs;
   try {
@@ -643,6 +705,9 @@ export async function runPilotCheck(
     return PILOT_EXIT.error;
   }
   let results = checkEnv(env);
+  // The files bucket's Object Lock (#1996) replaces the manual evidence holds line when holds are on.
+  const holds = await probeEvidenceHolds(env, objectLock);
+  if (holds) results = [...results.filter((r) => !(r.item === 'Evidence holds' && r.status === 'manual')), holds];
   if (args.url) {
     results.push(...(await probeDeployment(args.url, fetchFn)));
     // The CI of the deployed build (#1995) replaces the manual RLS matrix line.

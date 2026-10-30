@@ -1,9 +1,9 @@
 // Pilot readiness preflight (issue #308): the settings checks, the live probe with a fake fetch, and the exit codes.
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { vaultKeyId } from '@crove/kernel-runtime';
-import { KNOWN_DEFAULTS, PILOT_EXIT, REQUIRED_SECRETS, checkEnv, parsePilotArgs, probeBuildChecks, probeDeployment, runPilotCheck, type CheckResult, type Env, type Fetch } from '../src/pilot-check.ts';
+import { KNOWN_DEFAULTS, PILOT_EXIT, REQUIRED_SECRETS, checkEnv, parsePilotArgs, probeBuildChecks, probeDeployment, probeEvidenceHolds, runPilotCheck, type CheckResult, type Env, type Fetch } from '../src/pilot-check.ts';
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 
@@ -489,5 +489,44 @@ describe('pilot-check CI of the deployed build (#1995)', () => {
     const out = lines.join('\n');
     expect(out).toMatch(/^PASS +RLS matrix +CI passed on the deployed build/m);
     expect(out).not.toMatch(/^MANUAL +RLS matrix/m);
+  });
+});
+
+// #1996: the evidence holds item asks the files bucket for its Object Lock, the way the worker does, when holds are on.
+describe('pilot-check evidence holds (#1996)', () => {
+  const S3: Env = { STORAGE: 's3', S3_BUCKET: 'crove-files', S3_ENDPOINT: 'https://s3.example.com', S3_ACCESS_KEY_ID: 'key', S3_SECRET_ACCESS_KEY: fake('s3-secret') };
+
+  it('passes a bucket with Object Lock and fails one without', async () => {
+    expect(await probeEvidenceHolds(S3, async () => true)).toMatchObject({ item: 'Evidence holds', status: 'pass' });
+    const without = await probeEvidenceHolds(S3, async () => false);
+    expect(without).toMatchObject({ item: 'Evidence holds', status: 'fail' });
+    expect(without?.message).toContain('crove-files has no Object Lock');
+  });
+
+  it('leaves it to the person when the bucket does not answer, naming the permission and never the error text', async () => {
+    const denied = Object.assign(new Error('Access Denied for key AKIA... on crove-files'), { name: 'AccessDenied', $metadata: { httpStatusCode: 403 } });
+    const result = await probeEvidenceHolds(S3, async () => {
+      throw denied;
+    });
+    expect(result).toMatchObject({ item: 'Evidence holds', status: 'manual' });
+    expect(result?.message).toContain('AccessDenied (403)');
+    expect(result?.message).toContain('s3:GetBucketObjectLockConfiguration');
+    expect(result?.message).not.toContain('AKIA');
+  });
+
+  it('asks nothing when holds are off or files are on local disk', async () => {
+    const asked = vi.fn(async () => true);
+    expect(await probeEvidenceHolds({ ...S3, EVIDENCE_LOCK_DAYS: '0' }, asked)).toBeNull();
+    expect(await probeEvidenceHolds({ ...S3, STORAGE: 'local' }, asked)).toBeNull();
+    expect(await probeEvidenceHolds({}, asked)).toBeNull();
+    expect(asked).not.toHaveBeenCalled();
+  });
+
+  it('replaces the manual evidence holds line of the run', async () => {
+    const lines: string[] = [];
+    await runPilotCheck([], { ...READY, ...S3 }, fakeFetch({}), (line) => lines.push(line), async () => false);
+    const out = lines.join('\n');
+    expect(out).toMatch(/^FAIL +Evidence holds +the files bucket crove-files has no Object Lock/m);
+    expect(out).not.toMatch(/^MANUAL +Evidence holds/m);
   });
 });
