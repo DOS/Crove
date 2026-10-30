@@ -50,6 +50,39 @@ export function holderCandidates<A extends { id: string; templateKey: string; st
   );
 }
 
+// A position's legal entities (#1763): every entity ('*' alone) or some of the org's, by id, as the chart commands take
+// them. The picker sends one only where the org has more than one entity; with a single entity the screen is as before.
+export const EVERY_ENTITY = ['*'] as const;
+export type LeScope = readonly string[];
+
+export const isEveryEntity = (scope: LeScope): boolean => scope.includes('*');
+
+// The most entities a position names one by one (the commands' limit); past it, every entity is the choice.
+export const LE_SCOPE_MAX = 50;
+
+// Some entities with `id` turned on or off, in the order of `entities` (the server keeps what it is sent). An id the
+// list does not hold (an entity the reader cannot see) is kept, so a change never drops it unseen.
+export function toggleScopeEntity(scope: LeScope, id: string, on: boolean, entities: ReadonlyArray<{ id: string }>): string[] {
+  const chosen = new Set(isEveryEntity(scope) ? [] : scope);
+  if (on) chosen.add(id);
+  else chosen.delete(id);
+  const listed = new Set(entities.map((e) => e.id));
+  return [...entities.filter((e) => chosen.has(e.id)).map((e) => e.id), ...[...chosen].filter((c) => !listed.has(c))];
+}
+
+// What a new position starts with until the owner picks: the org's default entity, as the server gives it.
+export function defaultScope(entities: ReadonlyArray<{ id: string; isDefault: boolean }>): string[] {
+  const chosen = entities.find((e) => e.isDefault) ?? entities[0];
+  return chosen ? [chosen.id] : [];
+}
+
+// The names of a scope's entities for display, in the order of `entities`; null for every entity. An id the reader
+// cannot name (an entity they may not see) is left out.
+export function scopeNames(scope: LeScope, entities: ReadonlyArray<{ id: string; name: string }>): string[] | null {
+  if (isEveryEntity(scope)) return null;
+  return entities.filter((e) => scope.includes(e.id)).map((e) => e.name);
+}
+
 export interface AgentPermissions {
   // Owners and admins: "Stop AI" is R1, never behind a second factor.
   stop: boolean;
