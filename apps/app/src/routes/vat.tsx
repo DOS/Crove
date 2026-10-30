@@ -524,7 +524,18 @@ export function VatPage() {
 
           <section>
             <h2 className="mb-2 text-base font-semibold text-foreground">{t('ratesTitle')}</h2>
-            <DataTable numeric={[1, 2, 3, 4]} head={[t('columns.rate'), t('columns.outputTaxable'), t('columns.outputVat'), t('columns.inputTaxable'), t('columns.inputVat')]}>
+            <DataTable
+              numeric={[1, 2, 3, 4]}
+              head={[t('columns.rate'), t('columns.outputTaxable'), t('columns.outputVat'), t('columns.inputTaxable'), t('columns.inputVat')]}
+              foot={
+                <TableRow>
+                  <TableCell className="px-4 py-3 text-foreground">{t('total')}</TableCell>
+                  <TableCell className={NUM}>{f.money(data.output.totals.taxable)}</TableCell>
+                  <TableCell className={NUM}>{f.money(data.output.totals.vat)}</TableCell>
+                  <TableCell className={NUM}>{f.money(data.input.totals.taxable)}</TableCell>
+                  <TableCell className={NUM}>{f.money(data.input.totals.vat)}</TableCell>
+                </TableRow>
+              }>
               {rateRows.map(({ input, output }) => (
                 <TableRow key={input.rate}>
                   <TableCell className="px-4 py-3 text-foreground">{t(`rates.${input.rate}`)}</TableCell>
@@ -534,13 +545,6 @@ export function VatPage() {
                   <TableCell className={NUM}>{f.money(input.vat)}</TableCell>
                 </TableRow>
               ))}
-              <TableRow className="font-medium">
-                <TableCell className="px-4 py-3 text-foreground">{t('total')}</TableCell>
-                <TableCell className={NUM}>{f.money(data.output.totals.taxable)}</TableCell>
-                <TableCell className={NUM}>{f.money(data.output.totals.vat)}</TableCell>
-                <TableCell className={NUM}>{f.money(data.input.totals.taxable)}</TableCell>
-                <TableCell className={NUM}>{f.money(data.input.totals.vat)}</TableCell>
-              </TableRow>
             </DataTable>
           </section>
 
