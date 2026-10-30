@@ -98,7 +98,8 @@ async function dsn(bytes: Uint8Array): Promise<ExtractSuccess> {
 async function parseKind(kind: ExtractKind, bytes: Uint8Array): Promise<ExtractSuccess> {
   switch (kind) {
     case 'einvoice_xml':
-      // fast-xml-parser with entity processing off; DOCTYPE and ENTITY are refused before parsing.
+      // fast-xml-parser decoding only the predefined XML entities and character references; DOCTYPE and ENTITY are
+      // refused before parsing, so no entity can be declared.
       return { ok: true, kind, invoice: { ...parseEInvoiceXml(bytes), source: 'einvoice_xml' } };
     case 'pdf_text':
       return pdfText(bytes);

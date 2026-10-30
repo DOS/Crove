@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { EXTRACT_CLIENT_TIMEOUT_MS, EXTRACT_LIMITS, EXTRACT_TIMING, worstCaseCallMs, zExtractResponse, type ExtractResponse } from '@crove/extract-contract';
+import { EXTRACT_CLIENT_TIMEOUT_MS, EXTRACT_KINDS, EXTRACT_LIMITS, EXTRACT_TIMING, worstCaseCallMs, zExtractResponse, type ExtractResponse } from '@crove/extract-contract';
 import { IMAGE_MARKER, credentialVariables, enforcesAllowlist, loadExtractConfig, unexpectedVariables } from '../src/main.ts';
 import { DEFAULT_SANDBOX, PARSER_ENV, classifyExit, parserFlags, runSandboxed } from '../src/sandbox.ts';
 import { createExtractApp, createLimiter, type Runner } from '../src/server.ts';
@@ -172,7 +172,10 @@ describe('crove-extract HTTP service', () => {
     const app = createExtractApp();
     const unknown = await post(app, 'docx', encode('x'));
     expect(unknown.status).toBe(400);
-    expect(await answer(unknown)).toMatchObject({ code: 'bad_request' });
+    const refusal = await answer(unknown);
+    expect(refusal).toMatchObject({ code: 'bad_request' });
+    // The message names every kind the service takes, so it cannot fall behind EXTRACT_KINDS.
+    for (const kind of EXTRACT_KINDS) expect(refusal).toMatchObject({ message: expect.stringContaining(kind) });
     const empty = await post(app, 'einvoice_xml', new Uint8Array(0));
     expect(empty.status).toBe(422);
     expect(await answer(empty)).toMatchObject({ code: 'invalid' });

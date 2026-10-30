@@ -122,10 +122,7 @@ The sandbox reduces an HTML mail body to text and caps it (`mailText` in [`parse
 - **The signature check** has the gaps listed in the trust README, and applies to XML purchase invoices only.
 - **The sender of an email is not authenticated** (section 3).
 - **Feed refreshes** run on a timer outside a queue, so the queue egress test does not cover them; they use the guard.
-- **Stale text.**
-  - Plan §7.6 says per-org limits are checked "before any S3 or DB write" (the API stores the blob first and the worker applies the org's limits), that an e-invoice is "verified" only against an official source (what is built is the signature check above), and that SPF and DKIM are read.
-  - Two code comments say entity processing is off in the e-invoice parser ([`einvoice-xml.ts`](../../apps/extract/src/einvoice-xml.ts), [`parse.ts`](../../apps/extract/src/parse.ts)). It decodes the five predefined entities and character references, which the signature check needs, while DOCTYPE and ENTITY declarations are refused before parsing in every XML reader of the sandbox, so no entity can be declared.
-  - The error text for an unknown `kind` lists four of the eight kinds.
+- **Stale text in the plan.** Plan §7.6 says per-org limits are checked "before any S3 or DB write" (the API stores the blob first and the worker applies the org's limits), that an e-invoice is "verified" only against an official source (what is built is the signature check above), and that SPF and DKIM are read.
 
 ## Evidence
 
