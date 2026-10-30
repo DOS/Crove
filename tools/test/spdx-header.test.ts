@@ -2,7 +2,7 @@
 // The license header check for new source files (#1953): which files it reads, the line it accepts, and the line it asks
 // for.
 import { describe, expect, it } from 'vitest';
-import { checkedPaths, hasHeader, headerFor, missingHeaders } from '../ci/spdx-header.mjs';
+import { checkedPaths, escapeData, escapeProperty, hasHeader, headerFor, missingHeaders } from '../ci/spdx-header.mjs';
 
 describe('SPDX header check', () => {
   it('reads new TypeScript, JavaScript and SQL sources, but not third-party files or other kinds', () => {
@@ -44,5 +44,10 @@ describe('SPDX header check', () => {
     expect(missingHeaders(Object.keys(files), (path: string) => files[path] ?? '')).toEqual(['b.ts', 'c.sql']);
     expect(headerFor('b.ts')).toBe('// SPDX-License-Identifier: AGPL-3.0-only');
     expect(headerFor('c.sql')).toBe('-- SPDX-License-Identifier: AGPL-3.0-only');
+  });
+
+  it('escapes a path in the annotation, so it cannot end it or start another command', () => {
+    expect(escapeProperty('a,b:c%d\n::error::x.ts')).toBe('a%2Cb%3Ac%25d%0A%3A%3Aerror%3A%3Ax.ts');
+    expect(escapeData('line\r\n::warning::x')).toBe('line%0D%0A::warning::x');
   });
 });

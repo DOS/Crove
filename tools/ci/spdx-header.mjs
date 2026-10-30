@@ -9,7 +9,6 @@
 //   the merge commit's first parent. A renamed or moved file is not new. Exits 1 and names each file without the line,
 //   with the line to add for its kind.
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 export const IDENTIFIER = 'AGPL-3.0-only';
@@ -58,25 +57,36 @@ export function addedFiles(since) {
   return out.split('\0').filter(Boolean);
 }
 
-// A file's text, or '' when it cannot be read as one (a symbolic link to a directory, say), so it is reported.
-function readText(path) {
+// A file's committed text at HEAD (the blob, not the working tree, so a symbolic link is read as the link, never
+// followed), or '' when git cannot show it, so it is reported.
+function committedText(path) {
   try {
-    return readFileSync(path, 'utf8');
+    return execFileSync('git', ['cat-file', '-p', `HEAD:${path}`], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   } catch {
     return '';
   }
 }
 
+// GitHub workflow command escaping: a path is untrusted text, so a newline, '%', ':' or ',' in it cannot end the
+// annotation or start another command.
+export function escapeData(text) {
+  return text.replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
+}
+export function escapeProperty(text) {
+  return escapeData(text).replace(/:/g, '%3A').replace(/,/g, '%2C');
+}
+
 function main() {
   const since = process.argv[2] ?? execFileSync('git', ['merge-base', 'origin/main', 'HEAD'], { encoding: 'utf8' }).trim();
   const added = addedFiles(since);
-  const missing = missingHeaders(added, readText);
+  const missing = missingHeaders(added, committedText);
   if (missing.length === 0) {
     console.log(`spdx header OK: ${checkedPaths(added).length} new source file(s) checked`);
     return;
   }
   for (const path of missing) {
-    console.error(`::error file=${path},line=1::${path} is a new source file without its license line; add \`${headerFor(path)}\` as its first line (after a shebang).`);
+    const message = `${path} is a new source file without its license line; add \`${headerFor(path)}\` in its first ${HEADER_LINES} lines (after a shebang, if any), as a line comment or a /* */ comment.`;
+    console.error(`::error file=${escapeProperty(path)},line=1::${escapeData(message)}`);
   }
   process.exitCode = 1;
 }
