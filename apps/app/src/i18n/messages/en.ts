@@ -1934,8 +1934,15 @@ export const en = {
     stepUpApproveReversal: 'approve and post this reversal',
     shortcuts: 'Shortcuts: J or N next pending proposal · K or P previous one · A approve · E edit accounts · R reject · Ctrl K command palette',
     executedAt: 'Posted {at}',
-    rejected: 'Rejected',
-    expired: 'Expired',
+    // A proposal's status (lib/status.ts, #2000); executed shows executedAt with its time.
+    status: {
+      pending: 'Awaiting approval',
+      approved: 'Approved, running',
+      executed: 'Done',
+      rejected: 'Rejected',
+      failed: 'Failed to run',
+      expired: 'Expired',
+    },
     reading:
       'Reading the document again (reading {version}). The proposal is updated when it finishes; until then it cannot be approved, edited or rejected.',
     lastRunFailed: 'The last reading (reading {version}) failed: {error}.',

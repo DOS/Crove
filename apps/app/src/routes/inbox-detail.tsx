@@ -20,6 +20,7 @@ import { ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { accountLabel, pickableAccounts } from '../lib/accounts.ts';
 import { errorMessage, fetchFile, isStepUpRequired, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
+import { PROPOSAL_STATUS_VARIANT } from '../lib/status.ts';
 import { isZeroAmount, linesBalance, previewPurchaseJournal, previewSalesJournal } from '../lib/decimal.ts';
 import { nextDay, postingDateAllowed } from '../lib/period-lock.ts';
 import { useFormat } from '../i18n/provider.tsx';
@@ -686,14 +687,9 @@ function InboxDetail({ slug, id, split }: { slug: string; id: string; split: boo
             {t('resubmit')}
           </ConfirmDialog>
         )}
-        <Badge variant={item.status === 'executed' ? 'success' : item.status === 'expired' ? 'warning' : 'secondary'}>
-          {item.status === 'executed'
-            ? t('executedAt', { at: f.dateTime(item.decidedAt) })
-            : item.status === 'rejected'
-              ? t('rejected')
-              : item.status === 'expired'
-                ? t('expired')
-                : item.status}
+        {/* Every status in words, in its one chip (DESIGN.md §4.4, #2000). */}
+        <Badge variant={PROPOSAL_STATUS_VARIANT[item.status]}>
+          {item.status === 'executed' ? t('executedAt', { at: f.dateTime(item.decidedAt) }) : t(`status.${item.status}`)}
         </Badge>
         {item.voided && <Badge variant="destructive">{t('voidedBadge')}</Badge>}
         {/* DESIGN.md §5.1: every decision links to its audit log entry. By id alone, the log lists the decision (the

@@ -223,8 +223,9 @@ function LineState({ slug, line, canEnter, onEnter }: { slug: string; line: Bank
   }
   if (line.state.status === 'proposed') {
     return (
-      <Link to="/o/$slug/inbox/$id" params={{ slug, id: line.state.proposalId }} className="text-link underline">
-        {t('state.proposed')}
+      // The proposal waiting for a person, in its chip (DESIGN.md §4.4, #2000), which opens it.
+      <Link to="/o/$slug/inbox/$id" params={{ slug, id: line.state.proposalId }} className="hover:underline">
+        <Badge variant="proposal">{t('state.proposed')}</Badge>
       </Link>
     );
   }

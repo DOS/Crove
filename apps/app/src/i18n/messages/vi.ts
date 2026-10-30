@@ -1931,8 +1931,15 @@ export const vi = {
     stepUpApproveReversal: 'duyệt và ghi sổ bút toán đảo này',
     shortcuts: 'Phím tắt: J hoặc N sang đề xuất chờ duyệt tiếp theo · K hoặc P về đề xuất trước · A duyệt · E sửa tài khoản · R từ chối · Ctrl K mở bảng lệnh',
     executedAt: 'Đã ghi sổ {at}',
-    rejected: 'Đã từ chối',
-    expired: 'Đã hết hạn',
+    // A proposal's status (lib/status.ts, #2000); executed shows executedAt with its time.
+    status: {
+      pending: 'Chờ duyệt',
+      approved: 'Đã duyệt, đang thực hiện',
+      executed: 'Đã thực hiện',
+      rejected: 'Đã từ chối',
+      failed: 'Thực hiện lỗi',
+      expired: 'Đã hết hạn',
+    },
     reading:
       'Đang đọc lại chứng từ (lần đọc {version}). Đề xuất sẽ được cập nhật khi đọc xong; trong lúc này chưa duyệt, sửa hay từ chối được.',
     lastRunFailed: 'Lần đọc lại gần nhất (lần {version}) không thành công: {error}.',

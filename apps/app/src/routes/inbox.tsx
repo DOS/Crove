@@ -23,6 +23,7 @@ import { getConfig } from '../lib/auth.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { REVERSAL_KIND } from '../lib/reversal.ts';
 import { providerName } from '../lib/social.ts';
+import { FILE_STATE_VARIANT, type FileState } from '../lib/status.ts';
 import { toast } from '../lib/toast.ts';
 import { VOUCHER_KIND } from '../lib/vouchers.ts';
 import {
@@ -55,11 +56,9 @@ interface BulkRun {
 // One proposal as the Inbox lists it.
 type InboxItem = Awaited<ReturnType<typeof client.inbox.list>>[number];
 
-const FILE_STATUS = { processing: 'brand', waiting: 'warning', proposed: 'success', duplicate: 'warning', failed: 'destructive', expanded: 'success' } as const;
-type FileStatus = keyof typeof FILE_STATUS;
-
-function isFileStatus(status: string): status is FileStatus {
-  return Object.hasOwn(FILE_STATUS, status);
+// A file's chip, as the intake list shows the same state (lib/status.ts, #2000).
+function isFileStatus(status: string): status is FileState {
+  return Object.hasOwn(FILE_STATE_VARIANT, status);
 }
 
 // Bank statement lines with no voucher yet, per bank account (#326, stage 2b): each links to its account and the month
@@ -523,7 +522,7 @@ export function InboxPage() {
                 title={file.error ?? undefined}
               >
                 <span className="max-w-[16rem] truncate text-muted-foreground">{file.filename}</span>
-                <Badge variant={isFileStatus(file.status) ? FILE_STATUS[file.status] : 'secondary'}>
+                <Badge variant={isFileStatus(file.status) ? FILE_STATE_VARIANT[file.status] : 'secondary'}>
                   {isFileStatus(file.status) ? t(`fileStatus.${file.status}`) : file.status}
                 </Badge>
                 {file.status === 'failed' && file.canReextract && (
