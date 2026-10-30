@@ -186,8 +186,9 @@ suite('WORM fact stream: archive and tamper detection on PostgreSQL (#891)', () 
       if (i > 0) expect(b.window.from).toBe(batches[i - 1].window.to);
     });
     // Hashes and references only. A later batch version may also anchor a journal entry's legal entity under its own
-    // reference (entity:journal:<org>:<id>, #1489).
-    for (const b of batches) for (const [ref, hash] of b.rows as Array<[string, string]>) expect([ref, hash]).toEqual([expect.stringMatching(/^(entity:)?(audit:|journal:)[0-9a-f:-]+$/), expect.stringMatching(/^[0-9a-f]{64}$/)]);
+    // reference (entity:journal:<org>:<id>, #1489), and its source revision and payload hash (revision:journal:<org>:<id>,
+    // #1337).
+    for (const b of batches) for (const [ref, hash] of b.rows as Array<[string, string]>) expect([ref, hash]).toEqual([expect.stringMatching(/^(entity:|revision:)?(audit:|journal:)[0-9a-f:-]+$/), expect.stringMatching(/^[0-9a-f]{64}$/)]);
     // Written once, read-only.
     for (const key of keys) expect(statSync(join(dir, key)).mode & 0o222).toBe(0);
     await expect(store.put(keys[0] as string, new Uint8Array([1]))).rejects.toBeInstanceOf(ArchiveObjectExistsError);
