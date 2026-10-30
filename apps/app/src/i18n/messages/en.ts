@@ -1884,6 +1884,8 @@ export const en = {
     agentProposed: 'Proposed by AI agent: {name}',
     expiredReason: 'Expired after waiting {days, number} days',
     reversalKind: 'Reversal',
+    // A posted invoice whose entry was reversed (#2054), as the proposal page and the file say it.
+    voided: 'Voided (entry reversed)',
     voucherKind: 'Cash or bank voucher',
     journalVoucherKind: 'Journal voucher',
     saleKind: 'Sale',

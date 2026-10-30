@@ -483,6 +483,10 @@ export const zInboxItem = z.object({
   extracted: z.boolean(),
   // An expired proposal (#876): the whole days it waited for approval before it expired, its reason; null otherwise.
   expiredAfterDays: z.number().int().nonnegative().nullable(),
+  // An executed purchase whose document was voided by reversing its journal entry (#165): no longer in the books, so the
+  // list does not show it as posted (#2054), and its file may be read again and the invoice recorded anew. False for any
+  // other proposal.
+  voided: z.boolean(),
 });
 
 // Cash and bank vouchers (issue #327; cash-voucher.ts has the rest).
@@ -595,9 +599,6 @@ export const zInboxDetail = zInboxItem.extend({
       voucherCode: z.string().optional(),
     })
     .nullable(),
-  // An executed purchase whose document was voided by reversing its journal entry (#165): the file may be read again
-  // and the invoice recorded anew.
-  voided: z.boolean(),
   // The server's approval decision for the caller (plan §4.7 P10, P12): 'four_eyes' means the caller wrote
   // part of this revision and another eligible approver must approve it.
   canApprove: z.boolean(),

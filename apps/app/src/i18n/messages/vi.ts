@@ -1882,6 +1882,8 @@ export const vi = {
     agentProposed: 'AI agent đề xuất: {name}',
     expiredReason: 'Hết hạn sau {days, number} ngày chờ duyệt',
     reversalKind: 'Đảo bút toán',
+    // A posted invoice whose entry was reversed (#2054), as the proposal page and the file say it.
+    voided: 'Đã hủy (đảo bút toán)',
     voucherKind: 'Chứng từ thu chi',
     journalVoucherKind: 'Phiếu kế toán',
     saleKind: 'Bán ra',

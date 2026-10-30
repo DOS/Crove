@@ -155,6 +155,9 @@ describe('matched badge (#435)', () => {
     expect(showMatched({ ...row, warnChecks: 1 }, REVERSAL, VOUCHER)).toBe(false);
     expect(showMatched({ ...row, failedChecks: 1 }, REVERSAL, VOUCHER)).toBe(false);
     expect(showMatched({ ...row, duplicateOf: 'p0' }, REVERSAL, VOUCHER)).toBe(false);
+    // A posting a reversal voided (#2054) is no longer in the books: no success badge beside its voided chip.
+    expect(showMatched({ ...row, voided: true }, REVERSAL, VOUCHER)).toBe(false);
+    expect(showMatched({ ...row, voided: false }, REVERSAL, VOUCHER)).toBe(true);
     expect(showMatched({ ...row, kind: REVERSAL }, REVERSAL, VOUCHER)).toBe(false);
     expect(showMatched({ ...row, kind: VOUCHER }, REVERSAL, VOUCHER)).toBe(false);
     // A general journal voucher (#888) is entered by hand and has no checks either.
