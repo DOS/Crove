@@ -54,17 +54,21 @@ export interface StatementsBody {
 // The line amounts of one column, by line code; a code the column's period has no entries for reads 0, never absent.
 export type ColumnAmounts = Record<string, string>;
 
-// B02 for another period, shown beside the period's own.
+// B02 for another period, shown beside the period's own. `unmapped` counts the balances of that period no line reads
+// (the column is then incomplete), as the period's own `unmapped` list does for its statement.
 export interface ComparedPeriod {
   period: string;
   from: string;
   to: string;
   amounts: ColumnAmounts;
+  unmapped: number;
 }
 
 export interface StatementsComparison {
-  // B01 at the end of the previous year (`asOf`); null before 2000, where there is no previous year.
-  startOfYear: { asOf: string; amounts: ColumnAmounts } | null;
+  // B01 at the end of the previous year (`asOf`); null before 2000, where there is no previous year. `balanced` and
+  // `unmapped` are B01's own two warnings for that date: a start of year that does not balance or is incomplete must
+  // not read as a clean comparison.
+  startOfYear: { asOf: string; amounts: ColumnAmounts; balanced: boolean; unmapped: number } | null;
   // B02 for the same period of the previous year (a year: the previous year); null before 2000.
   lastYear: ComparedPeriod | null;
   // B02 for the month or quarter right before; null for a year, whose previous year is `lastYear`.
@@ -157,7 +161,7 @@ const amountsOf = (lines: ReportLine[]): ColumnAmounts => Object.fromEntries(lin
 function comparedPeriod(period: LedgerPeriod | null, rows: BalanceRow[], legalEntityId: string): ComparedPeriod | null {
   if (!period) return null;
   const b02 = buildB02(asEntries(rows, period.from, legalEntityId), legalEntityId, period.from, period.to);
-  return { period: period.period, from: period.from, to: period.to, amounts: amountsOf(b02.lines) };
+  return { period: period.period, from: period.from, to: period.to, amounts: amountsOf(b02.lines), unmapped: b02.unmapped.length };
 }
 
 async function unmappedRows(ctx: QueryContext, unmapped: UnmappedBalance[]): Promise<UnmappedRow[]> {
@@ -202,10 +206,11 @@ export async function financialStatements(ctx: QueryContext, periodText: string,
 export async function comparedStatements(ctx: QueryContext, periodText: string, legalEntityId: string): Promise<FinancialStatements> {
   const { body, sums, plan } = await readStatements(ctx, periodText, legalEntityId, true);
   const start = plan?.startOfYear ?? null;
+  const startB01 = start === null ? null : buildB01(asEntries(sums.start, start, legalEntityId), legalEntityId, start);
   return {
     ...body,
     comparison: {
-      startOfYear: start === null ? null : { asOf: start, amounts: amountsOf(buildB01(asEntries(sums.start, start, legalEntityId), legalEntityId, start).lines) },
+      startOfYear: start === null || startB01 === null ? null : { asOf: start, amounts: amountsOf(startB01.lines), balanced: startB01.balanced, unmapped: startB01.unmapped.length },
       lastYear: comparedPeriod(plan?.lastYear ?? null, sums.last_year, legalEntityId),
       previous: comparedPeriod(plan?.previous ?? null, sums.previous, legalEntityId),
     },

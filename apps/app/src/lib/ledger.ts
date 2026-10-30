@@ -71,14 +71,14 @@ export function balanceSide(balance: string): { side: 'debit' | 'credit' | null;
 export type StatementCompare = 'last_year' | 'previous';
 type ColumnAmounts = Record<string, string>;
 export interface StatementComparison {
-  startOfYear: { asOf: string; amounts: ColumnAmounts } | null;
-  lastYear: { period: string; amounts: ColumnAmounts } | null;
-  previous: { period: string; amounts: ColumnAmounts } | null;
+  startOfYear: { asOf: string; amounts: ColumnAmounts; balanced: boolean; unmapped: number } | null;
+  lastYear: { period: string; amounts: ColumnAmounts; unmapped: number } | null;
+  previous: { period: string; amounts: ColumnAmounts; unmapped: number } | null;
 }
 
 // B02's comparison column for the user's choice: the period before when it is chosen and exists (a year has none, its
 // previous year is `last_year`), else the same period last year; null when neither exists.
-export function b02Comparison(comparison: StatementComparison, choice: StatementCompare): { kind: StatementCompare; period: string; amounts: ColumnAmounts } | null {
+export function b02Comparison(comparison: StatementComparison, choice: StatementCompare): { kind: StatementCompare; period: string; amounts: ColumnAmounts; unmapped: number } | null {
   if (choice === 'previous' && comparison.previous) return { kind: 'previous', ...comparison.previous };
   return comparison.lastYear ? { kind: 'last_year', ...comparison.lastYear } : null;
 }

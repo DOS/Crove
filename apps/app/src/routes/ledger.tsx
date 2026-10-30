@@ -2,7 +2,7 @@
 // the receivables and payables per party, from posted entries, with one Excel workbook of all of them. The period
 // lock (#329) sits above the reports. The financial statements tab (issue #154) shows the DRAFT B01-DNN and B02-DNN
 // of the same period, with a workbook of its own.
-import { useState } from 'react';
+import { Fragment, useState, type ReactNode } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import { useTranslations } from 'use-intl';
@@ -223,22 +223,27 @@ interface UnmappedRow {
   amount: string;
 }
 
-// A column beside the statement's own (#2090): its heading and the amount of each line by code.
+// A column beside the statement's own (#2090): its heading and the amount of each line by code, and what its period's
+// own statement would warn about: B01 not balancing, and balances no line reads.
 interface ExtraColumn {
   head: string;
   amounts: Record<string, string>;
+  balanced?: boolean;
+  unmapped: number;
 }
 
 // One statement: its lines with the codes of the form, totals in bold, then the balances no line reads. `amountHead`
-// heads the statement's own column and `extra` the comparison columns after it.
+// heads the statement's own column and `extra` the comparison columns after it; `control` sits beside the title.
 function StatementTable({
   title,
+  control,
   amountHead,
   extra,
   lines,
   unmapped,
 }: {
   title: string;
+  control?: ReactNode;
   amountHead: string;
   extra: ExtraColumn[];
   lines: StatementLine[];
@@ -248,7 +253,24 @@ function StatementTable({
   const f = useFormat();
   return (
     <section className="space-y-3">
-      <h2 className="text-base font-semibold text-foreground">{title}</h2>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <h2 className="text-base font-semibold text-foreground">{title}</h2>
+        {control}
+      </div>
+      {extra.map((column) => (
+        <Fragment key={column.head}>
+          {column.balanced === false && (
+            <Alert className="border-warning/30 bg-warning/10 text-warning" role="status">
+              {t('compareUnbalanced', { column: column.head })}
+            </Alert>
+          )}
+          {column.unmapped > 0 && (
+            <Alert className="border-warning/30 bg-warning/10 text-warning" role="status">
+              {t('compareUnmapped', { column: column.head })}
+            </Alert>
+          )}
+        </Fragment>
+      ))}
       {unmapped.length > 0 && (
         <Alert className="border-warning/30 bg-warning/10 text-warning" role="note">
           <p className="font-medium">{t('unmappedTitle')}</p>
@@ -356,6 +378,7 @@ function Statements({ period }: { period: string }) {
         {
           head: t(against.kind === 'previous' ? 'columns.previousPeriod' : isYear ? 'columns.lastYear' : 'columns.sameLastYear', { period: against.period }),
           amounts: against.amounts,
+          unmapped: against.unmapped,
         },
       ]
     : [];
@@ -380,21 +403,27 @@ function Statements({ period }: { period: string }) {
       <StatementTable
         title={t('b01Title', { date: f.date(data.b01.asOf) })}
         amountHead={t('columns.endOfPeriod')}
-        extra={startOfYear ? [{ head: t('columns.startOfYear', { date: f.date(startOfYear.asOf) }), amounts: startOfYear.amounts }] : []}
+        extra={
+          startOfYear
+            ? [{ head: t('columns.startOfYear', { date: f.date(startOfYear.asOf) }), amounts: startOfYear.amounts, balanced: startOfYear.balanced, unmapped: startOfYear.unmapped }]
+            : []
+        }
         lines={data.b01.lines}
         unmapped={data.b01.unmapped}
       />
-      {data.comparison.previous && (
-        <label className="block text-xs">
-          <span className="text-subtle-foreground">{t('compareWith')}</span>
-          <NativeSelect aria-label={t('compareWith')} className="mt-1 w-56 max-w-full" value={compare} onChange={(e) => setCompare(e.target.value as StatementCompare)}>
-            <NativeSelectOption value="last_year">{t('compareLastYear')}</NativeSelectOption>
-            <NativeSelectOption value="previous">{t('comparePrevious')}</NativeSelectOption>
-          </NativeSelect>
-        </label>
-      )}
       <StatementTable
         title={t('b02Title', { from: f.date(data.b02.from), to: f.date(data.b02.to) })}
+        control={
+          data.comparison.previous && (
+            <label className="block text-xs">
+              <span className="text-subtle-foreground">{t('compareWith')}</span>
+              <NativeSelect aria-label={t('compareWith')} className="mt-1 w-56 max-w-full" value={compare} onChange={(e) => setCompare(e.target.value as StatementCompare)}>
+                <NativeSelectOption value="last_year">{t('compareLastYear')}</NativeSelectOption>
+                <NativeSelectOption value="previous">{t('comparePrevious')}</NativeSelectOption>
+              </NativeSelect>
+            </label>
+          )
+        }
         amountHead={t(isYear ? 'columns.thisYear' : 'columns.thisPeriod')}
         extra={b02Extra}
         lines={data.b02.lines}

@@ -53,9 +53,9 @@ describe('buildStatementsWorkbook', () => {
     const workbook = await readBack(
       statements({
         comparison: {
-          startOfYear: { asOf: '2025-12-31', amounts: { '181': '100000', '200': '100000', '311': '-12345678901234567', '500': '100000' } },
-          lastYear: { period: '2025-09', from: '2025-09-01', to: '2025-09-30', amounts: { '24': '900000', '60': '-900000' } },
-          previous: { period: '2026-08', from: '2026-08-01', to: '2026-08-31', amounts: { '24': '1800000' } },
+          startOfYear: { asOf: '2025-12-31', amounts: { '181': '100000', '200': '100000', '311': '-12345678901234567', '500': '100000' }, balanced: true, unmapped: 0 },
+          lastYear: { period: '2025-09', from: '2025-09-01', to: '2025-09-30', amounts: { '24': '900000', '60': '-900000' }, unmapped: 0 },
+          previous: { period: '2026-08', from: '2026-08-01', to: '2026-08-31', amounts: { '24': '1800000' }, unmapped: 0 },
         },
       }),
     );
@@ -76,11 +76,29 @@ describe('buildStatementsWorkbook', () => {
     ]);
   });
 
+  it('warns under a comparison column that does not balance or that no line reads in full', async () => {
+    const workbook = await readBack(
+      statements({
+        comparison: {
+          startOfYear: { asOf: '2025-12-31', amounts: { '200': '100' }, balanced: false, unmapped: 2 },
+          lastYear: { period: '2025-09', from: '2025-09-01', to: '2025-09-30', amounts: {}, unmapped: 1 },
+          previous: { period: '2026-08', from: '2026-08-01', to: '2026-08-31', amounts: {}, unmapped: 0 },
+        },
+      }),
+    );
+    // B01's own figures balance here, so the only warnings are the start of year's.
+    expect(rowsOf(workbook.getWorksheet('B01-DNN')).slice(7)).toEqual([
+      ['Cảnh báo: tổng tài sản (mã 200) và tổng nguồn vốn (mã 500) của cột Số đầu năm (2025-12-31) không bằng nhau'],
+      ['Cảnh báo: cột Số đầu năm (2025-12-31) có số dư chưa được chỉ tiêu nào đọc, báo cáo chưa đầy đủ'],
+    ]);
+    expect(rowsOf(workbook.getWorksheet('B02-DNN')).slice(5)).toEqual([['Cảnh báo: cột Cùng kỳ năm trước (2025-09) có số dư chưa được chỉ tiêu nào đọc, báo cáo chưa đầy đủ']]);
+  });
+
   it('names the previous year for a year, and leaves out a comparison that does not exist', async () => {
     const year = await readBack(
       statements({
         period: '2026',
-        comparison: { startOfYear: null, lastYear: { period: '2025', from: '2025-01-01', to: '2025-12-31', amounts: { '24': '5000' } }, previous: null },
+        comparison: { startOfYear: null, lastYear: { period: '2025', from: '2025-01-01', to: '2025-12-31', amounts: { '24': '5000' }, unmapped: 0 }, previous: null },
       }),
     );
     expect(rowsOf(year.getWorksheet('B02-DNN')).slice(2, 4)).toEqual([

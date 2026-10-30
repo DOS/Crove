@@ -1089,15 +1089,17 @@ const zStatementLine = z.object({ code: z.string(), label: z.string(), amount: z
 const zUnmappedRow = z.object({ accountCode: z.string(), accountName: z.string().nullable(), partyName: z.string().nullable(), amount: zMoney });
 // The comparison columns (#2090): the line amounts of another period by line code. `startOfYear` is B01 at the end of
 // the previous year, `lastYear` is B02 for the same period a year earlier and `previous` is B02 for the month or quarter
-// right before (null for a year). Each is null where there is no earlier period (before the year 2000).
+// right before (null for a year). Each is null where there is no earlier period (before the year 2000). `unmapped`
+// counts the balances of that period no line reads, and `balanced` is B01's total assets equal to its total sources:
+// the warnings of the period's own statement, kept for the column.
 const zColumnAmounts = z.record(z.string(), zMoney);
-const zComparedPeriod = z.object({ period: zLedgerPeriod, from: zLocalDate, to: zLocalDate, amounts: zColumnAmounts });
+const zComparedPeriod = z.object({ period: zLedgerPeriod, from: zLocalDate, to: zLocalDate, amounts: zColumnAmounts, unmapped: z.number().int().nonnegative() });
 export const zFinancialStatements = z.object({
   period: zLedgerPeriodRange,
   b01: z.object({ asOf: zLocalDate, lines: z.array(zStatementLine), unmapped: z.array(zUnmappedRow), balanced: z.boolean() }),
   b02: z.object({ from: zLocalDate, to: zLocalDate, lines: z.array(zStatementLine), unmapped: z.array(zUnmappedRow) }),
   comparison: z.object({
-    startOfYear: z.object({ asOf: zLocalDate, amounts: zColumnAmounts }).nullable(),
+    startOfYear: z.object({ asOf: zLocalDate, amounts: zColumnAmounts, balanced: z.boolean(), unmapped: z.number().int().nonnegative() }).nullable(),
     lastYear: zComparedPeriod.nullable(),
     previous: zComparedPeriod.nullable(),
   }),

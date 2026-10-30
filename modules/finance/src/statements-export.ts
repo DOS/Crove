@@ -16,6 +16,9 @@ export const DRAFT_NOTICE = 'BẢN NHÁP: mã chỉ tiêu và cách lấy số l
 interface ComparisonColumn {
   header: string;
   amounts: ColumnAmounts;
+  // B01's two warnings for the column's date, and the balances of the column's period no line reads.
+  balanced?: boolean;
+  unmapped: number;
 }
 
 function statementSheet(
@@ -67,6 +70,15 @@ function statementSheet(
       setMoney(row.getCell('amount'), u.amount);
     }
   }
+  // A comparison column that is incomplete or does not balance says so, as the sheet's own figures do.
+  for (const c of comparisons) {
+    if (c.balanced === false) {
+      setText(sheet.addRow([]).getCell('label'), `Cảnh báo: tổng tài sản (mã 200) và tổng nguồn vốn (mã 500) của cột ${c.header} không bằng nhau`);
+    }
+    if (c.unmapped > 0) {
+      setText(sheet.addRow([]).getCell('label'), `Cảnh báo: cột ${c.header} có số dư chưa được chỉ tiêu nào đọc, báo cáo chưa đầy đủ`);
+    }
+  }
   return sheet;
 }
 
@@ -83,7 +95,7 @@ export async function buildStatementsWorkbook(statements: FinancialStatements, o
     `Số cuối kỳ (${statements.b01.asOf})`,
     statements.b01.lines,
     statements.b01.unmapped,
-    startOfYear ? [{ header: `Số đầu năm (${startOfYear.asOf})`, amounts: startOfYear.amounts }] : [],
+    startOfYear ? [{ header: `Số đầu năm (${startOfYear.asOf})`, amounts: startOfYear.amounts, balanced: startOfYear.balanced, unmapped: startOfYear.unmapped }] : [],
   );
   if (!statements.b01.balanced) {
     const note = b01.addRow([]);
@@ -98,8 +110,8 @@ export async function buildStatementsWorkbook(statements: FinancialStatements, o
     statements.b02.lines,
     statements.b02.unmapped,
     [
-      ...(lastYear ? [{ header: `${statements.period.kind === 'year' ? 'Năm trước' : 'Cùng kỳ năm trước'} (${lastYear.period})`, amounts: lastYear.amounts }] : []),
-      ...(previous ? [{ header: `Kỳ liền trước (${previous.period})`, amounts: previous.amounts }] : []),
+      ...(lastYear ? [{ header: `${statements.period.kind === 'year' ? 'Năm trước' : 'Cùng kỳ năm trước'} (${lastYear.period})`, amounts: lastYear.amounts, unmapped: lastYear.unmapped }] : []),
+      ...(previous ? [{ header: `Kỳ liền trước (${previous.period})`, amounts: previous.amounts, unmapped: previous.unmapped }] : []),
     ],
   );
   return new Uint8Array(await workbook.xlsx.writeBuffer());

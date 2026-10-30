@@ -39,9 +39,9 @@ describe('balanceSide', () => {
 });
 
 describe('statement comparison columns (#2090)', () => {
-  const lastYear = { period: '2025-09', amounts: { '24': '900000' } };
-  const previous = { period: '2026-08', amounts: { '24': '1800000' } };
-  const startOfYear = { asOf: '2025-12-31', amounts: { '200': '100000' } };
+  const lastYear = { period: '2025-09', amounts: { '24': '900000' }, unmapped: 0 };
+  const previous = { period: '2026-08', amounts: { '24': '1800000' }, unmapped: 1 };
+  const startOfYear = { asOf: '2025-12-31', amounts: { '200': '100000' }, balanced: true, unmapped: 0 };
 
   it('reads B02 against the same period last year, and against the period before when it is picked', () => {
     const comparison = { startOfYear, lastYear, previous };
@@ -50,7 +50,7 @@ describe('statement comparison columns (#2090)', () => {
   });
 
   it('falls back to last year where there is no period before (a year), and to nothing before the first year', () => {
-    expect(b02Comparison({ startOfYear, lastYear: { period: '2025', amounts: {} }, previous: null }, 'previous')).toEqual({ kind: 'last_year', period: '2025', amounts: {} });
+    expect(b02Comparison({ startOfYear, lastYear: { period: '2025', amounts: {}, unmapped: 0 }, previous: null }, 'previous')).toEqual({ kind: 'last_year', period: '2025', amounts: {}, unmapped: 0 });
     expect(b02Comparison({ startOfYear: null, lastYear: null, previous: null }, 'last_year')).toBeNull();
     expect(b02Comparison({ startOfYear: null, lastYear: null, previous }, 'last_year')).toBeNull();
   });

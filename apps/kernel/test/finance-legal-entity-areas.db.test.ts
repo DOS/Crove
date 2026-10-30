@@ -487,8 +487,19 @@ suite('finance books per legal entity, part 2b (#1280)', () => {
     const check = await runtime.query<{ warnings: string[] }>('finance.statements.htkk_check', { year: 2025, legalEntityId: hue }, as(member));
     expect(check.warnings).not.toContain('YEAR_NOT_CLOSED');
     expect((await runtime.query<{ warnings: string[] }>('finance.statements.htkk_check', { year: 2025 }, as(member))).warnings).toContain('YEAR_NOT_CLOSED');
-    const statements = await runtime.query<{ b02: { lines: unknown[] } }>('finance.statements.period', { period: '2025', legalEntityId: hue }, as(member));
+    const statements = await runtime.query<{ b02: { lines: Array<{ code: string; amount: string }> } }>('finance.statements.period', { period: '2025', legalEntityId: hue }, as(member));
     expect(statements.b02.lines.length).toBeGreaterThan(0);
+    // The comparison columns read the entity named (#2090): Huế's 2025 is its previous year and its start of year, and the
+    // default entity, which booked nothing in 2025, compares against zeros.
+    type Compared = { comparison: { startOfYear: { amounts: Record<string, string> } | null; lastYear: { amounts: Record<string, string> } | null } };
+    const next = await runtime.query<Compared>('finance.statements.period', { period: '2026', legalEntityId: hue }, as(member));
+    expect(next.comparison.lastYear?.amounts).toEqual(Object.fromEntries(statements.b02.lines.map((l) => [l.code, l.amount])));
+    expect(Object.values(next.comparison.lastYear?.amounts ?? {}).some((amount) => amount !== '0')).toBe(true);
+    // Cash B01 reads: the 900,000 the voucher debited on 1111 is still there at the end of 2025.
+    expect(next.comparison.startOfYear?.amounts['110']).toBe('900000');
+    const other = await runtime.query<Compared>('finance.statements.period', { period: '2026' }, as(member));
+    expect(Object.keys(other.comparison.lastYear?.amounts ?? {}).length).toBeGreaterThan(0);
+    expect(Object.values(other.comparison.lastYear?.amounts ?? {}).every((amount) => amount === '0')).toBe(true);
   });
 
   it('exports the books of the entity named, and records it', async () => {
