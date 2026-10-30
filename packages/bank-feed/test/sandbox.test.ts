@@ -2,7 +2,7 @@
 // The offline sandbox bank feed (ADR-0039): its logins, accounts and pulls, the same transactions for a day every time,
 // pages and the cursor, and the refusals.
 import { describe, expect, it } from 'vitest';
-import { BANK_FEED_PROVIDERS, isBankFeedProvider, sandboxBankFeed } from '../src/index.ts';
+import { BANK_FEED_PROVIDERS, allowlistedFetch, bankFeedProviders, isBankFeedProvider, sandboxBankFeed } from '../src/index.ts';
 
 const at = (iso: string) => () => new Date(iso);
 
@@ -52,5 +52,25 @@ describe('the sandbox bank feed', () => {
     await expect(feed.accounts('stolen')).rejects.toThrow(/invalid secret/);
     await expect(feed.pull(secret, 'SBX-999', null)).rejects.toThrow(/unknown account/);
     await expect(feed.pull(secret, 'SBX-001', 'yesterday')).rejects.toThrow(/invalid cursor/);
+  });
+});
+
+describe('the adapters a deployment offers', () => {
+  it('offers the sandbox only when it is on', () => {
+    expect(Object.keys(bankFeedProviders({ sandbox: true }))).toEqual(['bank_sandbox']);
+    expect(bankFeedProviders({ sandbox: false })).toEqual({});
+  });
+
+  it('binds an adapter to its hosts: https only, no other host, no redirect followed', async () => {
+    const calls: Array<{ url: string; redirect: RequestInit['redirect'] }> = [];
+    const fetchImpl = async (url: string, init?: RequestInit) => {
+      calls.push({ url, redirect: init?.redirect });
+      return new Response('{}');
+    };
+    const bound = allowlistedFetch(['api.bank.example'], fetchImpl);
+    await bound('https://api.bank.example/v1/accounts');
+    await expect(bound('https://evil.example/v1/accounts')).rejects.toThrow(/host not allowed/);
+    await expect(bound('http://api.bank.example/v1/accounts')).rejects.toThrow(/host not allowed/);
+    expect(calls).toEqual([{ url: 'https://api.bank.example/v1/accounts', redirect: 'manual' }]);
   });
 });

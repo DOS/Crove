@@ -54,6 +54,26 @@ export interface BankFeedProvider {
   pull(secret: string, externalAccountId: string, cursor: string | null): Promise<BankFeedPull>;
 }
 
+export type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
+
+// fetch limited to the hosts an adapter declares (ADR-0039 point 2), over https, with a timeout; a redirect is not
+// followed, so an allowed host cannot hand the request and its credential to another one. Every adapter that reaches
+// a provider gets its fetch from here (bankFeedProviders), never the global one.
+export function allowlistedFetch(hosts: readonly string[], fetchImpl: Fetch = fetch, timeoutMs = 15_000): Fetch {
+  const allowed = new Set(hosts);
+  return async (input, init) => {
+    const url = new URL(input);
+    if (url.protocol !== 'https:' || !allowed.has(url.hostname)) throw new Error(`host not allowed for this bank feed: ${url.hostname}`);
+    return fetchImpl(url.toString(), { ...init, redirect: 'manual', signal: init?.signal ?? AbortSignal.timeout(timeoutMs) });
+  };
+}
+
+// The adapters this deployment offers, by provider id: the sandbox when it is on (BANK_FEED_SANDBOX). A real adapter
+// is built here with allowlistedFetch(itsHosts, fetchImpl); none exists yet (Tingee is #2045).
+export function bankFeedProviders(options: { sandbox: boolean; now?: () => Date }): Readonly<Record<string, BankFeedProvider>> {
+  return options.sandbox ? { bank_sandbox: sandboxBankFeed(options.now) } : {};
+}
+
 // The offline sandbox (ADR-0039): no network, so the connect, map and sync flow runs on a laptop and in tests. Its
 // secret is random and sealed like any other, so the credential path is exercised end to end. It reaches two accounts
 // and reports, for each day, the same transactions every time it is asked (references derived from the account and
