@@ -319,8 +319,8 @@ suite('private notes on PostgreSQL (#1671, ADR-0037)', () => {
   });
 
   // The personal-data finder (#1678, ADR-0037 section 5): per author, how many private notes and to-dos mention a value,
-  // for owners and admins in their own context only; never which ones or their text.
-  it('counts the private items that mention a value for owners only (admins too until #1972 lands), with no text (#1678)', async () => {
+  // for owners in their own context only (#1972); never which ones or their text.
+  it('counts the private items that mention a value for owners only, with no text (#1678, #1972)', async () => {
     const mention = randomUUID();
     await admin((c) =>
       c.query(`INSERT INTO crove_notes.note (org_id, id, author_user_id, visibility, title, body) VALUES ($1, $2, $3, 'private', 'Gọi lại', 'Giam.Doc@khach.example')`, [
@@ -337,12 +337,9 @@ suite('private notes on PostgreSQL (#1671, ADR-0037)', () => {
         expect(owner.value.fields.map((f) => f.name)).toEqual(['author_user_id', 'notes', 'todos']);
         expect(owner.value.rows).toEqual([{ author_user_id: users.author, notes: '1', todos: '0' }]);
       }
-      // An admin: the same counts, or 42501 once #1972 narrows the definer to owners (step 2). Both are accepted here
-      // so the narrowing can land with this suite running from base; step 2 then asserts the refusal alone.
-      const asAdmin = await matches(member('an admin', () => users.admin));
-      if (asAdmin.ok) expect(asAdmin.value.rows).toEqual([{ author_user_id: users.author, notes: '1', todos: '0' }]);
-      else expect(asAdmin).toMatchObject({ ok: false, code: '42501' });
-      for (const actor of [author, member('another member', () => users.member), member('a viewer', () => users.viewer), agentActor, system]) {
+      // An admin too is refused (#1972): the counts are an oracle for a guessed value, so only owners, who send the
+      // notice and erase, get them.
+      for (const actor of [member('an admin', () => users.admin), author, member('another member', () => users.member), member('a viewer', () => users.viewer), agentActor, system]) {
         expect(await matches(actor), actor.name).toMatchObject({ ok: false, code: '42501' });
       }
     } finally {
