@@ -4,7 +4,8 @@
 // runs it in the worker's container before the stack starts, and an operator may run it again at any time (the worker
 // login is the only role that may read the archive hashes and run the reseed):
 //
-//   restore-report [--reseed] [--floor <org id>:<legal entity id>:<doc type>:<period key>=<next number>]... [--json]
+//   restore-report [--reseed] [--floor <org id>:<legal entity id>:<doc type>:<period key>=<next number>]...
+//                  [--floors-complete <org id>]... [--json]
 //
 // The report (worm.ts, restoreReport) names, per org, the journal entries, vouchers, document voids, number
 // allocations, number voids and series the archive holds and the database lacks, the batches written after the backup
@@ -14,7 +15,10 @@
 // becomes the archived highest + 1, and a series the restore lost is created again with its archived id and key. It
 // never lowers a number. An org with lost allocations that no version 7 batch covers (the archive ends before the
 // first one) cannot be reseeded from the archive: the operator reads the highest number of each of its series from
-// the issued vouchers and passes it as a --floor (the next number to give), which --reseed applies too.
+// the issued vouchers and passes it as a --floor (the next number to give), which --reseed applies too. Such an org is
+// done only with a floor for every series the restored database has for it, and --floors-complete <org id>, by which
+// the operator confirms that every series it numbered after the backup point (made since, so in the vouchers only) has
+// one too.
 // --json prints the report as JSON on stdout and the summary on stderr.
 // Exit codes: 0 the archive and the database agree; 2 rows were lost and every series is above the archive (the
 // report names what to reconcile); 3 a series is still behind, or an org needs a floor: keep writes closed; 1 the
@@ -24,7 +28,7 @@ import { sql } from 'kysely';
 import { z } from 'zod';
 import type { Db } from '@crove/db';
 import { DomainError, defineCommand, type Actor, type CommandDef, type Runtime } from '@crove/kernel-runtime';
-import { restoreReport, type ArchiveStore, type RestoreReport, type RestoreSeries } from './worm.ts';
+import { restoreReport, type ArchiveStore, type RestoreReport, type RestoreSeries, type UncoveredSeries } from './worm.ts';
 
 export const RESTORE_REPORT_EXIT = { ok: 0, failed: 1, lost: 2, behind: 3 } as const;
 const OPERATOR: Actor = { type: 'system', component: 'operator' };
@@ -107,12 +111,15 @@ export interface RestoreReportArgs {
   reseed: boolean;
   json: boolean;
   floors: RestoreFloor[];
+  // The orgs whose floors the operator confirms complete: every series they numbered after the backup point has one.
+  floorsComplete: string[];
 }
 
+const ORG_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const FLOOR = /^([0-9a-f-]{36}):([0-9a-f-]{36}):([a-z][a-z0-9_.]*):([0-9]{4}(?:-(?:0[1-9]|1[0-2]))?|-)=([1-9][0-9]{0,17})$/;
 
 export function parseRestoreReportArgs(argv: readonly string[]): RestoreReportArgs {
-  const args: RestoreReportArgs = { reseed: false, json: false, floors: [] };
+  const args: RestoreReportArgs = { reseed: false, json: false, floors: [], floorsComplete: [] };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--') continue;
@@ -123,9 +130,17 @@ export function parseRestoreReportArgs(argv: readonly string[]): RestoreReportAr
       if (!match) throw new Error('--floor needs <org id>:<legal entity id>:<doc type>:<period key>=<next number>');
       const [, orgId = '', legalEntityId = '', docType = '', periodKey = '', next = ''] = match;
       args.floors.push({ orgId, legalEntityId, docType, periodKey, next });
-    } else throw new Error(`unknown argument ${arg}; use [--reseed] [--floor <org id>:<legal entity id>:<doc type>:<period key>=<next number>]... [--json]`);
+    } else if (arg === '--floors-complete') {
+      const orgId = (argv[++i] ?? '').trim().toLowerCase();
+      if (!ORG_ID.test(orgId)) throw new Error('--floors-complete needs an org id');
+      args.floorsComplete.push(orgId);
+    } else {
+      throw new Error(
+        `unknown argument ${arg}; use [--reseed] [--floor <org id>:<legal entity id>:<doc type>:<period key>=<next number>]... [--floors-complete <org id>]... [--json]`,
+      );
+    }
   }
-  if (args.floors.length > 0 && !args.reseed) throw new Error('--floor takes effect with --reseed only');
+  if ((args.floors.length > 0 || args.floorsComplete.length > 0) && !args.reseed) throw new Error('--floor and --floors-complete take effect with --reseed only');
   return args;
 }
 
@@ -145,7 +160,11 @@ export interface RestoreReportOutcome {
   // that still need a floor.
   behind: RestoreSeries[];
   failedFloors: Array<RestoreFloor & { reason: string }>;
+  // Orgs not yet done, each restored series of theirs still without a floor, and the orgs whose floors the operator has
+  // not confirmed complete.
   needFloor: string[];
+  missingFloors: UncoveredSeries[];
+  unconfirmed: string[];
 }
 
 const ids = (list: string[]) => (list.length <= SHOWN ? list.join(' ') : `${list.slice(0, SHOWN).join(' ')} and ${list.length - SHOWN} more`);
@@ -195,10 +214,15 @@ export async function restoreCheck(deps: RestoreReportDeps, args: RestoreReportA
   } else {
     behind.push(...report.reseed);
   }
-  // An org counts as floored once the operator named a floor for it: which of its series took numbers after the backup
-  // point is in the vouchers, not in the archive, so the runbook asks for one floor per such series.
-  const floored = new Set(trusted ? args.floors.map((f) => f.orgId) : []);
-  return { report, reseeded, behind, failedFloors, needFloor: report.uncovered.filter((org) => !floored.has(org)) };
+  // An org the archive does not cover is done with a floor raised for every series the restored database has for it,
+  // and the operator's word (--floors-complete) that every series it numbered after the backup point has one too.
+  const key = (s: { orgId: string; legalEntityId: string; docType: string; periodKey: string }) => `${s.orgId}|${s.legalEntityId}|${s.docType}|${s.periodKey}`;
+  const raised = new Set(reseeded.filter((r) => r.source === 'floor').map(key));
+  const missingFloors = report.uncoveredSeries.filter((s) => !raised.has(key(s)));
+  const confirmed = new Set(trusted ? args.floorsComplete : []);
+  const unconfirmed = report.uncovered.filter((org) => !confirmed.has(org));
+  const needFloor = report.uncovered.filter((org) => unconfirmed.includes(org) || missingFloors.some((s) => s.orgId === org));
+  return { report, reseeded, behind, failedFloors, needFloor, missingFloors, unconfirmed };
 }
 
 export function restoreReportLines(outcome: RestoreReportOutcome): string[] {
@@ -243,8 +267,17 @@ export function restoreReportLines(outcome: RestoreReportOutcome): string[] {
         'if the entity is entered again, give its series a --floor above that',
     );
   }
-  for (const org of outcome.needFloor) {
-    lines.push(`NEEDS A FLOOR: org ${org} lost number allocations that no version 7 batch covers; pass --floor for each of its series from the issued vouchers`);
+  for (const s of outcome.missingFloors) {
+    lines.push(
+      `NEEDS A FLOOR: org ${s.orgId} series ${s.legalEntityId} ${s.docType} ${s.periodKey} (restored next ${s.next}): no version 7 batch covers the org's lost numbers; ` +
+        `pass --floor ${s.orgId}:${s.legalEntityId}:${s.docType}:${s.periodKey}=<next number> from the issued vouchers`,
+    );
+  }
+  for (const org of outcome.unconfirmed) {
+    lines.push(
+      `NEEDS A FLOOR: org ${org} lost number allocations that no version 7 batch covers; once every series it numbered after the backup point has a --floor ` +
+        `(those made since are in the issued vouchers only), pass --floors-complete ${org}`,
+    );
   }
   lines.push('provider-issued numbers (e-invoices) are not in the archive: reconcile them with the provider (docs/runbooks/ledger-after-restore.md)');
   return lines;

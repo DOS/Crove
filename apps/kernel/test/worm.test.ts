@@ -628,6 +628,7 @@ describe('series highs and the restore report (#2007)', () => {
       ],
       reseed: [{ orgId: ORG, seriesId: SERIES, legalEntityId: ENTITY, docType: 'finance.journal_voucher', periodKey: '2026', archivedHigh: '6', next: '6' }],
       uncovered: [],
+      uncoveredSeries: [],
       orphaned: [],
       problems: [],
     });
@@ -646,7 +647,22 @@ describe('series highs and the restore report (#2007)', () => {
       { version: 6, rows: lost },
     ]);
     const legacy = await restoreReport(dbOf({ batches: old, recorded: 1, present: { [EPOCH]: kept }, series: [{ series_id: SERIES, next_number: '6' }] }), storeOf(old));
-    expect(legacy).toMatchObject({ reseed: [], uncovered: [ORG] });
+    expect(legacy).toMatchObject({
+      reseed: [],
+      uncovered: [ORG],
+      uncoveredSeries: [{ orgId: ORG, seriesId: SERIES, legalEntityId: ENTITY, docType: 'finance.journal_voucher', periodKey: '2026', next: '6' }],
+    });
+
+    // A high the reseed could not take (more than 18 digits) is not trusted: the report fails.
+    const huge = chainOf([
+      { version: 7, rows: kept, highs: [high('5')] },
+      { version: 7, rows: lost, highs: [high('1234567890123456789')] },
+    ]);
+    const tooLong = await restoreReport(
+      dbOf({ batches: huge, recorded: 1, present: { [EPOCH]: kept }, highs: { [EPOCH]: [high('5')] }, series: [{ series_id: SERIES, next_number: '6' }] }),
+      storeOf(huge),
+    );
+    expect(tooLong.problems).toEqual([{ code: 'high_mismatch', seq: 2, ref: highRef }]);
   });
 
   it('fails on a lower version after a version 7 batch: the numbers of its window have no highs', async () => {

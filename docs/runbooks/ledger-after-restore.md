@@ -63,18 +63,21 @@ docker compose run --rm --no-deps worker restore-report --reseed
 |---|---|---|
 | 0 | The archive and the restored database agree. | Nothing. |
 | 2 | Rows made after the backup point were lost; every series is above the archive. The restore goes on with a warning. | Reconcile (below). |
-| 3 | A series could not be raised from the archive. Some org lost number allocations that no version 7 batch covers, because the archive ends before the first one (#2007). `restore.sh` stops before the stack starts. | Name a floor for each series of that org (below), then start the stack (`docker compose up -d`). |
+| 3 | A series could not be raised. Either the reseed refused it (the reason is in the log), or some org lost number allocations that no version 7 batch covers, because the archive ends before the first one (#2007). `restore.sh` stops before the stack starts. | Name a floor for each series of that org and confirm them complete (below), then start the stack (`docker compose up -d`). |
 | 1 | The archive does not match: a broken chain, an edited batch, or a recorded batch that the store lacks, such as an archive setting that points at a new, empty store. `restore.sh` stops before the stack starts. | Point `ARCHIVE_*` at the deployment's surviving archive, or treat it as in [worm-archive.md](worm-archive.md), "Verification fails". |
 
-**A floor for a series the archive cannot raise.**
+**Floors for an org the archive cannot raise.** A floor is needed for every series of the org: one series left without one could give out an archived voucher number a second time.
 1. Read the highest number of each of the org's series from the vouchers issued after the backup point (paper or PDF).
-2. Pass the next number to give: `--floor <org id>:<legal entity id>:<doc type>:<period key>=<next number>`, once per series, for example:
+   - The run lists the series the restored database has for the org (`NEEDS A FLOOR: org ... series ...`).
+   - A series made after the backup point is not in the restored database, nor in such an archive. Find it in the issued vouchers too.
+2. Pass the next number to give, once per series: `--floor <org id>:<legal entity id>:<doc type>:<period key>=<next number>`.
+3. Once every series the org numbered after the backup point has its floor, confirm it with `--floors-complete <org id>`. For example:
 
    ```sh
-   docker compose run --rm --no-deps worker restore-report --reseed --floor <org id>:<legal entity id>:finance.cash_voucher.pt:2026=41
+   docker compose run --rm --no-deps worker restore-report --reseed --floor <org id>:<legal entity id>:finance.cash_voucher.pt:2026=41 --floor <org id>:<legal entity id>:finance.journal_voucher:2026=12 --floors-complete <org id>
    ```
 
-3. The run exits 2 once every such org has a floor.
+4. The run exits 2 once every listed series has a floor that the reseed accepted, and the org is confirmed. A floor never lowers a number, so a run with a floor too high leaves a gap; one too low changes nothing.
 
 **Reconcile before reopening writes.** The owner and the accountant (#61) decide what to enter again.
 - **Each lost journal entry and voucher.** Enter it again from its source document, with a new number. The number it had is in the archive's range of lost numbers, and the accountant notes the old and the new number on the voucher.

@@ -17,7 +17,7 @@ const OTHER = '0190f000-0000-7000-8000-00000000000b';
 const ENTITY = '0190f000-0000-7000-8000-0000000000e1';
 const SERIES = '0190f000-0000-7000-8000-0000000000f1';
 
-const clean: RestoreReport = { ok: true, batches: 3, recorded: 3, beyond: [], auditEvents: 0, orgs: [], reseed: [], uncovered: [], orphaned: [], problems: [] };
+const clean: RestoreReport = { ok: true, batches: 3, recorded: 3, beyond: [], auditEvents: 0, orgs: [], reseed: [], uncovered: [], uncoveredSeries: [], orphaned: [], problems: [] };
 const lostOne: RestoreReport = {
   ...clean,
   ok: false,
@@ -49,15 +49,18 @@ async function run(given: RestoreReport, argv: string[], refuse: (input: unknown
 }
 
 describe('restore-report arguments', () => {
-  it('reads --reseed, --json and floors named by org, entity, doc type and period', () => {
-    expect(parseRestoreReportArgs([])).toEqual({ reseed: false, json: false, floors: [] });
-    expect(parseRestoreReportArgs(['--reseed', '--json', '--floor', `${ORG}:${ENTITY}:finance.cash_voucher.pt:2026=41`])).toEqual({
+  it('reads --reseed, --json, floors named by org, entity, doc type and period, and the orgs whose floors are complete', () => {
+    expect(parseRestoreReportArgs([])).toEqual({ reseed: false, json: false, floors: [], floorsComplete: [] });
+    expect(parseRestoreReportArgs(['--reseed', '--json', '--floor', `${ORG}:${ENTITY}:finance.cash_voucher.pt:2026=41`, '--floors-complete', ORG])).toEqual({
       reseed: true,
       json: true,
       floors: [{ orgId: ORG, legalEntityId: ENTITY, docType: 'finance.cash_voucher.pt', periodKey: '2026', next: '41' }],
+      floorsComplete: [ORG],
     });
+    expect(() => parseRestoreReportArgs(['--floors-complete', ORG])).toThrow('take effect with --reseed only');
+    expect(() => parseRestoreReportArgs(['--reseed', '--floors-complete', 'acme'])).toThrow('--floors-complete needs an org id');
     expect(parseRestoreReportArgs(['--reseed', '--floor', `${ORG}:${ENTITY}:finance.journal_voucher:-=7`]).floors[0]?.periodKey).toBe('-');
-    expect(() => parseRestoreReportArgs(['--floor', `${ORG}:${ENTITY}:finance.journal_voucher:2026=7`])).toThrow('--floor takes effect with --reseed only');
+    expect(() => parseRestoreReportArgs(['--floor', `${ORG}:${ENTITY}:finance.journal_voucher:2026=7`])).toThrow('take effect with --reseed only');
     expect(() => parseRestoreReportArgs(['--reseed', '--floor', `${ORG}:${ENTITY}:finance.journal_voucher:2026=0`])).toThrow(/--floor needs/);
     expect(() => parseRestoreReportArgs(['--reseed', '--floor', `${ORG}:${ENTITY}:finance.journal_voucher:26=7`])).toThrow(/--floor needs/);
     expect(() => parseRestoreReportArgs(['--fix'])).toThrow('unknown argument --fix');
@@ -120,18 +123,30 @@ describe('restore-report run', () => {
     expect(lines).toEqual(expect.arrayContaining([expect.stringContaining(`lost with its org or legal entity: org ${ORG} series ${SERIES}`)]));
   });
 
-  it('needs a floor for an org the version 7 batches do not cover, and applies the floors given', async () => {
-    const legacy: RestoreReport = { ...lostOne, reseed: [], uncovered: [ORG, OTHER] };
+  it('needs a floor for every series of an org the version 7 batches do not cover, and the operator\'s word that none is missing', async () => {
+    const series = (docType: string) => ({ orgId: ORG, seriesId: SERIES, legalEntityId: ENTITY, docType, periodKey: '2026', next: '4' });
+    const legacy: RestoreReport = { ...lostOne, reseed: [], uncovered: [ORG], uncoveredSeries: [series('finance.journal_voucher'), series('finance.cash_voucher.pt')] };
+    const floor = (docType: string, next: string) => ['--floor', `${ORG}:${ENTITY}:${docType}:2026=${next}`];
     expect((await run(legacy, ['--reseed'])).code).toBe(RESTORE_REPORT_EXIT.behind);
-    const floored = await run(legacy, ['--reseed', '--floor', `${ORG}:${ENTITY}:finance.journal_voucher:2026=9`]);
-    expect(floored.code).toBe(RESTORE_REPORT_EXIT.behind);
-    expect(floored.lines).toContain(`[restore-report] NEEDS A FLOOR: org ${OTHER} lost number allocations that no version 7 batch covers; pass --floor for each of its series from the issued vouchers`);
-    const both = await run(legacy, ['--reseed', '--floor', `${ORG}:${ENTITY}:finance.journal_voucher:2026=9`, '--floor', `${OTHER}:${ENTITY}:finance.journal_voucher:2026=3`]);
-    expect(both.code).toBe(RESTORE_REPORT_EXIT.lost);
-    expect(both.calls.map((c) => [c.orgId, c.input])).toEqual([
+    // Two series, one floored: the other could give out an archived number again, so the run refuses.
+    const one = await run(legacy, ['--reseed', ...floor('finance.journal_voucher', '9'), '--floors-complete', ORG]);
+    expect(one.code).toBe(RESTORE_REPORT_EXIT.behind);
+    expect(one.lines).toEqual(expect.arrayContaining([expect.stringContaining(`NEEDS A FLOOR: org ${ORG} series ${ENTITY} finance.cash_voucher.pt 2026 (restored next 4)`)]));
+    // Every series floored, but no word that no series made after the backup point is missing.
+    const unconfirmed = await run(legacy, ['--reseed', ...floor('finance.journal_voucher', '9'), ...floor('finance.cash_voucher.pt', '41')]);
+    expect(unconfirmed.code).toBe(RESTORE_REPORT_EXIT.behind);
+    expect(unconfirmed.lines).toEqual(expect.arrayContaining([expect.stringContaining(`pass --floors-complete ${ORG}`)]));
+    const done = await run(legacy, ['--reseed', ...floor('finance.journal_voucher', '9'), ...floor('finance.cash_voucher.pt', '41'), '--floors-complete', ORG]);
+    expect(done.code).toBe(RESTORE_REPORT_EXIT.lost);
+    expect(done.calls.map((c) => [c.orgId, c.input])).toEqual([
       [ORG, { seriesId: null, legalEntityId: ENTITY, docType: 'finance.journal_voucher', periodKey: '2026', next: '9', source: 'floor', archivedHigh: null }],
-      [OTHER, { seriesId: null, legalEntityId: ENTITY, docType: 'finance.journal_voucher', periodKey: '2026', next: '3', source: 'floor', archivedHigh: null }],
+      [ORG, { seriesId: null, legalEntityId: ENTITY, docType: 'finance.cash_voucher.pt', periodKey: '2026', next: '41', source: 'floor', archivedHigh: null }],
     ]);
+    // A floor the reseed refuses does not count.
+    const refused = await run(legacy, ['--reseed', ...floor('finance.journal_voucher', '9'), ...floor('finance.cash_voucher.pt', '41'), '--floors-complete', ORG], (input) =>
+      (input as { docType: string }).docType === 'finance.cash_voucher.pt' ? new DomainError('NUMBER_RESEED_PERIOD_MISFIT', 422, 'Kỳ đánh số không khớp') : null,
+    );
+    expect(refused.code).toBe(RESTORE_REPORT_EXIT.behind);
   });
 
   it('raises nothing, from the archive or a floor, when the archive does not match, and exits 1', async () => {
@@ -146,12 +161,20 @@ describe('restore-report run', () => {
     const { code, lines, out } = await run(broken, ['--json']);
     expect(code).toBe(RESTORE_REPORT_EXIT.failed);
     expect(lines).toContain('[restore-report] PROBLEM: object_missing in batch 4');
-    expect(JSON.parse(out.join(''))).toMatchObject({ problems: [{ code: 'object_missing', seq: 4 }], reseeded: [], behind: [], failedFloors: [], needFloor: [] });
+    expect(JSON.parse(out.join(''))).toMatchObject({ problems: [{ code: 'object_missing', seq: 4 }], reseeded: [], behind: [], failedFloors: [], needFloor: [], missingFloors: [] });
   });
 
   it('lists at most 20 ids per kind in the summary', () => {
     const many = Array.from({ length: 25 }, (_, i) => `e${i}`);
-    const lines = restoreReportLines({ report: { ...lostOne, orgs: [{ ...lostOne.orgs[0]!, journalEntries: many }] }, reseeded: [], behind: [], failedFloors: [], needFloor: [] });
+    const lines = restoreReportLines({
+      report: { ...lostOne, orgs: [{ ...lostOne.orgs[0]!, journalEntries: many }] },
+      reseeded: [],
+      behind: [],
+      failedFloors: [],
+      needFloor: [],
+      missingFloors: [],
+      unconfirmed: [],
+    });
     expect(lines).toContain(`lost in org ${ORG}: 25 journal entries: ${many.slice(0, 20).join(' ')} and 5 more`);
   });
 });
