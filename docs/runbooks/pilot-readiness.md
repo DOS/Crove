@@ -121,7 +121,7 @@ Two ways hold this item. Pick one and record which in issue #308.
 The owner learns about an outage before the partner calls (M1-9, issue #309): prober alerts in a Telegram chat or Slack channel the owner reads, an outside uptime check on `/healthz` every 5 minutes, and a heartbeat monitor for the prober itself. Setting them up and testing each one: [alerts.md](alerts.md).
 
 - Checked by `pilot:check`: `ALERT_WEBHOOK_URL` is set and https, `PROBER_HEARTBEAT_URL` is https when set, and the prober accepts its settings (a Telegram webhook needs `ALERT_TELEGRAM_CHAT_ID`). The pass line says whether `COMPOSE_PROFILES` starts the prober.
-- `MANUAL`: the outside uptime check exists and the test alert (`pnpm alert:test`) reached the phone; without `prober` in `COMPOSE_PROFILES`, that a cron job runs the prober; without `PROBER_HEARTBEAT_URL`, that the owner accepts that nothing pages when the prober itself stops.
+- `MANUAL`: the outside uptime check exists and the test alert (`pnpm alert:test`) reached the phone; without `prober` in `COMPOSE_PROFILES`, that a cron job runs the prober; without `PROBER_HEARTBEAT_URL`, that the owner accepts that nothing pages when the prober itself stops; with `ARCHIVE_STORE=s3`, no `S3_ACCESS_KEY_ID` and `PROBER_ARCHIVE_S3_DEFAULT_CHAIN=true`, that the prober's role only reads the archive bucket (the worker is on the same default chain, so on one host the prober runs under the worker's role, which writes), or that it has a read-only `PROBER_ARCHIVE_S3_*` key pair of its own instead.
 
 ## 7. Owner sign-off
 

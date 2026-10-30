@@ -203,9 +203,22 @@ If a release with these migrations runs anyway:
 - The second fails on the check violation, and the deploy stops on that migration.
 - That half state refuses every new revision 2 and loses nothing. It stays until the forward migration above lands.
 
+## Upgrade notes
+
+Settings whose meaning changes between releases, to read before tagging the first release that contains the change. Nothing here changes data.
+
+### The prober's check of the archive's verification marker needs a key of its own (#2082, #2098, #2108)
+
+New in the first release after v0.1.1: the prober reads the newest verification marker from the WORM archive store and alerts when the nightly verification has not passed ([worm-archive.md](worm-archive.md)). It affects only a deployment with `ARCHIVE_STORE=s3`; a local archive (`ARCHIVE_STORE=local`, the default) is read from the archive volume and needs nothing.
+
+- With `ARCHIVE_STORE=s3` the prober needs a key of its own that only reads: `PROBER_ARCHIVE_S3_ACCESS_KEY_ID` and `PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY` (list and list versions on the bucket, get on `verify/*` and `chain/*`). Never the worker's own `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY`.
+- The SDK's default credential chain (an instance or task role) is used only when `PROBER_ARCHIVE_S3_DEFAULT_CHAIN=true` says so, with the prober running under a role that only reads. On a host where the worker and the prober share the default chain, that gives the prober the worker's role, which writes the archive: use the pair.
+- With neither the pair nor the opt-in, the marker check is disabled and the prober alerts `archive_marker` on every probe (exit code 1, repeated every `ALERT_REPEAT_MINUTES`) until one of them is set. The other checks, the backup alerts and the test alert are not affected.
+- Before tagging the release, set it in the host's `.env` (or `DEPLOY_ENV_FILE`). Check: `pnpm pilot:check` reports a prober with neither, and asks you to confirm the role when the worker and the prober share the default chain. The prober's start line says `with the prober's own key` or `with the default credential chain`.
+
 ## Deploy a release
 
-1. Merge to `main` and wait for CI. Run the [pre-deploy checks](#pre-deploy-checks) of every migration the release adds that has one.
+1. Merge to `main` and wait for CI. Run the [pre-deploy checks](#pre-deploy-checks) of every migration the release adds that has one. Read the [upgrade notes](#upgrade-notes) for settings the release changes.
 2. Tag the commit and push the tag: `git tag v0.3.0 <commit>` then `git push origin v0.3.0`. (Or create a release with that tag in the GitHub interface.)
 3. The `deploy` workflow runs. Its summary shows the image digests, the result on the host and the public smoke test.
 
