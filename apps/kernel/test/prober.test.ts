@@ -694,17 +694,21 @@ describe('WORM verification marker (#2082)', () => {
     expect(loadProberConfig({}).archiveMarker).toBeUndefined();
     expect(loadProberConfig({ ARCHIVE_DIR: '/data/archive' }).archiveMarker).toEqual(settings);
     expect(loadProberConfig({ ARCHIVE_DIR: '/data/archive', PROBER_MAX_ARCHIVE_MARKER_AGE_SECONDS: '0' }).archiveMarker).toBeUndefined();
+    // The worker's own key is in the environment of a prober run from the shared .env: it must never be used.
     const s3 = { ARCHIVE_STORE: 's3', ARCHIVE_S3_BUCKET: 'archive', S3_ENDPOINT: 'https://s3.example.test', S3_FORCE_PATH_STYLE: 'true', S3_ACCESS_KEY_ID: 'worker', S3_SECRET_ACCESS_KEY: 'w' };
     expect(loadProberConfig({ ...s3, PROBER_ARCHIVE_S3_ACCESS_KEY_ID: 'reader', PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY: 'r' }).archiveMarker).toEqual({
       maxAgeSeconds: 93_600,
       store: { kind: 's3', bucket: 'archive', region: 'us-east-1', endpoint: 'https://s3.example.test', forcePathStyle: true, accessKeyId: 'reader', secretAccessKey: 'r' },
     });
-    expect(loadProberConfig(s3).archiveMarker).toMatchObject({ store: { accessKeyId: 'worker', secretAccessKey: 'w' } });
-    // Half of the worker's pair is the default credential chain, as for the worker.
-    expect(loadProberConfig({ ...s3, S3_SECRET_ACCESS_KEY: '' }).archiveMarker).toMatchObject({ store: { accessKeyId: 'worker', secretAccessKey: undefined } });
-    // A setting the check cannot use is its finding, never a prober that does not start: its backup alerts must go out.
+    // Neither of the prober's pair set: the default credential chain, never the worker's S3_* key.
+    expect(loadProberConfig(s3).archiveMarker).toEqual({
+      maxAgeSeconds: 93_600,
+      store: { kind: 's3', bucket: 'archive', region: 'us-east-1', endpoint: 'https://s3.example.test', forcePathStyle: true, accessKeyId: undefined, secretAccessKey: undefined },
+    });
+    // A setting the check cannot use is reported as one, and refused at the start of the probes (see below).
     expect(loadProberConfig({ ARCHIVE_STORE: 's3' }).archiveMarker).toEqual({ maxAgeSeconds: 93_600, error: 'ARCHIVE_STORE=s3 needs ARCHIVE_S3_BUCKET' });
     expect(loadProberConfig({ ...s3, PROBER_ARCHIVE_S3_ACCESS_KEY_ID: 'reader' }).archiveMarker).toMatchObject({ error: expect.stringMatching(/PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY/) });
+    expect(loadProberConfig({ ...s3, PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY: 'r' }).archiveMarker).toMatchObject({ error: expect.stringMatching(/PROBER_ARCHIVE_S3_ACCESS_KEY_ID/) });
   });
 
   it('is quiet while the newest marker is recent by the store, and alerts once when it grows old, through a gate outside the database', async () => {
@@ -776,6 +780,45 @@ describe('WORM verification marker (#2082)', () => {
     expect(hook.body(3).crove.findings[0].message).toBe('the prober could not read the verification marker from the WORM archive store: no answer within 0 s (docs/runbooks/worm-archive.md)');
     expect(hook.body(4).crove.findings.map((f: { check: string }) => f.check)).toEqual(['heartbeat']);
     expect(statuses).toEqual([expect.objectContaining({ failing: ['heartbeat', 'archive_marker'] })]);
+  });
+
+  it('refuses to run the probes with marker settings it cannot use, and still sends the backup and test alerts (#2082)', async () => {
+    const io = capture();
+    const hook = webhook();
+    const env = { PROBER_DATABASE_URL: 'postgres://crove_prober:pw@db:5432/postgres', ALERT_WEBHOOK_URL: SECRET_HOOK, ARCHIVE_STORE: 's3' };
+    const deps = { ...io, fetch: hook.fetch, readHealth: async () => healthy };
+    // One probe a run (cron) and the loop both stop at the start, before any probe or alert.
+    expect(await runProber([], env, deps)).toBe(EXIT.probeFailed);
+    expect(await runProber(['--every', '60'], env, deps)).toBe(EXIT.probeFailed);
+    expect(io.err).toEqual(Array(2).fill('[prober] invalid prober configuration: ARCHIVE_STORE=s3 needs ARCHIVE_S3_BUCKET'));
+    expect(hook.calls).toEqual([]);
+    // The backup failure and the test alert never depend on the marker settings.
+    expect(await runProber(['--backup-failed', 'disk full'], env, deps)).toBe(EXIT.ok);
+    expect(await runProber(['--test-alert'], env, deps)).toBe(EXIT.ok);
+    expect(hook.calls).toHaveLength(2);
+  });
+
+  it('reports a marker key the store keeps more than one version of, but not one a lifecycle rule expired (#2082)', async () => {
+    const io = capture();
+    const hook = webhook();
+    const versioned = (counts: Record<string, number>): ArchiveStore => ({ ...fresh, versionCounts: async () => new Map(Object.entries(counts)) });
+    const run = (store: ArchiveStore) =>
+      probeOnce(config({ archiveMarker: settings }), { ...io, fetch: hook.fetch, readHealth: async () => healthy, now: () => now, archiveStore: store, markerGate: memoryAlertGate(3600) });
+    const newest = 'verify/v1/20261030T020000Z.json';
+    expect(await run(versioned({ [newest]: 1 }))).toBe(EXIT.ok);
+    expect(await run(versioned({ [newest]: 2, 'verify/v1/20261029T020000Z.json': 2 }))).toBe(EXIT.unhealthy);
+    expect(hook.body(0).crove.findings).toEqual([
+      {
+        check: 'archive_marker',
+        value: null,
+        threshold: 93_600,
+        message:
+          'the WORM archive store keeps more than one version of verification marker verify/v1/20261029T020000Z.json, verify/v1/20261030T020000Z.json: a marker was written over, or deleted and written again (docs/runbooks/worm-archive.md)',
+      },
+    ]);
+    // A marker past its 400 days leaves a delete marker when a lifecycle rule expires it: not a finding.
+    expect(await run(versioned({ [newest]: 1, 'verify/v1/20250901T020000Z.json': 2 }))).toBe(EXIT.ok);
+    expect(hook.calls).toHaveLength(1);
   });
 
   it("reports settings it cannot use, and picks the newest marker by the store's time, not by its key", async () => {

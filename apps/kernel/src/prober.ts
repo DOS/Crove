@@ -80,8 +80,10 @@ const schema = z.object({
   // WORM store, read from the store itself, older than this (26 h), alerts. 0 turns it off. The store is the worker's:
   // ARCHIVE_STORE=s3 reads ARCHIVE_S3_BUCKET with S3_ENDPOINT, S3_REGION and S3_FORCE_PATH_STYLE; local reads
   // ARCHIVE_DIR (the image sets /data/archive; mount the archive volume read-only), and without ARCHIVE_DIR the check is
-  // off. Credentials: PROBER_ARCHIVE_S3_ACCESS_KEY_ID and PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY (a read-only key), else
-  // S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY, else the default credential chain.
+  // off. Credentials: PROBER_ARCHIVE_S3_ACCESS_KEY_ID and PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY (a read-only key), both or
+  // neither; neither means the SDK's default credential chain (an instance or task role). Never the worker's
+  // S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY, which read and write every tenant document and write the archive: the
+  // prober gets no such key (Compose passes none), and ignores one in its environment.
   PROBER_MAX_ARCHIVE_MARKER_AGE_SECONDS: seconds(93_600),
   ARCHIVE_STORE: optional.pipe(z.enum(['local', 's3']).optional()),
   ARCHIVE_DIR: optional,
@@ -91,8 +93,6 @@ const schema = z.object({
   S3_FORCE_PATH_STYLE: optional.pipe(z.enum(['true', 'false']).optional()),
   PROBER_ARCHIVE_S3_ACCESS_KEY_ID: optional,
   PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY: optional,
-  S3_ACCESS_KEY_ID: optional,
-  S3_SECRET_ACCESS_KEY: optional,
   // AI document extraction (#1998): more than this many readings in PROBER_EXTRACTION_WINDOW_SECONDS whose every
   // attempt failed (the AI provider refused or did not answer, the parser sandbox was down) alert; a document that
   // cannot be read never does. 0 turns the check off.
@@ -223,9 +223,7 @@ function archiveMarkerSettings(raw: z.infer<typeof schema>): ProberConfig['archi
     if (own && (!raw.PROBER_ARCHIVE_S3_ACCESS_KEY_ID || !raw.PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY)) {
       return { maxAgeSeconds, error: 'set both PROBER_ARCHIVE_S3_ACCESS_KEY_ID and PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY, or neither' };
     }
-    // As for the worker (createS3Client): half of the S3_* pair means the default credential chain.
-    const accessKeyId = own ? raw.PROBER_ARCHIVE_S3_ACCESS_KEY_ID : raw.S3_ACCESS_KEY_ID;
-    const secretAccessKey = own ? raw.PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY : raw.S3_SECRET_ACCESS_KEY;
+    // Neither set: the default credential chain, never the worker's S3_* key.
     return {
       maxAgeSeconds,
       store: {
@@ -234,8 +232,8 @@ function archiveMarkerSettings(raw: z.infer<typeof schema>): ProberConfig['archi
         region: raw.S3_REGION ?? 'us-east-1',
         endpoint: raw.S3_ENDPOINT,
         forcePathStyle: raw.S3_FORCE_PATH_STYLE === 'true',
-        accessKeyId,
-        secretAccessKey,
+        accessKeyId: raw.PROBER_ARCHIVE_S3_ACCESS_KEY_ID,
+        secretAccessKey: raw.PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY,
       },
     };
   }
@@ -750,13 +748,17 @@ export async function checkVerifyMarker(settings: NonNullable<ProberConfig['arch
       timer = setTimeout(() => reject(new Error(`no answer within ${Math.round(timeoutMs / 1000)} s`)), timeoutMs);
     });
     const store = deps.archiveStore ?? proberArchiveStore(settings.store);
-    state = await Promise.race([readVerifyMarker(store), timeout]);
+    state = await Promise.race([readVerifyMarker(store, now), timeout]);
   } catch (e) {
     // One line, and short: a store's error text can run long.
     const reason = (e instanceof Error ? e.message : String(e)).replace(/\s+/g, ' ').trim().slice(0, MAX_STORE_REASON);
     return finding(null, `the prober could not read the verification marker from the WORM archive store: ${reason}`);
   } finally {
     clearTimeout(timer);
+  }
+  if (state.rewritten.length > 0) {
+    const names = state.rewritten.slice(0, 3).join(', ') + (state.rewritten.length > 3 ? ` and ${state.rewritten.length - 3} more` : '');
+    return finding(null, `the WORM archive store keeps more than one version of verification marker ${names}: a marker was written over, or deleted and written again`);
   }
   if (state.problem) return finding(null, `the newest WORM verification marker ${state.key} cannot be trusted: ${state.problem}`);
   if (state.key && !state.writtenAt) return finding(null, `the WORM archive store cannot tell when it wrote the verification marker ${state.key}`);
@@ -872,6 +874,12 @@ export async function runProber(argv: readonly string[], env: NodeJS.ProcessEnv 
   if (args.testAlert) return sendTestAlert(config, deps);
   if (args.backupFailed !== null) return sendBackupAlert(config, args.backupFailed, deps);
   if (args.backupOk) return sendBackupHeartbeat(config, deps);
+  // Marker settings the check cannot use stop the probes at the start, like any invalid setting, so a deploy finds out at
+  // once; the test and backup alerts above never depend on them (#2082).
+  if (config.archiveMarker && 'error' in config.archiveMarker) {
+    error(`[prober] invalid prober configuration: ${config.archiveMarker.error}`);
+    return EXIT.probeFailed;
+  }
   if (args.everySeconds === null) return probeOnce(config, deps);
   const every = args.everySeconds;
   const looping = {
@@ -887,11 +895,7 @@ export async function runProber(argv: readonly string[], env: NodeJS.ProcessEnv 
   const heartbeat = config.heartbeatUrl ? `, heartbeat to ${describeHeartbeat(config.heartbeatUrl)}` : '';
   // Where the verification marker is read from (#2082): a prober pointed at the wrong store sees no batch and no marker,
   // which reads as nothing to verify yet, so the log says which store it reads.
-  const marker = !config.archiveMarker
-    ? ', verification marker check off'
-    : 'error' in config.archiveMarker
-      ? `, verification marker check misconfigured: ${config.archiveMarker.error}`
-      : `, verification markers from ${looping.archiveStore?.describe() ?? 'the archive store'}`;
+  const marker = config.archiveMarker ? `, verification markers from ${looping.archiveStore?.describe() ?? 'the archive store'}` : ', verification marker check off';
   (deps.log ?? console.log)(`[prober] probing every ${every} s, alerts to ${alertSink(config, deps).describe()}${heartbeat}${marker}`);
   for (;;) {
     await probeOnce(config, looping);

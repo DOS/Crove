@@ -147,8 +147,10 @@ services:
       S3_ENDPOINT: http://minio:9000
       S3_REGION: us-east-1
       S3_FORCE_PATH_STYLE: 'true'
-      S3_ACCESS_KEY_ID: crove-split
-      S3_SECRET_ACCESS_KEY: crove-split-minio-secret
+      # This layout has one throwaway MinIO key, so the prober's own pair holds it; a deployment gives the prober a
+      # read-only key (docs/runbooks/worm-archive.md), never the worker's.
+      PROBER_ARCHIVE_S3_ACCESS_KEY_ID: crove-split
+      PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY: crove-split-minio-secret
 
   # Not needed here (sign-up is auto-confirmed); published ports would clash with a running default stack.
   mailpit:

@@ -679,12 +679,20 @@ function parseRestoreAck(bytes: Uint8Array): RestoreAck | null {
 const refKey = ([seq, ref]: [number, string]) => `${seq} ${ref}`;
 
 // Every batch and acknowledgement key with more than one version, where the store keeps versions: a PUT over a WORM
-// object, or a delete, which Object Lock keeps in view but does not stop with the writer's key (#2020).
-async function multiVersionProblems(store: ArchiveStore): Promise<ArchiveProblem[]> {
+// object, or a delete, which Object Lock keeps in view but does not stop with the writer's key (#2020). With `markersAt`
+// the verification markers inside their retention too (#2082): the prober's freshness rests on the newest, so one written
+// over, or deleted and written again, is a finding; an older one may have been expired by a lifecycle rule. The restore
+// check leaves markers out: they are no part of what a restore restores.
+async function multiVersionProblems(store: ArchiveStore, markersAt?: Date): Promise<ArchiveProblem[]> {
   if (!store.versionCounts) return [];
   const problems: ArchiveProblem[] = [];
   for (const prefix of [ARCHIVE_PREFIX, RESTORE_ACK_PREFIX]) {
     for (const [key, count] of await store.versionCounts(prefix)) if (count > 1) problems.push({ code: 'object_versions', seq: 0, ref: key });
+  }
+  if (markersAt) {
+    for (const [key, count] of await store.versionCounts(VERIFY_MARKER_PREFIX)) {
+      if (count > 1 && !verifyMarkerExpired(key, markersAt)) problems.push({ code: 'object_versions', seq: 0, ref: key });
+    }
   }
   return problems;
 }
@@ -816,7 +824,7 @@ export async function verifyArchive(
   // reads as one (restoreHolds).
   const acks = await restoreAckChain(store);
   for (const problem of acks.problems) note(problem);
-  for (const problem of await multiVersionProblems(store)) note(problem);
+  for (const problem of await multiVersionProblems(store, (options.now ?? (() => new Date()))())) note(problem);
   const excuses = new Set((acks.ack?.refs ?? []).map(refKey));
   const listed: Array<{ seq: number; ref: string; code: 'row_missing' | 'row_changed' }> = [];
   const windows = new Map<number, ArchiveBatch['window']>();
@@ -993,6 +1001,16 @@ export interface VerifyMarker {
 
 export const verifyMarkerKey = (at: Date) => `${VERIFY_MARKER_PREFIX}${at.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z')}.json`;
 
+// Whether a marker is past its Object Lock retention (VERIFY_MARKER_RETENTION_DAYS), by the time its key names: a
+// lifecycle rule may have expired it, which leaves a delete marker, not a second version to report. A key that names no
+// time is never expired.
+export function verifyMarkerExpired(key: string, now: Date): boolean {
+  const named = /^verify\/v1\/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z\.json$/.exec(key);
+  if (!named) return false;
+  const [year, month, day, hour, minute, second] = named.slice(1).map(Number) as [number, number, number, number, number, number];
+  return now.getTime() - Date.UTC(year, month - 1, day, hour, minute, second) > VERIFY_MARKER_RETENTION_DAYS * 86_400_000;
+}
+
 // Writes the marker of a run that passed; returns its key, or null for a run that did not pass (it writes none, so the
 // prober alerts once the newest marker grows old). A second run in the same second finds the key taken and writes none.
 export async function writeVerifyMarker(store: ArchiveStore, result: ArchiveVerification, now: Date = new Date()): Promise<string | null> {
@@ -1027,6 +1045,9 @@ export interface VerifyMarkerState {
   // Why the marker cannot be trusted, if it cannot: it does not parse, or it names a chain hash the store's batch of
   // that sequence does not hold.
   problem: string | null;
+  // The marker keys, inside their retention, that the store keeps more than one version of: written over, or deleted and
+  // written again, which the writer's key can do and Object Lock keeps in view.
+  rewritten: string[];
   // With no marker yet: when the store wrote its first batch (null with none), so a fresh deployment does not alert
   // before its first nightly run.
   firstBatchAt: Date | null;
@@ -1035,10 +1056,17 @@ export interface VerifyMarkerState {
 // The newest verification marker in the store, read from the store alone (#2082): the prober's out-of-band check. Newest
 // by the store's own write time, not by key: a key names the worker's clock, and one marker written while that clock ran
 // ahead (or every marker while it runs behind) would otherwise stay "newest" for as long as it is kept.
-export async function readVerifyMarker(store: ArchiveStore): Promise<VerifyMarkerState> {
+export async function readVerifyMarker(store: ArchiveStore, now: Date = new Date()): Promise<VerifyMarkerState> {
   const writtenAt = async (key: string) => (store.writtenAt ? await store.writtenAt(key) : null);
   const keys = await store.list(VERIFY_MARKER_PREFIX);
-  if (keys.length === 0) return { key: null, writtenAt: null, problem: null, firstBatchAt: await writtenAt(archiveKey(1)) };
+  // Counted over every version and delete marker, so a deleted newest marker, gone from `keys`, shows too.
+  const rewritten = store.versionCounts
+    ? [...(await store.versionCounts(VERIFY_MARKER_PREFIX))]
+        .filter(([key, count]) => count > 1 && !verifyMarkerExpired(key, now))
+        .map(([key]) => key)
+        .sort()
+    : [];
+  if (keys.length === 0) return { key: null, writtenAt: null, problem: null, rewritten, firstBatchAt: await writtenAt(archiveKey(1)) };
   const times = new Map<string, Date>();
   if (store.writtenTimes) for (const [k, at] of await store.writtenTimes(VERIFY_MARKER_PREFIX)) times.set(k, at);
   else if (store.writtenAt) {
@@ -1062,7 +1090,7 @@ export async function readVerifyMarker(store: ArchiveStore): Promise<VerifyMarke
     const batch = batchBytes ? parseBatch(batchBytes) : null;
     if (!batch || batch.chainSha256 !== marker.chainSha256) problem = `it names a chain hash that batch ${marker.batches} in the store does not hold`;
   }
-  return { key, writtenAt: newest, problem, firstBatchAt: null };
+  return { key, writtenAt: newest, problem, rewritten, firstBatchAt: null };
 }
 
 // What the worker alerts before a verification run reads the database (#2020): the newest object under restores/v1/, by
