@@ -201,6 +201,7 @@ export const en = {
       portal_failed: 'Could not read the tax portal list for {period}',
       period_closing: 'The VAT return for {period} is due on {due}, and the period is not locked',
       todo_due: 'You have 1 to-do due',
+      personal_data_notice: 'A person asked for their data to be erased: {items} of yours mention them and will be deleted. Copy out what you need, without their details.',
       other: 'New notification',
     },
   },
@@ -2110,6 +2111,10 @@ export const en = {
     privateAuthor: '{name}: {items}',
     privateHint: 'Only their author can read private notes and to-dos, so only the counts show here, never the text.',
     formerMember: 'Former member',
+    privateOwnersOnly: "Only owners see how many of the members' private notes and to-dos hold this value. Every search is recorded in the activity log.",
+    notify: 'Tell the authors',
+    notified: 'Told {authors, plural, one {# member} other {# members}}',
+    notifyHint: 'An erasure in {brand} deletes the private notes and to-dos whose authors were told, and puts "[đã xóa]" in place of this value in shared notes. Items written or changed after the notice stay until the next one. Give the authors time to read it before you erase, within the legal deadline.',
   },
   audit: {
     title: 'Activity log',
@@ -5421,6 +5426,7 @@ export const en = {
       VOUCHER_INVALID: 'The voucher is not valid. Check the cash account, the party and the posting lines.',
       JOURNAL_VOUCHER_INVALID: 'The journal voucher is not valid; check its lines.',
       PERSONAL_DATA_QUERY: 'Enter an email address, a phone number, or a tax code or national ID.',
+      PERSONAL_DATA_NOTICE_TOO_MANY: 'Too many private notes and to-dos mention this value for one notice. Contact support.',
       YEAR_NOT_ENDED: 'This year has not ended yet, so it cannot be closed.',
       YEAR_CLOSED: "This year is already closed. To close it again, first reverse its closing entry dated 31 December of that year.",
       CLOSING_EMPTY: 'This year has no revenue or expense balances to close.',
@@ -6102,6 +6108,7 @@ export const en = {
       personal_data: {
         erase: 'Erase personal data',
         find: 'Find personal data',
+        notify: 'Tell the authors before an erasure',
       },
       position: {
         assign: 'Assign a position',
