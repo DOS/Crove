@@ -1,6 +1,6 @@
 # Runbook: ledger checks after a restore
 
-A journal entry can gain lines only in the transaction that created it (External-tenant gate T3, issue #76). The posting function writes the entry and all its lines in one call, and a trigger refuses any line added later, by any role, superusers included. This runbook covers what a restore does to that rule and what to check before reopening writes (plan §7.9).
+A journal entry can gain lines only in the transaction that created it (External-tenant gate T3, issue #76). The posting function writes the entry and all its lines in one call, and a trigger refuses any line added later, by any role, superusers included. This runbook covers what a restore does to that rule, what the restore lost compared with the WORM archive, and what to check before reopening writes (plan §7.9).
 
 ## How the rule knows the creating transaction
 
@@ -34,7 +34,54 @@ The comparison on `created_xact_start` holds only while the new cluster's clock 
 
    It must be `0`. Otherwise the new cluster's clock is behind the old one: fix the clock (NTP) and run the check again. Do not reopen writes until it is `0`.
 3. Rotate the context key in the restored database: `docs/runbooks/context-key-rotation.md`.
-4. Reconcile finance with the providers (and the WORM stream once it exists) before reopening writes (plan §7.9).
+4. Reconcile finance with the WORM archive and the providers before reopening writes (plan §7.9; [What the restore lost](#what-the-restore-lost)).
+
+## What the restore lost
+
+The WORM archive ([worm-archive.md](worm-archive.md)) outlives the database. After a restore, it still holds every posting, voucher number and number allocation made after the backup point. `restore.sh` checks the restored database against it before the stack starts (`main.ts restore-report --reseed`, issue #2007). Any restore runs the same check: the steps above, a point-in-time recovery, or a logical restore. Run it by hand in the worker's container (the service `crove` on the all-in-one stack):
+
+```sh
+docker compose run --rm --no-deps worker restore-report --reseed
+```
+
+**What it reports.**
+- The batches written after the backup point.
+- Per org, what the archive holds and the database lacks: journal entries, cash and journal vouchers, voided purchase documents, number allocations, number voids and number series. Each is named by its id.
+- Per org, the number of audit events lost.
+- `restore.sh` also writes the whole report as JSON to `archive-report.json` in its restore directory (`BACKUP_DIR/restore-<time>/`).
+- The archive holds hashes, not values. The report says which records were lost, not what they held: amounts, parties and lines come from the source documents (the paper or PDF vouchers, the e-invoices, the bank statements) or from the period's exports.
+
+**What `--reseed` does.**
+- It raises every number series whose next number is not above the highest number the archive holds for it. The series' next number becomes the archived highest + 1.
+- A series the restore lost altogether is created again, with its archived id and key.
+- Each raise is one audited command (`kernel.number.reseed`, system actor), and it never lowers a number. Running it again changes nothing.
+- The numbers between the restored series and the new next number are the lost ones. They stay as the archive holds them, and the report names their allocations.
+
+**Its exit code** (also the outcome of that step of `restore.sh`):
+
+| Exit | Meaning | What to do |
+|---|---|---|
+| 0 | The archive and the restored database agree. | Nothing. |
+| 2 | Rows made after the backup point were lost; every series is above the archive. The restore goes on with a warning. | Reconcile (below). |
+| 3 | A series could not be raised from the archive. Some org lost number allocations that no version 7 batch covers, because the archive ends before the first one (#2007). `restore.sh` stops before the stack starts. | Name a floor for each series of that org (below), then start the stack (`docker compose up -d`). |
+| 1 | The archive does not match: a broken chain, an edited batch, or a recorded batch that the store lacks, such as an archive setting that points at a new, empty store. `restore.sh` stops before the stack starts. | Point `ARCHIVE_*` at the deployment's surviving archive, or treat it as in [worm-archive.md](worm-archive.md), "Verification fails". |
+
+**A floor for a series the archive cannot raise.**
+1. Read the highest number of each of the org's series from the vouchers issued after the backup point (paper or PDF).
+2. Pass the next number to give: `--floor <org id>:<legal entity id>:<doc type>:<period key>=<next number>`, once per series, for example:
+
+   ```sh
+   docker compose run --rm --no-deps worker restore-report --reseed --floor <org id>:<legal entity id>:finance.cash_voucher.pt:2026=41
+   ```
+
+3. The run exits 2 once every such org has a floor.
+
+**Reconcile before reopening writes.** The owner and the accountant (#61) decide what to enter again.
+- **Each lost journal entry and voucher.** Enter it again from its source document, with a new number. The number it had is in the archive's range of lost numbers, and the accountant notes the old and the new number on the voucher.
+- **Each lost void and number void.** Repeat it.
+- **Provider-issued numbers.** E-invoice numbers are not in the WORM archive. Reconcile them with the e-invoice provider's list for the same period, until a provider integration does it.
+- Keep the report and the reconciliation with the incident record.
+- Until #2020, the nightly WORM verification fails on the rows the report named ([worm-archive.md](worm-archive.md), "After a restore").
 
 ## How to restore the ledger tables
 
