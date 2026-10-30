@@ -32,11 +32,12 @@ function TableHeader({ className, ...props }: React.ComponentProps<"thead">) {
   )
 }
 
+// The last row drops only its bottom hairline, so a total's top rule on it stays (#2002).
 function TableBody({ className, ...props }: React.ComponentProps<"tbody">) {
   return (
     <tbody
       data-slot="table-body"
-      className={cn("[&_tr:last-child]:border-0", className)}
+      className={cn("[&_tr:last-child]:border-b-0", className)}
       {...props}
     />
   )

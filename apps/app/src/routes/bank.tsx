@@ -154,7 +154,7 @@ function StatementImport({ bankAccount, onImported }: { bankAccount: string; onI
                   </AlertDescription>
                 </Alert>
               )}
-              <DataTable head={[t('columns.row'), t('columns.date'), t('columns.reference'), t('columns.description'), t('columns.moneyIn'), t('columns.moneyOut'), t('columns.balance'), t('columns.status')]}>
+              <DataTable numeric={[4, 5, 6]} head={[t('columns.row'), t('columns.date'), t('columns.reference'), t('columns.description'), t('columns.moneyIn'), t('columns.moneyOut'), t('columns.balance'), t('columns.status')]}>
                 {data.rows.slice(0, PREVIEW_ROWS).map((row) => {
                   const out = row.amount?.startsWith('-') ?? false;
                   return (
@@ -407,7 +407,19 @@ export function BankPage() {
             <Empty title={t('empty')} hint={canImport ? t('emptyHint') : undefined} />
           ) : lines.data ? (
             <DataTable
+              numeric={[3, 4, 5]}
               head={[t('columns.date'), t('columns.reference'), t('columns.description'), t('columns.moneyIn'), t('columns.moneyOut'), t('columns.balance'), t('voucherColumn')]}
+              foot={
+                <TableRow>
+                  <TableCell className="px-4 py-3 text-foreground" colSpan={3}>
+                    {t('total')}
+                  </TableCell>
+                  <TableCell className={NUM}>{f.money(lines.data.moneyIn)}</TableCell>
+                  <TableCell className={NUM}>{f.money(lines.data.moneyOut)}</TableCell>
+                  <TableCell className="px-4 py-3" />
+                  <TableCell className="px-4 py-3" />
+                </TableRow>
+              }
             >
               {lines.data.lines.map((line) => (
                 <TableRow key={line.id}>
@@ -429,15 +441,6 @@ export function BankPage() {
                   </TableCell>
                 </TableRow>
               ))}
-              <TableRow className="font-medium">
-                <TableCell className="px-4 py-3 text-foreground" colSpan={3}>
-                  {t('total')}
-                </TableCell>
-                <TableCell className={NUM}>{f.money(lines.data.moneyIn)}</TableCell>
-                <TableCell className={NUM}>{f.money(lines.data.moneyOut)}</TableCell>
-                <TableCell className="px-4 py-3" />
-                <TableCell className="px-4 py-3" />
-              </TableRow>
             </DataTable>
           ) : null}
         </>

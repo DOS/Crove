@@ -1,9 +1,10 @@
 // Prober and alert delivery (plan §4.13, issue #39), unit part: thresholds, exit codes and the webhook payload.
 // The database part (health(), privileges, a real webhook) is in prober.db.test.ts and test/invariant/prober.db.test.ts.
-import { describe, expect, it, vi } from 'vitest';
+import { createServer, type Server } from 'node:http';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { memoryAlertGate } from '../src/alert-gate.ts';
 import { alertPayload, deliverAlert } from '../src/alert.ts';
-import { EXIT, evaluateHealth, loadProberConfig, parseProberArgs, probeOnce, runProber, type HealthSnapshot, type ProberConfig } from '../src/prober.ts';
+import { EXIT, checkAuth, evaluateHealth, initialAuthState, loadProberConfig, parseProberArgs, probeOnce, runProber, type HealthSnapshot, type ProberConfig } from '../src/prober.ts';
 
 const SECRET_HOOK = 'https://hooks.example.test/services/T000/B000/secret-token-123';
 const SECRET_PING = 'https://hc.example.test/ping/secret-check-456';
@@ -376,6 +377,144 @@ describe('prober heartbeat', () => {
     expect(await runProber(['--backup-failed', 'disk full'], env, { ...capture(), fetch: net.fetch })).toBe(EXIT.ok);
     expect(net.pings()).toEqual([]);
     expect(net.hooks()).toHaveLength(2);
+  });
+});
+
+describe('Supabase Auth check (#1994)', () => {
+  // A fake Supabase Auth on a local port: /auth/v1/health answers 200 while up, 503 while down, and records the apikey.
+  let server: Server;
+  let base = '';
+  let up = true;
+  const keys: Array<string | undefined> = [];
+  beforeAll(async () => {
+    server = createServer((req, res) => {
+      keys.push(req.headers.apikey as string | undefined);
+      res.statusCode = req.url === '/auth/v1/health' && up ? 200 : 503;
+      res.end(up ? '{"version":"test"}' : 'down');
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    base = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}/auth/v1`;
+  });
+  afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  beforeEach(() => {
+    up = true;
+    keys.length = 0;
+  });
+
+  // The fake Auth answers for real; the webhook is recorded.
+  function endpoints() {
+    const hooks: Array<{ url: string; init: RequestInit }> = [];
+    const fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).startsWith(base)) return globalThis.fetch(url, init);
+      hooks.push({ url: String(url), init: init ?? {} });
+      return new Response('ok', { status: 200 });
+    }) as unknown as typeof globalThis.fetch;
+    return { fetch, hooks, body: (i: number) => JSON.parse(String(hooks[i]?.init.body)) };
+  }
+
+  it('finds the health URL: PROBER_AUTH_URL, else PUBLIC_AUTH_URL, else PUBLIC_URL/auth/v1; off without them or at 0 misses', () => {
+    expect(loadProberConfig({ PUBLIC_URL: 'https://books.example.test/' })).toMatchObject({ authHealthUrl: 'https://books.example.test/auth/v1/health', authMisses: 2, authTimeoutSeconds: 10 });
+    expect(loadProberConfig({ PUBLIC_URL: 'https://books.example.test', PUBLIC_AUTH_URL: 'https://auth.example.test/auth/v1', PUBLIC_AUTH_ANON_KEY: 'pk_test' })).toMatchObject({
+      authHealthUrl: 'https://auth.example.test/auth/v1/health',
+      authAnonKey: 'pk_test',
+    });
+    expect(loadProberConfig({ PUBLIC_URL: 'https://books.example.test', PROBER_AUTH_URL: 'http://crove:8080/auth/v1/', PROBER_AUTH_MISSES: '3' })).toMatchObject({
+      authHealthUrl: 'http://crove:8080/auth/v1/health',
+      authMisses: 3,
+    });
+    expect(loadProberConfig({}).authHealthUrl).toBeUndefined();
+    expect(loadProberConfig({ PUBLIC_URL: 'not a url' }).authHealthUrl).toBeUndefined();
+    expect(loadProberConfig({ PUBLIC_URL: 'https://books.example.test', PROBER_AUTH_MISSES: '0' }).authHealthUrl).toBeUndefined();
+    expect(() => loadProberConfig({ PROBER_AUTH_URL: 'ftp://auth.example.test' })).toThrow(/PROBER_AUTH_URL/);
+    // Credentials in the URL would travel in every request and could reach a log.
+    expect(() => loadProberConfig({ PROBER_AUTH_URL: 'https://user:secret@auth.example.test/auth/v1' })).toThrow(/holds credentials/);
+    // Hosted Supabase answers 401 without the publishable key, which would page forever.
+    expect(() => loadProberConfig({ PUBLIC_AUTH_URL: 'https://project.supabase.co/auth/v1' })).toThrow(/PUBLIC_AUTH_ANON_KEY/);
+    expect(() => loadProberConfig({ PUBLIC_AUTH_URL: 'https://project.supabase.co./auth/v1' })).toThrow(/PUBLIC_AUTH_ANON_KEY/);
+    expect(loadProberConfig({ PUBLIC_AUTH_URL: 'https://project.supabase.co/auth/v1', PUBLIC_AUTH_ANON_KEY: 'sb_publishable_x' }).authHealthUrl).toBe('https://project.supabase.co/auth/v1/health');
+  });
+
+  it('alerts once after the misses in a row, stays quiet while it lasts, and sends a recovery when Auth answers again', async () => {
+    const io = capture();
+    const net = endpoints();
+    const authState = { misses: 0 };
+    const cfg = config({ authHealthUrl: `${base}/health`, authAnonKey: 'pk_test', authMisses: 2 });
+    const run = () => probeOnce(cfg, { ...io, fetch: net.fetch, readHealth: async () => healthy, authState });
+    up = true;
+    expect(await run()).toBe(EXIT.ok);
+    expect(io.out.at(-1)).toMatch(/, auth ok$/);
+    up = false;
+    // The first miss only counts.
+    expect(await run()).toBe(EXIT.ok);
+    expect(net.hooks).toEqual([]);
+    expect(io.err.at(-1)).toBe('[prober] Supabase Auth did not answer (HTTP 503); 1 of 2 misses before it alerts');
+    // The second alerts, once.
+    expect(await run()).toBe(EXIT.unhealthy);
+    expect(net.hooks).toHaveLength(1);
+    expect(net.body(0).crove.findings).toEqual([
+      { check: 'auth', value: 2, threshold: 2, message: 'Supabase Auth did not answer its health check 2 time(s) in a row (HTTP 503): nobody can sign in' },
+    ]);
+    // Neither the health URL nor the key reaches the alert.
+    expect(JSON.stringify(net.body(0))).not.toContain('127.0.0.1');
+    expect(JSON.stringify(net.body(0))).not.toContain('pk_test');
+    expect(await run()).toBe(EXIT.unhealthy);
+    expect(net.hooks).toHaveLength(1);
+    up = true;
+    expect(await run()).toBe(EXIT.ok);
+    expect(net.hooks).toHaveLength(2);
+    expect(net.body(1).crove).toMatchObject({ kind: 'resolved', previous: ['auth'] });
+    expect(authState.misses).toBe(0);
+    // The publishable key went with every request.
+    expect(new Set(keys)).toEqual(new Set(['pk_test']));
+  });
+
+  it('keeps an open Auth alert across a restart: a new probe loop alerts on its first miss, and counts afresh after an answer', async () => {
+    const io = capture();
+    const net = endpoints();
+    up = false;
+    const cfg = config({ authHealthUrl: `${base}/health`, authMisses: 2 });
+    // The state runProber starts its loop with.
+    const authState = initialAuthState(cfg);
+    expect(await probeOnce(cfg, { ...io, fetch: net.fetch, readHealth: async () => healthy, authState })).toBe(EXIT.unhealthy);
+    expect(net.body(0).crove.findings).toEqual([expect.objectContaining({ check: 'auth', value: 2, threshold: 2 })]);
+    up = true;
+    expect(await probeOnce(cfg, { ...io, fetch: net.fetch, readHealth: async () => healthy, authState })).toBe(EXIT.ok);
+    up = false;
+    // After an answer, one miss only counts again.
+    expect(await probeOnce(cfg, { ...io, fetch: net.fetch, readHealth: async () => healthy, authState })).toBe(EXIT.ok);
+    expect(net.hooks).toHaveLength(2);
+  });
+
+  it('alerts on the first miss when nothing counts the runs before (one probe a run, from cron)', async () => {
+    const io = capture();
+    const net = endpoints();
+    up = false;
+    expect(await probeOnce(config({ authHealthUrl: `${base}/health`, authMisses: 2 }), { ...io, fetch: net.fetch, readHealth: async () => healthy })).toBe(EXIT.unhealthy);
+    expect(net.body(0).crove.findings).toEqual([expect.objectContaining({ check: 'auth', value: 1, threshold: 1 })]);
+    up = true;
+  });
+
+  it('reads a refused connection or a timeout as a miss, on one line and without the URL', async () => {
+    const refused = await checkAuth(config({ authHealthUrl: 'http://127.0.0.1:9/auth/v1/health', authTimeoutSeconds: 2 }), {});
+    expect(refused).toMatchObject({ ok: false, reason: expect.stringMatching(/^connection failed(: [A-Z_]+)?$/) });
+    // A fetch error that quotes the URL: only a system code goes on.
+    const quoting = vi.fn(async () => {
+      throw new TypeError('fetch failed for https://user:secret@auth.example.test/auth/v1/health', { cause: { code: 'ECONNRESET' } });
+    }) as unknown as typeof globalThis.fetch;
+    expect(await checkAuth(config({ authHealthUrl: `${base}/health` }), { fetch: quoting })).toEqual({ ok: false, reason: 'connection failed: ECONNRESET' });
+    const slow = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      await new Promise((_resolve, reject) => init?.signal?.addEventListener('abort', () => reject(init.signal?.reason)));
+      return new Response('late');
+    }) as unknown as typeof globalThis.fetch;
+    expect(await checkAuth(config({ authHealthUrl: `${base}/health`, authTimeoutSeconds: 1 }), { fetch: slow })).toEqual({ ok: false, reason: 'no answer within 1 s' });
+  });
+
+  it('checks nothing without a health URL, as before', async () => {
+    const io = capture();
+    const net = endpoints();
+    expect(await probeOnce(config(), { ...io, fetch: net.fetch, readHealth: async () => healthy })).toBe(EXIT.ok);
+    expect(io.out.at(-1)).not.toContain('auth');
   });
 });
 

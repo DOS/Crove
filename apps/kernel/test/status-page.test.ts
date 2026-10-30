@@ -24,18 +24,23 @@ afterAll(() => rm(dir, { recursive: true, force: true }));
 describe('status view', () => {
   it('maps the failing checks to the functions a user sees', () => {
     expect(statusView(probeStatus(minutesAgo(1), []), NOW)).toMatchObject({ overall: 'ok', checkedAt: minutesAgo(1).toISOString() });
-    expect(states(statusView(probeStatus(minutesAgo(1), ['inbound']), NOW))).toEqual({ database: 'ok', documents: 'ok', email: 'problem', updates: 'ok' });
+    expect(states(statusView(probeStatus(minutesAgo(1), ['inbound']), NOW))).toEqual({ database: 'ok', documents: 'ok', email: 'problem', updates: 'ok', signin: 'unknown' });
     // A worker that stopped holds up both the uploaded documents and the mail.
     const workerDown = statusView(probeStatus(minutesAgo(1), ['heartbeat']), NOW);
     expect(workerDown.overall).toBe('problem');
-    expect(states(workerDown)).toEqual({ database: 'ok', documents: 'problem', email: 'problem', updates: 'ok' });
+    expect(states(workerDown)).toEqual({ database: 'ok', documents: 'problem', email: 'problem', updates: 'ok', signin: 'unknown' });
     expect(states(statusView(probeStatus(minutesAgo(1), ['outbox', 'notify_queue']), NOW))).toMatchObject({ updates: 'problem', documents: 'ok' });
+    // Supabase Auth not answering (#1994): signing in is down, nothing else; answering: fine. Without the check (off, or
+    // an older prober), the line says nothing is known.
+    expect(states(statusView(probeStatus(minutesAgo(1), ['auth'], true), NOW))).toEqual({ database: 'ok', documents: 'ok', email: 'ok', updates: 'ok', signin: 'problem' });
+    expect(states(statusView(probeStatus(minutesAgo(1), [], true), NOW))).toMatchObject({ signin: 'ok' });
+    expect(states(statusView(probeStatus(minutesAgo(1), []), NOW))).toMatchObject({ signin: 'unknown' });
   });
 
   it('shows the database down and every other function unknown when the probe could not read it', () => {
     const view = statusView(probeStatus(minutesAgo(1), null), NOW);
     expect(view.overall).toBe('problem');
-    expect(states(view)).toEqual({ database: 'problem', documents: 'unknown', email: 'unknown', updates: 'unknown' });
+    expect(states(view)).toEqual({ database: 'problem', documents: 'unknown', email: 'unknown', updates: 'unknown', signin: 'unknown' });
   });
 
   it('says nothing is known without a file, or with one older than the stale limit', () => {
@@ -55,10 +60,18 @@ describe('status file', () => {
 
     expect(await readStatusFile(join(dir, 'missing.json'))).toBeNull();
     const bad = join(dir, 'bad.json');
-    for (const text of ['not json', '{}', JSON.stringify({ version: 1, checkedAt: NOW.toISOString(), databaseOk: true, failing: ['<script>'] }), JSON.stringify({ ...probeStatus(NOW, []), extra: 'x' }), 'x'.repeat(20_000)]) {
+    for (const text of ['not json', '{}', JSON.stringify({ version: 1, checkedAt: NOW.toISOString(), databaseOk: true, failing: ['<script>'] }), 'x'.repeat(20_000)]) {
       await writeFile(bad, text);
       expect(await readStatusFile(bad), text.slice(0, 40)).toBeNull();
     }
+  });
+
+  it('reads a file from a newer prober, dropping the fields it does not know (an API rolled back first)', async () => {
+    const path = join(dir, 'newer.json');
+    await writeFile(path, JSON.stringify({ ...probeStatus(NOW, ['inbound'], true), someFutureField: { x: 1 } }));
+    const read = await readStatusFile(path);
+    expect(read).toEqual({ version: 1, checkedAt: NOW.toISOString(), databaseOk: true, failing: ['inbound'], authChecked: true });
+    expect(states(statusView(read, NOW))).toEqual({ database: 'ok', documents: 'ok', email: 'problem', updates: 'ok', signin: 'ok' });
   });
 });
 

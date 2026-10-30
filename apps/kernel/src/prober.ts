@@ -12,9 +12,14 @@
 // (issue #309): after each probe that read the database and delivered every notification it owed (exit 0 or 1). The
 // outside monitor then pages when the pings stop: the prober or the host is down, the database cannot be read, or
 // the alert path is broken.
+//
+// Supabase Auth (issue #1994): each probe also asks Auth's /health, the way signing in reaches it (the kernel's
+// /auth/v1 proxy at PUBLIC_URL, or PUBLIC_AUTH_URL when Auth is hosted elsewhere, or PROBER_AUTH_URL to name another
+// path), and an `auth` finding goes out after PROBER_AUTH_MISSES failed answers in a row. Before, nobody learned of an
+// Auth outage until a member could not sign in.
 import pg from 'pg';
 import { z } from 'zod';
-import { modulesSetting } from './config.ts';
+import { isHostedSupabase, modulesSetting } from './config.ts';
 import { probeStatus, writeStatusFile } from './status-page.ts';
 import { effectiveRepeatSeconds, memoryAlertGate, pgAlertGate, problemKey, type AlertGate, type GateResult } from './alert-gate.ts';
 import {
@@ -70,6 +75,15 @@ const schema = z.object({
   // even when no worker records the module, so a module whose workers all stopped still alerts. Unset or empty: every
   // module, as for the API.
   CROVE_MODULES: modulesSetting,
+  // Supabase Auth's base URL, ending in /auth/v1 (#1994). Unset: PUBLIC_AUTH_URL, else PUBLIC_URL/auth/v1 (the
+  // kernel's proxy, the way the app signs in). With neither, Auth is not checked.
+  PROBER_AUTH_URL: optional.pipe(z.url({ protocol: /^https?$/ }).optional()),
+  PUBLIC_AUTH_URL: optional.pipe(z.url({ protocol: /^https?$/ }).optional()),
+  // The publishable key a hosted Supabase project asks for on every request (sent as `apikey`); not a secret.
+  PUBLIC_AUTH_ANON_KEY: optional,
+  // How many probes in a row Auth must fail to answer before it alerts (one blip is not an outage); 0: no Auth check.
+  PROBER_AUTH_MISSES: z.coerce.number().int().min(0).max(100).default(2),
+  PROBER_AUTH_TIMEOUT_SECONDS: z.coerce.number().int().min(1).max(60).default(10),
 });
 
 export interface ProberConfig {
@@ -91,6 +105,13 @@ export interface ProberConfig {
   // The modules the deployment runs (CROVE_MODULES; loadProberConfig reads unset as every module). Left out of a
   // config built by hand: only the modules the workers record count.
   modules?: readonly string[] | undefined;
+  // Supabase Auth's health URL (<base>/health); unset: Auth is not checked.
+  authHealthUrl?: string | undefined;
+  // Sent as `apikey` when set (hosted Supabase asks for it).
+  authAnonKey?: string | undefined;
+  // Failed answers in a row before it alerts (default 2); the time one answer may take (default 10 s).
+  authMisses?: number;
+  authTimeoutSeconds?: number;
 }
 
 export interface Thresholds {
@@ -129,7 +150,38 @@ export function loadProberConfig(env: NodeJS.ProcessEnv = process.env, everySeco
     backupHeartbeatUrl: raw.BACKUP_HEARTBEAT_URL,
     statusFile: raw.PROBER_STATUS_FILE,
     modules: raw.CROVE_MODULES,
+    authHealthUrl: authHealthUrl(raw),
+    authAnonKey: raw.PUBLIC_AUTH_ANON_KEY,
+    authMisses: raw.PROBER_AUTH_MISSES,
+    authTimeoutSeconds: raw.PROBER_AUTH_TIMEOUT_SECONDS,
   };
+}
+
+// Where the Auth check asks (#1994): <base>/health, the base being PROBER_AUTH_URL, else PUBLIC_AUTH_URL, else
+// PUBLIC_URL/auth/v1; undefined with none of them, or with PROBER_AUTH_MISSES=0.
+function authHealthUrl(raw: {
+  PROBER_AUTH_URL?: string | undefined;
+  PUBLIC_AUTH_URL?: string | undefined;
+  PUBLIC_URL?: string | undefined;
+  PUBLIC_AUTH_ANON_KEY?: string | undefined;
+  PROBER_AUTH_MISSES: number;
+}): string | undefined {
+  if (raw.PROBER_AUTH_MISSES === 0) return undefined;
+  const base = raw.PROBER_AUTH_URL ?? raw.PUBLIC_AUTH_URL ?? (raw.PUBLIC_URL ? `${raw.PUBLIC_URL.replace(/\/+$/, '')}/auth/v1` : undefined);
+  if (!base) return undefined;
+  // PUBLIC_URL is not checked to be a URL here (the alert's instance name only reads it); one that is not leaves Auth
+  // unchecked rather than the whole prober refused.
+  let url: URL;
+  try {
+    url = new URL(base);
+  } catch {
+    return undefined;
+  }
+  // A user name or password in it would travel in every request and could reach a log: refused.
+  if (url.username || url.password) throw new Error('invalid prober configuration: the Auth URL (PROBER_AUTH_URL, PUBLIC_AUTH_URL or PUBLIC_URL) holds credentials');
+  // Hosted Supabase answers 401 without the publishable key: every probe would page about an outage that is not one.
+  if (isHostedSupabase(base) && !raw.PUBLIC_AUTH_ANON_KEY) throw new Error('invalid prober configuration: hosted Supabase Auth needs PUBLIC_AUTH_ANON_KEY (the publishable key) for its health check');
+  return `${base.replace(/\/+$/, '')}/health`;
 }
 
 /**
@@ -269,6 +321,37 @@ export interface ProbeDeps {
   outageGate?: AlertGate;
   // Replaces writing the status page's file (tests).
   writeStatus?: typeof writeStatusFile;
+  // Supabase Auth's failed answers in a row (#1994). runProber keeps one across --every probes; without it (one probe
+  // a run, from cron) a single failed answer alerts, since nothing counts the runs before.
+  authState?: { misses: number };
+}
+
+// The miss count a probe loop starts with: as if the probe before had missed Auth, so a restart during an Auth outage
+// keeps the alert open (the first miss alerts at once) instead of sending a recovery the next miss takes back.
+export function initialAuthState(config: Pick<ProberConfig, 'authMisses'>): { misses: number } {
+  return { misses: Math.max((config.authMisses ?? 2) - 1, 0) };
+}
+
+// One answer from Supabase Auth's health URL: ok on a 2xx, else why not, on one short line. The URL is never logged
+// or sent: it may name an internal host.
+export async function checkAuth(config: ProberConfig, deps: ProbeDeps): Promise<{ ok: true } | { ok: false; reason: string }> {
+  if (!config.authHealthUrl) return { ok: true };
+  try {
+    const response = await (deps.fetch ?? fetch)(config.authHealthUrl, {
+      method: 'GET',
+      redirect: 'error',
+      headers: config.authAnonKey ? { apikey: config.authAnonKey } : {},
+      signal: AbortSignal.timeout((config.authTimeoutSeconds ?? 10) * 1000),
+    });
+    await response.arrayBuffer().catch(() => undefined);
+    return response.ok ? { ok: true } : { ok: false, reason: `HTTP ${response.status}` };
+  } catch (e) {
+    if (e instanceof Error && (e.name === 'TimeoutError' || e.name === 'AbortError')) return { ok: false, reason: `no answer within ${config.authTimeoutSeconds ?? 10} s` };
+    // The system's error code only (ECONNREFUSED, ENOTFOUND): a fetch error's message may quote the whole URL.
+    const cause = e instanceof Error ? (e.cause as { code?: unknown } | undefined) : undefined;
+    const code = typeof cause?.code === 'string' && /^[A-Z_]{3,40}$/.test(cause.code) ? cause.code : null;
+    return { ok: false, reason: code ? `connection failed: ${code}` : 'connection failed' };
+  }
 }
 
 function alertSink(config: ProberConfig, deps: ProbeDeps): AlertSink {
@@ -338,15 +421,15 @@ export async function probeOnce(config: ProberConfig, deps: ProbeDeps = {}): Pro
   const { code, failing, at } = await probe(config, deps);
   // Written whether or not an alert went out: the page shows what the probe saw. Not when the probe could not run
   // at all (no PROBER_DATABASE_URL), which says nothing about the deployment.
-  if (config.statusFile && at) await writeStatus(config.statusFile, at, failing, deps);
+  if (config.statusFile && at) await writeStatus(config.statusFile, at, failing, config.authHealthUrl !== undefined, deps);
   if (config.heartbeatUrl && (code === EXIT.ok || code === EXIT.unhealthy)) await pingHeartbeat(config.heartbeatUrl, deps);
   return code;
 }
 
 // A failed write is logged, never thrown: the page then turns "unknown" once the file is stale.
-async function writeStatus(path: string, at: Date, failing: string[] | null, deps: ProbeDeps): Promise<void> {
+async function writeStatus(path: string, at: Date, failing: string[] | null, authChecked: boolean, deps: ProbeDeps): Promise<void> {
   try {
-    await (deps.writeStatus ?? writeStatusFile)(path, probeStatus(at, failing));
+    await (deps.writeStatus ?? writeStatusFile)(path, probeStatus(at, failing, authChecked));
   } catch (e) {
     (deps.error ?? ((line: string) => console.error(line)))(`[prober] status file ${path}: ${e instanceof Error ? e.message : String(e)}`);
   }
@@ -407,6 +490,21 @@ async function probe(config: ProberConfig, deps: ProbeDeps): Promise<{ code: num
     error('[prober] PROBER_DATABASE_URL is not set; connect it as crove_prober');
     return { code: EXIT.probeFailed, failing: null, at: null };
   }
+  // Supabase Auth first (#1994): its own short timeout, and counted even when the database turns out unreadable.
+  const authState = deps.authState ?? { misses: 0 };
+  const authLimit = deps.authState ? Math.max(config.authMisses ?? 2, 1) : 1;
+  const auth = config.authHealthUrl ? await checkAuth(config, deps) : null;
+  if (auth) authState.misses = auth.ok ? 0 : authState.misses + 1;
+  const authFinding: Finding | null =
+    auth && !auth.ok && authState.misses >= authLimit
+      ? {
+          check: 'auth',
+          value: authState.misses,
+          threshold: authLimit,
+          message: `Supabase Auth did not answer its health check ${authState.misses} time(s) in a row (${auth.reason}): nobody can sign in`,
+        }
+      : null;
+  if (auth && !auth.ok && !authFinding) error(`[prober] Supabase Auth did not answer (${auth.reason}); ${authState.misses} of ${authLimit} misses before it alerts`);
   let health: HealthSnapshot;
   try {
     health = await (deps.readHealth ?? readHealth)(config.databaseUrl, config.deadLetterWindowSeconds, config.modules);
@@ -427,12 +525,13 @@ async function probe(config: ProberConfig, deps: ProbeDeps): Promise<{ code: num
   let delivered = await notify(outage, recovered, notification(recovered, { instance: config.instance, at }, []));
 
   const findings = evaluateHealth(health, config.thresholds, config.deadLetterWindowSeconds);
+  if (authFinding) findings.push(authFinding);
   if (findings.length === 0) {
     log(
       `[prober] ok: outbox ${health.outbox_pending} pending, inbound ${health.inbound_pending} pending, ` +
         `jobs ${health.jobs_queued ?? 0} queued, dead letters ${health.dead_letter_count ?? 0}, ` +
         `heartbeat ${health.worker_heartbeat_age_seconds === null ? 'none' : s(health.worker_heartbeat_age_seconds)} ago, ` +
-        `notify queue ${percent(health.notify_queue_usage)}`,
+        `notify queue ${percent(health.notify_queue_usage)}${auth?.ok ? ', auth ok' : ''}`,
     );
   } else {
     for (const f of findings) error(`[prober] FAIL ${f.check}: ${f.message}`);
@@ -560,7 +659,7 @@ export async function runProber(argv: readonly string[], env: NodeJS.ProcessEnv 
   if (args.backupOk) return sendBackupHeartbeat(config, deps);
   if (args.everySeconds === null) return probeOnce(config, deps);
   const every = args.everySeconds;
-  const looping = { ...deps, outageGate: deps.outageGate ?? memoryAlertGate(config.repeatSeconds) };
+  const looping = { ...deps, outageGate: deps.outageGate ?? memoryAlertGate(config.repeatSeconds), authState: deps.authState ?? initialAuthState(config) };
   // Under Docker this is PID 1, which gets no default SIGTERM handling: stop between probes at once.
   process.once('SIGTERM', () => process.exit(EXIT.ok));
   const heartbeat = config.heartbeatUrl ? `, heartbeat to ${describeHeartbeat(config.heartbeatUrl)}` : '';

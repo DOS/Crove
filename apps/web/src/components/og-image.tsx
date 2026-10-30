@@ -22,7 +22,7 @@ async function font(weight: 400 | 600, text: string): Promise<ArrayBuffer> {
 // The social preview for one language: the brand, the hero line and the product promise, in the site's dark palette.
 // Colors are literal here because the image is drawn outside the page's CSS.
 export async function renderOgImage(dict: Dictionary): Promise<ImageResponse> {
-  const text = [...new Set(`Ludy crove.com ${dict.hero.title} ${dict.footer.tagline}`)].join('');
+  const text = [...new Set(`Ludy ludy.vn ${dict.hero.title} ${dict.footer.tagline}`)].join('');
   const [regular, semibold] = await Promise.all([font(400, text), font(600, text)]);
   const mark = await readFile(join(process.cwd(), 'public', 'favicon.svg'), 'utf8');
   return new ImageResponse(
@@ -37,7 +37,7 @@ export async function renderOgImage(dict: Dictionary): Promise<ImageResponse> {
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 26, color: '#a9a9b6' }}>
           <span style={{ maxWidth: 820 }}>{dict.footer.tagline}</span>
-          <span style={{ color: '#b9a6ff' }}>crove.com</span>
+          <span style={{ color: '#b9a6ff' }}>ludy.vn</span>
         </div>
       </div>
     ),
