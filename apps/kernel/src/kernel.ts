@@ -453,6 +453,9 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
           mailer: resolved.mail,
           channels: { broker: resolved.broker, sandbox: config.CHANNEL_SANDBOX === 'true', bluesky: config.CHANNEL_BLUESKY === 'true', telegram: config.CHANNEL_TELEGRAM === 'true', mastodon: config.CHANNEL_MASTODON === 'true', discord: config.CHANNEL_DISCORD === 'true', wordpress: config.CHANNEL_WORDPRESS === 'true', connectors: channelConnectors(config), publicUrl: config.PUBLIC_URL, ...(config.MEDIA_PEXELS_API_KEY ? { stockPhotos: createPexels({ apiKey: config.MEDIA_PEXELS_API_KEY, store }) } : {}), mediaUrls: createMediaUrls({ store }), ...(vapid ? { push: { publicKey: vapid.publicKey } } : {}) },
           ...(stream ? { stream } : {}),
+          // An API process of its own waits in /readyz for its workers' build (#1952); the single "all" process is its
+          // own worker, so it has none to wait for.
+          workerBuildCheck: role === 'api',
         });
         const server = serve({ fetch: app.fetch, port: config.PORT, hostname: config.HOST });
         console.log(`[api] listening on ${config.HOST}:${config.PORT}`);
@@ -486,6 +489,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
             inboundDomain: config.INBOUND_DOMAIN ?? null,
             revoker: resolved.identity.revoker,
             refusalTallyRetentionDays: config.REFUSAL_TALLY_RETENTION_DAYS,
+            build: { id: config.CROVE_BUILD ?? null, time: config.CROVE_BUILD_TIME ?? null },
             agentPrograms: { ...financeAgentPrograms, ...socialAgentPrograms, ...crmAgentPrograms },
             exportSealer: exportSealer(config),
             exportRetentionDays: config.EXPORT_RETENTION_DAYS,

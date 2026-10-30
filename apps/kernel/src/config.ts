@@ -358,6 +358,11 @@ const schema = z.object({
   // argument. GET /version reports it, so the deploy's smoke test can tell the new image from the old one. Unset (a
   // local build): "dev".
   CROVE_BUILD: optional.pipe(z.string().regex(/^[A-Za-z0-9._-]{1,64}$/, 'CROVE_BUILD is a build id: letters, digits, dot, dash, underscore').optional()),
+  // When that commit was made (#1952): its committer date, ISO 8601, the image's CROVE_BUILD_TIME build argument. A
+  // SHA has no order, so builds are compared by this date: the API's /readyz waits while a live worker runs an older
+  // build (plan §3.5, worker build >= API build), and each worker records its own in its heartbeat. Unset (a local
+  // build): no comparison.
+  CROVE_BUILD_TIME: optional.pipe(z.iso.datetime({ offset: true, error: 'CROVE_BUILD_TIME is an ISO 8601 date and time with its offset' }).optional()),
   // Where the app's "Góp ý / Hỗ trợ" (feedback and support) link goes: an https: page (a chat group, a help desk) or
   // a mailto: address. Unset hides the link. Browsers see it through /api/config, so it must hold nothing secret.
   SUPPORT_URL: optional.pipe(

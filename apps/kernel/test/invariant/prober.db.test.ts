@@ -81,13 +81,16 @@ suite('prober privileges', () => {
     ]);
   });
 
-  it('lets only crove_prober execute health() and prober_alert_gate(), and only crove_worker execute worker_beat() (EXECUTE matrix)', async () => {
+  it('lets only crove_prober execute health() and prober_alert_gate(), only crove_worker execute worker_beat() and only crove_app execute worker_build_lag() (EXECUTE matrix)', async () => {
     const admin = await connect(adminUrl);
     const functions = [
       'crove_kernel.health(integer)',
       'crove_kernel.prober_alert_gate(text,integer)',
       'crove_kernel.worker_beat(text)',
       'crove_kernel.worker_beat(text,text[])',
+      // #1952: the beat with the worker's build, and the count of older live workers the API's /readyz reads.
+      'crove_kernel.worker_beat(text,text[],text,timestamp with time zone)',
+      'crove_kernel.worker_build_lag(timestamp with time zone)',
     ];
     const roles = ['crove_app', 'crove_worker', 'crove_tenant', 'crove_definer_tenant', 'crove_auth_reader', 'crove_prober', 'crove_reporter'];
     const { rows } = await admin.query<{ fn: string; role: string }>(
@@ -100,17 +103,22 @@ suite('prober privileges', () => {
       { fn: 'crove_kernel.prober_alert_gate(text,integer)', role: 'crove_prober' },
       { fn: 'crove_kernel.worker_beat(text)', role: 'crove_worker' },
       { fn: 'crove_kernel.worker_beat(text,text[])', role: 'crove_worker' },
+      { fn: 'crove_kernel.worker_beat(text,text[],text,timestamp with time zone)', role: 'crove_worker' },
+      { fn: 'crove_kernel.worker_build_lag(timestamp with time zone)', role: 'crove_app' },
     ]);
     const defs = await admin.query(
       `SELECT p.oid::regprocedure::text AS fn, p.prosecdef, p.proconfig FROM pg_proc p
        WHERE p.oid IN ('crove_kernel.health(integer)'::regprocedure, 'crove_kernel.prober_alert_gate(text,integer)'::regprocedure,
-                       'crove_kernel.worker_beat(text)'::regprocedure, 'crove_kernel.worker_beat(text,text[])'::regprocedure) ORDER BY 1`,
+                       'crove_kernel.worker_beat(text)'::regprocedure, 'crove_kernel.worker_beat(text,text[])'::regprocedure,
+                       'crove_kernel.worker_beat(text,text[],text,timestamptz)'::regprocedure, 'crove_kernel.worker_build_lag(timestamptz)'::regprocedure) ORDER BY 1`,
     );
     expect(defs.rows).toEqual([
       { fn: 'crove_kernel.health(integer)', prosecdef: true, proconfig: PINNED },
       { fn: 'crove_kernel.prober_alert_gate(text,integer)', prosecdef: true, proconfig: PINNED },
       { fn: 'crove_kernel.worker_beat(text)', prosecdef: true, proconfig: PINNED },
       { fn: 'crove_kernel.worker_beat(text,text[])', prosecdef: true, proconfig: PINNED },
+      { fn: 'crove_kernel.worker_beat(text,text[],text,timestamp with time zone)', prosecdef: true, proconfig: PINNED },
+      { fn: 'crove_kernel.worker_build_lag(timestamp with time zone)', prosecdef: true, proconfig: PINNED },
     ]);
     // crove_prober executes no other Crove function.
     const others = await admin.query<{ fn: string }>(
