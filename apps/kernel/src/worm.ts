@@ -657,6 +657,9 @@ export interface RestoreReport {
   // Orgs with lost allocations or series that no version 7 batch covers (the archive ends before its first version 7
   // batch): the archive cannot say which series they were in, so the operator names a floor for each series.
   uncovered: string[];
+  // Series of an org or legal entity the restored database lacks (made after the backup point, or an org closed since):
+  // nothing to raise, their numbers are lost with the org or entity.
+  orphaned: RestoreSeries[];
   // Anything else the archive check found (a broken chain, a changed row, a recorded batch the store lacks).
   problems: ArchiveProblem[];
 }
@@ -671,6 +674,8 @@ export interface RestoreSeries {
   // The highest number the archive holds for the series, and the restored next number (null: no such series).
   archivedHigh: string;
   next: string | null;
+  // Why the reseed could not raise it, when it could not.
+  reason?: string;
 }
 
 type LossKind = Exclude<keyof RestoreOrgLoss, 'orgId'>;
@@ -744,7 +749,7 @@ export async function restoreReport(db: Db, store: ArchiveStore): Promise<Restor
       const bad = highProblems(batch);
       for (const ref of bad) problems.push({ code: 'high_mismatch', seq, ref });
       for (const [ref, legalEntityId, docType, periodKey, number] of batch.highs ?? []) {
-        if (bad.includes(ref) || !/^[1-9][0-9]{0,18}$/.test(number)) continue;
+        if (bad.includes(ref) || !/^[1-9][0-9]{0,17}$/.test(number)) continue;
         const [, orgId = '', seriesId = ''] = ref.split(':');
         const seriesKey = `${orgId}|${legalEntityId}|${docType}|${periodKey}`;
         const known = highs.get(seriesKey);
@@ -792,11 +797,15 @@ export async function restoreReport(db: Db, store: ArchiveStore): Promise<Restor
   const { rows: restored } = await sql<{ org_id: string; series_id: string; legal_entity_id: string; doc_type: string; period_key: string; next_number: string }>`
     SELECT org_id, series_id, legal_entity_id, doc_type, period_key, next_number::text AS next_number FROM crove_kernel.archive_series_next()`.execute(db);
   const nextByKey = new Map(restored.map((r) => [`${r.org_id}|${r.legal_entity_id}|${r.doc_type}|${r.period_key}`, r]));
+  const { rows: entities } = await sql<{ org_id: string; legal_entity_id: string }>`
+    SELECT org_id, legal_entity_id FROM crove_kernel.archive_legal_entities()`.execute(db);
+  const present = new Set(entities.map((e) => `${e.org_id}|${e.legal_entity_id}`));
   const reseed: RestoreSeries[] = [];
+  const orphaned: RestoreSeries[] = [];
   for (const [seriesKey, h] of highs) {
     const now = nextByKey.get(seriesKey);
     if (now && BigInt(now.next_number) > h.high) continue;
-    reseed.push({
+    (present.has(`${h.orgId}|${h.legalEntityId}`) ? reseed : orphaned).push({
       orgId: h.orgId,
       seriesId: now?.series_id ?? h.seriesId,
       legalEntityId: h.legalEntityId,
@@ -806,7 +815,9 @@ export async function restoreReport(db: Db, store: ArchiveStore): Promise<Restor
       next: now ? now.next_number : null,
     });
   }
-  reseed.sort((a, b) => (a.orgId + a.seriesId < b.orgId + b.seriesId ? -1 : 1));
+  const bySeries = (a: RestoreSeries, b: RestoreSeries) => (a.orgId + a.seriesId < b.orgId + b.seriesId ? -1 : 1);
+  reseed.sort(bySeries);
+  orphaned.sort(bySeries);
   const uncovered = sawV7 ? [] : lost.filter((o) => o.allocations.length > 0 || o.series.length > 0).map((o) => o.orgId);
   return {
     ok: problems.length === 0 && auditEvents === 0 && lost.length === 0 && reseed.length === 0 && uncovered.length === 0,
@@ -817,6 +828,7 @@ export async function restoreReport(db: Db, store: ArchiveStore): Promise<Restor
     orgs: lost,
     reseed,
     uncovered,
+    orphaned,
     problems,
   };
 }

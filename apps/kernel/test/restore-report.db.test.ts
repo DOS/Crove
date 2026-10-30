@@ -181,13 +181,14 @@ suite('restore report and series reseed on PostgreSQL (#2007)', () => {
       const { rows } = await c.query<{ fn: string; role: string }>(
         `SELECT f AS fn, r AS role
          FROM unnest(ARRAY['crove_kernel.archive_series_highs(timestamptz,timestamptz)', 'crove_kernel.archive_series_next()',
-                           'crove_kernel.number_series_reseed(uuid,uuid,text,text,bigint)']) f,
+                           'crove_kernel.archive_legal_entities()', 'crove_kernel.number_series_reseed(uuid,uuid,text,text,bigint)']) f,
               unnest(ARRAY['crove_app', 'crove_worker', 'crove_tenant', 'crove_definer_tenant', 'crove_prober']) r
          WHERE has_function_privilege(r, f, 'EXECUTE') ORDER BY 1, 2`,
       );
       return rows.map((r) => `${r.fn} ${r.role}`);
     });
     expect(allowed).toEqual([
+      'crove_kernel.archive_legal_entities() crove_worker',
       'crove_kernel.archive_series_highs(timestamptz,timestamptz) crove_worker',
       'crove_kernel.archive_series_next() crove_worker',
       'crove_kernel.number_series_reseed(uuid,uuid,text,text,bigint) crove_worker',
@@ -203,7 +204,7 @@ suite('restore report and series reseed on PostgreSQL (#2007)', () => {
     expect(report.problems).toEqual([]);
     expect(report.beyond.length).toBeGreaterThan(0);
     expect(report.recorded).toBe(report.batches - report.beyond.length);
-    expect(report.auditEvents).toBeGreaterThan(0);
+    expect(report.orphaned).toEqual([]);
     const org = report.orgs.find((o) => o.orgId === orgId);
     expect(org).toMatchObject({ journalEntries: [after.voucher?.entryId], journalVouchers: [after.voucher?.id], cashVouchers: [], documentVoids: [], numberVoids: [] });
     // Two of the old series, two of the late one and the voucher's: five allocations, and the late series itself.
@@ -281,7 +282,7 @@ suite('restore report and series reseed on PostgreSQL (#2007)', () => {
     );
     expect((await allocate(copyName, 'test.restore.floor')).number).toBe('41');
     // A period key that does not fit the doc type's reset (yearly by default) is refused.
-    await expect(reseed('test.restore.floor', '50', '2026-10')).rejects.toThrow(/NUMBER_RESEED_PERIOD_MISFIT/);
+    await expect(reseed('test.restore.floor', '50', '2026-10')).rejects.toMatchObject({ code: 'NUMBER_RESEED_PERIOD_MISFIT' });
     // A user is not the operator.
     const app = new Runtime(dbFor(copyName, APP), { manifests: TEST_MANIFESTS }).register({ commands: [numberReseedCommand()] });
     await expect(

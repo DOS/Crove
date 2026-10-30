@@ -4,6 +4,7 @@
 // and restore-report.db.test.ts (on PostgreSQL).
 import { describe, expect, it, vi } from 'vitest';
 import type { Db } from '@crove/db';
+import { DomainError } from '@crove/kernel-runtime';
 import type { RestoreReport } from '../src/worm.ts';
 
 const report = vi.hoisted(() => ({ current: null as RestoreReport | null }));
@@ -16,7 +17,7 @@ const OTHER = '0190f000-0000-7000-8000-00000000000b';
 const ENTITY = '0190f000-0000-7000-8000-0000000000e1';
 const SERIES = '0190f000-0000-7000-8000-0000000000f1';
 
-const clean: RestoreReport = { ok: true, batches: 3, recorded: 3, beyond: [], auditEvents: 0, orgs: [], reseed: [], uncovered: [], problems: [] };
+const clean: RestoreReport = { ok: true, batches: 3, recorded: 3, beyond: [], auditEvents: 0, orgs: [], reseed: [], uncovered: [], orphaned: [], problems: [] };
 const lostOne: RestoreReport = {
   ...clean,
   ok: false,
@@ -27,12 +28,14 @@ const lostOne: RestoreReport = {
   reseed: [{ orgId: ORG, seriesId: SERIES, legalEntityId: ENTITY, docType: 'finance.journal_voucher', periodKey: '2026', archivedHigh: '6', next: '6' }],
 };
 
-async function run(given: RestoreReport, argv: string[]) {
+async function run(given: RestoreReport, argv: string[], refuse: (input: unknown) => Error | null = () => null) {
   report.current = given;
   const calls: Array<{ command: string; input: unknown; orgId: string | undefined }> = [];
   const runtime = {
     execute: async (command: string, input: unknown, options: { orgId?: string }) => {
       calls.push({ command, input, orgId: options.orgId });
+      const refusal = refuse(input);
+      if (refusal) throw refusal;
       return {};
     },
   };
@@ -98,6 +101,25 @@ describe('restore-report run', () => {
     expect(lines).toContain(`[restore-report] reseeded: org ${ORG} series ${SERIES} (${ENTITY} finance.journal_voucher 2026) next 7, above the archived 6 (was 6)`);
   });
 
+  it('keeps raising the other series when the reseed refuses one, and exits 3 with the reason', async () => {
+    const two: RestoreReport = { ...lostOne, reseed: [...lostOne.reseed, { ...lostOne.reseed[0]!, seriesId: OTHER, periodKey: '2026-10' }] };
+    const { code, calls, lines } = await run(two, ['--reseed'], (input) =>
+      (input as { periodKey: string }).periodKey === '2026-10' ? new DomainError('NUMBER_RESEED_PERIOD_MISFIT', 422, 'Kỳ đánh số không khớp') : null,
+    );
+    expect(code).toBe(RESTORE_REPORT_EXIT.behind);
+    expect(calls).toHaveLength(2);
+    expect(lines).toContain(`[restore-report] reseeded: org ${ORG} series ${SERIES} (${ENTITY} finance.journal_voucher 2026) next 7, above the archived 6 (was 6)`);
+    expect(lines.some((l) => l.includes(`BEHIND: org ${ORG} series ${OTHER}`) && l.includes('NUMBER_RESEED_PERIOD_MISFIT'))).toBe(true);
+  });
+
+  it('names a series lost with its org or legal entity, and raises nothing for it', async () => {
+    const orphan: RestoreReport = { ...lostOne, reseed: [], orphaned: lostOne.reseed };
+    const { code, calls, lines } = await run(orphan, ['--reseed']);
+    expect(code).toBe(RESTORE_REPORT_EXIT.lost);
+    expect(calls).toEqual([]);
+    expect(lines).toEqual(expect.arrayContaining([expect.stringContaining(`lost with its org or legal entity: org ${ORG} series ${SERIES}`)]));
+  });
+
   it('needs a floor for an org the version 7 batches do not cover, and applies the floors given', async () => {
     const legacy: RestoreReport = { ...lostOne, reseed: [], uncovered: [ORG, OTHER] };
     expect((await run(legacy, ['--reseed'])).code).toBe(RESTORE_REPORT_EXIT.behind);
@@ -124,12 +146,12 @@ describe('restore-report run', () => {
     const { code, lines, out } = await run(broken, ['--json']);
     expect(code).toBe(RESTORE_REPORT_EXIT.failed);
     expect(lines).toContain('[restore-report] PROBLEM: object_missing in batch 4');
-    expect(JSON.parse(out.join(''))).toMatchObject({ problems: [{ code: 'object_missing', seq: 4 }], reseeded: [], behind: [], needFloor: [] });
+    expect(JSON.parse(out.join(''))).toMatchObject({ problems: [{ code: 'object_missing', seq: 4 }], reseeded: [], behind: [], failedFloors: [], needFloor: [] });
   });
 
   it('lists at most 20 ids per kind in the summary', () => {
     const many = Array.from({ length: 25 }, (_, i) => `e${i}`);
-    const lines = restoreReportLines({ report: { ...lostOne, orgs: [{ ...lostOne.orgs[0]!, journalEntries: many }] }, reseeded: [], behind: [], needFloor: [] });
+    const lines = restoreReportLines({ report: { ...lostOne, orgs: [{ ...lostOne.orgs[0]!, journalEntries: many }] }, reseeded: [], behind: [], failedFloors: [], needFloor: [] });
     expect(lines).toContain(`lost in org ${ORG}: 25 journal entries: ${many.slice(0, 20).join(' ')} and 5 more`);
   });
 });

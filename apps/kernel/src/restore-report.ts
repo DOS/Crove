@@ -44,6 +44,13 @@ const zReseed = z.strictObject({
   archivedHigh: zNumber.nullable(),
 });
 
+// The definer's refusals, in words the operator reads in the restore log.
+const RESEED_REFUSALS: Record<string, string> = {
+  NUMBER_RESEED_PERIOD_MISFIT: 'Kỳ đánh số không khớp cách đánh số của loại chứng từ (chính sách đặt sau bản sao lưu đã mất)',
+  LEGAL_ENTITY_NOT_ALLOWED: 'Pháp nhân không có trong tổ chức này',
+  NUMBER_INPUT_INVALID: 'Số tiếp theo không hợp lệ',
+};
+
 export interface NumberReseeded {
   seriesId: string;
   previousNext: string | null;
@@ -60,17 +67,30 @@ export function numberReseedCommand(): CommandDef<z.infer<typeof zReseed>, Numbe
     // Internal: it raises a counter of the numbering tables; no document, posting or outside system changes.
     sideEffect: 'internal',
     access: 'system',
-    target: (input) => (input.seriesId ? { type: 'kernel.number_series', id: input.seriesId } : null),
     handler: async (ctx, input) => {
       const { rows } = await sql<{ series_id: string; previous_next: string | null; next_number: string }>`
         SELECT series_id, previous_next::text AS previous_next, next_number::text AS next_number
         FROM crove_kernel.number_series_reseed(${input.seriesId}::uuid, ${input.legalEntityId}::uuid, ${input.docType}, ${input.periodKey},
-          ${input.next}::bigint)`.execute(ctx.trx);
+          ${input.next}::bigint)`
+        .execute(ctx.trx)
+        .catch((error: { message?: string }) => {
+          const refusal = error?.message && RESEED_REFUSALS[error.message];
+          if (refusal) throw new DomainError(error.message as string, 422, refusal);
+          throw error;
+        });
       const row = rows[0];
       if (!row) throw new DomainError('INTERNAL', 500, 'Lỗi hệ thống');
-      const result = { seriesId: row.series_id, previousNext: row.previous_next, next: row.next_number };
-      ctx.audit({ ...input, ...result });
-      return result;
+      ctx.audit({
+        seriesId: row.series_id,
+        legalEntityId: input.legalEntityId,
+        docType: input.docType,
+        periodKey: input.periodKey,
+        source: input.source,
+        archivedHigh: input.archivedHigh,
+        previousNext: row.previous_next,
+        next: row.next_number,
+      });
+      return { seriesId: row.series_id, previousNext: row.previous_next, next: row.next_number };
     },
   });
 }
@@ -121,48 +141,64 @@ export interface RestoreReportDeps {
 export interface RestoreReportOutcome {
   report: RestoreReport;
   reseeded: Array<RestoreSeries & { source: 'archive' } | RestoreFloor & { source: 'floor' }>;
-  // Series still behind the archive, and orgs that still need a floor.
+  // Series still behind the archive (with the reason when the reseed refused one), floors the reseed refused, and orgs
+  // that still need a floor.
   behind: RestoreSeries[];
+  failedFloors: Array<RestoreFloor & { reason: string }>;
   needFloor: string[];
 }
 
 const ids = (list: string[]) => (list.length <= SHOWN ? list.join(' ') : `${list.slice(0, SHOWN).join(' ')} and ${list.length - SHOWN} more`);
 const nextAfter = (high: string) => (BigInt(high) + 1n).toString();
+const reasonOf = (e: unknown) => (e instanceof DomainError ? `${e.code}: ${e.message}` : e instanceof Error ? e.message : String(e));
 
 // The report, and with --reseed the series raised. Throws when it cannot run. An archive with a problem (a broken
 // chain, an edited batch, a version regression) is not trusted: nothing is raised, from it or from a floor, and the
-// run exits 1.
+// run exits 1. Each series is raised in a command of its own: one the reseed refuses stays behind with its reason, and
+// the others are still raised.
 export async function restoreCheck(deps: RestoreReportDeps, args: RestoreReportArgs): Promise<RestoreReportOutcome> {
   const report = await restoreReport(deps.db, deps.store);
   const reseeded: RestoreReportOutcome['reseeded'] = [];
   const behind: RestoreSeries[] = [];
-  if (args.reseed && report.problems.length === 0) {
+  const failedFloors: RestoreReportOutcome['failedFloors'] = [];
+  const trusted = args.reseed && report.problems.length === 0;
+  if (trusted) {
     for (const series of report.reseed) {
-      await deps.runtime.execute<NumberReseeded>(
-        'kernel.number.reseed',
-        {
-          seriesId: series.seriesId,
-          legalEntityId: series.legalEntityId,
-          docType: series.docType,
-          periodKey: series.periodKey,
-          next: nextAfter(series.archivedHigh),
-          source: 'archive',
-          archivedHigh: series.archivedHigh,
-        },
-        { actor: OPERATOR, orgId: series.orgId },
-      );
-      reseeded.push({ ...series, source: 'archive' });
+      try {
+        await deps.runtime.execute<NumberReseeded>(
+          'kernel.number.reseed',
+          {
+            seriesId: series.seriesId,
+            legalEntityId: series.legalEntityId,
+            docType: series.docType,
+            periodKey: series.periodKey,
+            next: nextAfter(series.archivedHigh),
+            source: 'archive',
+            archivedHigh: series.archivedHigh,
+          },
+          { actor: OPERATOR, orgId: series.orgId },
+        );
+        reseeded.push({ ...series, source: 'archive' });
+      } catch (e) {
+        behind.push({ ...series, reason: reasonOf(e) });
+      }
     }
     for (const floor of args.floors) {
       const { orgId, ...key } = floor;
-      await deps.runtime.execute<NumberReseeded>('kernel.number.reseed', { seriesId: null, ...key, source: 'floor', archivedHigh: null }, { actor: OPERATOR, orgId });
-      reseeded.push({ ...floor, source: 'floor' });
+      try {
+        await deps.runtime.execute<NumberReseeded>('kernel.number.reseed', { seriesId: null, ...key, source: 'floor', archivedHigh: null }, { actor: OPERATOR, orgId });
+        reseeded.push({ ...floor, source: 'floor' });
+      } catch (e) {
+        failedFloors.push({ ...floor, reason: reasonOf(e) });
+      }
     }
   } else {
     behind.push(...report.reseed);
   }
-  const floored = new Set(args.reseed && report.problems.length === 0 ? args.floors.map((f) => f.orgId) : []);
-  return { report, reseeded, behind, needFloor: report.uncovered.filter((org) => !floored.has(org)) };
+  // An org counts as floored once the operator named a floor for it: which of its series took numbers after the backup
+  // point is in the vouchers, not in the archive, so the runbook asks for one floor per such series.
+  const floored = new Set(trusted ? args.floors.map((f) => f.orgId) : []);
+  return { report, reseeded, behind, failedFloors, needFloor: report.uncovered.filter((org) => !floored.has(org)) };
 }
 
 export function restoreReportLines(outcome: RestoreReportOutcome): string[] {
@@ -193,7 +229,19 @@ export function restoreReportLines(outcome: RestoreReportOutcome): string[] {
     );
   }
   for (const s of outcome.behind) {
-    lines.push(`BEHIND: org ${s.orgId} series ${s.seriesId} (${s.legalEntityId} ${s.docType} ${s.periodKey}) next ${s.next ?? 'lost'}, the archive holds ${s.archivedHigh}: run with --reseed`);
+    lines.push(
+      `BEHIND: org ${s.orgId} series ${s.seriesId} (${s.legalEntityId} ${s.docType} ${s.periodKey}) next ${s.next ?? 'lost'}, the archive holds ${s.archivedHigh}: ` +
+        (s.reason ? `the reseed refused it (${s.reason}); name a --floor once the cause is fixed` : 'run with --reseed'),
+    );
+  }
+  for (const f of outcome.failedFloors) {
+    lines.push(`FLOOR REFUSED: org ${f.orgId} series ${f.legalEntityId} ${f.docType} ${f.periodKey} next ${f.next}: ${f.reason}`);
+  }
+  for (const s of outcome.report.orphaned) {
+    lines.push(
+      `lost with its org or legal entity: org ${s.orgId} series ${s.seriesId} (${s.legalEntityId} ${s.docType} ${s.periodKey}), the archive holds up to ${s.archivedHigh}; ` +
+        'if the entity is entered again, give its series a --floor above that',
+    );
   }
   for (const org of outcome.needFloor) {
     lines.push(`NEEDS A FLOOR: org ${org} lost number allocations that no version 7 batch covers; pass --floor for each of its series from the issued vouchers`);
@@ -205,7 +253,7 @@ export function restoreReportLines(outcome: RestoreReportOutcome): string[] {
 export function restoreReportExit(outcome: RestoreReportOutcome): number {
   const { report } = outcome;
   if (report.problems.length > 0) return RESTORE_REPORT_EXIT.failed;
-  if (outcome.behind.length > 0 || outcome.needFloor.length > 0) return RESTORE_REPORT_EXIT.behind;
+  if (outcome.behind.length > 0 || outcome.failedFloors.length > 0 || outcome.needFloor.length > 0) return RESTORE_REPORT_EXIT.behind;
   if (report.auditEvents > 0 || report.orgs.length > 0) return RESTORE_REPORT_EXIT.lost;
   return RESTORE_REPORT_EXIT.ok;
 }
@@ -227,7 +275,10 @@ export async function runRestoreReport(deps: RestoreReportDeps, argv: readonly s
   try {
     const outcome = await restoreCheck(deps, args);
     for (const line of restoreReportLines(outcome)) log(`[restore-report] ${line}`);
-    if (args.json) out(`${JSON.stringify({ ...outcome.report, reseeded: outcome.reseeded, behind: outcome.behind, needFloor: outcome.needFloor })}\n`);
+    if (args.json) {
+      const { report, ...rest } = outcome;
+      out(`${JSON.stringify({ ...report, ...rest })}\n`);
+    }
     return restoreReportExit(outcome);
   } catch (e) {
     error(`[restore-report] ${oneLine(e instanceof Error ? e.message : String(e))}`);

@@ -28,6 +28,9 @@
 --
 -- crove_kernel.archive_series_next() gives the restore check every series with its next number, to the worker only:
 -- the series a restore must raise are those whose next number is not above the archived highest.
+-- crove_kernel.archive_legal_entities() gives it every legal entity of an org that is active or offboarding (the orgs
+-- whose system context the reseed may enter), to the worker only: a series of an org or entity made after the backup
+-- point has nothing to raise in the restored database, and is reported as lost with it.
 SET LOCAL lock_timeout = '2s';
 
 CREATE OR REPLACE FUNCTION crove_kernel.archive_series_highs(p_from timestamptz, p_to timestamptz)
@@ -63,3 +66,18 @@ BEGIN
 END $$;
 REVOKE ALL ON FUNCTION crove_kernel.archive_series_next() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION crove_kernel.archive_series_next() TO crove_worker;
+
+CREATE OR REPLACE FUNCTION crove_kernel.archive_legal_entities()
+RETURNS TABLE (org_id uuid, legal_entity_id uuid)
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
+BEGIN
+  PERFORM crove_kernel.archive_require_worker();
+  RETURN QUERY
+  SELECT e.org_id, e.id
+  FROM crove_kernel.legal_entity e
+  JOIN crove_kernel.tenant t ON t.org_id = e.org_id
+  WHERE t.status IN ('active', 'offboarding')
+  ORDER BY e.org_id, e.id;
+END $$;
+REVOKE ALL ON FUNCTION crove_kernel.archive_legal_entities() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION crove_kernel.archive_legal_entities() TO crove_worker;

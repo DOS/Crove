@@ -57,11 +57,12 @@ BEGIN
     'crove_kernel.number_series:' || v_org::text || ':' || p_legal_entity_id::text || ':' || p_doc_type, 0));
   SELECT p.reset INTO v_reset FROM crove_kernel.number_series_policy p
   WHERE p.org_id = v_org AND p.legal_entity_id = p_legal_entity_id AND p.doc_type = p_doc_type;
-  IF NOT CASE coalesce(v_reset, 'yearly')
-           WHEN 'yearly' THEN p_period_key ~ '^[0-9]{4}$'
-           WHEN 'monthly' THEN p_period_key ~ '^[0-9]{4}-(0[1-9]|1[0-2])$'
-           ELSE p_period_key = '-'
-         END THEN
+  -- In parentheses: PL/pgSQL ends an IF condition at its first THEN.
+  IF NOT (CASE coalesce(v_reset, 'yearly')
+            WHEN 'yearly' THEN p_period_key ~ '^[0-9]{4}$'
+            WHEN 'monthly' THEN p_period_key ~ '^[0-9]{4}-(0[1-9]|1[0-2])$'
+            ELSE p_period_key = '-'
+          END) THEN
     RAISE EXCEPTION 'NUMBER_RESEED_PERIOD_MISFIT' USING ERRCODE = '22023';
   END IF;
 

@@ -6108,6 +6108,7 @@ export const en = {
         policy: {
           set: 'Set the voucher numbering policy',
         },
+        reseed: 'Raise a voucher number series after a restore',
         void: 'Void a voucher number',
       },
       org: {

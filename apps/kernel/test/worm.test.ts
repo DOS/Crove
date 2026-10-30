@@ -517,6 +517,8 @@ describe('series highs and the restore report (#2007)', () => {
     present: Record<string, Array<[string, string]>>;
     highs?: Record<string, ArchiveHigh[]>;
     series?: Array<{ series_id: string; next_number: string }>;
+    // The org's legal entities the restored database has (default: the one entity of the tests).
+    entities?: string[];
   }): Db {
     return fakeDb((query) => {
       if (query.sql.includes('archive_batches()')) {
@@ -531,6 +533,7 @@ describe('series highs and the restore report (#2007)', () => {
       if (query.sql.includes('archive_series_next()')) {
         return (opts.series ?? []).map((s) => ({ org_id: ORG, legal_entity_id: ENTITY, doc_type: 'finance.journal_voucher', period_key: '2026', ...s }));
       }
+      if (query.sql.includes('archive_legal_entities()')) return (opts.entities ?? [ENTITY]).map((legal_entity_id) => ({ org_id: ORG, legal_entity_id }));
       const [from] = query.parameters as [string, string];
       if (query.sql.includes('archive_series_highs(')) return (opts.highs?.[from] ?? []).map(highAnswer);
       if (query.sql.includes('archive_row_hashes(')) return (opts.present[from] ?? []).map(([ref, row_sha256]) => ({ ref, row_sha256 }));
@@ -625,8 +628,13 @@ describe('series highs and the restore report (#2007)', () => {
       ],
       reseed: [{ orgId: ORG, seriesId: SERIES, legalEntityId: ENTITY, docType: 'finance.journal_voucher', periodKey: '2026', archivedHigh: '6', next: '6' }],
       uncovered: [],
+      orphaned: [],
       problems: [],
     });
+
+    // A series of an org or legal entity the restored database lacks has nothing to raise: it is lost with it.
+    const noEntity = await restoreReport(dbOf({ batches, recorded: 1, present: { [EPOCH]: kept }, highs: { [EPOCH]: [high('5')] }, entities: [] }), storeOf(batches));
+    expect(noEntity).toMatchObject({ reseed: [], orphaned: [expect.objectContaining({ seriesId: SERIES, archivedHigh: '6', next: null })] });
 
     // A series the restore lost altogether is named with its archived id; one already above the archive is not.
     expect((await restoreReport(restored(), storeOf(batches))).reseed).toEqual([expect.objectContaining({ seriesId: SERIES, archivedHigh: '6', next: null })]);

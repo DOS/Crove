@@ -10,13 +10,14 @@ import { commandLabel, withCommandLabels, type CommandLabels } from '../../app/s
 import { loadConfig } from '../src/config.ts';
 import { moduleDefinitions } from '../src/kernel.ts';
 import { orgPurgeCommand } from '../src/org-purge.ts';
+import { numberReseedCommand } from '../src/restore-report.ts';
 
 // Every name the kernel's runtimes register: the modules' commands and queries with every module on, and the operator's
-// org purge.
+// org purge and number reseed.
 function registeredNames(): string[] {
   const config = loadConfig({ DATABASE_URL: 'postgres://localhost/x', AUTH_JWT_SECRET: 'unit-test-jwt-secret-0123456789abcdef', AUTH_ISSUER: 'crove-auth' });
   const { commands, queries } = moduleDefinitions(config);
-  return [...commands, orgPurgeCommand({ store: {} as never }), ...queries].map((d) => d.name);
+  return [...commands, orgPurgeCommand({ store: {} as never }), numberReseedCommand(), ...queries].map((d) => d.name);
 }
 
 // The dotted names a catalog's labels stand for.
