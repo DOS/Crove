@@ -16,6 +16,7 @@ import {
   zClientOverviews,
   zOrgOverview,
   zJobDescription,
+  zPositionLeScope,
   zModuleId,
   zPositionStatus,
   zTask,
@@ -1474,6 +1475,7 @@ export const contract = {
           roleKey: zAgentRoleKey,
           reportsTo: zId.nullable().optional(),
           jobDescription: zJobDescription.optional(),
+          leScope: zPositionLeScope.optional(),
           idempotencyKey: zId,
         }),
       )
@@ -1485,6 +1487,7 @@ export const contract = {
           title: z.string().trim().min(1).max(200).optional(),
           reportsTo: zId.nullable().optional(),
           status: zPositionStatus.optional(),
+          leScope: zPositionLeScope.optional(),
           idempotencyKey: zId,
         }),
       )
@@ -1509,6 +1512,7 @@ export const contract = {
           templateKey: z.string().min(1).max(100),
           reportsTo: zId.nullable().optional(),
           displayName: z.string().trim().min(1).max(200).optional(),
+          leScope: zPositionLeScope.optional(),
           idempotencyKey: zId,
         }),
       )

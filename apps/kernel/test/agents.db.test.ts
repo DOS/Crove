@@ -294,4 +294,38 @@ suite('agent positions, tasks and wake-ups on PostgreSQL (ADR-0029 Phase 1)', ()
     expect(status).toEqual({ status: 'cancelled' });
     await expect(worker.execute('kernel.agent.run.start', { agentId }, { actor: SYSTEM, orgId })).resolves.toEqual({ runId: null, reason: 'not_runnable' });
   });
+  // The chart answers each position's legal entities (#1763), for the agents screen's picker: ['*'], or the ids the
+  // reader may see, so a member limited to some entities learns no other entity's id. The owner sets them on create and
+  // changes them on update.
+  it("answers each position's legal entities, only those the reader sees", async () => {
+    const [defaultEntity, branch] = await admin(async (c) => [
+      (await c.query<{ id: string }>('SELECT id FROM crove_kernel.legal_entity WHERE org_id = $1 AND is_default', [orgId])).rows[0]?.id as string,
+      (await c.query<{ id: string }>(`INSERT INTO crove_kernel.legal_entity (org_id, name, kind, created_by) VALUES ($1, 'Chi nhánh 1763', 'branch', $2) RETURNING id`, [orgId, owner]))
+        .rows[0]?.id as string,
+    ]);
+    const limited = await upsertIdentity(createDb(pools[0] as pg.Pool), { issuer: 'agents', subject: 'limited-1763', email: 'limited@agents.test', name: null });
+    await admin(async (c) => {
+      await c.query(`INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member')`, [orgId, limited]);
+      await c.query(`INSERT INTO crove_kernel.role_assignment (org_id, user_id, role_key, legal_entity_id, granted_by) VALUES ($1, $2, 'external_accountant', $3, $4)`, [
+        orgId,
+        limited,
+        defaultEntity,
+        owner,
+      ]);
+    });
+    const { positionId } = await app.execute<{ positionId: string }>(
+      'kernel.position.create',
+      { title: 'Kế toán hai pháp nhân', module: 'finance', roleKey: 'finance.accountant', leScope: [defaultEntity, branch] },
+      { actor: asMfa(owner), orgId },
+    );
+    const scopeOf = async (userId: string) => {
+      const chart = await app.query<{ positions: Array<{ id: string; leScope: string[] }> }>('kernel.chart.get', {}, { actor: asUser(userId), orgId });
+      return chart.positions.find((p) => p.id === positionId)?.leScope;
+    };
+    expect(new Set(await scopeOf(owner))).toEqual(new Set([defaultEntity, branch]));
+    expect(await scopeOf(limited)).toEqual([defaultEntity]);
+    await app.execute('kernel.position.update', { id: positionId, leScope: ['*'] }, { actor: asMfa(owner), orgId });
+    expect(await scopeOf(owner)).toEqual(['*']);
+    expect(await scopeOf(limited)).toEqual(['*']);
+  });
 });

@@ -1,6 +1,17 @@
 // What the AI agents screens decide on their own (ADR-0029, issue #258).
 import { describe, expect, it } from 'vitest';
-import { agentPermissions, budgetUsage, chartTree, holderCandidates, isBudgetAmount, socialPostOf } from '../src/lib/agents.ts';
+import {
+  agentPermissions,
+  budgetUsage,
+  chartTree,
+  defaultScope,
+  holderCandidates,
+  isBudgetAmount,
+  isEveryEntity,
+  scopeNames,
+  socialPostOf,
+  toggleScopeEntity,
+} from '../src/lib/agents.ts';
 
 const titles = (nodes: ReturnType<typeof chartTree<{ id: string; reportsTo: string | null }>>): unknown =>
   nodes.map((n) => (n.children.length ? { [n.position.id]: titles(n.children) } : n.position.id));
@@ -97,5 +108,37 @@ describe('socialPostOf', () => {
     expect(socialPostOf({ type: 'social.post', id: 'not-a-uuid' })).toBeNull();
     expect(socialPostOf(null)).toBeNull();
     expect(socialPostOf('social.post')).toBeNull();
+  });
+});
+
+// A position's legal entities on the agents screen (#1763).
+describe('legal entity scope', () => {
+  const entities = [
+    { id: 'e1', name: 'Công ty', isDefault: true },
+    { id: 'e2', name: 'Chi nhánh Hà Nội', isDefault: false },
+    { id: 'e3', name: 'Hộ kinh doanh', isDefault: false },
+  ];
+
+  it('starts a new position on the default entity, as the server would', () => {
+    expect(defaultScope(entities)).toEqual(['e1']);
+    expect(defaultScope([{ id: 'x', isDefault: false }])).toEqual(['x']);
+    expect(defaultScope([])).toEqual([]);
+  });
+
+  it('turns entities on and off in the order of the list, leaving every entity for some', () => {
+    expect(toggleScopeEntity(['e3'], 'e1', true, entities)).toEqual(['e1', 'e3']);
+    expect(toggleScopeEntity(['e1', 'e3'], 'e1', false, entities)).toEqual(['e3']);
+    expect(toggleScopeEntity(['*'], 'e2', true, entities)).toEqual(['e2']);
+    expect(toggleScopeEntity(['e2'], 'e2', false, entities)).toEqual([]);
+    // An id the list does not hold is kept.
+    expect(toggleScopeEntity(['e9', 'e1'], 'e2', true, entities)).toEqual(['e1', 'e2', 'e9']);
+  });
+
+  it('names a scope for display, or null for every entity', () => {
+    expect(isEveryEntity(['*'])).toBe(true);
+    expect(scopeNames(['*'], entities)).toBeNull();
+    expect(scopeNames(['e3', 'e1'], entities)).toEqual(['Công ty', 'Hộ kinh doanh']);
+    // An id the reader cannot name is left out.
+    expect(scopeNames(['e9', 'e2'], entities)).toEqual(['Chi nhánh Hà Nội']);
   });
 });
