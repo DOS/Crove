@@ -445,7 +445,26 @@ describe('pilot-check CI of the deployed build (#1995)', () => {
     expect(await status({ [VERSION]: json({ build: SHA }), [CHECKS]: json({ message: 'Not Found' }, 404) })).toBe('manual');
     expect(await status({})).toBe('manual');
     // A source repository that is not owner/name is the operator's mistake.
-    expect(await status(routes(green), { CROVE_SOURCE_REPO: 'not a repo' })).toBe('fail');
+    for (const repo of ['not a repo', '../x', 'acme/..', 'acme/.']) expect(await status(routes(green), { CROVE_SOURCE_REPO: repo }), repo).toBe('fail');
+    // More checks than one page: it cannot tell.
+    expect(await status({ [VERSION]: json({ build: SHA }), [CHECKS]: json({ total_count: 140, check_runs: green }) })).toBe('manual');
+  });
+
+  it('prints nothing the instance answers but a commit id, and names the rate limit', async () => {
+    const result = await probeBuildChecks('https://crove.example.com', {}, fakeFetch(routes(green, '\u001b[32mPASS fake\nline')));
+    expect(result.status).toBe('manual');
+    expect(result.message).not.toContain('fake');
+    // The database down: /version answers 503 but still names the build.
+    expect((await probeBuildChecks('https://crove.example.com', {}, fakeFetch({ ...routes(green), [VERSION]: json({ build: SHA, migrationsMissing: null }, 503) }))).status).toBe('pass');
+    const limited: Fetch = async (input) => (input === VERSION ? Response.json({ build: SHA }) : new Response('{}', { status: 403, headers: { 'x-ratelimit-remaining': '0' } }));
+    expect((await probeBuildChecks('https://crove.example.com', {}, limited)).message).toContain('export GITHUB_TOKEN');
+  });
+
+  it('fails a check that was cancelled or skipped, as it is not a pass', async () => {
+    for (const conclusion of ['cancelled', 'skipped', 'neutral', 'timed_out']) {
+      const result = await probeBuildChecks('https://crove.example.com', {}, fakeFetch(routes([...green.slice(0, 1), run('Database tests (shard 1 of 2)', conclusion), ...green.slice(2)])));
+      expect(result.status, conclusion).toBe('fail');
+    }
   });
 
   it('asks the fork CROVE_SOURCE_REPO names, with GITHUB_TOKEN when it is set', async () => {
@@ -456,7 +475,11 @@ describe('pilot-check CI of the deployed build (#1995)', () => {
       return input === VERSION ? Response.json({ build: SHA }) : Response.json({ check_runs: green });
     };
     expect((await probeBuildChecks('https://crove.example.com', { CROVE_SOURCE_REPO: 'acme/ludy', GITHUB_TOKEN: 'ghp_test' }, fetchFn)).status).toBe('pass');
-    expect(seen.at(-1)).toEqual({ url: fork, auth: 'Bearer ghp_test' });
+    // The token goes to GitHub only, never to the instance.
+    expect(seen).toEqual([
+      { url: VERSION, auth: null },
+      { url: fork, auth: 'Bearer ghp_test' },
+    ]);
   });
 
   it('replaces the manual RLS matrix line of the run with --url', async () => {

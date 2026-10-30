@@ -585,13 +585,16 @@ export async function probeBuildChecks(origin: string, env: Env, fetchFn: Fetch 
   const manual = (why: string): CheckResult => ({ item: 'RLS matrix', status: 'manual', message: `${why}: ${RLS_MANUAL}` });
   const init = (extra: RequestInit = {}): RequestInit => ({ signal: AbortSignal.timeout(PROBE_TIMEOUT_MS), ...extra });
   const repo = value(env, 'CROVE_SOURCE_REPO') ?? DEFAULT_SOURCE_REPO;
-  if (!/^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(repo)) return { item: 'RLS matrix', status: 'fail', message: `CROVE_SOURCE_REPO is owner/name of a GitHub repository, not ${repo}` };
+  if (!/^(?!\.{1,2}\/)[A-Za-z0-9_.-]{1,100}\/(?!\.{1,2}$)[A-Za-z0-9_.-]{1,100}$/.test(repo)) return { item: 'RLS matrix', status: 'fail', message: `CROVE_SOURCE_REPO is owner/name of a GitHub repository, not ${repo}` };
   let build: string;
   try {
+    // A 503 (the database is down) still names the build. What the instance answers is never printed: only a commit id
+    // that matches is used.
     const response = await fetchFn(`${origin}/version`, init({ redirect: 'error' }));
-    if (!response.ok) return manual(`${origin}/version answered ${response.status}`);
-    const answer = (await response.json()) as { build?: unknown };
-    if (typeof answer.build !== 'string' || !/^[0-9a-f]{40}$/.test(answer.build)) return manual(`the instance reports no commit as its build (${String(answer.build ?? 'none')})`);
+    const answer = (await response.json().catch(() => ({}))) as { build?: unknown };
+    if (typeof answer.build !== 'string' || !/^[0-9a-f]{40}$/.test(answer.build)) {
+      return manual(response.ok ? 'the instance reports no commit id as its build (a local build)' : `${origin}/version answered ${response.status} without a commit id`);
+    }
     build = answer.build;
   } catch (error) {
     return manual(`${origin}/version failed: ${reason(error)}`);
@@ -604,8 +607,15 @@ export async function probeBuildChecks(origin: string, env: Env, fetchFn: Fetch 
       `https://api.github.com/repos/${repo}/commits/${build}/check-runs?per_page=100`,
       init({ redirect: 'error', headers: { accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28', ...(token ? { authorization: `Bearer ${token}` } : {}) } }),
     );
-    if (!response.ok) return manual(`GitHub answered ${response.status} for the checks of ${repo}@${short}`);
-    runs = ((await response.json()) as { check_runs?: CheckRun[] }).check_runs ?? [];
+    if (!response.ok) {
+      const limited = response.status === 429 || (response.status === 403 && response.headers.get('x-ratelimit-remaining') === '0');
+      return manual(`GitHub answered ${response.status} for the checks of ${repo}@${short}${limited ? ' (rate limited: export GITHUB_TOKEN and run again)' : ''}`);
+    }
+    const page = (await response.json()) as { total_count?: number; check_runs?: CheckRun[] };
+    runs = page.check_runs ?? [];
+    if (typeof page.total_count === 'number' && page.total_count > runs.length) {
+      return manual(`${repo}@${short} has ${page.total_count} checks, more than one page of GitHub's answer`);
+    }
   } catch (error) {
     return manual(`could not read the checks of ${repo}@${short} from GitHub: ${reason(error)}`);
   }
