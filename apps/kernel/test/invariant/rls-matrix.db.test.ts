@@ -53,6 +53,7 @@ const MACHINERY = new Set([
 // until the table exists, neither its factory nor its MACHINERY entry is stale. Remove an entry once its table is on
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
+  'crove_finance.bank_feed_account',
   'crove_notes.link',
   'crove_notes.note',
 ]);
@@ -331,6 +332,19 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   },
   // Bank statement lines (#326): append-only, one row per line of an import, on a bank account (112 or an org
   // sub-account under it). Tenant roles read and insert; nothing updates or deletes a line.
+  // Bank feed accounts (ADR-0039, #2044): an account a bank feed connection reaches, mapped to a bank account of an
+  // entity (the org's default, by its trigger). Tenant roles update only the bank account and the sync cursor (a
+  // column grant), so the update probes assign the cursor to itself.
+  'crove_finance.bank_feed_account': {
+    update: { set: 'cursor = cursor' },
+    make: (o) => {
+      const connection = { ...channelConnectionRow(o), provider: 'bank_sandbox' };
+      return {
+        setup: [{ table: 'crove_kernel.channel_connection', values: connection }],
+        row: { org_id: o.id, id: randomUUID(), channel_connection_id: connection.id, external_account_id: 'SBX-001', bank_account: '1121' },
+      };
+    },
+  },
   'crove_finance.bank_line': {
     make: (o) => ({
       row: { org_id: o.id, bank_account: '1121', import_id: randomUUID(), position: 1, value_date: '2026-10-01', description: 'RLS matrix', amount: '100' },
