@@ -16,7 +16,7 @@ import { ConfirmDialog } from '../components/confirm-dialog.tsx';
 import { DateInput } from '../components/date-input.tsx';
 import { useLegalEntity } from '../components/entity-switcher.tsx';
 import { StepUpPrompt } from '../components/two-factor.tsx';
-import { ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
+import { DocumentSkeleton, ErrorText, PageHeader, ProposalSkeleton, Spinner } from '../components/ui.tsx';
 import { accountLabel, pickableAccounts } from '../lib/accounts.ts';
 import { errorMessage, fetchFile, isStepUpRequired, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
@@ -64,7 +64,7 @@ function FilePreview({ fileId, contentType, filename }: { fileId: string; conten
     };
   }, [fileId]);
   if (error) return <ErrorText>{errorMessage(error)}</ErrorText>;
-  if (!url) return <Spinner />;
+  if (!url) return <DocumentSkeleton />;
   if (contentType.startsWith('image/')) return <img src={url} alt={filename} className="w-full rounded-lg border" />;
   if (contentType === 'application/pdf')
     return (
@@ -534,7 +534,7 @@ function InboxDetail({ slug, id, split }: { slug: string; id: string; split: boo
   };
   useReviewShortcuts(handlers);
 
-  if (detail.isLoading) return <Spinner />;
+  if (detail.isLoading) return <ProposalSkeleton />;
   if (detail.error) return <ErrorText>{errorMessage(detail.error)}</ErrorText>;
   if (!item) return null;
   // A foreign-currency invoice converted at a rate is shown in VND, its amounts as booked (#918).

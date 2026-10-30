@@ -20,7 +20,7 @@ import { MemberRolesRow } from './member-roles.tsx';
 import { WorkingHoursCard } from './working-hours.tsx';
 import { EventTypesCard } from './event-types.tsx';
 import { MemberPrivateNotes, usePrivateNotes } from '../components/notes-panel.tsx';
-import { ErrorText, FieldError, fieldControl, fieldHintId, focusFirstInvalid, isEmailAddress, PageHeader, Spinner, useFieldErrors } from '../components/ui.tsx';
+import { CardSkeleton, ErrorText, FieldError, fieldControl, fieldHintId, focusFirstInvalid, isEmailAddress, PageHeader, PageSkeleton, RowsSkeleton, Spinner, useFieldErrors } from '../components/ui.tsx';
 import { apiFetch, errorMessage, isStepUpRequired, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
 import { useFormat } from '../i18n/provider.tsx';
@@ -267,7 +267,7 @@ function Offboarding({ name, slug }: { name: string; slug: string }) {
     },
   });
 
-  if (state.isLoading) return <Spinner />;
+  if (state.isLoading) return <CardSkeleton className="lg:col-span-2" />;
   if (state.error) return <ErrorText>{errorMessage(state.error)}</ErrorText>;
   const data = state.data;
   if (!data) return null;
@@ -566,7 +566,7 @@ function PendingInvites({ entities, entitiesLoading }: { entities: LegalEntity[]
       onSuccess: () => void queryClient.invalidateQueries({ queryKey: orpc.org.listInvites.key() }),
     }),
   );
-  if (invites.isLoading) return <Spinner />;
+  if (invites.isLoading) return <RowsSkeleton rows={2} />;
   if (invites.error) return <ErrorText>{errorMessage(invites.error)}</ErrorText>;
   if (!invites.data?.length) return null;
   return (
@@ -1035,7 +1035,7 @@ export function SettingsPage() {
   const memberRoles = useQuery({ ...orpc.org.memberRoles.queryOptions(), enabled: managesMembers });
   const entities = useQuery({ ...orpc.legalEntities.list.queryOptions(), enabled: managesMembers });
 
-  if (org.isLoading) return <Spinner />;
+  if (org.isLoading) return <PageSkeleton />;
   if (org.error) return <ErrorText>{errorMessage(org.error)}</ErrorText>;
   const canManage = org.data?.role === 'owner' || org.data?.role === 'admin';
   const isOwner = org.data?.role === 'owner';

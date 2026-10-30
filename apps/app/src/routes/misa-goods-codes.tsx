@@ -11,7 +11,7 @@ import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
-import { ErrorText, Spinner } from '../components/ui.tsx';
+import { ErrorText, RowsSkeleton } from '../components/ui.tsx';
 import { accountLabel, type ChartAccount } from '../lib/accounts.ts';
 import { errorMessage, orpc, queryClient } from '../lib/api.ts';
 
@@ -125,7 +125,7 @@ export function MisaGoodsCodesCard({ canManage }: { canManage: boolean }) {
       <p className="text-sm font-medium text-muted-foreground">{t('title')}</p>
       <p className="mt-2 text-sm text-muted-foreground">{t('intro')}</p>
       {accounts.isLoading || saved.isLoading ? (
-        <Spinner />
+        <RowsSkeleton />
       ) : error ? (
         <ErrorText>{errorMessage(error)}</ErrorText>
       ) : (

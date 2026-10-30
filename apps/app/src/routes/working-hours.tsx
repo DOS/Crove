@@ -12,7 +12,7 @@ import { Checkbox } from '@crove/ui/components/checkbox';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { DateInput } from '../components/date-input.tsx';
 import { TimeInput } from '../components/time-input.tsx';
-import { ErrorText, Spinner } from '../components/ui.tsx';
+import { ErrorText, RowsSkeleton, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { WEEKDAY_KEYS, dayOffRange, daysOf, datesOf, hoursOf, timeZones, type DayHours } from '../lib/calendar.ts';
@@ -154,7 +154,7 @@ export function WorkingHoursCard({ canEdit }: { canEdit: boolean }) {
       <p className="text-sm font-medium text-muted-foreground">{t('title')}</p>
       <p className="mt-2 text-sm text-muted-foreground">{t('intro')}</p>
       {calendar.isLoading ? (
-        <Spinner />
+        <RowsSkeleton />
       ) : calendar.error ? (
         <ErrorText>{errorMessage(calendar.error)}</ErrorText>
       ) : calendar.data ? (

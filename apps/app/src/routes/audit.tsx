@@ -14,7 +14,7 @@ import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { TableCell, TableRow } from '@crove/ui/components/table';
 import { DateInput } from '../components/date-input.tsx';
-import { DataTable, Empty, ErrorText, PageHeader, Spinner, TableSkeleton } from '../components/ui.tsx';
+import { DataTable, Empty, ErrorText, PageHeader, PageSkeleton, Spinner, TableSkeleton } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc } from '../lib/api.ts';
 import { type ChipVariant } from '../lib/status.ts';
@@ -89,7 +89,7 @@ function AuditLog({ search }: { search: AuditSearch }) {
   const set = (key: keyof AuditFilterForm) => (e: { target: { value: string } }) =>
     setForm((prev) => ({ ...prev, [key]: e.target.value, ...(key === 'target' ? { targetType: '' } : {}) }));
 
-  if (org.isLoading) return <Spinner />;
+  if (org.isLoading) return <PageSkeleton />;
   if (org.error) return <ErrorText>{errorMessage(org.error)}</ErrorText>;
   if (!canRead) return <Empty title={t('forbidden')} />;
 

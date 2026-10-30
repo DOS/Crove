@@ -12,7 +12,7 @@ import { TableCell, TableRow } from '@crove/ui/components/table';
 import { DateInput } from '../components/date-input.tsx';
 import { useChosenEntity } from '../components/entity-switcher.tsx';
 import { StepUpPrompt } from '../components/two-factor.tsx';
-import { DataTable, ErrorText, fieldErrorId, fieldHintId, Notice, PageHeader, Spinner } from '../components/ui.tsx';
+import { DataTable, ErrorText, fieldErrorId, fieldHintId, Notice, PageHeader, PageSkeleton, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { errorMessage, getCurrentOrg, isStepUpRequired, orpc, queryClient } from '../lib/api.ts';
 import { buildTemplate, canImportOpeningBalance, sheetToRows, type SheetProblem } from '../lib/opening-balance.ts';
@@ -95,7 +95,7 @@ function OpeningBalanceForm() {
   const download = () =>
     saveBytes(buildTemplate((accounts.data ?? []).filter((a) => a.active)), t('templateFile', { org: getCurrentOrg() ?? 'org' }));
 
-  if (org.isLoading) return <Spinner />;
+  if (org.isLoading) return <PageSkeleton />;
   if (!allowed) {
     return (
       <>
