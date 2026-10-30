@@ -752,7 +752,8 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
           const outbox = await archiveOutbox(deps.workerDb, deps.archive.store);
           console.log(`[retention] outbox archived=${outbox.archived} purged=${outbox.purged}${outbox.deferred ? ` deferred=${outbox.deferred}` : ''}`);
         } catch (error) {
-          opsAlert(`[retention] ALERT outbox archive failed: ${error instanceof Error ? error.message : 'unknown error'}`);
+          // The error (a database or bucket message may quote values) stays in the log; the post says where to look.
+          opsAlert('[retention] ALERT outbox archive failed; the error is in the worker log', error);
         }
       }
     }
@@ -1311,7 +1312,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       const done = await runEvidenceHolds({ runtime: deps.runtime, workerDb: deps.workerDb, store: deps.store }, evidenceLockDays, holdState);
       if (done.held + done.failed > 0) console.log(`[evidence-hold] held ${done.held}, failed ${done.failed}`);
     } catch (error) {
-      opsAlert(`[evidence-hold] ALERT sweep failed: ${error instanceof Error ? error.message : String(error)}`);
+      opsAlert('[evidence-hold] ALERT sweep failed; the error is in the worker log', error);
     } finally {
       holding = false;
     }

@@ -90,6 +90,31 @@ describe('opsAlert (#1993)', () => {
     expect(error).toHaveBeenCalledWith('[ops-alert] could not post the alert: boom');
   });
 
+  it('posts at most 300 characters of a line, the whole line in the log', async () => {
+    const { error, post } = setup();
+    const long = `[retention] ALERT ${'x'.repeat(400)}`;
+    opsAlert(long);
+    await flushOpsAlerts();
+    expect(error).toHaveBeenCalledWith(long);
+    expect(texts(post)[0]).toBe(`[Crove] pilot.example.com: ${long.slice(0, 299)}…`);
+  });
+
+  it('stops posting at the deadline of a stop, and says what is left in the log', async () => {
+    const { error, post } = setup();
+    post.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      return { channel: 'webhook', ok: true };
+    });
+    opsAlert('[retention] ALERT staging sweep failed after deleting 0');
+    opsAlert('[inbox-prune] ALERT more than 1000 orgs to prune');
+    opsAlert('[org-export] ALERT export of org 0b0d6f1e-3c1a-4d2e-9f00-0123456789ab failed after 4 attempts');
+    await flushOpsAlerts(20);
+    expect(post).toHaveBeenCalledOnce();
+    expect(error).toHaveBeenCalledWith('[ops-alert] 2 alert(s) not posted before the deadline; they are in the log');
+    // Each post gets no longer than what is left.
+    expect((post.mock.calls[0] as unknown as [unknown, { timeoutMs: number }])[1].timeoutMs).toBeLessThanOrEqual(20);
+  });
+
   it('takes ids, hashes and numbers out of the kind', () => {
     expect(alertKind('[year-archive] ALERT archive of org 0b0d6f1e-3c1a-4d2e-9f00-0123456789ab year 2025 failed after 3 attempts')).toBe(
       '[year-archive] ALERT archive of org <id> year # failed after # attempts',

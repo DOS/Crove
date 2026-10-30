@@ -26,6 +26,8 @@ export interface OpsAlertConfig {
 const MAX_KINDS = 500;
 const MAX_PENDING = 50;
 const FLUSH_MS = 2_000;
+// The longest line posted: a chat refuses a long message, and the log has the rest.
+const MAX_POSTED = 300;
 
 let current: OpsAlertConfig | null = null;
 const lastPosted = new Map<string, number>();
@@ -80,12 +82,17 @@ export function opsAlert(line: string, error?: unknown): void {
     dropped += 1;
     return;
   }
-  pending.push({ text: `[Crove] ${target.instance}: ${line}`, crove: { kind: 'ops_alert', instance: target.instance, line } });
+  const posted = line.length > MAX_POSTED ? `${line.slice(0, MAX_POSTED - 1)}…` : line;
+  pending.push({ text: `[Crove] ${target.instance}: ${posted}`, crove: { kind: 'ops_alert', instance: target.instance, line: posted } });
 }
 
-/** Posts the queued alerts, one at a time; one flush at a time. Never throws: a failed post is logged. */
-export function flushOpsAlerts(): Promise<void> {
-  if (flushing) return flushing;
+/**
+ * Posts the queued alerts, one at a time; one flush at a time. Never throws: a failed post is logged. With a deadline (the
+ * stop's), no post outlasts it and what is left stays in the log only.
+ */
+export function flushOpsAlerts(deadlineMs?: number): Promise<void> {
+  if (flushing) return deadlineMs === undefined ? flushing : within(flushing, deadlineMs);
+  const until = deadlineMs === undefined ? Infinity : Date.now() + deadlineMs;
   // Cleared in a later microtask, after the assignment: a flush with nothing to post finishes at once.
   flushing = (async () => {
     const config = current;
@@ -97,7 +104,14 @@ export function flushOpsAlerts(): Promise<void> {
       dropped = 0;
     }
     for (let message = pending.shift(); message; message = pending.shift()) {
-      const delivery = await post(message, { webhookUrl: target.webhookUrl, format: target.webhookFormat, telegramChatId: target.telegramChatId }).catch(
+      const left = until - Date.now();
+      if (left <= 0) {
+        console.error(`[ops-alert] ${pending.length + 1} alert(s) not posted before the deadline; they are in the log`);
+        pending.length = 0;
+        break;
+      }
+      const options = { webhookUrl: target.webhookUrl, format: target.webhookFormat, telegramChatId: target.telegramChatId, timeoutMs: Math.min(10_000, left) };
+      const delivery = await post(message, options).catch(
         (error: unknown) => ({ ok: false, error: error instanceof Error ? error.message : String(error) }),
       );
       if (!delivery.ok) console.error(`[ops-alert] could not post the alert: ${delivery.error ?? 'unknown error'}`);
@@ -106,4 +120,16 @@ export function flushOpsAlerts(): Promise<void> {
     flushing = null;
   });
   return flushing;
+}
+
+// Waits for a flush already under way, at most ms.
+function within(flush: Promise<void>, ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref();
+    void flush.finally(() => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
 }

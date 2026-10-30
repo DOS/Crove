@@ -90,6 +90,9 @@ import { createPortalSync } from './portal-sync.ts';
 import { createTaxPortalClient, testPortalAllowed } from './tax-portal.ts';
 import { startWorker, workerApplicationName } from './worker.ts';
 import { configureOpsAlerts, flushOpsAlerts } from './ops-alert.ts';
+
+// How long a stop waits for the queued operational alerts to post (#1993).
+const STOP_FLUSH_MS = 5_000;
 import { createPushSender, loadVapidKeys } from './web-push.ts';
 import { WORKER_LAG_EXIT_MS, WORKER_LAG_SUSTAIN_MS, startLagWatchdog } from './back-pressure.ts';
 
@@ -412,9 +415,10 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
       if (removed > 0) console.log(`[storage] removed ${removed} stale temporary file(s)`);
     }
     const stops: Array<() => Promise<void>> = [];
-    // Run last (stops run in reverse): the alerts the other stops raised are posted before the process ends.
+    // Run last (stops run in reverse): the alerts the other stops raised are posted before the process ends, within 5 s
+    // in all, so the container's stop grace period holds.
     stops.push(async () => {
-      await flushOpsAlerts();
+      await flushOpsAlerts(STOP_FLUSH_MS);
       configureOpsAlerts(null);
     });
     // Safe to call twice (SIGTERM then SIGINT): the second call finds nothing left to stop.
