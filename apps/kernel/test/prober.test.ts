@@ -431,6 +431,7 @@ describe('Supabase Auth check (#1994)', () => {
     expect(() => loadProberConfig({ PROBER_AUTH_URL: 'https://user:secret@auth.example.test/auth/v1' })).toThrow(/holds credentials/);
     // Hosted Supabase answers 401 without the publishable key, which would page forever.
     expect(() => loadProberConfig({ PUBLIC_AUTH_URL: 'https://project.supabase.co/auth/v1' })).toThrow(/PUBLIC_AUTH_ANON_KEY/);
+    expect(() => loadProberConfig({ PUBLIC_AUTH_URL: 'https://project.supabase.co./auth/v1' })).toThrow(/PUBLIC_AUTH_ANON_KEY/);
     expect(loadProberConfig({ PUBLIC_AUTH_URL: 'https://project.supabase.co/auth/v1', PUBLIC_AUTH_ANON_KEY: 'sb_publishable_x' }).authHealthUrl).toBe('https://project.supabase.co/auth/v1/health');
   });
 

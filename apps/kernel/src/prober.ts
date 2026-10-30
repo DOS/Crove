@@ -421,15 +421,15 @@ export async function probeOnce(config: ProberConfig, deps: ProbeDeps = {}): Pro
   const { code, failing, at } = await probe(config, deps);
   // Written whether or not an alert went out: the page shows what the probe saw. Not when the probe could not run
   // at all (no PROBER_DATABASE_URL), which says nothing about the deployment.
-  if (config.statusFile && at) await writeStatus(config.statusFile, at, failing, deps);
+  if (config.statusFile && at) await writeStatus(config.statusFile, at, failing, config.authHealthUrl !== undefined, deps);
   if (config.heartbeatUrl && (code === EXIT.ok || code === EXIT.unhealthy)) await pingHeartbeat(config.heartbeatUrl, deps);
   return code;
 }
 
 // A failed write is logged, never thrown: the page then turns "unknown" once the file is stale.
-async function writeStatus(path: string, at: Date, failing: string[] | null, deps: ProbeDeps): Promise<void> {
+async function writeStatus(path: string, at: Date, failing: string[] | null, authChecked: boolean, deps: ProbeDeps): Promise<void> {
   try {
-    await (deps.writeStatus ?? writeStatusFile)(path, probeStatus(at, failing));
+    await (deps.writeStatus ?? writeStatusFile)(path, probeStatus(at, failing, authChecked));
   } catch (e) {
     (deps.error ?? ((line: string) => console.error(line)))(`[prober] status file ${path}: ${e instanceof Error ? e.message : String(e)}`);
   }

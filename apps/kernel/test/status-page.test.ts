@@ -24,14 +24,17 @@ afterAll(() => rm(dir, { recursive: true, force: true }));
 describe('status view', () => {
   it('maps the failing checks to the functions a user sees', () => {
     expect(statusView(probeStatus(minutesAgo(1), []), NOW)).toMatchObject({ overall: 'ok', checkedAt: minutesAgo(1).toISOString() });
-    expect(states(statusView(probeStatus(minutesAgo(1), ['inbound']), NOW))).toEqual({ database: 'ok', documents: 'ok', email: 'problem', updates: 'ok', signin: 'ok' });
+    expect(states(statusView(probeStatus(minutesAgo(1), ['inbound']), NOW))).toEqual({ database: 'ok', documents: 'ok', email: 'problem', updates: 'ok', signin: 'unknown' });
     // A worker that stopped holds up both the uploaded documents and the mail.
     const workerDown = statusView(probeStatus(minutesAgo(1), ['heartbeat']), NOW);
     expect(workerDown.overall).toBe('problem');
-    expect(states(workerDown)).toEqual({ database: 'ok', documents: 'problem', email: 'problem', updates: 'ok', signin: 'ok' });
+    expect(states(workerDown)).toEqual({ database: 'ok', documents: 'problem', email: 'problem', updates: 'ok', signin: 'unknown' });
     expect(states(statusView(probeStatus(minutesAgo(1), ['outbox', 'notify_queue']), NOW))).toMatchObject({ updates: 'problem', documents: 'ok' });
-    // Supabase Auth not answering (#1994): signing in is down, nothing else.
-    expect(states(statusView(probeStatus(minutesAgo(1), ['auth']), NOW))).toEqual({ database: 'ok', documents: 'ok', email: 'ok', updates: 'ok', signin: 'problem' });
+    // Supabase Auth not answering (#1994): signing in is down, nothing else; answering: fine. Without the check (off, or
+    // an older prober), the line says nothing is known.
+    expect(states(statusView(probeStatus(minutesAgo(1), ['auth'], true), NOW))).toEqual({ database: 'ok', documents: 'ok', email: 'ok', updates: 'ok', signin: 'problem' });
+    expect(states(statusView(probeStatus(minutesAgo(1), [], true), NOW))).toMatchObject({ signin: 'ok' });
+    expect(states(statusView(probeStatus(minutesAgo(1), []), NOW))).toMatchObject({ signin: 'unknown' });
   });
 
   it('shows the database down and every other function unknown when the probe could not read it', () => {

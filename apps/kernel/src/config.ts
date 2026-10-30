@@ -633,7 +633,8 @@ export function isR2Endpoint(url: string | undefined): boolean {
 
 export function isHostedSupabase(url: string): boolean {
   try {
-    return new URL(url).hostname.endsWith('.supabase.co');
+    // The DNS root's trailing dot names the same host.
+    return new URL(url).hostname.replace(/\.$/, '').endsWith('.supabase.co');
   } catch {
     return false;
   }
