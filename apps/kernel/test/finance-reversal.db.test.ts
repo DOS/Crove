@@ -392,7 +392,7 @@ suite('journal reversal through the API, and voided purchase documents (#165)', 
   it('records the same invoice again from its file after the void, with the corrected accounts', async () => {
     expect((await rpc('inbox/get', await tokenFor(owner), { id: firstProposal })).body).toMatchObject({ voided: true, canReextract: true });
     const files = await rpc('files/recent', await tokenFor(owner), undefined);
-    // The file's proposal was posted (#2009): the Inbox shows the file as posted, not as waiting.
+    // The file's posting was voided (#2009, #2032): the Inbox shows the file as voided, neither posted nor waiting.
     expect((files.body as any[]).find((f) => f.id === fileId)).toMatchObject({ proposalStatus: 'executed', voided: true, canReextract: true });
 
     const { version } = await runtime.execute<{ version: number }>(

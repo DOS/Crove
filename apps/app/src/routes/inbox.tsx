@@ -534,7 +534,8 @@ export function InboxPage() {
                 <Badge variant={isFileStatus(file.status) ? fileChipVariant(file.status, file.proposalStatus, file.voided) : 'secondary'}>
                   {fileWords(file)}
                 </Badge>
-                {file.status === 'failed' && file.canReextract && (
+                {/* A file not read, or a posting voided by a reversal (#2032), may be read again from here. */}
+                {(file.status === 'failed' || file.voided) && file.canReextract && (
                   <button
                     type="button"
                     disabled={reextract.isPending}
