@@ -20,7 +20,7 @@ The search covers the columns listed in `packages/kernel/src/personal-data.ts`. 
 ## 3. Erase on request
 
 1. Search the value as above. Check that the rows really are the person's: a shared address such as `ketoan@` may belong to someone else as well.
-2. If members' private notes or to-dos mention the value, send the notice first (section 2, step 4) and give the authors time to read it and copy out what they need without the person's details: at least one working day, and always inside the legal deadline (to be confirmed by the lawyer, #62). The erasure deletes only the private items a notice named, unchanged since, once the notice's notification reached their author (the worker sends it within seconds).
+2. If members' private notes or to-dos mention the value, send the notice first (section 2, step 4) and give the authors time to read it and copy out what they need without the person's details: at least one working day, and always inside the legal deadline (to be confirmed by the lawyer, #62). The erasure deletes only the private items a notice named, unchanged since, once the notice's notification reached their author at least 24 hours before (the erasure enforces the wait; the worker sends the notification within seconds).
 3. Click **Xóa dữ liệu của người này**, confirm, and enter a fresh second factor. Only owners can do this, and it cannot be undone.
 4. Read the result. It lists what was erased and what was kept, and why:
    - **Erased:**
