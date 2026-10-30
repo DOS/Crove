@@ -22,6 +22,12 @@
 --   The command writes the audit row (system actor), with the series and both numbers. No row of number_allocation,
 --   number_void or a voucher is written: the numbers between the restored next number and the new one stay as the
 --   archive holds them, lost with the restore and named by its report.
+--
+-- crove_kernel.number_series_policy_set (20261103050000) refused a reset change once the doc type had allocations. A
+-- series the reseed created again has none in the restored database, so its doc type's reset could still be switched
+-- before its next number, and a '-' or monthly series would then give out from 1 numbers the archive holds. It now
+-- also refuses while any series of the doc type has a next number above 1, which only the reseed leaves without an
+-- allocation; every other case is as before. Body otherwise as in 20261103050000.
 SET LOCAL lock_timeout = '2s';
 
 CREATE OR REPLACE FUNCTION crove_kernel.number_series_reseed(p_series_id uuid, p_legal_entity_id uuid, p_doc_type text,
@@ -82,3 +88,59 @@ BEGIN
 END $$;
 REVOKE ALL ON FUNCTION crove_kernel.number_series_reseed(uuid, uuid, text, text, bigint) FROM PUBLIC, crove_tenant, crove_app, crove_definer_tenant;
 GRANT EXECUTE ON FUNCTION crove_kernel.number_series_reseed(uuid, uuid, text, text, bigint) TO crove_worker;
+
+CREATE OR REPLACE FUNCTION crove_kernel.number_series_policy_set(p_legal_entity_id uuid, p_doc_type text, p_reset text) RETURNS text
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
+DECLARE
+  v_org uuid := crove_kernel.ctx_org_id();
+  v_entity uuid;
+  v_previous text;
+BEGIN
+  IF v_org IS NULL THEN
+    RAISE EXCEPTION 'NO_CONTEXT' USING ERRCODE = '42501';
+  END IF;
+  PERFORM crove_kernel.assert_number_admin();
+  IF p_reset IS NULL OR p_reset NOT IN ('yearly', 'monthly', 'never') THEN
+    RAISE EXCEPTION 'NUMBER_RESET_INVALID' USING ERRCODE = '22023';
+  END IF;
+  IF p_doc_type IS NULL OR p_doc_type !~ '^[a-z][a-z0-9_.]*$' OR pg_catalog.char_length(p_doc_type) > 100 THEN
+    RAISE EXCEPTION 'NUMBER_DOC_TYPE_INVALID' USING ERRCODE = '22023';
+  END IF;
+  v_entity := coalesce(p_legal_entity_id, crove_kernel.org_default_legal_entity(v_org));
+  IF v_entity IS NULL OR NOT crove_kernel.ctx_le_allowed(v_entity)
+     OR NOT EXISTS (SELECT 1 FROM crove_kernel.legal_entity e WHERE e.org_id = v_org AND e.id = v_entity) THEN
+    RAISE EXCEPTION 'LEGAL_ENTITY_NOT_ALLOWED' USING ERRCODE = '42501';
+  END IF;
+  -- One at a time per (org, legal entity, doc type), with number_series_policy_set: this change waits for an allocation in
+  -- flight, the series' first included, and then sees it (#1607).
+  PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(
+    'crove_kernel.number_series:' || v_org::text || ':' || v_entity::text || ':' || p_doc_type, 0));
+  SELECT p.reset INTO v_previous FROM crove_kernel.number_series_policy p
+  WHERE p.org_id = v_org AND p.legal_entity_id = v_entity AND p.doc_type = p_doc_type FOR UPDATE;
+  -- Once the document type has numbers, its reset stays (review of #1573): switching it would number a period again
+  -- from 1 beside the numbers it already holds (never to yearly mid-year, or yearly to monthly). The series rows are
+  -- locked first, so an allocation in flight finishes, and is seen, before this decides.
+  IF p_reset IS DISTINCT FROM coalesce(v_previous, 'yearly') THEN
+    PERFORM 1 FROM crove_kernel.number_series s
+    WHERE s.org_id = v_org AND s.legal_entity_id = v_entity AND s.doc_type = p_doc_type FOR UPDATE;
+    -- A series raised by the reseed after a restore (#2007) holds numbers the archive keeps but the database lacks:
+    -- it counts as in use too, though it has no allocation here yet.
+    IF EXISTS (
+      SELECT 1 FROM crove_kernel.number_series s
+      JOIN crove_kernel.number_allocation a ON a.org_id = s.org_id AND a.series_id = s.id
+      WHERE s.org_id = v_org AND s.legal_entity_id = v_entity AND s.doc_type = p_doc_type
+    ) OR EXISTS (
+      SELECT 1 FROM crove_kernel.number_series s
+      WHERE s.org_id = v_org AND s.legal_entity_id = v_entity AND s.doc_type = p_doc_type AND s.next_number > 1
+    ) THEN
+      RAISE EXCEPTION 'NUMBER_POLICY_IN_USE' USING ERRCODE = '55000';
+    END IF;
+  END IF;
+  INSERT INTO crove_kernel.number_series_policy AS p (org_id, legal_entity_id, doc_type, reset, updated_by)
+  VALUES (v_org, v_entity, p_doc_type, p_reset, crove_kernel.ctx_user_id())
+  ON CONFLICT (org_id, legal_entity_id, doc_type)
+  DO UPDATE SET reset = EXCLUDED.reset, updated_by = EXCLUDED.updated_by, updated_at = pg_catalog.now();
+  RETURN coalesce(v_previous, 'yearly');
+END $$;
+REVOKE ALL ON FUNCTION crove_kernel.number_series_policy_set(uuid, text, text) FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant;
+GRANT EXECUTE ON FUNCTION crove_kernel.number_series_policy_set(uuid, text, text) TO crove_tenant;

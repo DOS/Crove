@@ -129,12 +129,14 @@ export interface RestoreReportOutcome {
 const ids = (list: string[]) => (list.length <= SHOWN ? list.join(' ') : `${list.slice(0, SHOWN).join(' ')} and ${list.length - SHOWN} more`);
 const nextAfter = (high: string) => (BigInt(high) + 1n).toString();
 
-// The report, and with --reseed the series raised. Throws when it cannot run.
+// The report, and with --reseed the series raised. Throws when it cannot run. An archive with a problem (a broken
+// chain, an edited batch, a version regression) is not trusted: nothing is raised, from it or from a floor, and the
+// run exits 1.
 export async function restoreCheck(deps: RestoreReportDeps, args: RestoreReportArgs): Promise<RestoreReportOutcome> {
   const report = await restoreReport(deps.db, deps.store);
   const reseeded: RestoreReportOutcome['reseeded'] = [];
   const behind: RestoreSeries[] = [];
-  if (args.reseed) {
+  if (args.reseed && report.problems.length === 0) {
     for (const series of report.reseed) {
       await deps.runtime.execute<NumberReseeded>(
         'kernel.number.reseed',
@@ -159,7 +161,7 @@ export async function restoreCheck(deps: RestoreReportDeps, args: RestoreReportA
   } else {
     behind.push(...report.reseed);
   }
-  const floored = new Set(args.reseed ? args.floors.map((f) => f.orgId) : []);
+  const floored = new Set(args.reseed && report.problems.length === 0 ? args.floors.map((f) => f.orgId) : []);
   return { report, reseeded, behind, needFloor: report.uncovered.filter((org) => !floored.has(org)) };
 }
 

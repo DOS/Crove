@@ -5,7 +5,8 @@
 // batches and the rows the archive holds beyond it, the restore check raises every series above the archived numbers
 // (one audited command each, a lost series created again with its archived key), and the next numbers allocated in the
 // copy lie above every archived one. The reseed definer is the worker's alone, in a system context, and never lowers a
-// number. Set CROVE_TEST_ADMIN_URL to a superuser URL; each run makes its own databases.
+// number, and a series it made keeps its doc type's reset. Set CROVE_TEST_ADMIN_URL to a superuser URL; each run makes
+// its own databases.
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -273,6 +274,11 @@ suite('restore report and series reseed on PostgreSQL (#2007)', () => {
     expect(await reseed('test.restore', '2')).toMatchObject({ previousNext: '7', next: '7' });
     expect((await allocate(copyName, 'test.restore')).number).toBe('7');
     expect(await reseed('test.restore.floor', '41')).toMatchObject({ previousNext: null, next: '41' });
+    // A series the reseed made has no allocation yet, and its doc type's reset is locked all the same: a switch would
+    // number a new period from 1 beside the numbers the archive holds.
+    await expect(asOwner(copyName, (c) => c.query(`SELECT crove_kernel.number_series_policy_set(NULL, 'test.restore.floor', 'never')`))).rejects.toThrow(
+      /NUMBER_POLICY_IN_USE/,
+    );
     expect((await allocate(copyName, 'test.restore.floor')).number).toBe('41');
     // A period key that does not fit the doc type's reset (yearly by default) is refused.
     await expect(reseed('test.restore.floor', '50', '2026-10')).rejects.toThrow(/NUMBER_RESEED_PERIOD_MISFIT/);

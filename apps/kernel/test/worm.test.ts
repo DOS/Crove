@@ -641,6 +641,19 @@ describe('series highs and the restore report (#2007)', () => {
     expect(legacy).toMatchObject({ reseed: [], uncovered: [ORG] });
   });
 
+  it('fails on a lower version after a version 7 batch: the numbers of its window have no highs', async () => {
+    const kept: Array<[string, string]> = [[`journal:${ORG}:e1`, hash('1')]];
+    const lost: Array<[string, string]> = [[`number:${ORG}:a2`, hash('7')]];
+    const batches = chainOf([
+      { version: 7, rows: kept, highs: [high('5')] },
+      { version: 6, rows: lost },
+    ]);
+    const db = dbOf({ batches, recorded: 1, present: { [EPOCH]: kept }, highs: { [EPOCH]: [high('5')] }, series: [{ series_id: SERIES, next_number: '6' }] });
+    const report = await restoreReport(db, storeOf(batches));
+    expect(report.problems).toEqual([{ code: 'version_regressed', seq: 2 }]);
+    expect(report.ok).toBe(false);
+  });
+
   it('agrees when nothing was lost, and names a recorded batch the store lacks', async () => {
     const kept: Array<[string, string]> = [[`journal:${ORG}:e1`, hash('1')]];
     const batches = chainOf([{ version: 7, rows: kept, highs: [high('5')] }]);

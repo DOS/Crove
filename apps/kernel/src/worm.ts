@@ -334,6 +334,21 @@ const revisionsFromAfter = (previous: ArchiveBatch | null, from: string) => ((pr
 // Where a batch's series highs start: the epoch when it is the first batch of version 7, its window's start after.
 const highsFromAfter = (previous: ArchiveBatch | null, from: string) => ((previous?.version ?? 1) >= 7 ? from : EPOCH);
 
+// A batch of a lower version after a higher one, and each kind of row a batch does not take from where the last one
+// stopped: rows that went unanchored.
+function versionProblems(batch: ArchiveBatch, previous: ArchiveBatch | null): ArchiveProblem['code'][] {
+  const from = batch.window.from;
+  const codes: ArchiveProblem['code'][] = [];
+  if (batch.version < (previous?.version ?? 1)) codes.push('version_regressed');
+  if (batch.version >= 2 && batch.numbersFrom !== numbersFromAfter(previous, from)) codes.push('numbers_gap');
+  if (batch.version >= 3 && batch.entitiesFrom !== entitiesFromAfter(previous, from)) codes.push('entities_gap');
+  if (batch.version >= 4 && batch.allocationsFrom !== allocationsFromAfter(previous, from)) codes.push('allocations_gap');
+  if (batch.version >= 5 && batch.seriesFrom !== seriesFromAfter(previous, from)) codes.push('series_gap');
+  if (batch.version >= 6 && batch.revisionsFrom !== revisionsFromAfter(previous, from)) codes.push('revisions_gap');
+  if (batch.version >= 7 && batch.highsFrom !== highsFromAfter(previous, from)) codes.push('highs_gap');
+  return codes;
+}
+
 // The problems of a version 7 batch's clear highs: each must match its row hash, and every high row must have its clear
 // values, so a value changed in the store, or one left out, shows.
 function highProblems(batch: ArchiveBatch): string[] {
@@ -535,13 +550,7 @@ export async function verifyArchive(db: Db, store: ArchiveStore): Promise<Archiv
     // allocations from the first version 4 batch on, number series from the first version 5 batch on, source
     // revisions from the first version 6 batch on and series highs from the first version 7 batch on, each from where
     // the last one stopped.
-    if (batch.version < (previous?.version ?? 1)) note({ code: 'version_regressed', seq });
-    if (batch.version >= 2 && batch.numbersFrom !== numbersFromAfter(previous, batch.window.from)) note({ code: 'numbers_gap', seq });
-    if (batch.version >= 3 && batch.entitiesFrom !== entitiesFromAfter(previous, batch.window.from)) note({ code: 'entities_gap', seq });
-    if (batch.version >= 4 && batch.allocationsFrom !== allocationsFromAfter(previous, batch.window.from)) note({ code: 'allocations_gap', seq });
-    if (batch.version >= 5 && batch.seriesFrom !== seriesFromAfter(previous, batch.window.from)) note({ code: 'series_gap', seq });
-    if (batch.version >= 6 && batch.revisionsFrom !== revisionsFromAfter(previous, batch.window.from)) note({ code: 'revisions_gap', seq });
-    if (batch.version >= 7 && batch.highsFrom !== highsFromAfter(previous, batch.window.from)) note({ code: 'highs_gap', seq });
+    for (const code of versionProblems(batch, previous)) note({ code, seq });
     for (const ref of highProblems(batch)) note({ code: 'high_mismatch', seq, ref });
     const batchHash = batchSha256(batch.rows);
     if (batchHash !== batch.batchSha256) note({ code: 'batch_hash_mismatch', seq });
@@ -701,6 +710,7 @@ export async function restoreReport(db: Db, store: ArchiveStore): Promise<Restor
   let prev = GENESIS_SHA256;
   let prevTo = EPOCH;
   let seq = 0;
+  let previous: ArchiveBatch | null = null;
   let sawV7 = false;
   // The highest archived number per series key (org, legal entity, doc type, period key).
   const highs = new Map<string, { orgId: string; seriesId: string; legalEntityId: string; docType: string; periodKey: string; high: bigint }>();
@@ -718,6 +728,9 @@ export async function restoreReport(db: Db, store: ArchiveStore): Promise<Restor
     }
     if (batch.prevChainSha256 !== prev) problems.push({ code: 'chain_broken', seq });
     if (batch.window.from !== prevTo) problems.push({ code: 'window_gap', seq });
+    // A batch of a lower version after a version 7 one (an old worker) leaves the numbers of its window without highs:
+    // the series could not be raised above them, so the report fails instead.
+    for (const code of versionProblems(batch, previous)) problems.push({ code, seq });
     const batchHash = batchSha256(batch.rows);
     if (batchHash !== batch.batchSha256) problems.push({ code: 'batch_hash_mismatch', seq });
     if (chainSha256(batch.prevChainSha256, seq, batch.window.from, batch.window.to, batch.batchSha256) !== batch.chainSha256) {
@@ -766,6 +779,7 @@ export async function restoreReport(db: Db, store: ArchiveStore): Promise<Restor
 
     prev = batch.chainSha256;
     prevTo = batch.window.to;
+    previous = batch;
   }
   // Batches the restored database recorded that the store does not hold: the archive is not the one this deployment
   // wrote, or it is unreachable.
@@ -797,7 +811,7 @@ export async function restoreReport(db: Db, store: ArchiveStore): Promise<Restor
   return {
     ok: problems.length === 0 && auditEvents === 0 && lost.length === 0 && reseed.length === 0 && uncovered.length === 0,
     batches: seq,
-    recorded: recorded.size === 0 ? 0 : Math.max(...recorded.keys()),
+    recorded: [...recorded.keys()].reduce((max, s) => (s > max ? s : max), 0),
     beyond,
     auditEvents,
     orgs: lost,

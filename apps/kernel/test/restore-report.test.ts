@@ -112,6 +112,13 @@ describe('restore-report run', () => {
     ]);
   });
 
+  it('raises nothing, from the archive or a floor, when the archive does not match, and exits 1', async () => {
+    const untrusted: RestoreReport = { ...lostOne, uncovered: [OTHER], problems: [{ code: 'record_mismatch', seq: 3 }] };
+    const { code, calls } = await run(untrusted, ['--reseed', '--floor', `${OTHER}:${ENTITY}:finance.journal_voucher:2026=3`]);
+    expect(code).toBe(RESTORE_REPORT_EXIT.failed);
+    expect(calls).toEqual([]);
+  });
+
   it('exits 1 when the archive does not match, and prints the whole report as JSON with --json', async () => {
     const broken: RestoreReport = { ...clean, ok: false, problems: [{ code: 'object_missing', seq: 4 }] };
     const { code, lines, out } = await run(broken, ['--json']);
