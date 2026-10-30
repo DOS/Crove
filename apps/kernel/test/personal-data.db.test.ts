@@ -13,10 +13,11 @@ import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
-import { createOrg, kernelCommands, kernelQueries, PERSONAL_DATA_COLUMNS, upsertIdentity, type PersonalDataColumn } from '@crove/kernel';
+import { createOrg, kernelCommands, kernelQueries, PERSONAL_DATA_COLUMNS, personalDataProbe, upsertIdentity, type PersonalDataColumn } from '@crove/kernel';
 import type { PersonalDataErasure, PersonalDataResult } from '@crove/kernel-contract';
 import { Runtime } from '@crove/kernel-runtime';
 import { TEST_MANIFESTS } from './manifests.ts';
+import { PII_TEXT_CASES } from './pii-text-cases.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -129,6 +130,81 @@ suite('finding a person in the org (#923)', () => {
     await expect(find('mau.nguyen@example.vn', org.member)).rejects.toMatchObject({ status: 403 });
     await expect(find('Nguyễn Văn Mẫu')).rejects.toMatchObject({ code: 'PERSONAL_DATA_QUERY', status: 422 });
     expect((await find('nobody@example.vn')).matches).toEqual([]);
+  });
+
+  // The shared free-text match (#1678, reused by #1948): whole addresses only, the value never read as a pattern,
+  // digits however they are spaced, a phone with or without +84, and the redaction that goes with it.
+  it('matches and edits out a value inside free text, and refuses a value of another shape (#1678)', async () => {
+    const check = async (text: string | null, kind: string, value: string) =>
+      admin(async (c) => (await c.query<{ found: boolean; edited: string | null }>(
+        `SELECT crove_kernel.text_mentions($1, $2, $3) AS found, crove_kernel.text_redact($1, $2, $3, '[đã xóa]') AS edited`,
+        [text, kind, value],
+      )).rows[0]);
+    // The shared table (pii-text-cases.ts), each value read as the finder reads it.
+    for (const c of PII_TEXT_CASES) {
+      const probe = personalDataProbe(c.value);
+      if (!probe) {
+        expect(c.redacted, c.name).toBe(c.text);
+        continue;
+      }
+      const value = probe.kind === 'email' ? probe.email : probe.digits;
+      expect(await check(c.text, probe.kind, value), c.name).toEqual({ found: c.redacted !== c.text, edited: c.redacted });
+    }
+    expect(await check(null, 'email', 'a@x.example')).toEqual({ found: false, edited: null });
+    // The mark is taken literally: an & or a backslash in it never brings the value back (#1678 review).
+    const marked = await admin(async (c) => (await c.query<{ edited: string }>(`SELECT crove_kernel.text_redact('mail a@x.example.', 'email', 'a@x.example', $1) AS edited`, ['R&D \\1 \\&'])).rows[0]?.edited);
+    expect(marked).toBe('mail R&D \\1 \\&.');
+    // A value of another shape, or another kind, raises instead of matching nothing.
+    for (const [kind, value] of [['email', 'A@X.example'], ['email', 'not an email'], ['digits', '1234'], ['name', 'Nguyễn']]) {
+      await expect(check('x', kind as string, value as string), `${kind} ${value}`).rejects.toMatchObject({ code: '22023' });
+    }
+  });
+
+  // Notes and to-dos (#1678, notes step N9, ADR-0037 section 5): a value among other words. A shared note is listed with
+  // its text; private notes and to-dos (always private) are counted per author and never shown, the finder's own
+  // included. The finder searches whole addresses and digits however they are spaced.
+  it('finds a value inside shared notes, and counts private notes and to-dos per author without their text (#1678)', async () => {
+    const [shared, near] = [randomUUID(), randomUUID()];
+    await admin(async (c) => {
+      await c.query(
+        `INSERT INTO crove_notes.note (org_id, id, author_user_id, visibility, title, body, tags) VALUES
+           ($1, $2, $4, 'org', 'Khách hàng mới', 'Liên hệ giám đốc: Giam.Doc@khach.example.', '{}'),
+           ($1, $3, $4, 'org', 'Địa chỉ khác', 'xgiam.doc@khach.example và giam.doc@khach.example.test', '{}'),
+           ($1, crove_kernel.uuid_v7(), $5, 'private', 'Riêng một', 'gọi giam.doc@khach.example sau 15h', '{}'),
+           ($1, crove_kernel.uuid_v7(), $5, 'private', 'Riêng hai: giam.doc@khach.example', '', '{}'),
+           ($1, crove_kernel.uuid_v7(), $4, 'private', 'Của chủ', 'không liên quan', '{giam.doc@khach.example}')`,
+        [org.orgId, shared, near, org.owner, org.member],
+      );
+      await c.query(
+        `INSERT INTO crove_notes.todo (org_id, owner_user_id, title, details, checklist, sort_key) VALUES
+           ($1, $2, 'Gọi giám đốc', 'Số (000) 777.66.55', '[]', 'a0'),
+           ($1, $2, 'Gửi hồ sơ', NULL, '[{"text": "gửi tới giam.doc@khach.example", "done": false}]', 'a1')`,
+        [org.orgId, org.member],
+      );
+    });
+    const byAuthor = (result: PersonalDataResult) => [...result.privateItems].sort((a, b) => a.authorUserId.localeCompare(b.authorUserId));
+    for (const user of [org.owner, org.admin]) {
+      const result = await find('giam.doc@khach.example', user);
+      // The shared note that holds the whole address, and not the one with longer addresses around it.
+      expect(result.matches.filter((m) => m.column.startsWith('crove_notes.'))).toEqual([
+        expect.objectContaining({ column: 'crove_notes.note.body', handling: 'erase', rowId: shared, row: expect.objectContaining({ visibility: 'org', title: 'Khách hàng mới' }) }),
+      ]);
+      expect(byAuthor(result), user).toEqual(
+        [
+          { authorUserId: org.member, notes: 2, todos: 1 },
+          { authorUserId: org.owner, notes: 1, todos: 0 },
+        ].sort((a, b) => a.authorUserId.localeCompare(b.authorUserId)),
+      );
+      // No private text, not even the owner's own.
+      for (const secret of ['Riêng một', 'Riêng hai', 'Của chủ', 'Gửi hồ sơ', 'Gọi giám đốc']) expect(JSON.stringify(result), secret).not.toContain(secret);
+    }
+    // A phone written with brackets and dots in a to-do's details, found by any spelling.
+    for (const phone of ['0007776655', '+84 007 776 655']) {
+      expect((await find(phone)).privateItems, phone).toEqual([{ authorUserId: org.member, notes: 0, todos: 1 }]);
+    }
+    // Nothing for a value no item holds, and nothing from another org.
+    expect((await find('nobody@khach.example')).privateItems).toEqual([]);
+    expect((await find('giam.doc@khach.example', other.owner, other.orgId)).privateItems).toEqual([]);
   });
 
   it("finds the legal entities the org keeps books for, kept by law, and the default one as the org's own (#1312)", async () => {
