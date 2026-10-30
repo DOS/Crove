@@ -231,7 +231,7 @@ function StatementTable({ title, lines, unmapped }: { title: string; lines: Stat
           </ul>
         </Alert>
       )}
-      <DataTable head={[t('columns.item'), t('columns.lineCode'), t('columns.amount')]}>
+      <DataTable numeric={[2]} head={[t('columns.item'), t('columns.lineCode'), t('columns.amount')]}>
         {lines.map((line) => (
           <TableRow key={line.code} className={line.total ? 'font-medium' : ''}>
             <TableCell className="px-4 py-3 text-foreground">{line.label}</TableCell>

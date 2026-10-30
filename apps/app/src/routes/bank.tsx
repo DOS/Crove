@@ -154,7 +154,7 @@ function StatementImport({ bankAccount, onImported }: { bankAccount: string; onI
                   </AlertDescription>
                 </Alert>
               )}
-              <DataTable head={[t('columns.row'), t('columns.date'), t('columns.reference'), t('columns.description'), t('columns.moneyIn'), t('columns.moneyOut'), t('columns.balance'), t('columns.status')]}>
+              <DataTable numeric={[4, 5, 6]} head={[t('columns.row'), t('columns.date'), t('columns.reference'), t('columns.description'), t('columns.moneyIn'), t('columns.moneyOut'), t('columns.balance'), t('columns.status')]}>
                 {data.rows.slice(0, PREVIEW_ROWS).map((row) => {
                   const out = row.amount?.startsWith('-') ?? false;
                   return (
@@ -406,6 +406,7 @@ export function BankPage() {
             <Empty title={t('empty')} hint={canImport ? t('emptyHint') : undefined} />
           ) : lines.data ? (
             <DataTable
+              numeric={[3, 4, 5]}
               head={[t('columns.date'), t('columns.reference'), t('columns.description'), t('columns.moneyIn'), t('columns.moneyOut'), t('columns.balance'), t('voucherColumn')]}
             >
               {lines.data.lines.map((line) => (
