@@ -106,12 +106,18 @@ export function amountScaleError(error: unknown): DomainError | null {
 //   REVISION_OUT_OF_ORDER (23514)   not the revision right after the latest one posted.
 //   SOURCE_STILL_POSTED (23514)     the previous revision has not been reversed yet.
 //   REVERSAL_REVISION (23514)       a reversal posted as a revision other than 1 (no caller does today).
+//   DOCUMENT_REPOST (23514)         a purchase or sale document posted again (journal_entry_document_one_revision,
+//                                   #1928): a document is posted once; a wrong one is replaced by a new invoice (#916).
 export function sourceRevisionError(error: unknown): DomainError | null {
   const pg = error as { code?: string; message?: string; detail?: string; constraint?: string } | null;
   const message = pg?.message;
   const known =
     (pg?.code === '23505' && (message === 'IDEMPOTENCY_CONFLICT' || pg.constraint === 'journal_entry_source_revision_key')) ||
-    (pg?.code === '23514' && (message === 'REVISION_OUT_OF_ORDER' || message === 'SOURCE_STILL_POSTED' || message === 'REVERSAL_REVISION'));
+    (pg?.code === '23514' &&
+      (message === 'REVISION_OUT_OF_ORDER' ||
+        message === 'SOURCE_STILL_POSTED' ||
+        message === 'REVERSAL_REVISION' ||
+        pg.constraint === 'journal_entry_document_one_revision'));
   if (!known) return null;
   let detail: { sourceType?: unknown; sourceId?: unknown; revision?: unknown; expected?: unknown; entryId?: unknown } = {};
   try {
@@ -127,6 +133,14 @@ export function sourceRevisionError(error: unknown): DomainError | null {
     sourceId: typeof detail.sourceId === 'string' ? detail.sourceId : null,
     revision,
   };
+  if (pg?.constraint === 'journal_entry_document_one_revision') {
+    return new DomainError(
+      'DOCUMENT_REPOST',
+      409,
+      'Hóa đơn đã ghi sổ một lần thì không ghi sổ lại được. Nếu hóa đơn sai, hãy đảo bút toán của nó và ghi hóa đơn thay thế hoặc điều chỉnh như một chứng từ mới.',
+      source,
+    );
+  }
   if (message === 'REVISION_OUT_OF_ORDER') {
     const which = expected === null ? '' : ` (lần ${expected})`;
     const given = revision === null ? '' : `, không phải lần ${revision}`;

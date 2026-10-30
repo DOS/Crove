@@ -6,11 +6,13 @@ import {
   accountBalances,
   checkAmount,
   CURRENCY_MINOR_UNITS,
+  DOCUMENT_SOURCE_TYPE,
   emptyLedger,
   entryDifference,
   lineAmount,
   postEntry,
   reversalOf,
+  reversalRequest,
   reverseEntry,
   toBookCurrency,
   type LedgerState,
@@ -336,5 +338,26 @@ describe('source_revision model (ADR-0021 decision 5)', () => {
     expect(replay).toMatchObject({ entryId: first.entryId, replayed: true });
     expect(replay.state.entries).toHaveLength(1);
     expect(balances([...replay.state.entries])).toEqual({ '6422': '100', '1331': '10', '331': '-110' });
+  });
+});
+
+// A purchase or sale document is posted once (#1928), as the database's CHECK keeps it: after its entry is reversed,
+// revision 2 is refused, while another source may be posted again.
+describe('a purchase or sale document is posted once', () => {
+  it('refuses revision 2 of a document whose revision 1 was reversed, and accepts it for another source', () => {
+    let next = 0;
+    const newId = () => `e${++next}`;
+    for (const [type, expected] of [
+      [DOCUMENT_SOURCE_TYPE, 'DOCUMENT_REPOST'],
+      ['finance.cash_voucher', 'posted'],
+    ] as const) {
+      const first = postEntry({ entries: [] }, request('VND', PAYLOADS[0] ?? [], { type, id: 'src', revision: 1 }), newId);
+      if (!first.ok) throw new Error('revision 1 was refused');
+      const posted = first.state.entries.find((e) => e.id === first.entryId);
+      if (!posted) throw new Error('no entry');
+      const reversed = postEntry(first.state, reversalRequest(posted, '2026-09-20'), newId);
+      if (!reversed.ok) throw new Error('the reversal was refused');
+      expect(outcomeCode(postEntry(reversed.state, request('VND', PAYLOADS[0] ?? [], { type, id: 'src', revision: 2 }), newId)), type).toBe(expected);
+    }
   });
 });

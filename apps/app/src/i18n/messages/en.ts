@@ -5415,6 +5415,7 @@ export const en = {
       REVISION_OUT_OF_ORDER: 'This document can only be posted again as its next revision, without skipping or going back.',
       SOURCE_STILL_POSTED: "This document's previous entry is still on the books. Reverse it first, then post again.",
       REVERSAL_REVISION: 'A reversal is posted once, as the first revision of its source; it cannot be posted again as a new revision.',
+      DOCUMENT_REPOST: 'An invoice is posted once and cannot be posted again. If it is wrong, reverse its entry and record the replacement or adjustment invoice as a new document.',
       LEGAL_ENTITY_REQUIRED: 'Choose a legal entity before viewing or posting to the books.',
       LEGAL_ENTITY_NOT_ALLOWED: "You don't have access to this legal entity's books.",
       SOURCE_LEGAL_ENTITY: 'This document was posted in another legal entity and cannot be posted again in a different one.',
