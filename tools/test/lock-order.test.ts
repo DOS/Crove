@@ -35,6 +35,8 @@ const TS_TENANT_LOCKS: Readonly<Record<string, string>> = {
   'packages/kernel/src/tax-code.ts': "the org's tax code and VAT filing period: an UPDATE of the tenant row only",
   'modules/finance/src/missing-invoices.ts': "the missing-invoice reminder day: an UPDATE of the tenant row only",
   'modules/finance/src/record.ts': "a purchase posting reads the org's tax code FOR SHARE; it writes ledger rows, never a member or position row",
+  'packages/kernel/src/legal-entities.ts':
+    "a change of the default legal entity locks the tenant row FOR NO KEY UPDATE, then the entity row, and writes the org's name with the entity's (#1317); it touches no member or position row",
   'packages/kernel/src/personal-data.ts': "an erasure clears the org's contact email (a raw UPDATE of the tenant row); its only row lock, the parties FOR UPDATE, comes before, and it touches no member or position row",
 };
 
