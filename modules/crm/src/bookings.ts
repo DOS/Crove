@@ -443,12 +443,13 @@ async function cancelHeld(ctx: CommandContext, booking: HeldBooking, type: Event
   }
   await queueBookingMails(ctx, 'cancelled', { ...booking, revision: booking.revision + 1 }, type, held, by === 'visitor');
   // A visitor's cancel also gives the crm.scheduler agent a task (#1434): the next free slots, for a person to invite
-  // the client again. Its title names the type only, never the visitor: every member reads tasks. Tainted, as it comes
-  // from a visitor's action.
+  // the client again. Its title is a fixed template, never the visitor or the type's title (#1970): every member reads
+  // tasks, and the event outlives every erasure. Tainted, as it comes from a visitor's action.
   await ctx.emit('crm.booking.cancelled', {
     booking_id: booking.id,
     by,
-    ...(by === 'visitor' ? { agent_task: { title: `Khách hủy lịch hẹn: ${type.title}`.slice(0, 300), ref: { type: 'crm.booking', id: booking.id }, tainted: true } } : {}),
+    // The task's ref leads to the booking and its type.
+    ...(by === 'visitor' ? { agent_task: { title: 'Khách hủy lịch hẹn', ref: { type: 'crm.booking', id: booking.id }, tainted: true } } : {}),
   });
 }
 
