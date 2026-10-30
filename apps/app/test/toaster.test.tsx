@@ -28,11 +28,14 @@ describe('Toaster', () => {
     const html = render('vi');
     const status = /<div role="status"[^>]*>([\s\S]*)<\/div>/.exec(html)?.[1] ?? '';
     expect(status).toContain('Đã lưu trữ ghi chú');
-    const buttons = [...status.matchAll(/<button([^>]*)>([\s\S]*?)<\/button>/g)];
-    expect(buttons.map((b) => (b[2] ?? '').replace(/<[^>]+>/g, ''))).toEqual(['Hoàn tác', '']);
-    expect(buttons[0]?.[1]).toContain('type="button"');
-    expect(buttons[0]?.[1]).not.toContain('tabindex="-1"');
-    expect(buttons[1]?.[1]).toContain('aria-label="' + words('vi').close + '"');
+    // The opening tags of its buttons, in order: the undo, labelled by its text, then the close button.
+    const buttons = [...status.matchAll(/<button([^>]*)>/g)].map((b) => b[1] ?? '');
+    expect(buttons).toHaveLength(2);
+    expect(status).toMatch(/<button[^>]*>Hoàn tác<\/button>/);
+    expect(status.indexOf('>Hoàn tác<')).toBeLessThan(status.indexOf('aria-label="' + words('vi').close + '"'));
+    expect(buttons[0]).toContain('type="button"');
+    expect(buttons[0]).not.toContain('tabindex="-1"');
+    expect(buttons[1]).toContain('aria-label="' + words('vi').close + '"');
   });
 
   it('renders no action button for a plain toast, and has the undo in English', () => {
