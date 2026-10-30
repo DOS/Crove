@@ -1,7 +1,8 @@
 // The org's audit log for owners and admins (#672): every command's audit row, newest first, filtered by who, what,
 // outcome, object and days, a page at a time, and the filtered list as a CSV file (the server builds and audits it).
 // Commands show by their label in the screen's language, with the name under it (#1654); the file gets a label column.
-// The filters start from the URL (#1445), so a link opens it filtered: a proposal's decision links here by its id.
+// The filters start from the URL (#1445), so a link opens it filtered: a proposal's decision links here by its id, and
+// the log then lists the decision and the rows of what it ran.
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery } from '@tanstack/react-query';
 import { useSearch } from '@tanstack/react-router';
 import { useState } from 'react';

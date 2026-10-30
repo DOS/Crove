@@ -1998,7 +1998,7 @@ export const en = {
     resubmittedAs: 'This proposal was asked for again.',
     openResubmitted: 'Open the new proposal',
     resubmittedFrom: 'This proposal was asked for again from an expired one.',
-    auditLink: 'View audit log',
+    auditLink: 'View activity log',
     openExpired: 'See the expired proposal',
     voidedNotice: 'The entry of this invoice was reversed, so {brand} voided the document in its own books.',
     voidedReread: 'Press Read again to create a new proposal and post the invoice again with the right accounts.',

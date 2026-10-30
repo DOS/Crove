@@ -1994,7 +1994,7 @@ export const vi = {
     resubmittedAs: 'Đề xuất này đã được gửi lại.',
     openResubmitted: 'Mở đề xuất mới',
     resubmittedFrom: 'Đề xuất này được gửi lại từ một đề xuất đã hết hạn.',
-    auditLink: 'Xem nhật ký',
+    auditLink: 'Xem nhật ký hoạt động',
     openExpired: 'Xem đề xuất cũ',
     voidedNotice: 'Bút toán của hóa đơn này đã được đảo nên {brand} đã hủy chứng từ trong sổ của mình.',
     voidedReread: 'Bấm Đọc lại để tạo đề xuất mới và ghi sổ lại hóa đơn với tài khoản đúng.',

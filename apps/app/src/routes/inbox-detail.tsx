@@ -696,12 +696,13 @@ function InboxDetail({ slug, id, split }: { slug: string; id: string; split: boo
                 : item.status}
         </Badge>
         {item.voided && <Badge variant="destructive">{t('voidedBadge')}</Badge>}
-        {/* DESIGN.md §5.1: every decision links to its audit log entry, the rows whose object is this proposal. */}
+        {/* DESIGN.md §5.1: every decision links to its audit log entry. By id alone, the log lists the decision (the
+            proposal as object) and what it ran (the rows that name the proposal), as kernel.audit.list matches it. */}
         {canReadAudit && (
           <Link
             to="/o/$slug/audit"
             params={{ slug }}
-            search={{ targetType: 'kernel.proposal', targetId: id }}
+            search={{ targetId: id }}
             className="inline-flex min-h-11 items-center text-sm text-link hover:underline"
           >
             {t('auditLink')}
