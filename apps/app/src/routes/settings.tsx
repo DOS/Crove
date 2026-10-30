@@ -566,7 +566,7 @@ function PendingInvites({ entities, entitiesLoading }: { entities: LegalEntity[]
       onSuccess: () => void queryClient.invalidateQueries({ queryKey: orpc.org.listInvites.key() }),
     }),
   );
-  if (invites.isLoading) return <RowsSkeleton rows={2} />;
+  if (invites.isLoading) return <RowsSkeleton rows={1} />;
   if (invites.error) return <ErrorText>{errorMessage(invites.error)}</ErrorText>;
   if (!invites.data?.length) return null;
   return (
@@ -1035,7 +1035,7 @@ export function SettingsPage() {
   const memberRoles = useQuery({ ...orpc.org.memberRoles.queryOptions(), enabled: managesMembers });
   const entities = useQuery({ ...orpc.legalEntities.list.queryOptions(), enabled: managesMembers });
 
-  if (org.isLoading) return <PageSkeleton />;
+  if (org.isLoading) return <PageSkeleton body="cards" />;
   if (org.error) return <ErrorText>{errorMessage(org.error)}</ErrorText>;
   const canManage = org.data?.role === 'owner' || org.data?.role === 'admin';
   const isOwner = org.data?.role === 'owner';

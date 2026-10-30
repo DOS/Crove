@@ -95,7 +95,7 @@ function OpeningBalanceForm() {
   const download = () =>
     saveBytes(buildTemplate((accounts.data ?? []).filter((a) => a.active)), t('templateFile', { org: getCurrentOrg() ?? 'org' }));
 
-  if (org.isLoading) return <PageSkeleton />;
+  if (org.isLoading) return <PageSkeleton body="list" />;
   if (!allowed) {
     return (
       <>

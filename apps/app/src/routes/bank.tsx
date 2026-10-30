@@ -197,7 +197,7 @@ function StatementImport({ bankAccount, onImported }: { bankAccount: string; onI
 function LineVoucher({ slug, line, onClose }: { slug: string; line: BankLine; onClose: () => void }) {
   const t = useTranslations('vouchers');
   const made = useQuery(orpc.bank.lineVoucher.queryOptions({ input: { bankLineId: line.id } }));
-  if (made.isLoading) return <CardSkeleton />;
+  if (made.isLoading) return <CardSkeleton className="mb-6" />;
   if (made.error) return <ErrorText>{errorMessage(made.error)}</ErrorText>;
   if (!made.data) return null;
   if (!made.data.voucher) {

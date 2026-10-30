@@ -154,7 +154,7 @@ export function WorkingHoursCard({ canEdit }: { canEdit: boolean }) {
       <p className="text-sm font-medium text-muted-foreground">{t('title')}</p>
       <p className="mt-2 text-sm text-muted-foreground">{t('intro')}</p>
       {calendar.isLoading ? (
-        <RowsSkeleton />
+        <RowsSkeleton rows={7} />
       ) : calendar.error ? (
         <ErrorText>{errorMessage(calendar.error)}</ErrorText>
       ) : calendar.data ? (

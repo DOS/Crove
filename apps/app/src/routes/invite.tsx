@@ -4,7 +4,7 @@ import type { ReactNode } from 'react';
 import { useTranslations } from 'use-intl';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
-import { ErrorText, Logo, Spinner } from '../components/ui.tsx';
+import { CardSkeleton, ErrorText, Logo } from '../components/ui.tsx';
 import { errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { signOut } from '../lib/session-actions.ts';
 import { useFormat } from '../i18n/provider.tsx';
@@ -70,7 +70,7 @@ export function InvitePage() {
   if (preview.isLoading) {
     return (
       <Shell>
-        <Spinner />
+        <CardSkeleton />
       </Shell>
     );
   }

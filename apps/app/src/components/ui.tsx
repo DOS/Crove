@@ -250,13 +250,23 @@ function HeaderSkeleton() {
   );
 }
 
-// While a whole page loads (DESIGN.md §5.3, #2005): its header and a table or a list of cards below it, so no page
-// waits behind a lone spinner.
-export function PageSkeleton({ body = 'table', columns }: { body?: 'table' | 'list'; columns?: number }) {
+// While a whole page loads (DESIGN.md §5.3, #2005): its header and, below it, a table, a list of cards or a two-column
+// grid of cards (a settings page), so no page waits behind a lone spinner.
+export function PageSkeleton({ body = 'table', columns }: { body?: 'table' | 'list' | 'cards'; columns?: number }) {
   return (
     <div>
       <HeaderSkeleton />
-      {body === 'table' ? <TableSkeleton {...(columns ? { columns } : {})} /> : <ListSkeleton />}
+      {body === 'table' ? (
+        <TableSkeleton {...(columns ? { columns } : {})} />
+      ) : body === 'list' ? (
+        <ListSkeleton />
+      ) : (
+        <div className="grid gap-6 lg:grid-cols-2">
+          {[0, 1, 2, 3].map((i) => (
+            <CardSkeleton key={i} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -290,13 +300,14 @@ export function CardSkeleton({ className }: { className?: string }) {
   );
 }
 
-// While a source document loads: a page-shaped block where the image or the PDF appears.
-export function DocumentSkeleton() {
+// While a source document loads: a page-shaped block where an image appears, a short box where a PDF or an XML file's
+// link does.
+export function DocumentSkeleton({ image }: { image: boolean }) {
   const t = useTranslations('common');
   return (
     <div aria-busy="true">
       <span className="sr-only">{t('loading')}</span>
-      <Skeleton className="aspect-[3/4] w-full rounded-lg" />
+      <Skeleton className={cn('w-full rounded-lg', image ? 'aspect-[3/4]' : 'h-20')} />
     </div>
   );
 }

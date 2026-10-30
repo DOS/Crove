@@ -89,7 +89,7 @@ function AuditLog({ search }: { search: AuditSearch }) {
   const set = (key: keyof AuditFilterForm) => (e: { target: { value: string } }) =>
     setForm((prev) => ({ ...prev, [key]: e.target.value, ...(key === 'target' ? { targetType: '' } : {}) }));
 
-  if (org.isLoading) return <PageSkeleton />;
+  if (org.isLoading) return <PageSkeleton columns={5} />;
   if (org.error) return <ErrorText>{errorMessage(org.error)}</ErrorText>;
   if (!canRead) return <Empty title={t('forbidden')} />;
 

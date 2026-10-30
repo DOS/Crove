@@ -263,7 +263,7 @@ export function StepUpPrompt({
   const root = useTranslations();
   const t = useTranslations('twoFactor.stepUp');
   const factors = useFactors();
-  if (factors.isLoading) return <CardSkeleton />;
+  if (factors.isLoading) return <CardSkeleton className="max-w-sm" />;
   if (factors.error) return <ErrorText>{authErrorText(failureOf(factors.error), root)}</ErrorText>;
   const pending = <p className="text-sm text-muted-foreground">{t('pending', { action })}</p>;
   const cancel = onCancel && (

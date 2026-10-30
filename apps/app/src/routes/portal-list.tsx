@@ -10,7 +10,7 @@ import { Card } from '@crove/ui/components/card';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { TableCell, TableRow } from '@crove/ui/components/table';
 import { useChosenEntity } from '../components/entity-switcher.tsx';
-import { CardSkeleton, DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
+import { CardSkeleton, DataTable, Empty, ErrorText, ListSkeleton, PageHeader, Spinner } from '../components/ui.tsx';
 import { PortalSyncPanel } from '../components/portal-sync.tsx';
 import { getConfig } from '../lib/auth.ts';
 import { canSyncFromPortal } from '../lib/portal-sync.ts';
@@ -360,7 +360,7 @@ export function PortalListPage() {
       )}
 
       {report.isPending ? (
-        <Spinner />
+        <ListSkeleton />
       ) : report.error ? (
         <ErrorText>{errorMessage(report.error)}</ErrorText>
       ) : data ? (

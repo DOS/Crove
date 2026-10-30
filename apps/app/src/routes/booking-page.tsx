@@ -40,8 +40,6 @@ const post = <T,>(path: string, body: unknown) => call<T>(path, { method: 'POST'
 export const whenOf = (s: Slot, zone: string, locale: Locale) =>
   `${dayLabel(zonedDate(zone, Date.parse(s.start)), locale)}, ${timeIn(s.start, zone, locale)} - ${timeIn(s.end, zone, locale)} (${zone})`;
 
-// A week of the type's free slots, with the weeks before and after; picking one calls onPick. The bookings screen
-// (#1320) uses it for a host's move too.
 // While the week's free times load (DESIGN.md §5.3, #2005): a few days, each with a row of time buttons.
 function SlotsSkeleton() {
   const t = useTranslations('common');
@@ -62,16 +60,23 @@ function SlotsSkeleton() {
   );
 }
 
-// While a public booking page loads: the page's frame with its logo, and a card where the booking appears.
+// While a public booking page loads: the page's frame, its header (the org, the title, the length and place) and a card
+// where the booking appears.
 function PublicPageSkeleton() {
   return (
-    <main className="mx-auto max-w-xl p-6">
-      <Logo />
-      <CardSkeleton className="mt-6" />
+    <main className="mx-auto max-w-2xl space-y-4 p-4 sm:p-6">
+      <div className="space-y-2">
+        <Skeleton className="h-4 w-32" />
+        <Skeleton className="h-6 w-64 max-w-full" />
+        <Skeleton className="h-4 w-40" />
+      </div>
+      <CardSkeleton />
     </main>
   );
 }
 
+// A week of the type's free slots, with the weeks before and after; picking one calls onPick. The bookings screen
+// (#1320) uses it for a host's move too.
 export function SlotPicker({ path, zone, onPick }: { path: string; zone: string; onPick: (slot: Slot) => void }) {
   const t = useTranslations('booking');
   const { locale } = useLocaleSetting();

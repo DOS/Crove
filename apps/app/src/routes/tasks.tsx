@@ -168,7 +168,14 @@ export function TaskDetailPage() {
       {t('back')}
     </Link>
   );
-  if (detail.isPending) return <PageSkeleton body="list" />;
+  if (detail.isPending) {
+    return (
+      <div className="space-y-3">
+        {back}
+        <PageSkeleton body="list" />
+      </div>
+    );
+  }
   if (detail.error) {
     return (
       <div className="space-y-3">
