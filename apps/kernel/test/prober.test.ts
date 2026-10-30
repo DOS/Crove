@@ -132,6 +132,21 @@ describe('health thresholds', () => {
     expect(findings.map((f) => [f.check, f.value, f.threshold])).toEqual([['notify_queue', 0.634, 0.5]]);
     expect(findings[0]?.message).toMatch(/^the NOTIFY queue is 63\.4% full \(limit 50%\): a listening session has stopped reading/);
     expect(loadProberConfig({ PROBER_MAX_NOTIFY_QUEUE_PERCENT: '80' }).thresholds.notifyQueuePercent).toBe(80);
+    // A limit left empty in an .env is not set: the default, where it used to read 0 and turn the check off (#2098).
+    expect(loadProberConfig({ PROBER_MAX_OUTBOX_AGE_SECONDS: '', PROBER_MAX_JOB_AGE_SECONDS: ' ', PROBER_MAX_ARCHIVE_VERIFY_AGE_SECONDS: '' }).thresholds).toMatchObject({
+      outboxAgeSeconds: 300,
+      jobAgeSeconds: 900,
+      archiveVerifyAgeSeconds: 93_600,
+    });
+    expect(loadProberConfig({ PROBER_MAX_OUTBOX_AGE_SECONDS: '0' }).thresholds.outboxAgeSeconds).toBe(0);
+    // The same for the counts and percentages: an empty .env line is the default, not a check turned off.
+    expect(
+      loadProberConfig({ PROBER_MAX_NOTIFY_QUEUE_PERCENT: '', PROBER_MAX_EXTRACTION_FAILURES: ' ', PROBER_MAX_DEAD_LETTERS: '', PROBER_EXTRACTION_WINDOW_SECONDS: '', ALERT_REPEAT_MINUTES: '', PROBER_AUTH_MISSES: '' }),
+    ).toMatchObject({
+      thresholds: { notifyQueuePercent: 50, extractionFailures: 2, deadLetters: 0, extractionWindowSeconds: 3600 },
+      repeatSeconds: 3600,
+      authMisses: 2,
+    });
   });
 
   it('reports a WORM verification older than its limit and an archive behind its limit, and neither when off or unknown (#1997)', () => {
@@ -715,17 +730,45 @@ describe('WORM verification marker (#2082)', () => {
     expect(loadProberConfig({}).archiveMarker).toBeUndefined();
     expect(loadProberConfig({ ARCHIVE_DIR: '/data/archive' }).archiveMarker).toEqual(settings);
     expect(loadProberConfig({ ARCHIVE_DIR: '/data/archive', PROBER_MAX_ARCHIVE_MARKER_AGE_SECONDS: '0' }).archiveMarker).toBeUndefined();
+    // An empty or blank limit is no limit set: the default, never 0, which would turn the check off (#2098).
+    for (const empty of ['', ' ', '\t']) {
+      expect(loadProberConfig({ ARCHIVE_DIR: '/data/archive', PROBER_MAX_ARCHIVE_MARKER_AGE_SECONDS: empty }).archiveMarker, JSON.stringify(empty)).toEqual(settings);
+    }
+    expect(loadProberConfig({ ARCHIVE_DIR: '/data/archive', PROBER_MAX_ARCHIVE_MARKER_AGE_SECONDS: '7200' }).archiveMarker).toEqual({ ...settings, maxAgeSeconds: 7200 });
     const s3 = { ARCHIVE_STORE: 's3', ARCHIVE_S3_BUCKET: 'archive', S3_ENDPOINT: 'https://s3.example.test', S3_FORCE_PATH_STYLE: 'true' };
     const reader = { PROBER_ARCHIVE_S3_ACCESS_KEY_ID: 'reader', PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY: 'r' };
     expect(loadProberConfig({ ...s3, ...reader }).archiveMarker).toEqual({
       maxAgeSeconds: 93_600,
       store: { kind: 's3', bucket: 'archive', region: 'us-east-1', endpoint: 'https://s3.example.test', forcePathStyle: true, accessKeyId: 'reader', secretAccessKey: 'r' },
     });
-    // Neither of the prober's pair set, and no worker key in its environment: the default credential chain.
-    expect(loadProberConfig(s3).archiveMarker).toEqual({
+    // Neither of the prober's pair set and no worker key in its environment: the default credential chain, only when the
+    // deployment opts in (#2098).
+    expect(loadProberConfig({ ...s3, PROBER_ARCHIVE_S3_DEFAULT_CHAIN: 'true' }).archiveMarker).toEqual({
       maxAgeSeconds: 93_600,
       store: { kind: 's3', bucket: 'archive', region: 'us-east-1', endpoint: 'https://s3.example.test', forcePathStyle: true, accessKeyId: undefined, secretAccessKey: undefined },
     });
+    // Not asked for, it is refused, whatever else the process holds: an instance or task role, AWS_* keys, a profile or a
+    // web identity would all resolve through the SDK's chain to a role the prober cannot tell is read-only.
+    const noChain = {
+      maxAgeSeconds: 93_600,
+      error: expect.stringContaining('set PROBER_ARCHIVE_S3_ACCESS_KEY_ID and PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY to a read-only key, or PROBER_ARCHIVE_S3_DEFAULT_CHAIN=true'),
+    };
+    expect(loadProberConfig(s3).archiveMarker).toEqual(noChain);
+    expect(
+      loadProberConfig({ ...s3, AWS_ACCESS_KEY_ID: 'AKIAAMBIENT', AWS_SECRET_ACCESS_KEY: 'ambient-secret', AWS_PROFILE: 'writer', AWS_WEB_IDENTITY_TOKEN_FILE: '/var/run/token', AWS_ROLE_ARN: 'arn:aws:iam::1:role/w' }).archiveMarker,
+    ).toEqual(noChain);
+    // Only a plain `true` opts in: false, an empty value and a blank one do not.
+    for (const value of ['false', '', '  ']) expect(loadProberConfig({ ...s3, PROBER_ARCHIVE_S3_DEFAULT_CHAIN: value }).archiveMarker, JSON.stringify(value)).toEqual(noChain);
+    // The refusal names no key.
+    expect(JSON.stringify(loadProberConfig({ ...s3, AWS_ACCESS_KEY_ID: 'AKIAAMBIENT', AWS_SECRET_ACCESS_KEY: 'ambient-secret' }).archiveMarker)).not.toMatch(/AKIAAMBIENT|ambient-secret/);
+    // A pair and the opt-in together are two answers to one question.
+    expect(loadProberConfig({ ...s3, ...reader, PROBER_ARCHIVE_S3_DEFAULT_CHAIN: 'true' }).archiveMarker).toMatchObject({
+      error: 'PROBER_ARCHIVE_S3_DEFAULT_CHAIN=true and a PROBER_ARCHIVE_S3_* key are both set: use one or the other',
+    });
+    // The opt-in does not make the worker's key usable: with it in the environment and no pair, the check still refuses.
+    expect(loadProberConfig({ ...s3, S3_ACCESS_KEY_ID: 'AKIAWORKERKEY', PROBER_ARCHIVE_S3_DEFAULT_CHAIN: 'true' }).archiveMarker).toMatchObject({ workerKey: true });
+    // A local store reads no bucket, so the opt-in is no matter.
+    expect(loadProberConfig({ ARCHIVE_DIR: '/data/archive', PROBER_ARCHIVE_S3_DEFAULT_CHAIN: 'true' }).archiveMarker).toEqual(settings);
     // The worker's key in the environment (a prober run from the shared .env) is never used (#2094): with the prober's own
     // pair it is ignored; without one the check refuses, naming the pair, and never echoes a key.
     const worker = { S3_ACCESS_KEY_ID: 'AKIAWORKERKEY', S3_SECRET_ACCESS_KEY: 'worker-secret-123' };
@@ -755,6 +798,7 @@ describe('WORM verification marker (#2082)', () => {
       [{ S3_FORCE_PATH_STYLE: 'maybe' }, 'S3_FORCE_PATH_STYLE'],
       [{ ARCHIVE_STORE: 'gcs' }, 'ARCHIVE_STORE'],
       [{ PROBER_MAX_ARCHIVE_MARKER_AGE_SECONDS: 'a day' }, 'PROBER_MAX_ARCHIVE_MARKER_AGE_SECONDS'],
+      [{ PROBER_ARCHIVE_S3_DEFAULT_CHAIN: 'maybe' }, 'PROBER_ARCHIVE_S3_DEFAULT_CHAIN'],
     ];
     for (const [bad, field] of cases) {
       const env = { ALERT_WEBHOOK_URL: SECRET_HOOK, ARCHIVE_STORE: 's3', ARCHIVE_S3_BUCKET: 'archive', ...bad };
@@ -811,7 +855,7 @@ describe('WORM verification marker (#2082)', () => {
     expect((await start({ ARCHIVE_STORE: 's3', ARCHIVE_S3_BUCKET: 'archive', S3_ENDPOINT: 'https://s3.example.test', ...reader })).line).toMatch(
       /, verification markers from s3 bucket archive at s3\.example\.test, with the prober's own key$/,
     );
-    expect((await start({ ARCHIVE_STORE: 's3', ARCHIVE_S3_BUCKET: 'archive', S3_REGION: 'ap-southeast-1' })).line).toMatch(
+    expect((await start({ ARCHIVE_STORE: 's3', ARCHIVE_S3_BUCKET: 'archive', S3_REGION: 'ap-southeast-1', PROBER_ARCHIVE_S3_DEFAULT_CHAIN: 'true' })).line).toMatch(
       /, verification markers from s3 bucket archive at AWS ap-southeast-1, with the default credential chain$/,
     );
     // Disabled: the line says so, and a loud error names what is wrong and that the other checks run.

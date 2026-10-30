@@ -9,11 +9,15 @@
 //   4. both files are objects in MinIO with the right bytes, the raw message was deleted from the bucket, and
 //      nothing was written under /data/files in either container;
 //   5. the worker anchors the audit events and journal entries in the Object Lock bucket (WORM fact stream, #891):
-//      the first batch is a locked object that cannot be deleted without bypassing the lock.
+//      the first batch is a locked object that cannot be deleted without bypassing the lock;
+//   6. the prober reads the verification marker with the read-only MinIO user minio-init made for it (#2094, #2098): a
+//      marker written as the nightly verification would is read and trusted by one probe, and judged too old by another
+//      whose limit is one second, so the policy grants what the prober needs (list, list versions, get of the marker and
+//      of the batch it names) and nothing else is asked of it.
 // No AI endpoint is configured: e-invoice XML is read without AI. Plain Node (26+), no dependencies.
 //
 // Environment: SPLIT_PROJECT (compose project, default crove-split), SPLIT_PORT (default 18080).
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -286,6 +290,34 @@ async function main() {
   }
   assert(!removed, 'a locked batch cannot be deleted without bypassing its retention');
   log(`the worker anchored ${batch.rows.length} row(s) in ${ARCHIVE_BUCKET}, locked`);
+
+  // The prober's read of the WORM store (#2082) as the prober's own user (#2094): the nightly verification has not run in
+  // this stack, so the marker it would write is written here, as the bucket's owner, naming the first batch's chain hash.
+  const verifiedAt = new Date();
+  const markerKey = `verify/v1/${verifiedAt.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z')}.json`;
+  const marker = { format: 'crove-verify-marker', version: 1, verifiedAt: verifiedAt.toISOString(), batches: 1, chainSha256: batch.chainSha256 };
+  docker([...COMPOSE, 'exec', '-T', 'minio', 'mc', 'pipe', `local/${ARCHIVE_BUCKET}/${markerKey}`], { input: JSON.stringify(marker), stdio: ['pipe', 'pipe', 'pipe'] });
+  // One probe of the real prober image, in the stack's network, with the environment docker-compose.split.yml gives it.
+  // --no-deps: the database and MinIO are up, and the one-shot migrate and minio-init that the prober depends on are not
+  // run a second time against a live stack.
+  const probe = (extra = []) => {
+    const run = spawnSync('docker', [...COMPOSE, '--profile', 'prober', 'run', '--rm', '-T', '--no-deps', ...extra, 'prober', 'prober'], { encoding: 'utf8', timeout: 120_000 });
+    const output = `${run.stdout ?? ''}${run.stderr ?? ''}`;
+    // The prober's own lines first: compose's progress lines would otherwise fill a failure message before them.
+    const lines = output.split('\n').filter((line) => line.startsWith('[prober]'));
+    return { output, summary: `exit ${run.status}${run.error ? ` (${run.error.message})` : ''}: ${(lines.length > 0 ? lines.join(' | ') : output.slice(-800)).slice(0, 1200)}` };
+  };
+  const ran = /\[prober\] (?:ok:|FAIL )/;
+  const trusted = probe();
+  assert(ran.test(trusted.output), `the prober ran its checks (${trusted.summary})`);
+  assert(!/FAIL archive_marker/.test(trusted.output), `the prober reads and trusts the marker with its own read-only user (${trusted.summary})`);
+  log('the prober read the verification marker with its read-only user');
+  // A marker the store wrote more than a second ago is too old for a one-second limit: the finding is about its age, so the
+  // marker and the batch it names were read, not refused (a refused read says "could not read").
+  await sleep(3_000);
+  const old = probe(['-e', 'PROBER_MAX_ARCHIVE_MARKER_AGE_SECONDS=1']);
+  assert(/FAIL archive_marker: the WORM archive store wrote the newest verification marker/.test(old.output), `the prober judges the marker by its age (${old.summary})`);
+  log('the prober judged the marker by the store\'s write time');
   log('passed');
 }
 

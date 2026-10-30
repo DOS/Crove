@@ -158,6 +158,9 @@ services:
 
   # The prober (profile `prober`) asks Supabase Auth through the API's /auth/v1 proxy: `crove` does not run here (#1994).
   prober:
+    # The image built for this stack, like api and worker, so the probe the end-to-end script runs is of this checkout's code
+    # (the base file names crove:local, which an earlier run may have left behind).
+    image: crove:split
     # Its bucket and its MinIO user (#2094) exist once minio-init is done, so the first probe finds them.
     depends_on:
       minio-init:

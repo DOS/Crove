@@ -122,8 +122,23 @@ describe('pilot-check settings', () => {
     expect(failing({ ...READY, ARCHIVE_STORE: 's3', ARCHIVE_S3_BUCKET: 'crove-archive', PROBER_ARCHIVE_S3_ACCESS_KEY_ID: fake('reader') })).toEqual([
       expect.stringContaining('set both PROBER_ARCHIVE_S3_ACCESS_KEY_ID and PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY, or neither'),
     ]);
-    // The worker's own key in the shared .env is no problem: Compose never passes it to the prober.
-    expect(failing({ ...READY, ARCHIVE_STORE: 's3', ARCHIVE_S3_BUCKET: 'crove-archive', S3_ACCESS_KEY_ID: fake('worker-key'), S3_SECRET_ACCESS_KEY: fake('worker-secret') })).toEqual([]);
+    // No key of its own and no opt-in to the default credential chain (#2098): reported, naming both ways out.
+    expect(failing({ ...READY, ARCHIVE_STORE: 's3', ARCHIVE_S3_BUCKET: 'crove-archive' })).toEqual([
+      expect.stringContaining('PROBER_ARCHIVE_S3_DEFAULT_CHAIN=true'),
+    ]);
+    expect(failing({ ...READY, ARCHIVE_STORE: 's3', ARCHIVE_S3_BUCKET: 'crove-archive', PROBER_ARCHIVE_S3_DEFAULT_CHAIN: 'true' })).toEqual([]);
+    // The worker's own key in the shared .env is never the prober's: Compose does not pass it, so with it in the .env and no
+    // key of the prober's own the preflight still reports that the prober has no credentials, and does not name the key.
+    const worker = { S3_ACCESS_KEY_ID: fake('worker-key'), S3_SECRET_ACCESS_KEY: fake('worker-secret') };
+    const withWorkerKey = failing({ ...READY, ARCHIVE_STORE: 's3', ARCHIVE_S3_BUCKET: 'crove-archive', ...worker });
+    expect(withWorkerKey).toEqual([expect.stringContaining('PROBER_ARCHIVE_S3_DEFAULT_CHAIN=true')]);
+    expect(JSON.stringify(withWorkerKey)).not.toContain(worker.S3_ACCESS_KEY_ID);
+    expect(failing({ ...READY, ARCHIVE_STORE: 's3', ARCHIVE_S3_BUCKET: 'crove-archive', ...worker, PROBER_ARCHIVE_S3_DEFAULT_CHAIN: 'true' })).toEqual([]);
+    // A prober key that is the worker's key is the same mistake whatever Compose passes: reported.
+    expect(
+      failing({ ...READY, ARCHIVE_STORE: 's3', ARCHIVE_S3_BUCKET: 'crove-archive', ...worker, PROBER_ARCHIVE_S3_ACCESS_KEY_ID: worker.S3_ACCESS_KEY_ID, PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY: fake('reader-secret') }),
+    ).toEqual([expect.stringContaining("PROBER_ARCHIVE_S3_ACCESS_KEY_ID is the worker's S3_ACCESS_KEY_ID")]);
+    expect(failing({ ...READY, ARCHIVE_STORE: 's3', ARCHIVE_S3_BUCKET: 'crove-archive', ...worker, PROBER_ARCHIVE_S3_ACCESS_KEY_ID: fake('reader'), PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY: fake('reader-secret') })).toEqual([]);
   });
 
   it('requires backups in a second location over https, apart from the files bucket (issues #307, #351)', () => {
