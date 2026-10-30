@@ -57,6 +57,9 @@ export const SERIES = 'C26TBB';
 export const SELLER_NAME = 'Cong ty TNHH Van Phong Pham Mau';
 export const BUYER_NAME = 'Cong ty Thu Nghiem A';
 
+// Each line ends with a word a built-in account rule matches (internet, 6422): the control reading is proposed to an
+// account as it always was, and a line no rule matches is unclassified and unapprovable (#2091), which adds a flag the
+// control's exact list of flags does not expect. ASCII only: the reading is printed on the document the model sees.
 export function honestReading(number: string, seller: { name: string; taxCode: string | null } = { name: SELLER_NAME, taxCode: null }): Extracted {
   return {
     isInvoice: true,
@@ -67,8 +70,8 @@ export function honestReading(number: string, seller: { name: string; taxCode: s
     seller: { ...seller, address: 'So 1 Duong Mau, Ha Noi' },
     buyer: { name: BUYER_NAME, taxCode: null, address: null },
     lines: [
-      { description: 'Giay in A4', unit: 'ram', quantity: '20', unitPrice: '60000', amount: '1200000', vatRate: '10%', isDiscount: false },
-      { description: 'Muc in', unit: 'hop', quantity: '4', unitPrice: '200000', amount: '800000', vatRate: '10%', isDiscount: false },
+      { description: 'Giay in A4 internet', unit: 'ram', quantity: '20', unitPrice: '60000', amount: '1200000', vatRate: '10%', isDiscount: false },
+      { description: 'Muc in internet', unit: 'hop', quantity: '4', unitPrice: '200000', amount: '800000', vatRate: '10%', isDiscount: false },
     ],
     subtotal: '2000000',
     vatTotal: '200000',
