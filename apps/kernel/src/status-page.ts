@@ -21,7 +21,9 @@ export const STATUS_STALE_SECONDS = 900;
 // The file is tiny; anything larger is not one the prober wrote.
 const MAX_STATUS_BYTES = 16 * 1024;
 
-const statusSchema = z.strictObject({
+// A field it does not know is dropped, not refused: after a rollback the API may run an older build than the prober,
+// which writes fields that build has never heard of (#1994's authChecked), and the page must still show the rest.
+const statusSchema = z.object({
   version: z.literal(1),
   checkedAt: z.iso.datetime(),
   // false: the prober could not read the database (its "probe" finding).

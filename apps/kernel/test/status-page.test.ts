@@ -60,10 +60,18 @@ describe('status file', () => {
 
     expect(await readStatusFile(join(dir, 'missing.json'))).toBeNull();
     const bad = join(dir, 'bad.json');
-    for (const text of ['not json', '{}', JSON.stringify({ version: 1, checkedAt: NOW.toISOString(), databaseOk: true, failing: ['<script>'] }), JSON.stringify({ ...probeStatus(NOW, []), extra: 'x' }), 'x'.repeat(20_000)]) {
+    for (const text of ['not json', '{}', JSON.stringify({ version: 1, checkedAt: NOW.toISOString(), databaseOk: true, failing: ['<script>'] }), 'x'.repeat(20_000)]) {
       await writeFile(bad, text);
       expect(await readStatusFile(bad), text.slice(0, 40)).toBeNull();
     }
+  });
+
+  it('reads a file from a newer prober, dropping the fields it does not know (an API rolled back first)', async () => {
+    const path = join(dir, 'newer.json');
+    await writeFile(path, JSON.stringify({ ...probeStatus(NOW, ['inbound'], true), someFutureField: { x: 1 } }));
+    const read = await readStatusFile(path);
+    expect(read).toEqual({ version: 1, checkedAt: NOW.toISOString(), databaseOk: true, failing: ['inbound'], authChecked: true });
+    expect(states(statusView(read, NOW))).toEqual({ database: 'ok', documents: 'ok', email: 'problem', updates: 'ok', signin: 'ok' });
   });
 });
 
