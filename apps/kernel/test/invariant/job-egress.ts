@@ -58,6 +58,8 @@ export const DEPS_REACH: Readonly<Record<string, readonly Reach[]>> = {
   // Supabase Auth.
   revoker: [],
   instance: [],
+  // The build it records in its heartbeat (#1952): an id and a date, reaching nothing.
+  build: [],
   refusalTallyRetentionDays: [],
   agentPrograms: [],
   exportSealer: [],
