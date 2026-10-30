@@ -64,3 +64,24 @@ export function balanceSide(balance: string): { side: 'debit' | 'credit' | null;
   if (/^0(\.0*)?$/.test(amount)) return { side: null, amount: '0' };
   return { side: negative ? 'credit' : 'debit', amount };
 }
+
+// The comparison columns of the financial statements (#2090): `startOfYear` is B01 at the end of the previous year, and
+// B02 reads against the same period a year earlier (`last_year`, the default) or, for a month or a quarter, the period
+// right before it (`previous`). Each is null where the server has no earlier period.
+export type StatementCompare = 'last_year' | 'previous';
+type ColumnAmounts = Record<string, string>;
+export interface StatementComparison {
+  startOfYear: { asOf: string; amounts: ColumnAmounts } | null;
+  lastYear: { period: string; amounts: ColumnAmounts } | null;
+  previous: { period: string; amounts: ColumnAmounts } | null;
+}
+
+// B02's comparison column for the user's choice: the period before when it is chosen and exists (a year has none, its
+// previous year is `last_year`), else the same period last year; null when neither exists.
+export function b02Comparison(comparison: StatementComparison, choice: StatementCompare): { kind: StatementCompare; period: string; amounts: ColumnAmounts } | null {
+  if (choice === 'previous' && comparison.previous) return { kind: 'previous', ...comparison.previous };
+  return comparison.lastYear ? { kind: 'last_year', ...comparison.lastYear } : null;
+}
+
+// A line's amount in a column; a line the column's period has no entries for reads 0.
+export const columnAmount = (amounts: ColumnAmounts, code: string): string => amounts[code] ?? '0';

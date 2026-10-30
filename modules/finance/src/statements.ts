@@ -6,6 +6,11 @@
 // finance.statements.period answers both for the screen; the Excel export (GET /api/export/statements.xlsx) reads the
 // same query and records its download with finance.statements.export, like the other exports.
 //
+// Next to the period, the screen and the workbook carry the comparison columns (#2090): B01's start of year (its
+// balances at the end of the previous year) and B02 for the same period of the previous year and, for a month or a
+// quarter, for the period right before it (domain/statement-comparison.ts). They are read in the same statement as the
+// period's own balances and only add what a column shows: the line amounts by code.
+//
 // The pure builders take entries with lines. Balances are summed in SQL instead, one row per account, party and
 // reversal (and, for B02, only the period's entries without a line on 911, the year-end closing account), and each row
 // is handed over as one entry: the builders only ever add lines up, so the sums are the same and no line limit is
@@ -18,6 +23,7 @@ import { defineCommand, defineQuery, type QueryContext } from '@crove/kernel-run
 import { chartAccounts } from './accounts.ts';
 import { resolveLegalEntity } from './legal-entity.ts';
 import { ledgerPeriod, type LedgerPeriod } from './domain/ledger-reports.ts';
+import { comparisonPlan, type ComparisonPlan } from './domain/statement-comparison.ts';
 import { B01_LINES, B02_LINES, CLOSING_ACCOUNT, buildB01, buildB02, type ReportEntry, type ReportLine, type ReportLineDef, type UnmappedBalance } from './domain/tt133-reports.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
@@ -38,10 +44,36 @@ export interface StatementLine extends ReportLine {
   total: boolean;
 }
 
-export interface FinancialStatements {
+// What financialStatements() reads, and what the HTKK export builds on (statements-htkk.ts).
+export interface StatementsBody {
   period: LedgerPeriod;
   b01: { asOf: string; lines: StatementLine[]; unmapped: UnmappedRow[]; balanced: boolean };
   b02: { from: string; to: string; lines: StatementLine[]; unmapped: UnmappedRow[] };
+}
+
+// The line amounts of one column, by line code; a code the column's period has no entries for reads 0, never absent.
+export type ColumnAmounts = Record<string, string>;
+
+// B02 for another period, shown beside the period's own.
+export interface ComparedPeriod {
+  period: string;
+  from: string;
+  to: string;
+  amounts: ColumnAmounts;
+}
+
+export interface StatementsComparison {
+  // B01 at the end of the previous year (`asOf`); null before 2000, where there is no previous year.
+  startOfYear: { asOf: string; amounts: ColumnAmounts } | null;
+  // B02 for the same period of the previous year (a year: the previous year); null before 2000.
+  lastYear: ComparedPeriod | null;
+  // B02 for the month or quarter right before; null for a year, whose previous year is `lastYear`.
+  previous: ComparedPeriod | null;
+}
+
+// The statements the screen and the workbook show: the period's own and the comparison columns.
+export interface FinancialStatements extends StatementsBody {
+  comparison: StatementsComparison;
 }
 
 function withTotals(lines: ReportLine[], defs: readonly ReportLineDef[]): StatementLine[] {
@@ -100,20 +132,32 @@ function balances(ctx: QueryContext, legalEntityId: string, from: string | null,
   return query.groupBy(['l.account_code', 'l.party_id', sql`j.reverses_entry_id IS NOT NULL`]);
 }
 
+type Part = 'b01' | 'b02' | 'start' | 'last_year' | 'previous';
+
 // B01's balances (every entry up to the period end) and B02's (the period's entries without a closing line) in ONE
 // statement (#365), so both statements see the same entries even in the query's READ COMMITTED transaction: an entry
-// posted while they read is in both or in neither. The names of unmapped accounts and parties are read afterwards; they
-// only label rows whose amounts come from this statement.
-async function statementBalances(ctx: QueryContext, period: LedgerPeriod, legalEntityId: string): Promise<{ b01: BalanceRow[]; b02: BalanceRow[] }> {
-  const rows = await balances(ctx, legalEntityId, null, period.to, false)
+// posted while they read is in both or in neither. The comparison columns' balances (#2090) ride in the same
+// statement: B01 at the end of the previous year, and B02 of the periods `plan` names. The names of unmapped accounts
+// and parties are read afterwards; they only label rows whose amounts come from this statement.
+async function statementBalances(ctx: QueryContext, period: LedgerPeriod, legalEntityId: string, plan: ComparisonPlan | null): Promise<Record<Part, BalanceRow[]>> {
+  let query = balances(ctx, legalEntityId, null, period.to, false)
     .select(sql.lit('b01').as('part'))
-    .unionAll(balances(ctx, legalEntityId, period.from, period.to, true).select(sql.lit('b02').as('part')))
-    .orderBy('part')
-    .orderBy('account_code')
-    .execute();
-  const split = { b01: [] as BalanceRow[], b02: [] as BalanceRow[] };
-  for (const { part, ...row } of rows) split[part === 'b01' ? 'b01' : 'b02'].push(row as BalanceRow);
+    .unionAll(balances(ctx, legalEntityId, period.from, period.to, true).select(sql.lit('b02').as('part')));
+  if (plan?.startOfYear) query = query.unionAll(balances(ctx, legalEntityId, null, plan.startOfYear, false).select(sql.lit('start').as('part')));
+  if (plan?.lastYear) query = query.unionAll(balances(ctx, legalEntityId, plan.lastYear.from, plan.lastYear.to, true).select(sql.lit('last_year').as('part')));
+  if (plan?.previous) query = query.unionAll(balances(ctx, legalEntityId, plan.previous.from, plan.previous.to, true).select(sql.lit('previous').as('part')));
+  const rows = await query.orderBy('part').orderBy('account_code').execute();
+  const split: Record<Part, BalanceRow[]> = { b01: [], b02: [], start: [], last_year: [], previous: [] };
+  for (const { part, ...row } of rows) split[part as Part].push(row as BalanceRow);
   return split;
+}
+
+const amountsOf = (lines: ReportLine[]): ColumnAmounts => Object.fromEntries(lines.map((line) => [line.code, line.amount]));
+
+function comparedPeriod(period: LedgerPeriod | null, rows: BalanceRow[], legalEntityId: string): ComparedPeriod | null {
+  if (!period) return null;
+  const b02 = buildB02(asEntries(rows, period.from, legalEntityId), legalEntityId, period.from, period.to);
+  return { period: period.period, from: period.from, to: period.to, amounts: amountsOf(b02.lines) };
 }
 
 async function unmappedRows(ctx: QueryContext, unmapped: UnmappedBalance[]): Promise<UnmappedRow[]> {
@@ -134,16 +178,37 @@ async function unmappedRows(ctx: QueryContext, unmapped: UnmappedBalance[]): Pro
   }));
 }
 
-// The statements of one legal entity (#1280).
-export async function financialStatements(ctx: QueryContext, periodText: string, legalEntityId: string): Promise<FinancialStatements> {
+async function readStatements(ctx: QueryContext, periodText: string, legalEntityId: string, withComparison: boolean) {
   const period = ledgerPeriod(periodText);
-  const sums = await statementBalances(ctx, period, legalEntityId);
+  const plan = withComparison ? comparisonPlan(period) : null;
+  const sums = await statementBalances(ctx, period, legalEntityId, plan);
   const b01 = buildB01(asEntries(sums.b01, period.to, legalEntityId), legalEntityId, period.to);
   const b02 = buildB02(asEntries(sums.b02, period.from, legalEntityId), legalEntityId, period.from, period.to);
-  return {
+  const body: StatementsBody = {
     period,
     b01: { asOf: period.to, lines: withTotals(b01.lines, B01_LINES), unmapped: await unmappedRows(ctx, b01.unmapped), balanced: b01.balanced },
     b02: { from: period.from, to: period.to, lines: withTotals(b02.lines, B02_LINES), unmapped: await unmappedRows(ctx, b02.unmapped) },
+  };
+  return { body, sums, plan };
+}
+
+// The statements of one legal entity (#1280), without the comparison columns: what the HTKK export reads for the year
+// and the year before it.
+export async function financialStatements(ctx: QueryContext, periodText: string, legalEntityId: string): Promise<StatementsBody> {
+  return (await readStatements(ctx, periodText, legalEntityId, false)).body;
+}
+
+// The same with the comparison columns (#2090), for the screen and the workbook.
+export async function comparedStatements(ctx: QueryContext, periodText: string, legalEntityId: string): Promise<FinancialStatements> {
+  const { body, sums, plan } = await readStatements(ctx, periodText, legalEntityId, true);
+  const start = plan?.startOfYear ?? null;
+  return {
+    ...body,
+    comparison: {
+      startOfYear: start === null ? null : { asOf: start, amounts: amountsOf(buildB01(asEntries(sums.start, start, legalEntityId), legalEntityId, start).lines) },
+      lastYear: comparedPeriod(plan?.lastYear ?? null, sums.last_year, legalEntityId),
+      previous: comparedPeriod(plan?.previous ?? null, sums.previous, legalEntityId),
+    },
   };
 }
 
@@ -151,7 +216,7 @@ export const statementsPeriodQuery = defineQuery({
   name: 'finance.statements.period',
   input: zStatementsInput,
   access: ALL,
-  handler: async (ctx, input): Promise<FinancialStatements> => financialStatements(ctx, input.period, await resolveLegalEntity(ctx, input.legalEntityId)),
+  handler: async (ctx, input): Promise<FinancialStatements> => comparedStatements(ctx, input.period, await resolveLegalEntity(ctx, input.legalEntityId)),
 });
 
 // Records one export of a period's financial statements after the file is built. It changes nothing: its audit row

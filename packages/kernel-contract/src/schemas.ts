@@ -1087,10 +1087,20 @@ export type YearArchiveVerification = z.infer<typeof zYearArchiveVerification>;
 // is then incomplete); `balanced` is whether B01's total assets equal its total sources.
 const zStatementLine = z.object({ code: z.string(), label: z.string(), amount: zMoney, total: z.boolean() });
 const zUnmappedRow = z.object({ accountCode: z.string(), accountName: z.string().nullable(), partyName: z.string().nullable(), amount: zMoney });
+// The comparison columns (#2090): the line amounts of another period by line code. `startOfYear` is B01 at the end of
+// the previous year, `lastYear` is B02 for the same period a year earlier and `previous` is B02 for the month or quarter
+// right before (null for a year). Each is null where there is no earlier period (before the year 2000).
+const zColumnAmounts = z.record(z.string(), zMoney);
+const zComparedPeriod = z.object({ period: zLedgerPeriod, from: zLocalDate, to: zLocalDate, amounts: zColumnAmounts });
 export const zFinancialStatements = z.object({
   period: zLedgerPeriodRange,
   b01: z.object({ asOf: zLocalDate, lines: z.array(zStatementLine), unmapped: z.array(zUnmappedRow), balanced: z.boolean() }),
   b02: z.object({ from: zLocalDate, to: zLocalDate, lines: z.array(zStatementLine), unmapped: z.array(zUnmappedRow) }),
+  comparison: z.object({
+    startOfYear: z.object({ asOf: zLocalDate, amounts: zColumnAmounts }).nullable(),
+    lastYear: zComparedPeriod.nullable(),
+    previous: zComparedPeriod.nullable(),
+  }),
 });
 
 export const zAccountLedger = z.object({
