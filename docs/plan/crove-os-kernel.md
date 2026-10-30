@@ -2116,7 +2116,7 @@ ADRs live in `docs/adr/`, using the MADR template. They keep the "why"; this pla
 | 0010 | Risk and policy: levels, derived risk, P01-P13, who may approve R3 (T2), proposal revisions, the agent autonomy table | Before Phase 1 features |
 | 0011 | Frontend: SPA cache policy, CSP/Trusted Types, untrusted HTML | Before Phase 1 features |
 | 0015 | Version and upgrade policy (including the Vite+/Oxfmt exception) | Before Phase 1 features |
-| 0017 | Data classification, PII, crypto-shredding, deletion map, PDPL | Before Phase 1 features |
+| [0017](../adr/0017-crypto-shredding.md) | Data classification, PII, crypto-shredding, deletion map, PDPL | Before Phase 1 features; the crypto-shredding part proposed 2026-10-30 (#1949), the classes and deletion map in §5.2 and §7.9 |
 | [0033](../adr/0033-dbos-transact-spike.md) | Process engine: the plan's own engine, not DBOS Transact (spike result, Decision 14) | Accepted 2026-10-16 (Decision 14's rule; issue #59) |
 | 0009 / 0012 | Agent runtime and chat (OpenAI-compatible provider) / SSE invalidation | 2b |
 | [0032](../adr/0032-oauth-authorization-server.md) | OAuth 2.1 authorization server for self-host and Cloud (Decision 14; issue #67): proposed 2026-10-16, embedded `oidc-provider`, fallback Ory Hydra | Accepted before Phase 3 (acceptance tests in the ADR) |
