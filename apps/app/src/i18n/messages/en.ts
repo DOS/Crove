@@ -6130,6 +6130,7 @@ export const en = {
         allocations: 'List allocated voucher numbers',
         policy: {
           set: 'Set the voucher numbering policy',
+          schedule: 'Schedule a voucher numbering change from a future year',
         },
         reseed: 'Raise a voucher number series after a restore',
         void: 'Void a voucher number',
