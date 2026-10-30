@@ -104,6 +104,26 @@ describe('bulk intake state', () => {
     expect(undecidedIds(items)).toEqual([]);
   });
 
+  it("takes a watched file's own state when it moved on: failed after the decision, or read again (#2032)", () => {
+    const plain = uploaded(newItem('a', 'a.xml'), { fileId: ID(1), duplicate: false });
+    const other = uploaded(newItem('b', 'b.xml'), { fileId: ID(2), duplicate: false });
+    let items = applyBatch(
+      [plain, other],
+      [
+        { ...batchFile(ID(1), 'proposed'), proposalId: ID(9), proposalStatus: 'pending' },
+        { ...batchFile(ID(2), 'proposed'), proposalId: ID(8), proposalStatus: 'pending' },
+      ],
+    );
+    items = withProposalStatuses(items, [
+      { ...status(ID(1), 'failed', 'Không đọc được'), proposalId: ID(9), proposalStatus: 'rejected' },
+      { ...status(ID(2), 'processing'), proposalId: ID(8), proposalStatus: 'pending' },
+    ]);
+    expect(items[0]).toMatchObject({ state: 'failed', error: 'Không đọc được', proposalStatus: 'rejected' });
+    // Being read again: back on the poll until it settles.
+    expect(items[1]).toMatchObject({ state: 'processing' });
+    expect(pendingIds(items)).toEqual([ID(2)]);
+  });
+
   it('turns an opened archive into its entries and polls it while an entry is being read', () => {
     let items = [uploaded(newItem('z', 'thang-10.zip'), { fileId: ID(10), duplicate: false })];
     expect(items[0]?.archive).toBe(true);

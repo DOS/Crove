@@ -165,13 +165,16 @@ export function undecidedIds(items: readonly IntakeItem[]): string[] {
   return leaves(items).flatMap((item) => (item.fileId && item.state === 'proposed' && item.proposalStatus && UNDECIDED.has(item.proposalStatus) ? [item.fileId] : []));
 }
 
-// The proposal statuses files.batch gave, on the items (an archive's entries included) whose file it answered for.
+// What files.batch says now about the proposed items it answered for (an archive's entries included): the proposal's
+// status, and the file's own when it moved on (#2032): read again and failed after the decision, or being read again,
+// which puts it back on the poll.
 export function withProposalStatuses(items: readonly IntakeItem[], files: readonly FileStatus[]): IntakeItem[] {
   const byId = new Map(files.map((file) => [file.id, file]));
   const apply = (item: IntakeItem): IntakeItem => {
     const file = item.fileId ? byId.get(item.fileId) : undefined;
     const entries = item.entries.length > 0 ? item.entries.map(apply) : item.entries;
-    return file && item.state === 'proposed' && file.status === 'proposed' ? { ...item, proposalStatus: file.proposalStatus, voided: file.voided, entries } : { ...item, entries };
+    if (!file || item.state !== 'proposed') return { ...item, entries };
+    return { ...item, state: fromStatus(file.status), error: file.error, proposalStatus: file.proposalStatus, voided: file.voided, entries };
   };
   return items.map(apply);
 }
