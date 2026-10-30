@@ -688,11 +688,15 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     if (!job) return;
     const { sessionId, scope } = job.data;
     const label = `${scope} sign-out of session ${sessionId.slice(0, 8)}`;
+    // A job the previous release's relay made from an event of this one has the subject `undefined` and no user: its
+    // session cannot be signed out upstream.
+    if (job.data.subject === 'undefined') {
+      console.error(`[signout] ALERT ${label}: the job names no account (made by the previous release from a newer event); revoked in Crove only`);
+      return;
+    }
     let subject: string | null;
     try {
-      // A job the previous release's relay made from an event of this one has the subject `undefined`: none.
-      const given = job.data.subject === 'undefined' ? undefined : job.data.subject;
-      subject = given ?? (job.data.userId ? await authSubject(deps.workerDb, job.data.userId) : null);
+      subject = job.data.subject ?? (job.data.userId ? await authSubject(deps.workerDb, job.data.userId) : null);
     } catch (error) {
       if (job.retryCount < SIGN_OUT_RETRY_LIMIT) throw error;
       console.error(`[signout] ALERT ${label}: the account's subject could not be read after ${job.retryCount + 1} attempts; revoked in Crove only`, error);

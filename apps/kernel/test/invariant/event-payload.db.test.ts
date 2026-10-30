@@ -3,9 +3,10 @@
 // #1970, ADR-0017 section 1). An event row is append-only and the outbox archive keeps payloads as plain JSON for 400
 // days, so no erasure reaches a value once it is in one. ctx.emit checks the payload in TypeScript; the database holds
 // every insert into crove_kernel.outbox_event to the same rule (crove_kernel.event_payload_problem), so a definer that
-// writes an event directly is held too. This file keeps the two rules in step on one corpus, shows the database
-// refusing a personal value from a tenant session and taking a clean one, and pins the sign-out job's subject lookup
-// to the worker login. Keep this directory self-contained: import package code under test, never helpers from outside
+// writes an event directly is held too. The database's one-release allowance for the previous release (#1980) is
+// tested outside this suite, in apps/kernel/test/event-payload-legacy.db.test.ts. This file keeps the two rules in step
+// on one corpus, shows the database refusing a personal value from a tenant session and taking a clean one, and pins
+// the sign-out job's subject lookup to the worker login. Keep this directory self-contained: import package code under test, never helpers from outside
 // test/invariant/. Set CROVE_TEST_ADMIN_URL to a superuser URL; each run creates and drops its own database.
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -106,22 +107,6 @@ suite('event payloads: ids and codes only, in TypeScript and in the database (#1
     // The corpus holds both outcomes, so agreement says something.
     expect(sqlProblems.filter((p) => p === null).length).toBeGreaterThanOrEqual(5);
     expect(sqlProblems.filter((p) => p !== null).length).toBeGreaterThanOrEqual(9);
-  });
-
-  // The one difference, for one release (#1980 drops it): what the previous release emits, which a rollback may bring
-  // back, still passes the database while ctx.emit refuses it: its CRM cancel title and its session revoke's subject.
-  it("still lets the previous release's CRM cancel title and revoke subject through the database only", async () => {
-    const legacy: Array<[string, unknown, string]> = [
-      ['crm.booking.cancelled', { booking_id: ID, agent_task: { title: 'Khách hủy lịch hẹn: Tư vấn thuế', ref: { type: 'crm.booking', id: ID } } }, 'payload.agent_task.title'],
-      ['kernel.session.revoked', { userId: ID, subject: 'auth0|abc', sessionId: ID, scope: 'local' }, 'payload.subject'],
-    ];
-    for (const [type, payload, path] of legacy) {
-      expect(eventPayloadProblem(payload, type)).toBe(`${path}: a string that is neither an id nor a code`);
-      const sqlProblem = await withClient(adminUrl, async (c) =>
-        (await c.query<{ p: string | null }>('SELECT crove_kernel.event_payload_problem($1, $2::jsonb) AS p', [type, JSON.stringify(payload)])).rows[0]?.p,
-      );
-      expect(sqlProblem, type).toBeNull();
-    }
   });
 
   it('refuses a personal value from a tenant session that writes an event past ctx.emit, and takes a clean one', async () => {
