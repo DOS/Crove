@@ -51,6 +51,8 @@ import {
 } from './worm.ts';
 import type { SessionRevoker, SignOutTarget } from './sessions.ts';
 import { opsAlert } from './ops-alert.ts';
+import { BANK_FEEDS_DUE_PAGE, bankFeedsDue, runBankFeedSync, type BankFeedSyncJob } from './bank-feed-sync.ts';
+import type { BankFeedProvider } from '@crove/bank-feed';
 
 const SOCIAL_PUBLISH_RETRY_LIMIT = 2;
 // The worker looks for due variants this often; a post goes out within this long of its time.
@@ -303,6 +305,10 @@ export function sendExtractJob(boss: JobSender, row: OutboxRow, priority: number
   return boss.send(QUEUES.extract, { orgId: row.org_id, fileId } satisfies ExtractJob, { ...options, singletonKey: jobKey(row.org_id, QUEUES.extract, fileId) });
 }
 
+// The daily pull of every bank feed (ADR-0039), early morning in Vietnam; a sync retries a few times, then dead-letters.
+const BANK_FEED_SYNC_CRON = '30 5 * * *';
+const BANK_FEED_SYNC_RETRY_LIMIT = 3;
+
 export interface WorkerDeps {
   connectionString: string;
   workerDb: Db;
@@ -331,7 +337,14 @@ export interface WorkerDeps {
   evidenceLockDays?: number;
   // Social publishing: the credential broker that opens channel tokens, and the providers this deployment can publish
   // to. Without it, or without the social module, scheduled posts wait.
-  channels?: { broker: CredentialBroker; publishers: Readonly<Record<string, Publisher>>; refreshers?: Readonly<Record<string, Refresher>> };
+  // bankFeeds: the bank feed adapters this deployment offers (ADR-0039, #2044), by provider id; the worker alone uses
+  // them, with the credentials it opens.
+  channels?: {
+    broker: CredentialBroker;
+    publishers: Readonly<Record<string, Publisher>>;
+    refreshers?: Readonly<Record<string, Refresher>>;
+    bankFeeds?: Readonly<Record<string, BankFeedProvider>>;
+  };
   // PUBLIC_URL, where Social short links (#706) point.
   publicUrl?: string;
   // The product name users see (BRAND_NAME, #1045), for the chat alert test line.
@@ -905,6 +918,40 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     // The member purges stay queued (they carry whose notes to purge) for when notes is installed again.
     await dropCron(QUEUES.notesTrash);
     await dropCron(QUEUES.notesRemind);
+  }
+
+  // Bank feeds (ADR-0039, #2044): a connection's sync, queued by the relay above and, once a day, for every active
+  // bank feed connection of an active org. The adapters are the deployment's; with none on, the sweep queues nothing.
+  const bankFeeds = deps.channels?.bankFeeds;
+  const bankFeedBroker = deps.channels?.broker;
+  if (finance && bankFeeds && bankFeedBroker && Object.keys(bankFeeds).length > 0) {
+    await boss.work<BankFeedSyncJob | { sweep: true }>(QUEUES.bankFeedSync, { batchSize: 1 }, async ([job]) => {
+      if (!job) return;
+      if ('sweep' in job.data) {
+        // Every active bank feed, a page of connections at a time by key.
+        let after: { orgId: string; connectionId: string } | null = null;
+        for (;;) {
+          const page = await bankFeedsDue(deps.workerDb, after);
+          for (const row of page.filter((r) => Object.hasOwn(bankFeeds, r.provider))) {
+            await boss.send(QUEUES.bankFeedSync, { orgId: row.orgId, connectionId: row.connectionId } satisfies BankFeedSyncJob, {
+              singletonKey: jobKey(row.orgId, QUEUES.bankFeedSync, row.connectionId),
+              retryLimit: BANK_FEED_SYNC_RETRY_LIMIT,
+              retryDelay: 30,
+              retryBackoff: true,
+            });
+          }
+          const last = page.at(-1);
+          if (!last || page.length < BANK_FEEDS_DUE_PAGE) break;
+          after = { orgId: last.orgId, connectionId: last.connectionId };
+        }
+        return;
+      }
+      const done = await runBankFeedSync({ runtime: deps.runtime, broker: bankFeedBroker, providers: bankFeeds }, job.data);
+      console.log(`[bank-feed] ${job.data.connectionId}: ${done.accounts} account(s), ${done.pages} page(s), ${done.stored} line(s) stored`);
+    });
+    await boss.schedule(QUEUES.bankFeedSync, BANK_FEED_SYNC_CRON, { sweep: true }, { tz: RETENTION_TZ, missed: 'once' });
+  } else {
+    await dropCron(QUEUES.bankFeedSync);
   }
 
   // In-app notifications of the kernel and finance (#671): the module's dispatch reads the event from the outbox.
@@ -1583,6 +1630,22 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
               }
               // A member who left (#1671): their private notes are removed 30 days later, beside the rest.
               if (notes) await queueNotesMemberPurge(boss, row);
+              // A bank feed connected, or an account of one mapped (ADR-0039, #2044): its sync lists the accounts and
+              // pulls the mapped ones.
+              if (
+                finance &&
+                deps.channels?.bankFeeds &&
+                Object.keys(deps.channels.bankFeeds).length > 0 &&
+                ((row.type === 'kernel.channel.connected' && String(row.payload.provider).startsWith('bank_')) || row.type === 'finance.bank_feed.sync_requested')
+              ) {
+                const connectionId = String(row.payload.connection_id);
+                await boss.send(QUEUES.bankFeedSync, { orgId: row.org_id, connectionId } satisfies BankFeedSyncJob, {
+                  singletonKey: jobKey(row.org_id, QUEUES.bankFeedSync, connectionId),
+                  retryLimit: BANK_FEED_SYNC_RETRY_LIMIT,
+                  retryDelay: 30,
+                  retryBackoff: true,
+                });
+              }
               // A visitor's booking (#1318): the worker confirms or refuses it as the system.
               if (crm && row.type === 'crm.booking.requested') {
                 const bookingId = String(row.payload.booking_id);

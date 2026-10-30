@@ -256,6 +256,7 @@ export const KERNEL_ERROR_CODES = [
   'BANK_FEED_INACTIVE',
   'BANK_FEED_ACCOUNT_MAPPED',
   'BANK_FEED_ACCOUNT_NOT_FOUND',
+  'BANK_FEED_ACCOUNT_UNKNOWN',
   'BANK_FEED_DISABLED',
   // The chart of accounts and vendor defaults (#319).
   'ACCOUNT_CODE_TAKEN',

@@ -20,6 +20,8 @@ import { financeCommands, financeQueries } from '@crove/mod-finance';
 import { createAuthenticator } from '../src/auth.ts';
 import { loadConfig } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
+import { runBankFeedSync } from '../src/bank-feed-sync.ts';
+import { bankFeedProviders } from '@crove/bank-feed';
 import { createSessionStatusSource } from '../src/sessions.ts';
 import { TEST_MANIFESTS } from './manifests.ts';
 
@@ -60,6 +62,7 @@ suite('bank statement import (#326)', () => {
   let app: ReturnType<typeof createHttpApp>;
   // With the sandbox bank feed on (ADR-0039, #2044), and a credential key to seal its secret.
   let feedApp: ReturnType<typeof createHttpApp>;
+  let vault: CredentialVault;
   // The API's runtime, and the worker's, which runs feed jobs as the system.
   let api: Runtime;
   let worker: Runtime;
@@ -162,7 +165,7 @@ suite('bank statement import (#326)', () => {
     });
     app = createHttpApp({ config, runtime, store: new MemoryStore(), authenticate: createAuthenticator(config, db), pool, aiEnabled: false });
     api = runtime;
-    const vault = new CredentialVault([parseVaultKey(randomBytes(32).toString('base64'))]);
+    vault = new CredentialVault([parseVaultKey(randomBytes(32).toString('base64'))]);
     feedApp = createHttpApp({
       config,
       runtime,
@@ -431,6 +434,11 @@ suite('bank statement import (#326)', () => {
 
   // ADR-0039, #2044 part 2a: a bank feed connection's accounts mapped to the org's bank accounts.
   const feed = async (path: string, who: Account, input?: unknown) => rpc(`bankFeeds/${path}`, await tokenFor(who), input, slug, feedApp);
+  // Part 2b: the worker's sync of a connection, with the sandbox adapter and the vault the API sealed with.
+  // A fixed day, so the sandbox's days do not move under a test that crosses midnight.
+  const SYNC_NOW = () => new Date('2026-11-20T08:00:00Z');
+  const sync = (connectionId: string, org = orgId) =>
+    runBankFeedSync({ runtime: worker, broker: vault, providers: bankFeedProviders({ sandbox: true, now: SYNC_NOW }) }, { orgId: org, connectionId });
 
   it('offers the sandbox bank feed only where the deployment turns it on', async () => {
     expect(((await (await feedApp.request('/api/config')).json()) as { bankFeeds: unknown }).bankFeeds).toEqual({ sandbox: true });
@@ -442,8 +450,12 @@ suite('bank statement import (#326)', () => {
     expect((await feed('connectSandbox', member, { displayName: 'Ngân hàng thử' })).status).toBe(403);
     const connected = await feed('connectSandbox', owner, { displayName: 'Ngân hàng thử' });
     expect(connected.status).toBe(200);
-    expect(connected.body.accounts.map((a: { externalAccountId: string }) => a.externalAccountId)).toEqual(['SBX-001', 'SBX-002']);
     const connectionId = String(connected.body.connectionId);
+    // The API sealed the login and listed nothing: the worker's sync opens it and records the accounts it reaches.
+    expect((await feed('listed', owner, { connectionId })).body).toEqual([]);
+    expect(await sync(connectionId)).toMatchObject({ accounts: 2, pages: 0 });
+    expect((await feed('listed', owner, { connectionId })).body.map((a: { externalAccountId: string }) => a.externalAccountId)).toEqual(['SBX-001', 'SBX-002']);
+    expect((await feed('listed', viewer, { connectionId })).status).toBe(403);
     // Sealed like any channel's: a credential row holds it, and no audit row or answer carries a sandbox secret.
     const stored = await admin(async (c) => (await c.query<{ provider: string }>('SELECT provider FROM crove_kernel.channel_connection WHERE org_id = $1 AND id = $2', [orgId, connectionId])).rows);
     expect(stored).toEqual([{ provider: 'bank_sandbox' }]);
@@ -458,6 +470,7 @@ suite('bank statement import (#326)', () => {
     expect((await map(member, {})).status).toBe(403);
     expect((await map(viewer, {})).status).toBe(403);
     expect(await map(owner, { bankAccount: '331' })).toMatchObject({ status: 422, body: { code: 'NOT_A_BANK_ACCOUNT' } });
+    expect(await map(owner, { externalAccountId: 'SBX-999' })).toMatchObject({ status: 422, body: { code: 'BANK_FEED_ACCOUNT_UNKNOWN' } });
     expect(await map(owner, { bankAccount: '1121.OLD' })).toMatchObject({ status: 422, body: { code: 'ACCOUNT_INACTIVE' } });
     const mapped = await map(owner, {});
     expect(mapped.status).toBe(200);
@@ -508,5 +521,104 @@ suite('bank statement import (#326)', () => {
       status: 422,
       body: { code: 'BANK_FEED_INACTIVE' },
     });
+  });
+
+  // Part 2b: the sync stores a mapped account's lines once, however often it runs, and moves the cursor with them.
+  it("pulls a mapped account's lines into its bank account once, and moves its cursor", async () => {
+    const connectionId = String((await feed('connectSandbox', owner, { displayName: 'Ngân hàng đồng bộ' })).body.connectionId);
+    await sync(connectionId);
+    const mapped = await feed('map', owner, { connectionId, externalAccountId: 'SBX-002', bankAccount: '1121', idempotencyKey: randomUUID() });
+    expect(mapped.status).toBe(200);
+    const before = (await stored('1121')).length;
+    const first = await sync(connectionId);
+    expect(first.pages).toBe(1);
+    expect(first.stored).toBeGreaterThan(0);
+    const lines = await stored('1121');
+    expect(lines.length - before).toBe(first.stored);
+    expect(lines.filter((l) => l.dedupe_key?.startsWith('ref:SBX-002-')).length).toBe(first.stored);
+    const account = (await feed('accounts', owner)).body.find((a: { id: string }) => a.id === mapped.body.feedAccountId);
+    expect(account.lastSyncedAt).not.toBeNull();
+    // Again: the cursor is at yesterday, so nothing new; and a pull from the start again stores nothing twice.
+    expect((await sync(connectionId)).stored).toBe(0);
+    await admin((c) => c.query('UPDATE crove_finance.bank_feed_account SET cursor = NULL WHERE org_id = $1 AND id = $2', [orgId, mapped.body.feedAccountId]));
+    expect((await sync(connectionId)).stored).toBe(0);
+    expect((await stored('1121')).length).toBe(lines.length);
+    // The pull takes the mapping's account and entity, never the job's: a page for an unknown mapping is refused.
+    await expect(
+      worker.execute('finance.bank_feed.record_pull', { feedAccountId: randomUUID(), fromCursor: null, lines: [], cursor: '2026-11-01' }, { actor: SYSTEM, orgId }),
+    ).rejects.toMatchObject({ code: 'BANK_FEED_ACCOUNT_NOT_FOUND' });
+    // A late sync's page, pulled from a cursor the account has moved past, never moves it back.
+    const at = (await admin(async (c) => (await c.query<{ cursor: string }>('SELECT cursor FROM crove_finance.bank_feed_account WHERE org_id = $1 AND id = $2', [orgId, mapped.body.feedAccountId])).rows[0]?.cursor)) as string;
+    await expect(
+      worker.execute('finance.bank_feed.record_pull', { feedAccountId: mapped.body.feedAccountId, fromCursor: '2026-01-01', lines: [], cursor: '2026-01-31' }, { actor: SYSTEM, orgId }),
+    ).rejects.toMatchObject({ code: 'BANK_FEED_CURSOR_MOVED' });
+    expect((await admin(async (c) => (await c.query<{ cursor: string }>('SELECT cursor FROM crove_finance.bank_feed_account WHERE org_id = $1 AND id = $2', [orgId, mapped.body.feedAccountId])).rows[0]?.cursor))).toBe(at);
+  });
+
+  it('stops syncing once the member who connected the feed may no longer use it', async () => {
+    const connectionId = String((await feed('connectSandbox', owner, { displayName: 'Ngân hàng của chủ cũ' })).body.connectionId);
+    await sync(connectionId);
+    // The connector is no longer an owner or admin: the channel layer no longer opens the credential for the worker,
+    // and the sync marks the connection expired, so the daily sweep leaves it until it is connected again.
+    await admin((c) => c.query(`UPDATE crove_kernel.channel_connection SET connected_by = $3 WHERE org_id = $1 AND id = $2`, [orgId, connectionId, viewer.userId]));
+    expect(await sync(connectionId)).toEqual({ accounts: 0, pages: 0, stored: 0 });
+    expect(await admin(async (c) => (await c.query<{ status: string }>('SELECT status FROM crove_kernel.channel_connection WHERE org_id = $1 AND id = $2', [orgId, connectionId])).rows[0]?.status)).toBe('expired');
+    expect(await sync(connectionId)).toEqual({ accounts: 0, pages: 0, stored: 0 });
+  });
+
+  it("pages the daily sweep's bank feeds by key, active ones of active orgs only, for the worker login alone", async () => {
+    const workerAdmin = async <T>(fn: (c: pg.Client) => Promise<T>) => {
+      const url = new URL(adminUrl);
+      url.username = 'crove_worker';
+      url.password = 'test-worker-pw';
+      const c = new pg.Client({ connectionString: url.toString() });
+      await c.connect();
+      try {
+        return await fn(c);
+      } finally {
+        await c.end();
+      }
+    };
+    const connection = async (org: string, provider: string, status = 'active') =>
+      admin(
+        async (c) =>
+          (
+            await c.query<{ id: string }>(
+              `INSERT INTO crove_kernel.channel_connection (org_id, provider, external_account_id, display_name, connected_by, status) VALUES ($1, $2, $3, 'Sweep', $4, $5) RETURNING id`,
+              [org, provider, `sweep-${randomUUID()}`, owner.userId, status],
+            )
+          ).rows[0]?.id as string,
+      );
+    const otherOrg = await admin(async (c) => (await c.query<{ org_id: string }>('SELECT org_id FROM crove_kernel.tenant WHERE slug = $1', [otherSlug])).rows[0]?.org_id as string);
+    const live = [await connection(orgId, 'bank_sandbox'), await connection(orgId, 'bank_sandbox')];
+    await connection(orgId, 'bank_sandbox', 'revoked');
+    await connection(orgId, 'bank_sandbox', 'expired');
+    await connection(orgId, 'sandbox');
+    await connection(otherOrg, 'bank_sandbox');
+    await admin((c) => c.query(`UPDATE crove_kernel.tenant SET status = 'closed' WHERE org_id = $1`, [otherOrg]));
+    // A page of one at a time, by key, reaches every live bank feed of this org and nothing else.
+    const seen: string[] = [];
+    let after: [string | null, string | null] = [null, null];
+    for (let i = 0; i < 50; i++) {
+      const rows = await workerAdmin(async (c) => (await c.query<{ org_id: string; connection_id: string }>('SELECT org_id, connection_id FROM crove_finance.bank_feeds_due($1::uuid, $2::uuid, 1)', after)).rows);
+      const row = rows[0];
+      if (!row) break;
+      expect(row.org_id).toBe(orgId);
+      seen.push(row.connection_id);
+      after = [row.org_id, row.connection_id];
+    }
+    for (const id of live) expect(seen).toContain(id);
+    expect(new Set(seen).size).toBe(seen.length);
+    const callers = await admin(
+      async (c) =>
+        (
+          await c.query<{ role: string }>(
+            `SELECT r.rolname AS role FROM pg_catalog.pg_roles r
+             WHERE r.rolname = ANY (ARRAY['crove_tenant', 'crove_app', 'crove_worker', 'crove_definer_tenant', 'crove_prober'])
+               AND pg_catalog.has_function_privilege(r.oid, 'crove_finance.bank_feeds_due(uuid, uuid, integer)', 'EXECUTE')`,
+          )
+        ).rows,
+    );
+    expect(callers.map((r) => r.role)).toEqual(['crove_worker']);
   });
 });
