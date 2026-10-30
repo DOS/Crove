@@ -22,6 +22,7 @@ import { financeManifest } from '@crove/mod-finance';
 import { loadConfig } from '../../src/config.ts';
 import { moduleDefinitions, moduleManifests, serverRuntime } from '../../src/kernel.ts';
 import { orgPurgeCommand } from '../../src/org-purge.ts';
+import { numberReseedCommand } from '../../src/restore-report.ts';
 import { TEST_MANIFESTS } from './fixtures/manifests.ts';
 
 const noDatabase = (): never => {
@@ -34,7 +35,7 @@ const CONFIG_ENV = { DATABASE_URL: 'postgres://localhost/x', AUTH_JWT_SECRET: 'u
 const config = loadConfig(CONFIG_ENV);
 const manifests = (): ManifestTables[] => moduleManifests(config).map((m) => m.tables);
 const shipped = (): Array<CommandDef<unknown, unknown>> =>
-  [...moduleDefinitions(config).commands, orgPurgeCommand({ store: {} as never })] as Array<CommandDef<unknown, unknown>>;
+  [...moduleDefinitions(config).commands, orgPurgeCommand({ store: {} as never }), numberReseedCommand()] as Array<CommandDef<unknown, unknown>>;
 
 // The server's own sources: the kernel app and every package and module it loads (the runtime package aside, which
 // defines Runtime). Comments are scanned too: a comment that trips a rule below is reworded.

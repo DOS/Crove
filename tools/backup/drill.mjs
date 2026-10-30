@@ -11,15 +11,19 @@
 //      prober), then for real: a dump and a file copy, sealed with a throwaway BACKUP_ENCRYPTION_KEY (unless
 //      --seal off) and uploaded to the target bucket, where a stray blob in the blob store must wait for the next prune;
 //      then a fourth invoice and a second backup, which must upload only the new blob, link the old ones to the first
-//      run and delete the stray one;
+//      run and delete the stray one; then a journal voucher (NVK00001) is posted and the worker archives it in the WORM
+//      archive (#2007), which both stacks share on a volume of the drill's own, as a deployment's archive outlives its
+//      database;
 //   4. wipes the source stack and its volumes, and deletes the local copies of the runs;
 //   5. checks that restore.sh refuses a STORAGE that differs from the scratch stack's, a run with a file its
 //      checksums do not list and (sealing on) an unsealed run in the bucket, then runs restore.sh s3:latest onto a scratch stack (<prefix>-restore) with empty
 //      volumes and an empty bucket;
-//   6. signs in as the same user, finds the org, the four files with their bytes (read back through the API, so
-//      through the recorded object versions), the journal entry and the second org's export (downloaded, so its
-//      record points at the restored object versions), and uploads one more invoice, which the worker reads (the
-//      restored stack takes writes);
+//   6. checks that the restore's WORM archive check names the journal voucher posted after the backup (its entry, the
+//      voucher and its number allocation) and raised the NVK series above it; signs in as the same user, finds the
+//      org, the four files with their bytes (read back through the API, so through the recorded object versions), the
+//      journal entry and the second org's export (downloaded, so its record points at the restored object versions),
+//      uploads one more invoice, which the worker reads (the restored stack takes writes), and posts a journal voucher
+//      that takes NVK00002, above the archived NVK00001;
 //   7. tears everything down (containers, volumes, networks, the images, the temporary directory).
 // No AI endpoint: e-invoice XML is read without AI. Plain Node (26+), no dependencies; needs docker and bash.
 //
@@ -56,6 +60,8 @@ const TAG = PREFIX;
 const BASH = process.env.DRILL_BASH ?? 'bash';
 const MC_IMAGE = 'pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372';
 const TARGET = { name: `${PREFIX}-backup-s3`, network: `${PREFIX}-backup-net`, user: 'crove-drill', secret: 'crove-drill-backup-secret', bucket: 'crove-backups' };
+// The WORM archive both stacks use (#2007): a volume of its own, which wiping the source stack keeps.
+const ARCHIVE_VOLUME = `${PREFIX}-archive`;
 const INVOICE = readFileSync(`${ROOT}apps/extract/test/fixtures/einvoice-basic.xml`, 'utf8');
 const invoice = (number) => Buffer.from(INVOICE.replace('<SHDon>1234</SHDon>', `<SHDon>${number}</SHDon>`), 'utf8');
 const REQUEST_MS = 15_000;
@@ -74,20 +80,32 @@ const backupDir = `${work}/backups`;
 // A stack: s3 is docker-compose.split.yml (api and worker, files in MinIO), local the all-in-one stack with the files
 // volume; a local restore target also gets tools/backup/scratch.compose.yml, as the monthly restore test does. Each
 // gets an override with image tags of its own and no published Mailpit port, so a stack already running on this
-// machine is untouched.
+// machine is untouched. The service that writes the WORM archive (the worker, or the all-in-one crove) keeps it in
+// read-only files on the drill's archive volume, with the shortest lag, so a posting is archived within two minutes.
 function stack(name, port, storage, scratch) {
   const split = storage === 's3';
   const override = `${work}/${name}.compose.yml`;
   const services = ['migrate', 'auth-grants', 'crove', 'prober', ...(split ? ['api', 'worker'] : [])];
+  const archiver = split ? 'worker' : 'crove';
   writeFileSync(
     override,
     [
       'services:',
-      ...services.flatMap((s) => [`  ${s}:`, `    image: crove:${TAG}`]),
+      ...services.flatMap((s) => [
+        `  ${s}:`,
+        `    image: crove:${TAG}`,
+        ...(s === archiver
+          ? ['    environment:', '      ARCHIVE_STORE: local', "      ARCHIVE_LAG_SECONDS: '60'", '    volumes:', '      - archive:/data/archive']
+          : []),
+      ]),
       '  crove-extract:',
       `    image: crove-extract:${TAG}`,
       '  mailpit:',
       '    ports: !reset []',
+      'volumes:',
+      '  archive:',
+      `    name: ${ARCHIVE_VOLUME}`,
+      '    external: true',
       '',
     ].join('\n'),
   );
@@ -101,7 +119,7 @@ function stack(name, port, storage, scratch) {
   const storageEnv = split
     ? { STORAGE: 's3', S3_ENDPOINT: 'http://minio:9000', S3_BUCKET: 'crove-files', S3_ACCESS_KEY_ID: 'crove-split', S3_SECRET_ACCESS_KEY: 'crove-split-minio-secret', S3_FORCE_PATH_STYLE: 'true', S3_VERSIONING: 'required' }
     : { STORAGE: 'local' };
-  return { project: `${PREFIX}-${name}`, port, storage, files, storageEnv };
+  return { project: `${PREFIX}-${name}`, port, storage, files, storageEnv, archiver };
 }
 const SRC = stack('src', process.env.DRILL_SRC_PORT ?? '18181', STORAGE, false);
 const DST = stack('restore', process.env.DRILL_RESTORE_PORT ?? '18182', RESTORE_STORAGE, true);
@@ -255,6 +273,8 @@ async function download(stack, token, slug, path) {
 }
 
 function startTarget() {
+  quietly(() => docker(['volume', 'rm', '-f', ARCHIVE_VOLUME]));
+  docker(['volume', 'create', ARCHIVE_VOLUME]);
   quietly(() => docker(['rm', '-f', TARGET.name]));
   quietly(() => docker(['network', 'rm', TARGET.network]));
   docker(['network', 'create', TARGET.network]);
@@ -311,6 +331,45 @@ async function seed() {
   };
 }
 
+// A journal voucher posted through its proposal, approved by the owner (the org's only member, so four-eyes gives way
+// to the owner override). Returns the voucher, its entry and the entry's description, which starts with the voucher's
+// code (NVK00001 ...).
+async function journalVoucher(stack, token, slug, description) {
+  const asked = await rpc(
+    stack,
+    token,
+    'inbox/request',
+    {
+      command: 'finance.journal_voucher.record',
+      input: {
+        date: new Date().toISOString().slice(0, 10),
+        description,
+        lines: [
+          { account: '6422', debit: '150000', credit: '0' },
+          { account: '1111', debit: '0', credit: '150000' },
+        ],
+      },
+      idempotencyKey: randomUUID(),
+    },
+    slug,
+  );
+  const detail = await rpc(stack, token, 'inbox/get', { id: asked.proposalId }, slug);
+  assert(detail.canApprove, `the journal voucher can be approved (${detail.approveReason})`);
+  const approved = await rpc(stack, token, 'inbox/approve', { id: asked.proposalId, revision: detail.revision, idempotencyKey: randomUUID() }, slug);
+  assert(typeof approved.voucherId === 'string', 'the approval records a journal voucher');
+  const entry = await rpc(stack, token, 'journal/get', { id: approved.journalEntryId }, slug);
+  return { voucherId: approved.voucherId, entryId: approved.journalEntryId, description: entry.description };
+}
+
+// Waits until a batch of the WORM archive names `ref`, read in the stack's archiving container.
+async function archived(stack, ref) {
+  await waitFor(`${ref} in the WORM archive`, 300_000, async () => {
+    const found = compose(stack, ['exec', '-T', stack.archiver, 'sh', '-c', `grep -l -F '"${ref}"' /data/archive/chain/v1/*.json 2>/dev/null || true`]);
+    if (!found.trim()) throw new Error('not archived yet');
+    return found.trim();
+  });
+}
+
 // The figures of a backup's log: blobs uploaded, already in the store, linked to the previous run, deleted strays.
 function backupFigures(output) {
   const uploaded = /(\d+) new blob\(s\) into (blobs\/\S+), (\d+) already there/.exec(output);
@@ -335,6 +394,11 @@ async function verifyRestored(seeded) {
   const manifest = await download(DST, token, seeded.exported.slug, '/api/org-export/manifest');
   assert(sha256(manifest) === seeded.exported.manifestSha256, `the export of ${seeded.exported.slug} downloads with the same manifest`);
   log(`restored data: signed in as ${seeded.email}, org, ${seeded.files.length} files with their bytes, the journal entry and the second org's export are back`);
+  // The journal voucher posted after the backup is lost, and its number with it; the restore raised the series, so the
+  // next voucher takes the number after the archived one.
+  const next = await journalVoucher(DST, token, seeded.slug, 'Diễn tập sau khôi phục');
+  assert(next.description.startsWith('NVK00002 '), `the next journal voucher takes NVK00002, above the archived NVK00001 (${next.description})`);
+  log('numbering: the next journal voucher took NVK00002, above NVK00001, which the WORM archive holds and the restore lost');
   const more = await upload(DST, token, seeded.slug, 'hoadon-4106.xml', invoice(4106));
   await proposalOf(DST, token, seeded.slug, more);
   log('restored stack takes writes: one more e-invoice was uploaded and read into a proposal');
@@ -348,6 +412,7 @@ function teardown() {
   for (const stack of [SRC, DST]) quietly(() => compose(stack, ['down', '-v', '--remove-orphans']));
   quietly(() => docker(['rm', '-f', TARGET.name]));
   quietly(() => docker(['network', 'rm', TARGET.network]));
+  quietly(() => docker(['volume', 'rm', '-f', ARCHIVE_VOLUME]));
   quietly(() => docker(['image', 'rm', `crove:${TAG}`, `crove-extract:${TAG}`]));
   rmSync(work, { recursive: true, force: true });
   log('torn down: both stacks with their volumes and networks, the backup target, the images and the work directory');
@@ -432,6 +497,13 @@ async function main() {
   assert(strayGone, 'the stray blob is gone from the bucket');
   log(`incremental: ${two.newBlobs} new blob(s) uploaded, ${two.already} already there, ${two.linked} linked to the first run, the stray blob deleted on the second prune`);
 
+  // After the last backup: a journal voucher, numbered NVK00001, which the worker archives (#2007). The restore loses
+  // it; the archive keeps it, and the restore's archive check must name it and raise the series above its number.
+  const late = await journalVoucher(SRC, seeded.token, seeded.slug, 'Diễn tập sau bản sao lưu');
+  assert(late.description.startsWith('NVK00001 '), `the voucher after the backup is NVK00001 (${late.description})`);
+  await time('archive the voucher posted after the backup', () => archived(SRC, `journal:${seeded.orgId}:${late.entryId}`));
+  log(`after the backup: journal voucher ${late.voucherId} (NVK00001), entry ${late.entryId}, archived in the WORM archive`);
+
   await time('wipe source', async () => {
     compose(SRC, ['down', '-v', '--remove-orphans']);
     rmSync(backupDir, { recursive: true, force: true });
@@ -484,6 +556,18 @@ async function main() {
   assert(passed.length === 1, `one restore directory with its lists (found ${restoreDirs.join(', ')})`);
   const leftover = readdirSync(`${backupDir}/${passed[0]}`).filter((name) => /^\d{8}T\d{6}Z$/.test(name));
   assert(leftover.length === 0, `no downloaded run left after the restore (found ${leftover.join(', ')})`);
+  // The WORM archive check (#2007): the voucher posted after the backup, its entry and its number allocation are named
+  // as lost, and the NVK series was raised above the archived NVK00001.
+  assert(restore.output.includes('WARNING: the WORM archive holds rows made after the backup point'), 'the restore warns that the archive holds rows it lost');
+  const report = JSON.parse(readFileSync(`${backupDir}/${passed[0]}/archive-report.json`, 'utf8'));
+  const lost = report.orgs.find((o) => o.orgId === seeded.orgId);
+  assert(lost?.journalEntries.includes(late.entryId), `the archive report names the entry ${late.entryId} as lost`);
+  assert(lost?.journalVouchers.includes(late.voucherId), `the archive report names the journal voucher ${late.voucherId} as lost`);
+  assert(lost?.allocations.length >= 1, 'the archive report names the voucher\'s number allocation as lost');
+  const raised = report.reseeded.find((r) => r.orgId === seeded.orgId && r.docType === 'finance.journal_voucher');
+  assert(raised?.archivedHigh === '1', `the NVK series was raised above the archived number 1 (${JSON.stringify(raised)})`);
+  assert(report.problems.length === 0 && report.needFloor.length === 0, `the archive matches the restored database (${JSON.stringify(report.problems)})`);
+  log(`archive check: ${report.beyond.length} batch(es) after the backup point; the entry, the voucher and ${lost.allocations.length} number allocation(s) named as lost; the NVK series raised above 1`);
   await time('verify through the API', async () => {
     await ready(DST);
     await verifyRestored(seeded);
