@@ -631,7 +631,7 @@ export function isR2Endpoint(url: string | undefined): boolean {
   }
 }
 
-function isHostedSupabase(url: string): boolean {
+export function isHostedSupabase(url: string): boolean {
   try {
     return new URL(url).hostname.endsWith('.supabase.co');
   } catch {

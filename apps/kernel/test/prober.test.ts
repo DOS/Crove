@@ -1,10 +1,10 @@
 // Prober and alert delivery (plan §4.13, issue #39), unit part: thresholds, exit codes and the webhook payload.
 // The database part (health(), privileges, a real webhook) is in prober.db.test.ts and test/invariant/prober.db.test.ts.
 import { createServer, type Server } from 'node:http';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { memoryAlertGate } from '../src/alert-gate.ts';
 import { alertPayload, deliverAlert } from '../src/alert.ts';
-import { EXIT, checkAuth, evaluateHealth, loadProberConfig, parseProberArgs, probeOnce, runProber, type HealthSnapshot, type ProberConfig } from '../src/prober.ts';
+import { EXIT, checkAuth, evaluateHealth, initialAuthState, loadProberConfig, parseProberArgs, probeOnce, runProber, type HealthSnapshot, type ProberConfig } from '../src/prober.ts';
 
 const SECRET_HOOK = 'https://hooks.example.test/services/T000/B000/secret-token-123';
 const SECRET_PING = 'https://hc.example.test/ping/secret-check-456';
@@ -397,6 +397,10 @@ describe('Supabase Auth check (#1994)', () => {
     base = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}/auth/v1`;
   });
   afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  beforeEach(() => {
+    up = true;
+    keys.length = 0;
+  });
 
   // The fake Auth answers for real; the webhook is recorded.
   function endpoints() {
@@ -422,6 +426,11 @@ describe('Supabase Auth check (#1994)', () => {
     expect(loadProberConfig({}).authHealthUrl).toBeUndefined();
     expect(loadProberConfig({ PUBLIC_URL: 'https://books.example.test', PROBER_AUTH_MISSES: '0' }).authHealthUrl).toBeUndefined();
     expect(() => loadProberConfig({ PROBER_AUTH_URL: 'ftp://auth.example.test' })).toThrow(/PROBER_AUTH_URL/);
+    // Credentials in the URL would travel in every request and could reach a log.
+    expect(() => loadProberConfig({ PROBER_AUTH_URL: 'https://user:secret@auth.example.test/auth/v1' })).toThrow(/holds credentials/);
+    // Hosted Supabase answers 401 without the publishable key, which would page forever.
+    expect(() => loadProberConfig({ PUBLIC_AUTH_URL: 'https://project.supabase.co/auth/v1' })).toThrow(/PUBLIC_AUTH_ANON_KEY/);
+    expect(loadProberConfig({ PUBLIC_AUTH_URL: 'https://project.supabase.co/auth/v1', PUBLIC_AUTH_ANON_KEY: 'sb_publishable_x' }).authHealthUrl).toBe('https://project.supabase.co/auth/v1/health');
   });
 
   it('alerts once after the misses in a row, stays quiet while it lasts, and sends a recovery when Auth answers again', async () => {
@@ -458,6 +467,23 @@ describe('Supabase Auth check (#1994)', () => {
     expect(new Set(keys)).toEqual(new Set(['pk_test']));
   });
 
+  it('keeps an open Auth alert across a restart: a new probe loop alerts on its first miss, and counts afresh after an answer', async () => {
+    const io = capture();
+    const net = endpoints();
+    up = false;
+    const cfg = config({ authHealthUrl: `${base}/health`, authMisses: 2 });
+    // The state runProber starts its loop with.
+    const authState = initialAuthState(cfg);
+    expect(await probeOnce(cfg, { ...io, fetch: net.fetch, readHealth: async () => healthy, authState })).toBe(EXIT.unhealthy);
+    expect(net.body(0).crove.findings).toEqual([expect.objectContaining({ check: 'auth', value: 2, threshold: 2 })]);
+    up = true;
+    expect(await probeOnce(cfg, { ...io, fetch: net.fetch, readHealth: async () => healthy, authState })).toBe(EXIT.ok);
+    up = false;
+    // After an answer, one miss only counts again.
+    expect(await probeOnce(cfg, { ...io, fetch: net.fetch, readHealth: async () => healthy, authState })).toBe(EXIT.ok);
+    expect(net.hooks).toHaveLength(2);
+  });
+
   it('alerts on the first miss when nothing counts the runs before (one probe a run, from cron)', async () => {
     const io = capture();
     const net = endpoints();
@@ -469,11 +495,12 @@ describe('Supabase Auth check (#1994)', () => {
 
   it('reads a refused connection or a timeout as a miss, on one line and without the URL', async () => {
     const refused = await checkAuth(config({ authHealthUrl: 'http://127.0.0.1:9/auth/v1/health', authTimeoutSeconds: 2 }), {});
-    expect(refused.ok).toBe(false);
-    if (!refused.ok) {
-      expect(refused.reason).not.toContain('127.0.0.1:9');
-      expect(refused.reason).not.toMatch(/\n/);
-    }
+    expect(refused).toMatchObject({ ok: false, reason: expect.stringMatching(/^connection failed(: [A-Z_]+)?$/) });
+    // A fetch error that quotes the URL: only a system code goes on.
+    const quoting = vi.fn(async () => {
+      throw new TypeError('fetch failed for https://user:secret@auth.example.test/auth/v1/health', { cause: { code: 'ECONNRESET' } });
+    }) as unknown as typeof globalThis.fetch;
+    expect(await checkAuth(config({ authHealthUrl: `${base}/health` }), { fetch: quoting })).toEqual({ ok: false, reason: 'connection failed: ECONNRESET' });
     const slow = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       await new Promise((_resolve, reject) => init?.signal?.addEventListener('abort', () => reject(init.signal?.reason)));
       return new Response('late');

@@ -19,7 +19,7 @@
 // Auth outage until a member could not sign in.
 import pg from 'pg';
 import { z } from 'zod';
-import { modulesSetting } from './config.ts';
+import { isHostedSupabase, modulesSetting } from './config.ts';
 import { probeStatus, writeStatusFile } from './status-page.ts';
 import { effectiveRepeatSeconds, memoryAlertGate, pgAlertGate, problemKey, type AlertGate, type GateResult } from './alert-gate.ts';
 import {
@@ -159,10 +159,22 @@ export function loadProberConfig(env: NodeJS.ProcessEnv = process.env, everySeco
 
 // Where the Auth check asks (#1994): <base>/health, the base being PROBER_AUTH_URL, else PUBLIC_AUTH_URL, else
 // PUBLIC_URL/auth/v1; undefined with none of them, or with PROBER_AUTH_MISSES=0.
-function authHealthUrl(raw: { PROBER_AUTH_URL?: string | undefined; PUBLIC_AUTH_URL?: string | undefined; PUBLIC_URL?: string | undefined; PROBER_AUTH_MISSES: number }): string | undefined {
+function authHealthUrl(raw: {
+  PROBER_AUTH_URL?: string | undefined;
+  PUBLIC_AUTH_URL?: string | undefined;
+  PUBLIC_URL?: string | undefined;
+  PUBLIC_AUTH_ANON_KEY?: string | undefined;
+  PROBER_AUTH_MISSES: number;
+}): string | undefined {
   if (raw.PROBER_AUTH_MISSES === 0) return undefined;
   const base = raw.PROBER_AUTH_URL ?? raw.PUBLIC_AUTH_URL ?? (raw.PUBLIC_URL ? `${raw.PUBLIC_URL.replace(/\/+$/, '')}/auth/v1` : undefined);
-  return base ? `${base.replace(/\/+$/, '')}/health` : undefined;
+  if (!base) return undefined;
+  // A user name or password in it would travel in every request and could reach a log: refused.
+  const url = new URL(base);
+  if (url.username || url.password) throw new Error('invalid prober configuration: the Auth URL (PROBER_AUTH_URL, PUBLIC_AUTH_URL or PUBLIC_URL) holds credentials');
+  // Hosted Supabase answers 401 without the publishable key: every probe would page about an outage that is not one.
+  if (isHostedSupabase(base) && !raw.PUBLIC_AUTH_ANON_KEY) throw new Error('invalid prober configuration: hosted Supabase Auth needs PUBLIC_AUTH_ANON_KEY (the publishable key) for its health check');
+  return `${base.replace(/\/+$/, '')}/health`;
 }
 
 /**
@@ -307,6 +319,12 @@ export interface ProbeDeps {
   authState?: { misses: number };
 }
 
+// The miss count a probe loop starts with: as if the probe before had missed Auth, so a restart during an Auth outage
+// keeps the alert open (the first miss alerts at once) instead of sending a recovery the next miss takes back.
+export function initialAuthState(config: Pick<ProberConfig, 'authMisses'>): { misses: number } {
+  return { misses: Math.max((config.authMisses ?? 2) - 1, 0) };
+}
+
 // One answer from Supabase Auth's health URL: ok on a 2xx, else why not, on one short line. The URL is never logged
 // or sent: it may name an internal host.
 export async function checkAuth(config: ProberConfig, deps: ProbeDeps): Promise<{ ok: true } | { ok: false; reason: string }> {
@@ -321,9 +339,11 @@ export async function checkAuth(config: ProberConfig, deps: ProbeDeps): Promise<
     await response.arrayBuffer().catch(() => undefined);
     return response.ok ? { ok: true } : { ok: false, reason: `HTTP ${response.status}` };
   } catch (e) {
-    const name = e instanceof Error && (e.name === 'TimeoutError' || e.name === 'AbortError') ? `no answer within ${config.authTimeoutSeconds ?? 10} s` : null;
-    const message = (e instanceof Error ? e.message : String(e)).replace(/\s+/g, ' ').trim().slice(0, 200);
-    return { ok: false, reason: name ?? (message || 'no answer') };
+    if (e instanceof Error && (e.name === 'TimeoutError' || e.name === 'AbortError')) return { ok: false, reason: `no answer within ${config.authTimeoutSeconds ?? 10} s` };
+    // The system's error code only (ECONNREFUSED, ENOTFOUND): a fetch error's message may quote the whole URL.
+    const cause = e instanceof Error ? (e.cause as { code?: unknown } | undefined) : undefined;
+    const code = typeof cause?.code === 'string' && /^[A-Z_]{3,40}$/.test(cause.code) ? cause.code : null;
+    return { ok: false, reason: code ? `connection failed: ${code}` : 'connection failed' };
   }
 }
 
@@ -632,7 +652,7 @@ export async function runProber(argv: readonly string[], env: NodeJS.ProcessEnv 
   if (args.backupOk) return sendBackupHeartbeat(config, deps);
   if (args.everySeconds === null) return probeOnce(config, deps);
   const every = args.everySeconds;
-  const looping = { ...deps, outageGate: deps.outageGate ?? memoryAlertGate(config.repeatSeconds), authState: deps.authState ?? { misses: 0 } };
+  const looping = { ...deps, outageGate: deps.outageGate ?? memoryAlertGate(config.repeatSeconds), authState: deps.authState ?? initialAuthState(config) };
   // Under Docker this is PID 1, which gets no default SIGTERM handling: stop between probes at once.
   process.once('SIGTERM', () => process.exit(EXIT.ok));
   const heartbeat = config.heartbeatUrl ? `, heartbeat to ${describeHeartbeat(config.heartbeatUrl)}` : '';
