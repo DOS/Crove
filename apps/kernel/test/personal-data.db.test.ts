@@ -30,6 +30,9 @@ suite('finding a person in the org (#923)', () => {
   let pool: pg.Pool;
   let db: Db;
   let rt: Runtime;
+  // The worker's login, for the system command that turns a notice into notifications (#1678).
+  let workerPool: pg.Pool;
+  let workerRt: Runtime;
   const asUser = (userId: string) => ({ type: 'user' as const, userId, aal: 'aal1' as const });
   let org = { orgId: '', owner: '', admin: '', member: '' };
   let other = { orgId: '', owner: '' };
@@ -69,6 +72,11 @@ suite('finding a person in the org (#923)', () => {
     pool = createPool({ connectionString: app.toString(), max: 4 });
     db = createDb(pool);
     rt = new Runtime(db, { manifests: TEST_MANIFESTS }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
+    const worker = new URL(adminUrl);
+    worker.username = 'crove_worker';
+    worker.password = 'test-worker-pw';
+    workerPool = createPool({ connectionString: worker.toString(), max: 2 });
+    workerRt = new Runtime(createDb(workerPool), { manifests: TEST_MANIFESTS }).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
 
     const owner = await identity('owner');
     org = { orgId: (await createOrg(rt, asUser(owner), `Org ${randomUUID().slice(0, 6)}`)).orgId, owner, admin: await identity('admin'), member: await identity('member') };
@@ -101,6 +109,7 @@ suite('finding a person in the org (#923)', () => {
 
   afterAll(async () => {
     await pool?.end();
+    await workerPool?.end();
     if (!ADMIN) return;
     const root = new pg.Client({ connectionString: ADMIN });
     await root.connect();
@@ -331,7 +340,7 @@ suite('finding a person in the org (#923)', () => {
       { column: 'crove_notes.todo', rows: 2, reason: UNTOLD_PRIVATE_REASON },
     ]);
     // The worker turns the event into one notification per author, with counts only.
-    await rt.execute('kernel.notification.dispatch', { eventId: events[0]?.id }, { actor: { type: 'system', component: 'test' }, orgId: org.orgId });
+    await workerRt.execute('kernel.notification.dispatch', { eventId: events[0]?.id }, { actor: { type: 'system', component: 'test' }, orgId: org.orgId });
     const { rows: notes } = await admin((c) =>
       c.query<{ user_id: string; detail: Record<string, string>; subject_id: string | null }>(
         `SELECT user_id, detail, subject_id FROM crove_kernel.notification WHERE org_id = $1 AND kind = 'kernel.personal_data_notice' ORDER BY user_id`,
