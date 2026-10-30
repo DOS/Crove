@@ -203,7 +203,7 @@ describe.skipIf(!runHere)('deploy.sh', { timeout: 300_000 }, () => {
       // The worker is still checked: it stays up before the instance is called ready.
       expect(indexOf(c, 'compose ps --status running --services')).toBeGreaterThan(indexOf(c, worker));
       expect(indexOf(c, 'compose port api 8080')).toBeGreaterThan(indexOf(c, worker));
-      expect(res.out).toContain('rolling the API (toward an older release: the API before the worker)');
+      expect(res.out).toContain('rolling the API (toward an older build: the API before the worker)');
       // The second rollback returns to the release deployed later: toward it, the worker first again.
       rmSync(log);
       res = run(['rollback'], env);
@@ -237,7 +237,42 @@ describe.skipIf(!runHere)('deploy.sh', { timeout: 300_000 }, () => {
       const c = calls();
       // The rollback: the API, then the worker. The recovery: the worker, then the API.
       expect(indexOf(c, worker)).toBeGreaterThan(indexOf(c, api));
+      expect(last(c, worker)).toBeGreaterThan(indexOf(c, worker));
       expect(last(c, api)).toBeGreaterThan(last(c, worker));
+    });
+
+    it('recovers forward, worker first, when the older worker does not stay up after the API was rolled back', () => {
+      expect(deploy('v1.0.0', 'a', env).status).toBe(0);
+      expect(deploy('v1.1.0', 'b', env).status).toBe(0);
+      rmSync(log);
+      const res = run(['rollback'], { ...env, STUB_WORKER_DOWN_DIGEST: digest('a') });
+      expect(res.status, res.out).toBe(1);
+      expect(res.out).toContain('the worker is not running');
+      expect(res.out).toContain(`rolled back to ${releaseDir('v1.1.0', 'b')}, which serves again`);
+      const c = calls();
+      expect(indexOf(c, worker)).toBeGreaterThan(indexOf(c, api));
+      expect(last(c, worker)).toBeGreaterThan(indexOf(c, worker));
+      expect(last(c, api)).toBeGreaterThan(last(c, worker));
+    });
+
+    // The build time the image carries orders the rolls, not when the release was deployed: a deploy of an older tag
+    // rolls the API first, and the rollback from it, to the newer build, the worker first (Codex and review, #1965).
+    it('orders by the build time the images carry, so a deploy of an older tag rolls the API first', () => {
+      const times = { ...env, STUB_BUILD_TIMES: `${digest('a')}=2026-10-01T10:00:00+07:00 ${digest('b')}=2026-10-02T09:00:00+07:00` };
+      expect(deploy('v1.1.0', 'b', times).status).toBe(0);
+      expect(readFileSync(`${dir}/releases/${releaseDir('v1.1.0', 'b')}/release.env`, 'utf8')).toContain(`BUILD_EPOCH=${Date.parse('2026-10-02T02:00:00Z') / 1000}`);
+      rmSync(log);
+      let res = deploy('v1.0.0', 'a', times);
+      expect(res.status, res.out).toBe(0);
+      let c = calls();
+      expect(indexOf(c, worker)).toBeGreaterThan(indexOf(c, api));
+      rmSync(log);
+      res = run(['rollback'], times);
+      expect(res.status, res.out).toBe(0);
+      c = calls();
+      expect(indexOf(c, api)).toBeGreaterThan(indexOf(c, worker));
+      // The older tag's release records its build time too.
+      expect(readFileSync(`${dir}/releases/${releaseDir('v1.0.0', 'a')}/release.env`, 'utf8')).toMatch(/BUILD_EPOCH=\d+/);
     });
   });
 
