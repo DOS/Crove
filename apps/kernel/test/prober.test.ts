@@ -424,6 +424,7 @@ describe('Supabase Auth check (#1994)', () => {
       authMisses: 3,
     });
     expect(loadProberConfig({}).authHealthUrl).toBeUndefined();
+    expect(loadProberConfig({ PUBLIC_URL: 'not a url' }).authHealthUrl).toBeUndefined();
     expect(loadProberConfig({ PUBLIC_URL: 'https://books.example.test', PROBER_AUTH_MISSES: '0' }).authHealthUrl).toBeUndefined();
     expect(() => loadProberConfig({ PROBER_AUTH_URL: 'ftp://auth.example.test' })).toThrow(/PROBER_AUTH_URL/);
     // Credentials in the URL would travel in every request and could reach a log.

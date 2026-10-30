@@ -169,8 +169,15 @@ function authHealthUrl(raw: {
   if (raw.PROBER_AUTH_MISSES === 0) return undefined;
   const base = raw.PROBER_AUTH_URL ?? raw.PUBLIC_AUTH_URL ?? (raw.PUBLIC_URL ? `${raw.PUBLIC_URL.replace(/\/+$/, '')}/auth/v1` : undefined);
   if (!base) return undefined;
+  // PUBLIC_URL is not checked to be a URL here (the alert's instance name only reads it); one that is not leaves Auth
+  // unchecked rather than the whole prober refused.
+  let url: URL;
+  try {
+    url = new URL(base);
+  } catch {
+    return undefined;
+  }
   // A user name or password in it would travel in every request and could reach a log: refused.
-  const url = new URL(base);
   if (url.username || url.password) throw new Error('invalid prober configuration: the Auth URL (PROBER_AUTH_URL, PUBLIC_AUTH_URL or PUBLIC_URL) holds credentials');
   // Hosted Supabase answers 401 without the publishable key: every probe would page about an outage that is not one.
   if (isHostedSupabase(base) && !raw.PUBLIC_AUTH_ANON_KEY) throw new Error('invalid prober configuration: hosted Supabase Auth needs PUBLIC_AUTH_ANON_KEY (the publishable key) for its health check');
