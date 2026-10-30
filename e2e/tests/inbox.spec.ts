@@ -53,9 +53,8 @@ test('sign up, upload an e-invoice, approve it, then find it in the lists, the e
     await expect(page.getByText('einvoice-basic.xml')).toBeVisible();
     // The worker reads the XML and raises the proposal; the Inbox polls every few seconds.
     await expect(page.getByRole('link', { name: SELLER })).toBeVisible({ timeout: 60_000 });
-    // The file says its proposal waits for a person, in the proposal's words (#2009), in the upload panel and the
-    // recent files.
-    await expect(page.getByTestId('intake-item').filter({ hasText: 'einvoice-basic.xml' })).toContainText('Chờ duyệt');
+    // The file says its proposal waits for a person, in the proposal's words (#2009). The upload panel's chips are
+    // walked in bulk-intake.spec.ts and unit tested in intake.test.ts.
     await expect(page.getByTestId('recent-file').filter({ hasText: 'einvoice-basic.xml' })).toContainText('Chờ duyệt');
   });
 
