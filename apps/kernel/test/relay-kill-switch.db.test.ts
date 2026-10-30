@@ -189,10 +189,10 @@ suite('a kill switch per relay type on PostgreSQL (#1696)', () => {
   // claim's walk and the lag read the unmarked rows through outbox_pending_held_seq (held_type, seq), which is what keeps
   // them off the marked backlog, but with the table's statistics a step behind its rows (an analyze that ran before
   // the backlog was marked, by autovacuum at any moment under CI load) the planner may scan the whole table instead,
-  // and the counts measured the plan, not the claim. Sequential scans are off in the measured transaction, so the
+  // and the counts measured the plan, not the claim. The test builds exactly that case. Sequential scans are off in the measured transaction, so the
   // counts show what the claim's own queries reach; a claim that walked the backlog through the index would still be
   // caught.
-  const touched = async <T>(c: pg.Client, run: () => Promise<T>) => {
+  const touched = async <T>(c: pg.Client, run: () => Promise<T>, seqscan = false) => {
     const stats = async () =>
       Object.fromEntries(
         (
@@ -205,7 +205,7 @@ suite('a kill switch per relay type on PostgreSQL (#1696)', () => {
       ) as Record<'outbox_event' | 'outbox_pending', { scans: number; rows: number; updated: number }>;
     await c.query('BEGIN');
     try {
-      await c.query('SET LOCAL enable_seqscan = off');
+      if (!seqscan) await c.query('SET LOCAL enable_seqscan = off');
       const start = await stats();
       const result = await run();
       const end = await stats();
@@ -225,31 +225,14 @@ suite('a kill switch per relay type on PostgreSQL (#1696)', () => {
   const claimIn = (c: pg.Client, limit = 100) =>
     c.query<{ event_id: string; type: string }>('SELECT event_id, type FROM crove_kernel.outbox_claim($1)', [limit]).then((r) => r.rows);
 
-  // Fresh statistics for the outbox, as autovacuum would take them, and an analyzer that keeps taking them in the
-  // background while the test runs, at any point of it, as autovacuum does under CI load (#2074).
-  const analyze = () => admin((c) => c.query('ANALYZE crove_kernel.outbox_pending, crove_kernel.outbox_event'));
-  const analyzing = () => {
-    let on = true;
-    const done = (async () => {
-      while (on) {
-        await analyze();
-        await new Promise((resolve) => setTimeout(resolve, 5));
-      }
-    })();
-    return async () => {
-      on = false;
-      await done;
-    };
-  };
   // Rounds of the backlog test: 1 in every run, 20 to show it stable (#2074).
   const ROUNDS = 20;
 
-  it('passes a large held backlog without walking it on every claim (#1713)', { timeout: 600_000 }, async () => {
-    const stop = analyzing();
-    try {
-      for (let round = 0; round < ROUNDS; round++) await backlogRound();
-    } finally {
-      await stop();
+  it('passes a large held backlog without walking it on every claim (#1713)', { timeout: ROUNDS * 30_000 }, async () => {
+    for (let round = 0; round < ROUNDS; round++) {
+      await backlogRound().catch((error: unknown) => {
+        throw new Error(`round ${round + 1} of ${ROUNDS}: ${(error as Error).message}`, { cause: error });
+      });
     }
   });
 
@@ -259,6 +242,13 @@ suite('a kill switch per relay type on PostgreSQL (#1696)', () => {
     await set(`relay:${HELD}`, true);
     const held = await addMany(HELD, BACKLOG);
     expect(held).toHaveLength(BACKLOG);
+    // The statistics a step behind, every time (#2074): taken now, before the claim marks the backlog, so they say no
+    // row is marked, and kept so (no autovacuum on this database's outbox) for the rest of the round. The measured
+    // passes below must pass on the claim's index path all the same.
+    await admin(async (c) => {
+      await c.query('ALTER TABLE crove_kernel.outbox_pending SET (autovacuum_enabled = false)');
+      await c.query('ANALYZE crove_kernel.outbox_pending, crove_kernel.outbox_event');
+    });
 
     // The first claim meets every held row once: one event probe and one mark each, and claims none of them.
     const first = await asWorker((c) => touched(c, () => claimIn(c)));
@@ -270,12 +260,15 @@ suite('a kill switch per relay type on PostgreSQL (#1696)', () => {
     // From then on a claim reaches newer rows of other types, and a newer held row, without touching the marked backlog.
     const others = [await add(OTHER), await add(OTHER), await add(OTHER)];
     const lateHeld = await add(HELD);
-    await analyze();
     const next = await asWorker((c) => touched(c, () => claimIn(c)));
     expect(next.result).toEqual(others.map((event_id) => ({ event_id, type: OTHER })));
     expect(next.event.scans).toBeLessThan(20);
     expect(next.pending.rows).toBeLessThan(20);
     expect(next.pending.updated).toBe(1);
+    // TEMPORARY (#2074 evidence, removed before merge): the same passes as the planner picks them on these statistics.
+    const rawIdle = await asWorker((c) => touched(c, () => claimIn(c), true));
+    const rawLag = await asWorker((c) => touched(c, async () => (await c.query('SELECT crove_kernel.outbox_lag_seconds() AS lag')).rows[0]?.lag, true));
+    console.log(`#2074 control: with sequential scans allowed, an idle claim read ${rawIdle.pending.rows} and the lag ${rawLag.pending.rows} outbox_pending rows`);
     // An empty pass touches no held row either.
     const idle = await asWorker((c) => touched(c, () => claimIn(c)));
     expect(idle.result).toEqual([]);
