@@ -5832,6 +5832,7 @@ export const en = {
       },
       bank: {
         import: 'Import a bank statement',
+        ingest: 'Store the lines of a bank feed',
         line_voucher: 'Read the voucher of a statement line',
         lines: 'List bank statement lines',
         open_lines: 'List unmatched bank statement lines',

@@ -168,6 +168,14 @@ describe('readFeedLines', () => {
     });
   });
 
+  it("turns a day the feed lists newest first round by its balances, so the chain holds", () => {
+    // Opening 100, then +50 (150) and -30 (120) on the 2nd; the feed sends the 2nd newest first.
+    const read = readFeedLines([line('2026-11-02', '-30', 'B', '120'), line('2026-11-02', '50', 'A', '150'), line('2026-11-01', '100', 'O', '100')]);
+    if (!read.ok) throw new Error('read');
+    expect(read.lines.map((l) => l.reference)).toEqual(['O', 'A', 'B']);
+    expect(balanceBreaks(read.lines.map((l) => ({ ...l, rowNo: l.rowNo })))).toEqual([]);
+  });
+
   it('names every line whose amount is zero, too precise or too large, or whose balance is unreadable', () => {
     expect(readFeedLines([line('2026-11-02', '1', 'A'), line('2026-11-02', '0', 'B'), line('2026-11-02', '1.005', 'C'), line('2026-11-02', '1e16', 'D'), line('2026-11-02', '1', 'E', '0.001')])).toEqual({
       ok: false,

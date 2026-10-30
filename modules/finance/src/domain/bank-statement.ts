@@ -211,9 +211,11 @@ export function readStatement(input: BankStatementImport) {
 // stored line before the file's first day, then the stored lines of the file's days, in order) followed, day by day, by
 // the lines this import stores.
 // The lines of a bank feed (ADR-0039, #2044), as a source of the same check as a statement's: each amount at most 2
-// decimals, within the amount limit and not zero, a balance likewise (zero allowed); put oldest first by value date,
-// keeping the feed's order within a day. rowNo is the line's place in the batch, for messages. The invalid places
-// when any line is.
+// decimals, within the amount limit and not zero, a balance likewise (zero allowed); put oldest first by value date.
+// Within a day the running balances decide the order, as for a statement (statementOrder): a feed that lists a day
+// newest first has that day turned round, so the balance chain and the next batch's last balance are right; without
+// balances the feed's own order stays. rowNo is the line's place in the batch, for messages. The invalid places when
+// any line is.
 export function readFeedLines(feed: readonly BankFeedLine[]): { ok: true; lines: Line[]; keys: Array<string | null> } | { ok: false; rows: number[] } {
   const invalid: number[] = [];
   const read = feed.map((line, i) => {
@@ -233,7 +235,15 @@ export function readFeedLines(feed: readonly BankFeedLine[]): { ok: true; lines:
     };
   });
   if (invalid.length > 0) return { ok: false, rows: invalid };
-  const lines = (read as Line[]).map((line, i) => ({ line, i })).sort((a, b) => (a.line.date < b.line.date ? -1 : a.line.date > b.line.date ? 1 : a.i - b.i)).map((x) => x.line);
+  const byDate = (read as Line[]).map((line, i) => ({ line, i })).sort((a, b) => (a.line.date < b.line.date ? -1 : a.line.date > b.line.date ? 1 : a.i - b.i)).map((x) => x.line);
+  const lines: Line[] = [];
+  for (let start = 0; start < byDate.length; ) {
+    let end = start;
+    while (end < byDate.length && (byDate[end] as Line).date === (byDate[start] as Line).date) end++;
+    const day = byDate.slice(start, end);
+    lines.push(...(statementOrder(day) === 'newest_first' ? day.reverse() : day));
+    start = end;
+  }
   return { ok: true, lines, keys: dedupeKeys(lines) };
 }
 
