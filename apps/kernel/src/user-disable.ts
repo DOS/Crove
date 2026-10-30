@@ -2,34 +2,45 @@
 // user account in Crove, or unblocks it, without touching Supabase Auth. Run in the worker's container (the worker
 // login is the only role that may execute crove_kernel.user_set_disabled), like exports-rebind:
 //
-//   user-disable <account id or email> --reason <text>
-//   user-enable  <account id or email> --reason <text>
+//   user-disable <account id or email> --reason <text> [--code security|abuse|request|offboarding|other]
+//   user-enable  <account id or email> --reason <text> [--code ...]
 //
 // A disabled account is refused on its next request with 403 USER_DISABLED (session_check and the org-less checks read
-// user_account.disabled_at), whatever its sessions. Each org the user belongs to gets an audit row with the reason
-// (kernel.user.status_note); no email is written there. A repeated run changes nothing and is noted as unchanged.
+// user_account.disabled_at), whatever its sessions. The reason is kept on the account (user_account.status_reason), and
+// each org the user belongs to gets an audit row with its code, `other` when none is given (kernel.user.status_note;
+// #1949: an audit row outlives every erasure, so it keeps no words about a person); no email is written there. A
+// repeated run changes nothing and is noted as unchanged.
 // Exit codes: 0 done, 2 the command could not run (arguments, unknown or ambiguous account, database).
 import { sql } from 'kysely';
+import { USER_STATUS_CODES } from '@crove/kernel';
 import type { Actor, Runtime } from '@crove/kernel-runtime';
 
 export const USER_DISABLE_EXIT = { ok: 0, failed: 2 } as const;
 
 const OPERATOR: Actor = { type: 'system', component: 'operator' };
 
+type UserStatusCode = (typeof USER_STATUS_CODES)[number];
+
 export interface UserDisableArgs {
   ref: string;
   reason: string;
+  code: UserStatusCode;
 }
 
 export function parseUserDisableArgs(argv: readonly string[]): UserDisableArgs {
   let ref: string | null = null;
   let reason: string | null = null;
+  let code: UserStatusCode = 'other';
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--') continue;
     if (arg === '--reason') {
       reason = (argv[++i] ?? '').trim();
       if (reason === '' || reason.length > 500) throw new Error('--reason needs a text of 1 to 500 characters');
+    } else if (arg === '--code') {
+      const given = (argv[++i] ?? '').trim();
+      if (!(USER_STATUS_CODES as readonly string[]).includes(given)) throw new Error(`--code is one of ${USER_STATUS_CODES.join(', ')}`);
+      code = given as UserStatusCode;
     } else if (arg?.startsWith('--')) {
       throw new Error(`unknown argument ${arg}; use <account id or email> --reason <text>`);
     } else if (ref === null && arg) {
@@ -39,8 +50,8 @@ export function parseUserDisableArgs(argv: readonly string[]): UserDisableArgs {
     }
   }
   if (!ref || ref.length > 320) throw new Error('name the account: its id or its email');
-  if (reason === null) throw new Error('--reason is required: it goes into the audit log of every org the user belongs to');
-  return { ref, reason };
+  if (reason === null) throw new Error('--reason is required: it is kept on the account, and its --code goes into the audit log of every org the user belongs to');
+  return { ref, reason, code };
 }
 
 const OUTCOMES: Record<string, string> = {
@@ -61,7 +72,7 @@ export interface UserStatusResult {
 export async function setUserDisabled(runtime: Pick<Runtime, 'orgless' | 'execute'>, disabled: boolean, args: UserDisableArgs): Promise<UserStatusResult> {
   const row = await runtime.orgless(async (db) => {
     const { rows } = await sql<{ outcome: string; user_id: string | null; changed: boolean | null; disabled_at: Date | null; org_ids: string[] | null }>`
-      SELECT outcome, user_id, changed, disabled_at, org_ids FROM crove_kernel.user_set_disabled(${args.ref}, ${disabled})`.execute(db);
+      SELECT outcome, user_id, changed, disabled_at, org_ids FROM crove_kernel.user_set_disabled(${args.ref}, ${disabled}, ${args.reason})`.execute(db);
     return rows[0];
   });
   if (!row) throw new Error('crove_kernel.user_set_disabled returned no row');
@@ -70,7 +81,7 @@ export async function setUserDisabled(runtime: Pick<Runtime, 'orgless' | 'execut
   const failed: string[] = [];
   for (const orgId of row.org_ids) {
     try {
-      await runtime.execute('kernel.user.status_note', { userId: row.user_id, disabled, changed: row.changed === true, reason: args.reason }, { actor: OPERATOR, orgId });
+      await runtime.execute('kernel.user.status_note', { userId: row.user_id, disabled, changed: row.changed === true, code: args.code }, { actor: OPERATOR, orgId });
     } catch (e) {
       failed.push(`${orgId} (${e instanceof Error ? e.message : String(e)})`);
     }

@@ -12,7 +12,7 @@
 //                 instance; prints and exits
 //   exports-rebind <org id>...  after a restore into a new bucket, re-records each org's export with the restored
 //                 object versions (issue #351; tools/backup/restore.sh runs it in the worker's container)
-//   user-disable | user-enable <account id or email> --reason <text>
+//   user-disable | user-enable <account id or email> --reason <text> [--code <code>]
 //                 block or unblock a user account in Crove, audited in each of its orgs (issue #985); run it in the
 //                 worker's container
 //   org-purge <org slug or id> --reason <text>

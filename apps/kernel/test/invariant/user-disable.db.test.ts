@@ -109,6 +109,39 @@ suite('user disable invariants on PostgreSQL (#985)', () => {
     });
   });
 
+  // The form with the operator's reason (#1949), which keeps the reason on the account: the same matrix and guard.
+  it('lets only the worker login role execute the form with a reason, a pinned definer that refuses any other session', async () => {
+    const withReason = 'crove_kernel.user_set_disabled(text,boolean,text)';
+    const { matrix, shape } = await withClient(adminUrl, async (c) => {
+      const { rows } = await c.query<{ role: string }>(
+        `SELECT r AS role FROM unnest($1::text[]) r WHERE has_function_privilege(r, $2::regprocedure, 'EXECUTE') ORDER BY 1`,
+        [ROLES, withReason],
+      );
+      const { rows: defs } = await c.query<{ definer: boolean; config: string[]; public: boolean }>(
+        `SELECT p.prosecdef AS definer, p.proconfig AS config,
+                EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) x WHERE x.grantee = 0) AS public
+         FROM pg_proc p WHERE p.oid = $1::regprocedure`,
+        [withReason],
+      );
+      return { matrix: rows, shape: defs };
+    });
+    expect(matrix).toEqual([{ role: 'crove_worker' }]);
+    expect(shape).toEqual([{ definer: true, config: ['search_path=pg_catalog, pg_temp'], public: false }]);
+    await withClient(adminUrl, async (c) => {
+      await c.query('BEGIN');
+      try {
+        await c.query(`GRANT EXECUTE ON FUNCTION ${withReason} TO crove_app`);
+        await c.query('SET SESSION AUTHORIZATION crove_app');
+        await expect(c.query('SELECT * FROM crove_kernel.user_set_disabled($1, true, $2)', [randomUUID(), 'x'])).rejects.toMatchObject({
+          code: '42501',
+          message: 'USER_STATUS_WORKER_ONLY',
+        });
+      } finally {
+        await c.query('ROLLBACK');
+      }
+    });
+  });
+
   it('refuses a disabled account when it next signs in or calls the API, and lets it back once enabled', async () => {
     // Every request resolves the token's identity (crove_kernel.identity_resolve) before anything else.
     const email = `blocked-${randomUUID().slice(0, 8)}@disable.test`;
