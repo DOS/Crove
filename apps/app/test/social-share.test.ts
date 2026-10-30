@@ -216,7 +216,7 @@ describe('the web app manifest', () => {
     start_url: string;
     scope: string;
     display: string;
-    icons: Array<{ src: string }>;
+    icons: Array<{ src: string; purpose?: string }>;
     share_target: { action: string; method: string; params: Record<string, string> };
   };
 
@@ -237,6 +237,6 @@ describe('the web app manifest', () => {
     const link = /<link rel="apple-touch-icon"[^>]*href="([^"]+)"/.exec(html);
     expect(link?.[1]).toBe('/assets/icon-maskable-512.png');
     expect(existsSync(join(app, 'public', link?.[1] ?? ''))).toBe(true);
-    expect(manifest.icons.map((icon) => icon.src)).toContain(link?.[1]);
+    expect(manifest.icons).toContainEqual(expect.objectContaining({ src: link?.[1], purpose: 'maskable' }));
   });
 });
