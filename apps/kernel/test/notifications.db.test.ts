@@ -167,9 +167,12 @@ suite('in-app notifications of the kernel and finance (#671)', () => {
     expect(await dispatch('kernel.proposal.created')).toBe(2);
     const owner = await list(people.owner);
     expect(owner.unread).toBe(1);
+    // The proposal's title, read when the notice is shown; the notice keeps no copy of it (#1977).
+    const { title } = (await admin((c) => c.query<{ title: string }>('SELECT title FROM crove_kernel.proposal WHERE id = $1', [proposalId]))).rows[0] as { title: string };
     expect(owner.items).toEqual([
-      expect.objectContaining({ kind: 'kernel.approval_waiting', subjectType: 'kernel.proposal', subjectId: proposalId, read: false, detail: { title: expect.any(String) } }),
+      expect.objectContaining({ kind: 'kernel.approval_waiting', subjectType: 'kernel.proposal', subjectId: proposalId, read: false, detail: { title: title.slice(0, 200) } }),
     ]);
+    expect((await admin((c) => c.query(`SELECT DISTINCT detail FROM crove_kernel.notification WHERE subject_id = $1`, [proposalId]))).rows).toEqual([{ detail: {} }]);
     expect(await kinds(people.admin)).toEqual(['kernel.approval_waiting']);
     // Members and viewers may not approve a purchase: nothing for them.
     expect(await kinds(people.member)).toEqual([]);
@@ -186,6 +189,8 @@ suite('in-app notifications of the kernel and finance (#671)', () => {
     await recordExtractionFailure(workerRuntime, org.orgId, fileId, 'Không đọc được chứng từ');
     expect(await dispatch('kernel.file.read_failed')).toBe(1);
     expect((await list(people.member)).items).toEqual([expect.objectContaining({ kind: 'kernel.file_unreadable', subjectId: fileId, detail: { filename: 'rac.xml' } })]);
+    // The name is the file's, read when the notice is shown (#1977).
+    expect((await admin((c) => c.query(`SELECT detail FROM crove_kernel.notification WHERE subject_id = $1`, [fileId]))).rows).toEqual([{ detail: {} }]);
 
     // Turned off: the next one is not written for them.
     await runtime.execute('kernel.notification.mute', { kind: 'kernel.file_unreadable', muted: true }, { actor: asUser(people.member), orgId: org.orgId });
