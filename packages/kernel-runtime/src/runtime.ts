@@ -226,7 +226,9 @@ const CLEAN_EVENTS: ReadonlySet<string> = new Set(P04_CLEAN_EVENTS);
 // The pg-boss tables a row in which starts work later (a job, a dependency between jobs, a schedule, a subscription, a
 // queue, a bulk request): a proposal command declared free of contact and payment writes, and the commands run under it,
 // do not declare them, since the job they start runs under its own declaration and the proposal's says nothing of what
-// it writes (#2107). Not crove_jobs.queue_stats, the statistics, which start nothing.
+// it writes (#2107). The other crove_jobs tables start nothing: queue_stats and warning are statistics and a log, instance
+// is the workers' heartbeat, and version holds the leases of the maintenance passes (no job content). The invariant suite
+// pins the list against the manifest, so a table a pg-boss upgrade adds is classified before it is used.
 const JOB_TABLES: ReadonlySet<string> = new Set(['crove_jobs.job', 'crove_jobs.job_dependency', 'crove_jobs.schedule', 'crove_jobs.subscription', 'crove_jobs.queue', 'crove_jobs.bam']);
 const jobTablesOf = (writes: readonly CommandWrite[] | undefined): string[] => (writes ?? []).filter((w) => JOB_TABLES.has(w.table)).map((w) => w.table);
 
@@ -1220,7 +1222,7 @@ export class Runtime {
       if (c.access === 'proposal' && contactOrPayment && contactOrPayment.length === 0) {
         const jobs = jobTablesOf(c.writes);
         if (jobs.length > 0) {
-          throw new Error(`command ${c.name}: declares no contact or payment write (P04), so it does not declare ${jobs.join(', ')}: the job it starts runs later under its own declaration (#2107)`);
+          throw new Error(`command ${c.name}: declares no contact or payment write (P04), so it may not declare ${jobs.join(', ')}: the job it starts runs later under its own declaration (#2107)`);
         }
       }
       if (c.agentApprovers !== undefined) {
@@ -2003,7 +2005,7 @@ export class Runtime {
         throw new Error(`command ${cleanRoot}: declares no contact or payment write (P04), so it cannot run ${nested.def.name}, which may write one`);
       }
       // Nor one that declares a job table: what it starts runs under the job's own declaration (#2107).
-      const startsJobs = cleanRoot === undefined ? [] : jobTablesOf(this.#commands.get(nested.def.name)?.writes);
+      const startsJobs = cleanRoot === undefined ? [] : jobTablesOf(nested.def.writes);
       if (startsJobs.length > 0) {
         throw new Error(`command ${cleanRoot}: declares no contact or payment write (P04), so it cannot run ${nested.def.name}, which declares ${startsJobs.join(', ')}: the job it starts runs later under its own declaration (#2107)`);
       }
