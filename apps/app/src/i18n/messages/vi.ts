@@ -569,6 +569,28 @@ export const vi = {
     searchEmpty: 'Không tìm thấy ghi chú nào',
     listLabel: 'Danh sách ghi chú',
     noteLabel: 'Ghi chú đang mở',
+    export: {
+      markdown: 'Tải về Markdown',
+      json: 'Tải về JSON',
+      heading: 'Ghi chú và việc của tôi',
+      exportedAt: 'Tải về lúc',
+      notes: 'Ghi chú',
+      todos: 'Việc',
+      private: 'Ghi chú riêng',
+      shared: 'Ghi chú dùng chung',
+      tags: 'Nhãn',
+      pinned: 'Đã ghim',
+      archived: 'Lưu trữ lúc',
+      trashed: 'Trong thùng rác từ',
+      created: 'Tạo lúc',
+      updated: 'Sửa lần cuối',
+      links: 'Gắn với',
+      status: { open: 'Chưa xong', done: 'Đã xong', handed_over: 'Đã giao thành việc nhóm', cancelled: 'Đã hủy' },
+      due: 'Hạn',
+      remind: 'Nhắc lúc',
+      done: 'Xong lúc',
+      truncated: 'Chỉ có 2000 ghi chú và 2000 việc mới nhất; hãy liên hệ hỗ trợ để lấy phần còn lại.',
+    },
     views: {
       mine: 'Của tôi',
       shared: 'Dùng chung',
@@ -6169,6 +6191,9 @@ export const vi = {
       },
       member_items: {
         purge: 'Xóa ghi chú riêng của thành viên đã rời tổ chức',
+      },
+      mine: {
+        export: 'Tải về ghi chú và việc của mình',
       },
       my_work: 'Xem việc của tôi và việc nhóm của vị trí mình giữ',
       note: {

@@ -572,6 +572,7 @@ export function createRpcHandler(
       linkAdd: os.notes.linkAdd.handler(notesCommand('notes.link.add')),
       linkRemove: os.notes.linkRemove.handler(notesCommand('notes.link.remove')),
       privateCounts: os.notes.privateCounts.handler(notesQuery('notes.private_counts')),
+      exportMine: os.notes.exportMine.handler(notesQuery('notes.mine.export')),
       // A member's own to-dos (#1673).
       todos: {
         list: os.notes.todos.list.handler(notesQuery('notes.todo.list')),

@@ -23,6 +23,7 @@ import { client, clientForOrg, errorMessage, orpc, queryClient } from '../lib/ap
 import { Markdown } from '../lib/markdown.tsx';
 import { applyFormat, shortcutFormat, type MarkdownFormat } from '../lib/markdown-edit.ts';
 import { createAutosaver, type NoteValues, type SaveState } from '../lib/note-autosave.ts';
+import { notesMarkdown, saveText } from '../lib/notes-export.ts';
 import { listOfNote, looksLikePassword, parseTags, tagCounts, type NotesSearch } from '../lib/notes.ts';
 
 const SAVE_AFTER_MS = 800;
@@ -361,11 +362,56 @@ export function NotesPage() {
       {t('new')}
     </Button>
   ) : undefined;
+  // My own notes and to-dos, whole, as a file (#1678): whoever has a role in the org, a viewer who once wrote notes too.
+  const exportMine = useMutation({ mutationFn: () => client.notes.exportMine({}) });
+  const download = async (format: 'md' | 'json') => {
+    const data = await exportMine.mutateAsync();
+    const name = `ghi-chu-${data.exportedAt.slice(0, 10)}`;
+    if (format === 'json') {
+      saveText(`${name}.json`, `${JSON.stringify(data, null, 2)}\n`, 'application/json');
+      return;
+    }
+    const words = {
+      heading: t('export.heading'),
+      exportedAt: t('export.exportedAt'),
+      notes: t('export.notes'),
+      todos: t('export.todos'),
+      private: t('export.private'),
+      shared: t('export.shared'),
+      tags: t('export.tags'),
+      pinned: t('export.pinned'),
+      archived: t('export.archived'),
+      trashed: t('export.trashed'),
+      created: t('export.created'),
+      updated: t('export.updated'),
+      links: t('export.links'),
+      status: { open: t('export.status.open'), done: t('export.status.done'), handed_over: t('export.status.handed_over'), cancelled: t('export.status.cancelled') },
+      due: t('export.due'),
+      remind: t('export.remind'),
+      done: t('export.done'),
+      truncated: t('export.truncated'),
+    };
+    saveText(`${name}.md`, notesMarkdown(data, words), 'text/markdown;charset=utf-8');
+  };
+  const actions =
+    role !== undefined ? (
+      <div className="flex flex-wrap gap-2">
+        <Button variant="outline" disabled={exportMine.isPending} onClick={() => void download('md').catch(() => undefined)}>
+          {exportMine.isPending && <Spinner className="text-current" />}
+          {t('export.markdown')}
+        </Button>
+        <Button variant="outline" disabled={exportMine.isPending} onClick={() => void download('json').catch(() => undefined)}>
+          {t('export.json')}
+        </Button>
+        {newButton}
+      </div>
+    ) : undefined;
 
   return (
     <div>
-      <PageHeader title={t('title')} subtitle={t('subtitle')} actions={newButton} />
+      <PageHeader title={t('title')} subtitle={t('subtitle')} actions={actions} />
       {create.error && <ErrorText>{errorMessage(create.error)}</ErrorText>}
+      {exportMine.error && <ErrorText>{errorMessage(exportMine.error)}</ErrorText>}
       <div className="grid gap-6 lg:grid-cols-[18rem_minmax(0,1fr)]">
         <section aria-label={t('listLabel')} className={search.note ? 'hidden lg:block' : undefined}>
           <form

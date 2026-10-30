@@ -10,7 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
-import type { Note, NoteRecordPanel, NoteSummary, NoteWritten } from '@crove/kernel-contract';
+import type { Note, NoteRecordPanel, NoteSummary, NoteWritten, NotesExport, TodoWritten } from '@crove/kernel-contract';
 import { Runtime } from '@crove/kernel-runtime';
 import { notesCommands, notesQueries } from '@crove/mod-notes';
 import { sweepNotesFormerMembers } from '../src/notes-worker.ts';
@@ -262,6 +262,36 @@ suite('notes on PostgreSQL (#1671)', () => {
     // An owner counts private notes per member before removing one; a member does not.
     expect(await o.query(o.owner, 'notes.private_counts')).toEqual([{ userId: o.author, notes: 1 }]);
     await expect(o.query(o.other, 'notes.private_counts')).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("downloads the caller's own notes and to-dos, whole, and nothing of anyone else's (#1678)", async () => {
+    const o = await org();
+    const n = await written(o);
+    await o.exec<NoteWritten>(o.other, 'notes.note.create', { title: 'Của người khác', visibility: 'org' });
+    await o.exec(o.author, 'notes.note.delete', { noteId: n.shared });
+    const todo = await o.exec<TodoWritten>(o.author, 'notes.todo.create', { title: 'Gọi lại khách', details: 'Hỏi hóa đơn', checklist: [{ text: 'Tìm số', done: false }] });
+    await o.exec<TodoWritten>(o.other, 'notes.todo.create', { title: 'Việc của người khác' });
+    const mine = await o.query<NotesExport>(o.author, 'notes.mine.export');
+    // Private and shared, in the trash too, with their text, tags and links.
+    expect(mine.notes.map((x) => x.id).sort()).toEqual([n.priv, n.shared].sort());
+    expect(mine.notes.find((x) => x.id === n.priv)).toMatchObject({
+      visibility: 'private',
+      title: PRIVATE_TITLE,
+      body: PRIVATE_BODY,
+      tags: ['Ngân hàng'],
+      deletedAt: null,
+      links: [{ targetType: 'kernel.party', targetId: o.party }],
+    });
+    expect(mine.notes.find((x) => x.id === n.shared)?.deletedAt).not.toBeNull();
+    expect(mine.todos).toEqual([
+      expect.objectContaining({ id: todo.todoId, title: 'Gọi lại khách', details: 'Hỏi hóa đơn', checklist: [{ text: 'Tìm số', done: false }], status: 'open' }),
+    ]);
+    expect(mine.truncated).toBe(false);
+    // An owner reads the shared notes but downloads only their own: none here.
+    expect(await o.query<NotesExport>(o.owner, 'notes.mine.export')).toMatchObject({ notes: [], todos: [] });
+    // A member who became a viewer still takes what they wrote.
+    await admin((c) => c.query(`UPDATE crove_kernel.tenant_member SET role = 'viewer' WHERE org_id = $1 AND user_id = $2`, [o.orgId, o.author]));
+    expect((await o.query<NotesExport>(o.author, 'notes.mine.export')).notes).toHaveLength(2);
   });
 
   it("hides a removed member's private notes and removes them with the system's purge, keeping the shared ones", async () => {

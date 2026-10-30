@@ -571,6 +571,28 @@ export const en = {
     searchEmpty: 'No note found',
     listLabel: 'Notes list',
     noteLabel: 'Open note',
+    export: {
+      markdown: 'Download as Markdown',
+      json: 'Download as JSON',
+      heading: 'My notes and to-dos',
+      exportedAt: 'Downloaded at',
+      notes: 'Notes',
+      todos: 'To-dos',
+      private: 'Private note',
+      shared: 'Shared note',
+      tags: 'Tags',
+      pinned: 'Pinned',
+      archived: 'Archived at',
+      trashed: 'In the trash since',
+      created: 'Created at',
+      updated: 'Last edited',
+      links: 'Linked to',
+      status: { open: 'Open', done: 'Done', handed_over: 'Handed over as a team task', cancelled: 'Cancelled' },
+      due: 'Due',
+      remind: 'Reminder at',
+      done: 'Done at',
+      truncated: 'Only the newest 2000 notes and 2000 to-dos are here; contact support for the rest.',
+    },
     views: {
       mine: 'Mine',
       shared: 'Shared',
@@ -6169,6 +6191,9 @@ export const en = {
       },
       member_items: {
         purge: 'Remove the private notes of a member who left',
+      },
+      mine: {
+        export: 'Download my notes and to-dos',
       },
       my_work: 'Read my work and the team tasks of my positions',
       note: {
