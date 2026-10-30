@@ -161,7 +161,7 @@ The job's `name` says what failed and `output` holds the error.
 
 **Symptom.** Nobody can sign in, sign up or recover a password; the sign-in page answers "Dịch vụ đăng nhập không phản hồi" (the proxy's 503 `AUTH_UNAVAILABLE`). People already signed in keep working until their access token expires (at most 15 minutes in the compose stack, `GOTRUE_JWT_EXP=900`), because the token cannot be refreshed; then they are signed out. Approvals and other R3 actions need a fresh second factor, which needs Supabase Auth, so they fail too.
 
-**Alert.** No alert watches Supabase Auth directly yet. The deploy's smoke test checks it (`/auth/v1/health answers (Supabase Auth through the proxy)`), and the design partner usually notices first. A database outage also takes Auth down: check section 1, "The database".
+**Alert.** The prober asks Supabase Auth's `/health` on every probe, the way signing in reaches it (the kernel's `/auth/v1` proxy, or `PUBLIC_AUTH_URL` when Auth is hosted elsewhere), and pages after `PROBER_AUTH_MISSES` (default 2) failed answers in a row: `[Crove] ALERT ... Supabase Auth did not answer its health check 2 time(s) in a row (HTTP 503): nobody can sign in`, then `RESOLVED` once it answers again (#1994). The status page shows "Đăng nhập" as down. The deploy's smoke test checks it too (`/auth/v1/health answers (Supabase Auth through the proxy)`). A database outage also takes Auth down: check section 1, "The database".
 
 **Checks.**
 

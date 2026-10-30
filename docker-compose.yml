@@ -349,6 +349,12 @@ services:
       PROBER_DEAD_LETTER_WINDOW_SECONDS: ${PROBER_DEAD_LETTER_WINDOW_SECONDS:-}
       # The modules the deployment runs, as for the API and the worker: their queued jobs count in job_age (#1894).
       CROVE_MODULES: ${CROVE_MODULES:-}
+      # Supabase Auth through the kernel's /auth/v1 proxy, inside the Compose network (#1994); PUBLIC_AUTH_URL when
+      # Auth is hosted elsewhere. PROBER_AUTH_MISSES=0 turns the check off.
+      PROBER_AUTH_URL: ${PROBER_AUTH_URL:-http://crove:8080/auth/v1}
+      PUBLIC_AUTH_URL: ${PUBLIC_AUTH_URL:-}
+      PUBLIC_AUTH_ANON_KEY: ${PUBLIC_AUTH_ANON_KEY:-}
+      PROBER_AUTH_MISSES: ${PROBER_AUTH_MISSES:-2}
     volumes:
       - status:/data/status
     depends_on:

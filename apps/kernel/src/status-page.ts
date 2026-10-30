@@ -12,6 +12,8 @@ export const STATUS_COMPONENTS = [
   { id: 'documents', label: 'Xử lý chứng từ tải lên', checks: ['heartbeat', 'job_age', 'dead_letters', 'jobs_schema'] },
   { id: 'email', label: 'Nhận hóa đơn qua email', checks: ['inbound', 'heartbeat'] },
   { id: 'updates', label: 'Cập nhật trực tiếp trên màn hình', checks: ['outbox', 'notify_queue'] },
+  // Supabase Auth's health check (#1994).
+  { id: 'signin', label: 'Đăng nhập', checks: ['auth'] },
 ] as const;
 
 // A probe older than this is no news: the prober or the volume is gone. Three default probe intervals (300 s).
