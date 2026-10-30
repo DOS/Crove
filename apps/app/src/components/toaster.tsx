@@ -3,10 +3,11 @@
 // toast waits while it is hovered or focused.
 //
 // Screen readers (#2026): a live region filled in the moment it is inserted is often not read, so the list itself is
-// the one polite status region, always mounted (empty and out of the way when there is nothing to say), and each new
-// toast is an addition read once. A toast with an action also says that F8 reaches it. F8 moves the focus to the newest
-// toast's first button; when the toast that holds the focus goes (its action ran, it was closed, or a newer one pushed
-// it out), the focus goes back to where it came from, or else to the page's main region.
+// the one polite status region, always mounted (empty and out of the way when there is nothing to say), not atomic,
+// and each new toast is an addition read once, without the older ones. The newest toast with an action also says that
+// F8 reaches it. F8 moves the focus to the newest toast's first button; when the toast that holds the focus goes (its
+// action ran, it was closed, or a newer one pushed it out), the focus goes back to where it came from, or else to the
+// page's main region, unless the action already moved it elsewhere.
 import { useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react';
 import { useTranslations } from 'use-intl';
 import { NavIcon } from '@crove/ui/components/nav-icon';
@@ -23,7 +24,7 @@ export function Toaster() {
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (!isToastShortcut(event)) return;
+      if (event.defaultPrevented || !isToastShortcut(event)) return;
       const newest = list.current?.querySelector<HTMLElement>('[data-toast]:last-child button');
       if (!newest) return;
       event.preventDefault();
@@ -33,24 +34,30 @@ export function Toaster() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // The focused toast is gone: give the focus back.
+  // The focused toast is gone: give the focus back, unless its action already moved it elsewhere (a dialog, a page).
   useLayoutEffect(() => {
     if (focused.current === null || toasts.some((item) => item.id === focused.current)) return;
     focused.current = null;
     const back = cameFrom.current;
     cameFrom.current = null;
-    if (back?.isConnected) back.focus();
-    else document.querySelector<HTMLElement>('main')?.focus();
+    const now = document.activeElement;
+    if (now && now !== document.body && !list.current?.contains(now)) return;
+    if (back?.isConnected) back.focus({ preventScroll: true });
+    // Gone, disabled or hidden since: the main region instead.
+    if (document.activeElement !== back) document.querySelector<HTMLElement>('main')?.focus({ preventScroll: true });
   }, [toasts]);
 
   return (
     <div
       ref={list}
       role="status"
+      // role="status" implies atomic: a new toast would make the whole list be read again, older ones included.
+      aria-atomic="false"
+      aria-relevant="additions"
       aria-label={t('toasts')}
       className="pointer-events-none fixed right-0 bottom-0 z-50 flex w-full max-w-sm flex-col gap-2 pr-[max(1rem,env(safe-area-inset-right))] pb-[max(1rem,env(safe-area-inset-bottom))] pl-4"
     >
-      {toasts.map((item) => (
+      {toasts.map((item, index) => (
         <div
           key={item.id}
           data-toast={item.id}
@@ -81,7 +88,8 @@ export function Toaster() {
         >
           <span className={cn('min-w-0 flex-1', item.tone === 'error' && 'text-destructive')}>
             {item.message}
-            {item.action && <span className="sr-only"> {t('toastShortcut', { key: TOAST_SHORTCUT, action: item.action.label })}</span>}
+            {/* F8 reaches the newest toast only, so only it says so. */}
+            {item.action && index === toasts.length - 1 && <span className="sr-only"> {t('toastShortcut', { key: TOAST_SHORTCUT, action: item.action.label })}</span>}
           </span>
           {item.action && (
             <button

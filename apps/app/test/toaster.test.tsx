@@ -25,7 +25,8 @@ afterEach(() => {
 
 describe('Toaster', () => {
   it('keeps its status region mounted while there is no toast (#2026)', () => {
-    expect(render('vi')).toMatch(new RegExp(`^<div role="status" aria-label="${words('vi').toasts}" class="[^"]*"></div>$`));
+    // Not atomic: a new toast is read alone, not with the older ones.
+    expect(render('vi')).toMatch(new RegExp(`^<div role="status" aria-atomic="false" aria-relevant="additions" aria-label="${words('vi').toasts}" class="[^"]*"></div>$`));
   });
 
   it('renders an undo as a button inside the status, before the close button, and says F8 reaches it', () => {
@@ -52,6 +53,14 @@ describe('Toaster', () => {
     expect(words('en').undo).toBe('Undo');
     toast('Note moved to the trash', 'success', { action: { label: 'Undo', run: () => {} } });
     expect(render('en')).toContain('<span class="sr-only"> Press F8 to reach Undo.</span>');
+  });
+
+  it('says F8 only on the newest toast, the one F8 reaches', () => {
+    toast('Note archived', 'success', { action: { label: 'Undo', run: () => {} } });
+    toast('Marked done: Call the client', 'success', { action: { label: 'Undo', run: () => {} } });
+    const html = render('en');
+    expect(html.match(/Press F8/g)).toHaveLength(1);
+    expect(html.indexOf('Press F8')).toBeGreaterThan(html.indexOf('Marked done: Call the client'));
   });
 });
 
