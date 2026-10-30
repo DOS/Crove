@@ -79,6 +79,7 @@ const KERNEL_MODULE_REFERENCES: Record<string, { modules: readonly string[]; why
     modules: ['crm', 'finance', 'notes', 'social'],
     why: 'the personal-data registry, find and erase: an erasure reaches data an earlier install of the module left, whatever is installed now; private notes and to-dos are counted through crove_notes.private_matches (#1678)',
   },
+  'apps/kernel/src/bank-feed-webhook.ts': { modules: ['finance'], why: 'the bank feed notice route queues the account ids through a finance definer, mounted only when finance is installed (http.ts)' },
   'apps/kernel/src/bank-feed-sync.ts': { modules: ['finance'], why: 'the bank feed sync and its daily sweep, worked and scheduled only when finance is installed (worker.ts)' },
   'apps/kernel/src/bio-page.ts': { modules: ['social'], why: 'public bio page routes, registered only when social is installed (http.ts)' },
   'apps/kernel/src/booking-feed.ts': { modules: ['crm'], why: 'the booking calendar feed, served only when crm is installed (http.ts)' },

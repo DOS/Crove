@@ -255,6 +255,9 @@ const schema = z.object({
   // The offline sandbox bank feed (ADR-0039, #2044): off unless asked for, so a deployment shows no bank feed until it
   // has one.
   BANK_FEED_SANDBOX: z.enum(['true', 'false']).default('false'),
+  // The secret the sandbox bank feed's signed notices are checked with (POST /api/bank-feed/bank_sandbox/webhook); unset:
+  // the sandbox takes no notices. At least 32 characters.
+  BANK_FEED_SANDBOX_WEBHOOK_SECRET: optional,
   // Bluesky (S9): accounts connect with an app password, no app of the deployment's own is needed. On unless false.
   CHANNEL_BLUESKY: z.enum(['true', 'false']).default('true'),
   // Telegram channels (#747): a bot the shop makes with @BotFather posts to its channel; no app of the deployment's own is
@@ -550,6 +553,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (Boolean(config.CHANNEL_PINTEREST_APP_ID) !== Boolean(config.CHANNEL_PINTEREST_APP_SECRET)) throw new Error('set both CHANNEL_PINTEREST_APP_ID and CHANNEL_PINTEREST_APP_SECRET, or neither');
   if (config.CHANNEL_PINTEREST_APP_ID && !/^\d{4,32}$/.test(config.CHANNEL_PINTEREST_APP_ID)) throw new Error('CHANNEL_PINTEREST_APP_ID is the numeric id of the Pinterest app');
   if (config.CHANNEL_X_CLIENT_ID && !/^[A-Za-z0-9_-]{16,64}$/.test(config.CHANNEL_X_CLIENT_ID)) throw new Error('CHANNEL_X_CLIENT_ID is the OAuth 2.0 client id of the X app');
+  if (config.BANK_FEED_SANDBOX_WEBHOOK_SECRET !== undefined) {
+    if (config.BANK_FEED_SANDBOX !== 'true') throw new Error('BANK_FEED_SANDBOX_WEBHOOK_SECRET is set without BANK_FEED_SANDBOX=true');
+    if (config.BANK_FEED_SANDBOX_WEBHOOK_SECRET.length < 32) throw new Error('BANK_FEED_SANDBOX_WEBHOOK_SECRET must be at least 32 characters');
+  }
   if (Boolean(config.CHANNEL_ZALO_APP_ID) !== Boolean(config.CHANNEL_ZALO_APP_SECRET)) throw new Error('set both CHANNEL_ZALO_APP_ID and CHANNEL_ZALO_APP_SECRET, or neither');
   if (config.CHANNEL_ZALO_APP_ID && !/^\d{1,32}$/.test(config.CHANNEL_ZALO_APP_ID)) throw new Error('CHANNEL_ZALO_APP_ID is the numeric id of the Zalo app');
   if (config.CROVE_CONTEXT_TOKEN_KEY !== undefined) {

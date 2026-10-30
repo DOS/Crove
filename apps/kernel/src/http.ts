@@ -96,6 +96,8 @@ import { publicAuthUrl, type Config } from './config.ts';
 import { exportAad, exportSealer } from './export-seal.ts';
 import { MAX_EMAIL_BYTES, acceptInboundEmail, secretMatches } from './inbound.ts';
 import { MAX_MAIL_WEBHOOK_BYTES, acceptMailWebhook } from './mail-events.ts';
+import { MAX_BANK_FEED_WEBHOOK_BYTES, acceptBankFeedWebhook } from './bank-feed-webhook.ts';
+import type { BankFeedProvider } from '@crove/bank-feed';
 import { createInviteMailSender } from './invite-mail.ts';
 import { pgBossSchemaVersion } from './jobs-schema.ts';
 import type { MailProvider } from './mail.ts';
@@ -158,6 +160,11 @@ export interface HttpDeps {
   aiEnabled: boolean;
   // Outbound mail for invites (issue #129). Unset: off, and the inviter passes the one-time link on.
   mailer?: MailProvider;
+  // The bank feed adapters that take signed notices, by provider id (ADR-0039): POST /api/bank-feed/<id>/webhook exists
+  // for these alone, with finance installed.
+  bankFeedWebhooks?: Readonly<Record<string, BankFeedProvider>>;
+  // Notices per minute per client address; one is checked and queued per call.
+  bankFeedWebhookLimit?: RateLimiter;
   // Per-client budget for Supabase Auth's emails (#190). Unset: the database limiter on `pool`.
   emailLimiter?: EmailLimiter;
   // The member invite checks for AUTH_SIGNUP_POLICY (#350, #563). Unset: the database checks on `pool`.
@@ -344,6 +351,8 @@ const AUTH_PUBLIC_PATHS =
   /^\/(?:token|signup|verify|recover|user|logout|otp|resend|settings|health|authorize|callback|reauthenticate|factors(?:\/[\w-]+(?:\/(?:challenge|verify))?)?|\.well-known\/jwks\.json)$/;
 // The status page re-reads the prober's file at most this often (#678).
 const STATUS_CACHE_MS = 5_000;
+// Signed notices one client address may post a minute: a provider posts a few per bank event, from a handful of addresses.
+const BANK_FEED_WEBHOOKS_PER_MINUTE = 120;
 const MAX_FILES_PER_UPLOAD = 5;
 // A Social video (#409) is one file of up to 100 MB; a batch of documents stays under 60 MB.
 const UPLOAD_BODY_LIMIT = MAX_SOCIAL_VIDEO_BYTES + 2 * 1024 * 1024;
@@ -614,6 +623,36 @@ export function createHttpApp(deps: HttpDeps) {
           headers[name.toLowerCase()] = value;
         });
         const outcome = await acceptMailWebhook(runtime, mailer, { headers, body: await c.req.text() });
+        if (outcome.status === 401 || outcome.status === 400) return c.json({ code: outcome.code }, outcome.status);
+        return c.json({ queued: outcome.queued }, outcome.status);
+      } catch (error) {
+        return problem(c, error);
+      }
+    });
+  }
+
+  // A bank feed provider's signed notice (ADR-0039, #2044): public like the mail provider's, checked by the adapter's
+  // signature before anything else, rate limited per client address, and only queued: it asks the worker for a pull of a
+  // connection that lists the account it names. A provider name no adapter here takes notices for is a 404; with no
+  // adapter taking any, the route does not exist.
+  const bankFeedWebhooks = deps.bankFeedWebhooks;
+  if (bankFeedWebhooks && Object.keys(bankFeedWebhooks).length > 0 && runtime.installed('finance')) {
+    const noticeLimit = deps.bankFeedWebhookLimit ?? new RateLimiter({ perMinute: BANK_FEED_WEBHOOKS_PER_MINUTE });
+    app.post('/api/bank-feed/:provider/webhook', bodyLimit({ maxSize: MAX_BANK_FEED_WEBHOOK_BYTES }), async (c) => {
+      const name = c.req.param('provider');
+      if (!Object.hasOwn(bankFeedWebhooks, name)) return c.json({ code: 'NOT_FOUND' }, 404);
+      const decision = noticeLimit.take(clientBucket(clientIp(c, config.TRUSTED_PROXY_HOPS)));
+      if (!decision.allowed) {
+        warnIfUntrustedProxy(c, config.TRUSTED_PROXY_HOPS);
+        c.header('retry-after', String(decision.retryAfterSeconds));
+        return c.json({ code: 'RATE_LIMITED', retryAfterSeconds: decision.retryAfterSeconds }, 429);
+      }
+      try {
+        const headers: Record<string, string | undefined> = {};
+        c.req.raw.headers.forEach((value, header) => {
+          headers[header.toLowerCase()] = value;
+        });
+        const outcome = await acceptBankFeedWebhook(runtime, bankFeedWebhooks[name] as BankFeedProvider, { headers, body: await c.req.text() });
         if (outcome.status === 401 || outcome.status === 400) return c.json({ code: outcome.code }, outcome.status);
         return c.json({ queued: outcome.queued }, outcome.status);
       } catch (error) {

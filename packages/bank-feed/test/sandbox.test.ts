@@ -2,7 +2,7 @@
 // The offline sandbox bank feed (ADR-0039): its logins, accounts and pulls, the same transactions for a day every time,
 // pages and the cursor, and the refusals.
 import { describe, expect, it } from 'vitest';
-import { BANK_FEED_PROVIDERS, allowlistedFetch, bankFeedProviders, isBankFeedProvider, sandboxBankFeed } from '../src/index.ts';
+import { BANK_FEED_PROVIDERS, BankFeedWebhookRejected, WEBHOOK_WINDOW_MS, allowlistedFetch, bankFeedProviders, isBankFeedProvider, sandboxBankFeed, signSandboxWebhook } from '../src/index.ts';
 
 const at = (iso: string) => () => new Date(iso);
 
@@ -72,5 +72,54 @@ describe('the adapters a deployment offers', () => {
     await expect(bound('https://evil.example/v1/accounts')).rejects.toThrow(/host not allowed/);
     await expect(bound('http://api.bank.example/v1/accounts')).rejects.toThrow(/host not allowed/);
     expect(calls).toEqual([{ url: 'https://api.bank.example/v1/accounts', redirect: 'manual' }]);
+  });
+});
+
+describe('the sandbox notice (ADR-0039)', () => {
+  const SECRET = 'sandbox-webhook-secret-0123456789-abcdef';
+  const NOW = Date.parse('2026-11-20T08:00:00Z');
+  const feed = sandboxBankFeed(undefined, SECRET);
+  const notice = (body: string, over: { timestamp?: number; secret?: string } = {}) => {
+    const timestamp = over.timestamp ?? NOW;
+    return { headers: { 'x-request-timestamp': String(timestamp), 'x-signature': signSandboxWebhook(over.secret ?? SECRET, timestamp, body) }, body };
+  };
+
+  it('takes notices only when a secret is set', () => {
+    expect(sandboxBankFeed().verifyWebhook).toBeUndefined();
+    expect(Object.keys(bankFeedProviders({ sandbox: true, sandboxWebhookSecret: SECRET }))).toEqual(['bank_sandbox']);
+    expect(bankFeedProviders({ sandbox: true, sandboxWebhookSecret: SECRET }).bank_sandbox?.verifyWebhook).toBeTypeOf('function');
+    expect(bankFeedProviders({ sandbox: true }).bank_sandbox?.verifyWebhook).toBeUndefined();
+  });
+
+  it('names the accounts of a signed notice, each once', () => {
+    expect(feed.verifyWebhook?.(notice('{"accounts":["SBX-001","SBX-002","SBX-001"]}'), NOW)).toEqual(['SBX-001', 'SBX-002']);
+  });
+
+  it('refuses a wrong signature, another secret, a body changed after signing, and a stale or future timestamp, before reading the body', () => {
+    const body = '{"accounts":["SBX-001"]}';
+    const reason = (request: { headers: Record<string, string | undefined>; body: string }, at = NOW) => {
+      try {
+        feed.verifyWebhook?.(request, at);
+      } catch (error) {
+        return error instanceof BankFeedWebhookRejected ? error.reason : 'other';
+      }
+      return 'accepted';
+    };
+    expect(reason({ headers: { 'x-request-timestamp': String(NOW), 'x-signature': 'f'.repeat(64) }, body })).toBe('signature');
+    expect(reason(notice(body, { secret: 'another-secret-0123456789-abcdefghijkl' }))).toBe('signature');
+    expect(reason({ ...notice(body), body: '{"accounts":["SBX-002"]}' })).toBe('signature');
+    expect(reason({ headers: {}, body })).toBe('signature');
+    expect(reason(notice(body, { timestamp: NOW - WEBHOOK_WINDOW_MS - 1 }))).toBe('signature');
+    expect(reason(notice(body, { timestamp: NOW + WEBHOOK_WINDOW_MS + 1 }))).toBe('signature');
+    // A body that is not JSON is signed fine and still refused as malformed, never read as accounts.
+    expect(reason(notice('not json'))).toBe('malformed');
+    expect(reason(notice('{"accounts":[]}'))).toBe('malformed');
+    expect(reason(notice(`{"accounts":${JSON.stringify(Array.from({ length: 101 }, (_, i) => `A${i}`))}}`))).toBe('malformed');
+    expect(reason(notice('{"accounts":[1]}'))).toBe('malformed');
+    // A control character in an account id would make the database refuse it: refused as malformed instead.
+    expect(reason(notice('{"accounts":["SBX\\u0000001"]}'))).toBe('malformed');
+    // A timestamp in seconds, or padded, is not the 13 digits the provider sends.
+    expect(reason(notice(body, { timestamp: Math.floor(NOW / 1000) }))).toBe('signature');
+    expect(reason(notice(body))).toBe('accepted');
   });
 });
