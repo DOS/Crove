@@ -175,7 +175,9 @@ export interface CommandDef<I = unknown, O = unknown> {
   // nested write cannot escape P04. Events it emits are not writes: a command that handles them runs on its own, under
   // its own declaration, so such a proposal command emits, itself or through a nested command, only the events on
   // P04_CLEAN_EVENTS, whose handlers were reviewed to write no contact or payment column (#1710); no command declares
-  // the outbox table (crove_kernel.outbox_event), events are the runtime's.
+  // the outbox table (crove_kernel.outbox_event), events are the runtime's. Nor does such a proposal command, or a
+  // command run under it, declare a job table (JOB_TABLES): a job it queued would run later under its own declaration
+  // (#2107).
   writes?: readonly CommandWrite[];
   // access 'proposal' only, R1 or R2 only (ADR-0029 section 6): the role keys of positions whose agents may approve
   // a proposal of this command, within their max_risk and only when the proposal's outcome names none of P03 to
@@ -220,6 +222,15 @@ const P04_DATA_CLASSES: readonly string[] = ['contact', 'payment'];
 // an event at run time. The list is not scoped to a command: an event listed is allowed for every such command.
 export const P04_CLEAN_EVENTS: readonly string[] = Object.freeze([]);
 const CLEAN_EVENTS: ReadonlySet<string> = new Set(P04_CLEAN_EVENTS);
+
+// The pg-boss tables a row in which starts work later (a job, a dependency between jobs, a schedule, a subscription, a
+// queue, a bulk request): a proposal command declared free of contact and payment writes, and the commands run under it,
+// do not declare them, since the job they start runs under its own declaration and the proposal's says nothing of what
+// it writes (#2107). The other crove_jobs tables start nothing: queue_stats and warning are statistics and a log, instance
+// is the workers' heartbeat, and version holds the leases of the maintenance passes (no job content). The invariant suite
+// pins the list against the manifest, so a table a pg-boss upgrade adds is classified before it is used.
+const JOB_TABLES: ReadonlySet<string> = new Set(['crove_jobs.job', 'crove_jobs.job_dependency', 'crove_jobs.schedule', 'crove_jobs.subscription', 'crove_jobs.queue', 'crove_jobs.bam']);
+const jobTablesOf = (writes: readonly CommandWrite[] | undefined): string[] => (writes ?? []).filter((w) => JOB_TABLES.has(w.table)).map((w) => w.table);
 
 // What a handler may learn about a registered command (ADR-0029 section 6): enough to judge a proposal of it.
 export interface CommandInfo {
@@ -1206,6 +1217,14 @@ export class Runtime {
       if (contactOrPayment && contactOrPayment.length > 0 && c.agent !== undefined) {
         throw new Error(`command ${c.name}: writes ${contactOrPayment.join(', ')}, so no agent may run it (P04: an agent asks for a proposal instead)`);
       }
+      // A proposal command declared free of contact and payment writes starts no job of its own: the job runs under its
+      // own declaration, so nothing in the proposal's says what it writes (#2107).
+      if (c.access === 'proposal' && contactOrPayment && contactOrPayment.length === 0) {
+        const jobs = jobTablesOf(c.writes);
+        if (jobs.length > 0) {
+          throw new Error(`command ${c.name}: declares no contact or payment write (P04), so it may not declare ${jobs.join(', ')}: the job it starts runs later under its own declaration (#2107)`);
+        }
+      }
       if (c.agentApprovers !== undefined) {
         if (c.access !== 'proposal' || (c.risk !== 'R1' && c.risk !== 'R2')) {
           throw new Error(`command ${c.name}: agent approvers are declared only on an R1 or R2 proposal command (access 'proposal')`);
@@ -1984,6 +2003,11 @@ export class Runtime {
       // runs a command that may write one (or declares nothing), whoever runs it and however deep it is nested.
       if (cleanRoot !== undefined && this.#contactOrPayment.get(nested.def.name) !== false) {
         throw new Error(`command ${cleanRoot}: declares no contact or payment write (P04), so it cannot run ${nested.def.name}, which may write one`);
+      }
+      // Nor one that declares a job table: what it starts runs under the job's own declaration (#2107).
+      const startsJobs = cleanRoot === undefined ? [] : jobTablesOf(nested.def.writes);
+      if (startsJobs.length > 0) {
+        throw new Error(`command ${cleanRoot}: declares no contact or payment write (P04), so it cannot run ${nested.def.name}, which declares ${startsJobs.join(', ')}: the job it starts runs later under its own declaration (#2107)`);
       }
       const { proposalId } = nested;
       const permissionEntities = await this.authorize(trx, nested.def, base.actor, base.entered, proposalId !== null);
