@@ -7,7 +7,7 @@
 //
 // Exit codes: 0 every automatic check passed, 1 a check failed, 2 the check could not run (bad arguments).
 import { randomBytes } from 'node:crypto';
-import { S3BlobStore, parseVaultKey } from '@crove/kernel-runtime';
+import { S3BlobStore, parseVaultKey, type S3Sender } from '@crove/kernel-runtime';
 import { parseExportKey } from './export-seal.ts';
 import { loadProberConfig } from './prober.ts';
 
@@ -634,18 +634,25 @@ export async function probeBuildChecks(origin: string, env: Env, fetchFn: Fetch 
 // retention hold (S3BlobStore's holds.available). True or false; throws when the bucket does not answer.
 export type ObjectLockProbe = (env: Env) => Promise<boolean>;
 
-export const filesBucketObjectLock: ObjectLockProbe = async (env) => {
-  const store = S3BlobStore.connect({
-    bucket: value(env, 'S3_BUCKET') ?? '',
-    region: value(env, 'S3_REGION') ?? 'us-east-1',
-    endpoint: value(env, 'S3_ENDPOINT'),
-    accessKeyId: value(env, 'S3_ACCESS_KEY_ID'),
-    secretAccessKey: value(env, 'S3_SECRET_ACCESS_KEY'),
-    forcePathStyle: value(env, 'S3_FORCE_PATH_STYLE') === 'true',
-    presign: false,
-  });
-  return store.holds.available();
-};
+// With a client, that client is asked instead of one built from the settings (tests); connect also tells GCS, which has
+// no Object Lock API, from S3.
+export function objectLockProbe(client?: S3Sender): ObjectLockProbe {
+  return async (env) => {
+    const options = {
+      bucket: value(env, 'S3_BUCKET') ?? '',
+      region: value(env, 'S3_REGION') ?? 'us-east-1',
+      endpoint: value(env, 'S3_ENDPOINT'),
+      accessKeyId: value(env, 'S3_ACCESS_KEY_ID'),
+      secretAccessKey: value(env, 'S3_SECRET_ACCESS_KEY'),
+      forcePathStyle: value(env, 'S3_FORCE_PATH_STYLE') === 'true',
+      presign: false,
+    };
+    const store = client ? new S3BlobStore(client, options.bucket) : S3BlobStore.connect(options);
+    return store.holds.available();
+  };
+}
+
+export const filesBucketObjectLock: ObjectLockProbe = objectLockProbe();
 
 // The name and HTTP status of an S3 error, never its message (which may quote the request).
 function s3Reason(error: unknown): string {

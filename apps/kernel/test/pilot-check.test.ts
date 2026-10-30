@@ -2,8 +2,8 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
-import { vaultKeyId } from '@crove/kernel-runtime';
-import { KNOWN_DEFAULTS, PILOT_EXIT, REQUIRED_SECRETS, checkEnv, parsePilotArgs, probeBuildChecks, probeDeployment, probeEvidenceHolds, runPilotCheck, type CheckResult, type Env, type Fetch } from '../src/pilot-check.ts';
+import { vaultKeyId, type S3Sender } from '@crove/kernel-runtime';
+import { KNOWN_DEFAULTS, PILOT_EXIT, REQUIRED_SECRETS, checkEnv, parsePilotArgs, probeBuildChecks, probeDeployment, objectLockProbe, probeEvidenceHolds, runPilotCheck, type CheckResult, type Env, type Fetch } from '../src/pilot-check.ts';
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 
@@ -522,11 +522,46 @@ describe('pilot-check evidence holds (#1996)', () => {
     expect(asked).not.toHaveBeenCalled();
   });
 
-  it('replaces the manual evidence holds line of the run', async () => {
+  // A fake S3 client: answers GetObjectLockConfiguration as told and records every command it is sent.
+  const fakeS3 = (answer: () => unknown) => {
+    const sent: Array<{ name: string; input: unknown }> = [];
+    const client = {
+      send: async (command: { constructor: { name: string }; input: unknown }) => {
+        sent.push({ name: command.constructor.name, input: command.input });
+        return answer();
+      },
+    } as unknown as S3Sender;
+    return { client, sent };
+  };
+  const s3Error = (name: string, status: number) => Object.assign(new Error(`${name} for key AKIA-not-printed`), { name, $metadata: { httpStatusCode: status } });
+  const run = async (client: S3Sender) => {
     const lines: string[] = [];
-    await runPilotCheck([], { ...READY, ...S3 }, fakeFetch({}), (line) => lines.push(line), async () => false);
-    const out = lines.join('\n');
-    expect(out).toMatch(/^FAIL +Evidence holds +the files bucket crove-files has no Object Lock/m);
-    expect(out).not.toMatch(/^MANUAL +Evidence holds/m);
+    await runPilotCheck([], { ...READY, ...S3 }, fakeFetch({}), (line) => lines.push(line), objectLockProbe(client));
+    return lines.join('\n');
+  };
+
+  it('replaces the manual line of the run with what the bucket answers, writing nothing to it', async () => {
+    const on = fakeS3(() => ({ ObjectLockConfiguration: { ObjectLockEnabled: 'Enabled' } }));
+    const passed = await run(on.client);
+    expect(passed).toMatch(/^PASS +Evidence holds +the files bucket crove-files has Object Lock enabled/m);
+    expect(passed).not.toMatch(/^MANUAL +Evidence holds/m);
+    // One read of the bucket's configuration, nothing else: no object is written, held or deleted.
+    expect(on.sent).toEqual([{ name: 'GetObjectLockConfigurationCommand', input: { Bucket: 'crove-files' } }]);
+
+    const off = fakeS3(() => {
+      throw s3Error('ObjectLockConfigurationNotFoundError', 404);
+    });
+    expect(await run(off.client)).toMatch(/^FAIL +Evidence holds +the files bucket crove-files has no Object Lock/m);
+    expect(await run(fakeS3(() => ({ ObjectLockConfiguration: {} })).client)).toMatch(/^FAIL +Evidence holds/m);
+
+    const denied = await run(fakeS3(() => {
+      throw s3Error('AccessDenied', 403);
+    }).client);
+    expect(denied).toMatch(/^MANUAL +Evidence holds +could not read the Object Lock of the files bucket crove-files \(AccessDenied \(403\); the keys need s3:GetBucketObjectLockConfiguration\)/m);
+    expect(denied).not.toContain('AKIA');
+    // A missing bucket is no answer either, not "no Object Lock".
+    expect(await run(fakeS3(() => {
+      throw s3Error('NoSuchBucket', 404);
+    }).client)).toMatch(/^MANUAL +Evidence holds .*NoSuchBucket \(404\)/m);
   });
 });
