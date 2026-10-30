@@ -1,7 +1,9 @@
 // What an outbox event may carry (#1949, ADR-0017 section 1): ids and codes only. An event row is append-only, and the
 // outbox archive keeps every payload as plain JSON for 400 days under Object Lock, so no erasure can reach a value once
 // it is emitted. ctx.emit reduces the codes a provider gave (normalizeEventPayload) and refuses a payload that still
-// breaks the rule (eventPayloadProblem), so every test that emits checks it. What it can tell is the shape: free text,
+// breaks the rule (eventPayloadProblem), so every test that emits checks it; the database holds every insert into
+// crove_kernel.outbox_event to the same rule (crove_kernel.event_payload_problem, #1970), so a definer that writes an
+// event directly is held too. A test keeps the two in step. What it can tell is the shape: free text,
 // a name, an email (anything with a space, an @ or a letter outside ASCII) and any value under a key that names
 // personal data. A phone number or a tax code under another key looks like any other run of digits (an account code),
 // so keep them out by review.
@@ -16,18 +18,14 @@ const PERSONAL_KEY = /(email|phone|address|taxcode|nationalid|idnumber|recipient
 // before the check, never refused.
 const CODE_KEYS = new Set(['code', 'reason', 'error', 'errorCode', 'error_code']);
 const MAX_CODE = 200;
-const MAX_TEXT = 300;
 const MAX_DEPTH = 8;
 
-// Values the rule lets through as they are, each with its reason. Follow-up: #1970 moves them out.
-//   *: agent_task.title, text a module builds from a template, which an event hands to the agents' task maker as the
-//      task's title (packages/kernel/src/agents.ts): "Rà soát bài gửi duyệt: <n> kênh" (Social), "Khách hủy lịch hẹn:
-//      <event type>" (CRM bookings). The task row holds the same text.
-//   kernel.session.revoked: subject, the identity provider's id of the account the sign-out job signs out
-//      (apps/kernel/src/worker.ts). A uuid for Supabase Auth; another provider's may hold other characters.
-const EXEMPT: Record<string, ReadonlySet<string>> = {
-  '*': new Set(['payload.agent_task.title']),
-  'kernel.session.revoked': new Set(['payload.subject']),
+// The task titles an event may hand to the agents' task maker (agent_task.title, packages/kernel/src/agents.ts), one
+// template per event type and nothing else (#1970): the module's fixed words and a count, never a value an org or a
+// person wrote. The database holds the same list (crove_kernel.event_payload_problem).
+const TASK_TITLES: Record<string, RegExp> = {
+  'social.post.submitted': /^Rà soát bài gửi duyệt: [0-9]{1,4} kênh$/,
+  'crm.booking.cancelled': /^Khách hủy lịch hẹn$/,
 };
 
 // A code made of `value`: only its leading word of letters and underscores, at most 60 characters, `other` when there
@@ -46,21 +44,20 @@ export function normalizeEventPayload(value: unknown, key = '', depth = 0): unkn
   return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([k, item]) => [k, normalizeEventPayload(item, k, depth + 1)]));
 }
 
-// The first value of the payload of an event of `type` that is not an id, a code, a number, a boolean or null, as
-// "<path>: <why>"; null when every value is allowed. The value itself is never named.
-export function eventPayloadProblem(value: unknown, type = '*'): string | null {
-  const exempt = new Set([...(EXEMPT['*'] ?? []), ...(EXEMPT[type] ?? [])]);
-  return walk(value, 'payload', 0, exempt);
+// The first value of the payload of an event of `type` that is not an id, a code, a number, a boolean or null (or the
+// type's task title), as "<path>: <why>"; null when every value is allowed. The value itself is never named.
+export function eventPayloadProblem(value: unknown, type = ''): string | null {
+  return walk(value, 'payload', 0, TASK_TITLES[type] ?? null);
 }
 
-function walk(value: unknown, path: string, depth: number, exempt: ReadonlySet<string>): string | null {
+function walk(value: unknown, path: string, depth: number, title: RegExp | null): string | null {
   if (value === null || value === undefined || typeof value === 'boolean') return null;
   const key = path.slice(path.lastIndexOf('.') + 1).replace(/\[\d+\]$/, '');
   if (PERSONAL_KEY.test(key.toLowerCase().replace(/[^a-z]/g, ''))) return `${path}: a key that names personal data`;
   if (typeof value === 'number') return Number.isFinite(value) ? null : `${path}: not a finite number`;
   if (typeof value === 'string') {
     if (value === '' || UUID.test(value)) return null;
-    if (exempt.has(path)) return value.length <= MAX_TEXT ? null : `${path}: longer than ${MAX_TEXT} characters`;
+    if (path === 'payload.agent_task.title' && title?.test(value)) return null;
     if (value.length > MAX_CODE) return `${path}: a string longer than ${MAX_CODE} characters`;
     if (!CODE.test(value)) return `${path}: a string that is neither an id nor a code`;
     return null;
@@ -68,14 +65,14 @@ function walk(value: unknown, path: string, depth: number, exempt: ReadonlySet<s
   if (depth >= MAX_DEPTH) return `${path}: nested deeper than ${MAX_DEPTH}`;
   if (Array.isArray(value)) {
     for (let i = 0; i < value.length; i++) {
-      const problem = walk(value[i], `${path}[${i}]`, depth + 1, exempt);
+      const problem = walk(value[i], `${path}[${i}]`, depth + 1, title);
       if (problem) return problem;
     }
     return null;
   }
   if (typeof value === 'object') {
     for (const [k, item] of Object.entries(value as Record<string, unknown>)) {
-      const problem = walk(item, `${path}.${k}`, depth + 1, exempt);
+      const problem = walk(item, `${path}.${k}`, depth + 1, title);
       if (problem) return problem;
     }
     return null;
