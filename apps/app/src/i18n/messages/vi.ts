@@ -199,6 +199,7 @@ export const vi = {
       portal_failed: 'Không đọc được bảng kê hóa đơn của cổng thuế {period}',
       period_closing: 'Tờ khai GTGT {period} đến hạn nộp ngày {due} nhưng kỳ này chưa khóa sổ',
       todo_due: 'Bạn có 1 việc đến hạn',
+      personal_data_notice: 'Theo yêu cầu xóa dữ liệu của một người, {items} của bạn có thông tin của họ và sắp bị xóa. Hãy chép lại phần bạn cần, bỏ thông tin của người đó ra.',
       other: 'Có thông báo mới',
     },
   },
@@ -2106,6 +2107,10 @@ export const vi = {
     privateAuthor: '{name}: {items}',
     privateHint: 'Ghi chú riêng và việc riêng chỉ tác giả xem được, nên ở đây chỉ hiện số lượng, không hiện nội dung.',
     formerMember: 'Thành viên cũ',
+    privateOwnersOnly: 'Chỉ chủ sở hữu xem được số ghi chú riêng và việc riêng của thành viên có giá trị này. Mỗi lần tìm đều được ghi vào nhật ký hoạt động.',
+    notify: 'Báo cho các tác giả',
+    notified: 'Đã báo cho {authors, plural, other {# thành viên}}',
+    notifyHint: 'Khi xóa, {brand} xóa hẳn các ghi chú riêng và việc riêng mà tác giả đã được báo, và thay giá trị này bằng "[đã xóa]" trong ghi chú chung. Mục viết hoặc sửa sau lần báo được giữ lại cho đến lần báo sau. Hãy chờ tác giả đọc thông báo trước khi xóa, trong thời hạn luật cho phép.',
   },
   audit: {
     title: 'Nhật ký hoạt động',
@@ -5421,6 +5426,7 @@ export const vi = {
       VOUCHER_INVALID: 'Chứng từ chưa hợp lệ; hãy kiểm tra tài khoản tiền, đối tượng và các dòng hạch toán',
       JOURNAL_VOUCHER_INVALID: 'Phiếu kế toán không hợp lệ; hãy kiểm tra các dòng hạch toán',
       PERSONAL_DATA_QUERY: 'Hãy nhập một địa chỉ email, một số điện thoại, hoặc một mã số thuế hay số căn cước',
+      PERSONAL_DATA_NOTICE_TOO_MANY: 'Có quá nhiều ghi chú riêng và việc nhắc đến giá trị này để báo một lần. Hãy liên hệ bộ phận hỗ trợ.',
       YEAR_NOT_ENDED: 'Năm này chưa kết thúc nên chưa kết chuyển được',
       YEAR_CLOSED: 'Năm này đã kết chuyển; muốn làm lại thì đảo bút toán kết chuyển với ngày 31/12 của năm đó trước',
       CLOSING_EMPTY: 'Năm này không có số dư doanh thu, chi phí để kết chuyển',
@@ -6102,6 +6108,7 @@ export const vi = {
       personal_data: {
         erase: 'Xóa dữ liệu cá nhân',
         find: 'Tìm dữ liệu cá nhân',
+        notify: 'Báo tác giả trước khi xóa dữ liệu cá nhân',
       },
       position: {
         assign: 'Giao vị trí cho thành viên hoặc tác tử AI',

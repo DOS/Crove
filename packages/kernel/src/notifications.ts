@@ -17,6 +17,8 @@ import { zId, zNotificationKind } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext } from '@crove/kernel-runtime';
 import { eligibleApprovers } from './approval.ts';
+import { uploaderEntity } from './extraction.ts';
+import { PERSONAL_DATA_NOTICE_ITEMS } from './personal-data.ts';
 import { REROUTED_EVENT_TASKS } from './task-reroute.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
@@ -33,6 +35,9 @@ export const NOTIFICATION_KIND = /^[a-z]+\.[a-z0-9_]+$/;
 export const APPROVAL_WAITING = 'kernel.approval_waiting';
 export const FILE_UNREADABLE = 'kernel.file_unreadable';
 export const TASK_REROUTED = 'kernel.task_rerouted';
+// An owner's notice before a personal-data erasure (#1678, ADR-0037 section 5): how many of my private notes and
+// to-dos mention a person who asked to be erased. Not one a member can turn off: the erasure waits on it.
+export const PERSONAL_DATA_NOTICE = 'kernel.personal_data_notice';
 
 export interface NotifyInput {
   // '<module>.<kind>', for example 'finance.bank_attention'.
@@ -52,6 +57,8 @@ export interface NotifyInput {
   eventId?: string | null;
   // The member who acted: never told about their own action.
   actor?: string | null;
+  // Sent even to a member who turned the kind off (a notice an action waits on).
+  required?: boolean;
 }
 
 export async function notifyMembers(ctx: CommandContext, input: NotifyInput): Promise<number> {
@@ -59,11 +66,11 @@ export async function notifyMembers(ctx: CommandContext, input: NotifyInput): Pr
   if (!NOTIFICATION_KIND.test(input.kind)) throw new Error(`not a notification kind: ${input.kind}`);
   const wanted = [...new Set(input.users)].filter((u) => u !== input.actor);
   if (wanted.length === 0) return 0;
-  // Members now, who have not turned this kind off.
+  // Members now, who have not turned this kind off (unless it is required).
   const { rows } = await sql<{ user_id: string }>`
     SELECT m.user_id FROM crove_kernel.tenant_member m
     WHERE m.org_id = ${ctx.orgId} AND m.user_id = ANY(${wanted}::uuid[])
-      AND NOT EXISTS (SELECT 1 FROM crove_kernel.notification_mute x WHERE x.org_id = m.org_id AND x.user_id = m.user_id AND x.kind = ${input.kind})`.execute(ctx.trx);
+      ${input.required === true ? sql`` : sql`AND NOT EXISTS (SELECT 1 FROM crove_kernel.notification_mute x WHERE x.org_id = m.org_id AND x.user_id = m.user_id AND x.kind = ${input.kind})`}`.execute(ctx.trx);
   if (rows.length === 0) return 0;
   const users = rows.map((r) => r.user_id);
   const inserted = await ctx.trx
@@ -113,7 +120,7 @@ export async function outboxEvent(ctx: Pick<CommandContext, 'trx' | 'orgId'>, ev
 }
 
 // The events kernel.notification.dispatch handles.
-export const KERNEL_NOTIFYING_EVENTS = ['kernel.proposal.created', 'kernel.file.read_failed', 'kernel.task.rerouted'] as const;
+export const KERNEL_NOTIFYING_EVENTS = ['kernel.proposal.created', 'kernel.file.read_failed', 'kernel.task.rerouted', 'kernel.personal_data.notified'] as const;
 
 export const notificationDispatch = defineCommand({
   name: 'kernel.notification.dispatch',
@@ -213,6 +220,30 @@ export const notificationDispatch = defineCommand({
           eventId: event.id,
           actor: event.actor,
         });
+        return { sent };
+      }
+      case 'kernel.personal_data.notified': {
+        // Each author named by an owner's notice (kernel.personal_data.notify): how many of their private notes and
+        // to-dos mention the person, never which, what they say or who the person is. The owner who sent it is left
+        // out, as for every notification (they know).
+        const e = z
+          .object({ authors: z.array(z.object({ userId: zId, notes: z.number().int().nonnegative(), todos: z.number().int().nonnegative() })).min(1).max(PERSONAL_DATA_NOTICE_ITEMS) })
+          .safeParse(event.payload);
+        if (!e.success) return { sent: 0 };
+        let sent = 0;
+        for (const author of e.data.authors) {
+          sent += await notifyMembers(ctx, {
+            kind: PERSONAL_DATA_NOTICE,
+            users: [author.userId],
+            key: `personal_data_notice:${event.id}`,
+            // Under an entity the author sees (the notification's le_scope policy, #1280), as a to-do's reminder is.
+            legalEntityId: await uploaderEntity(ctx, author.userId),
+            detail: { notes: String(author.notes), todos: String(author.todos) },
+            eventId: event.id,
+            actor: event.actor,
+            required: true,
+          });
+        }
         return { sent };
       }
       default:
