@@ -25,9 +25,26 @@ import { Empty, ErrorText, ListSkeleton, PageHeader, Spinner } from '../componen
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { SAFETY_POLL_MS, pollEvery, useStreamLive } from '../lib/stream-hook.ts';
+import { toast } from '../lib/toast.ts';
 import { browserTimeZone, groupTodos, handOverDescription, moveTarget, myWorkShortcut, stepSelection, type MyWorkAction } from '../lib/my-work.ts';
 
 const refresh = () => void queryClient.invalidateQueries({ queryKey: orpc.notes.todos.key() });
+
+// A result toast in the action's verb with an undo (DESIGN.md §4.5, #2003): the undo runs the inverse command, says it
+// did, or why it could not, and reads the lists again.
+function toastWithUndo(said: string, undone: string, inverse: () => Promise<unknown>, labels: { undo: string; failed: (reason: string) => string }) {
+  const undo = async () => {
+    try {
+      await inverse();
+      toast(undone);
+    } catch (error) {
+      toast(labels.failed(errorMessage(error)), 'error');
+    } finally {
+      refresh();
+    }
+  };
+  toast(said, 'success', { action: { label: labels.undo, run: () => void undo() } });
+}
 type Chart = Awaited<ReturnType<typeof orpc.chart.get.call>>;
 // The most to-dos one list shows; a longer list says so.
 const LIST_LIMIT = 500;
@@ -161,6 +178,7 @@ function TaskRow({ task, slug, chart }: { task: MyWorkTask; slug: string; chart:
 // server keeps the reminder, moving an automatic one with the due day; a time picked elsewhere stays.
 function TodoEditor({ todo, onClose }: { todo: Todo; onClose: () => void }) {
   const t = useTranslations('myWork');
+  const common = useTranslations('common');
   const f = useFormat();
   const [title, setTitle] = useState(todo.title);
   const [details, setDetails] = useState(todo.details);
@@ -206,6 +224,10 @@ function TodoEditor({ todo, onClose }: { todo: Todo; onClose: () => void }) {
     onSuccess: () => {
       refresh();
       onClose();
+      toastWithUndo(t('deletedToast', { title: todo.title }), t('undoneToast', { title: todo.title }), () => client.notes.todos.restore({ todoId: todo.id }), {
+        undo: common('undo'),
+        failed: (reason) => common('undoFailed', { reason }),
+      });
     },
   });
   const addStep = () => {
@@ -366,6 +388,7 @@ function QuickAdd({ inputRef }: { inputRef: RefObject<HTMLInputElement | null> }
 export function MyWorkPage() {
   const { slug } = useParams({ strict: false }) as { slug: string };
   const t = useTranslations('myWork');
+  const common = useTranslations('common');
   const f = useFormat();
   const [view, setView] = useState<TodoListView>('open');
   const [selected, setSelected] = useState<string | null>(null);
@@ -397,6 +420,15 @@ export function MyWorkPage() {
         case 'restore':
           return client.notes.todos.restore({ todoId: v.todoId });
       }
+    },
+    // Completing (the box or the X key) moves the to-do to Done: the toast says so and can open it again.
+    onSuccess: (_done, v) => {
+      if (v.what !== 'complete') return;
+      const title = todos.find((x) => x.id === v.todoId)?.title ?? '';
+      toastWithUndo(t('completedToast', { title }), t('undoneToast', { title }), () => client.notes.todos.reopen({ todoId: v.todoId }), {
+        undo: common('undo'),
+        failed: (reason) => common('undoFailed', { reason }),
+      });
     },
     onSettled: refresh,
   });

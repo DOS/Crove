@@ -6,6 +6,8 @@ import type { Messages } from './vi.ts';
 export const en = {
   common: {
     toasts: 'Results',
+    undo: 'Undo',
+    undoFailed: 'Could not undo: {reason}',
     datePlaceholder: 'dd/mm/yyyy',
     monthPlaceholder: 'mm/yyyy',
     openCalendar: 'Open the calendar',
@@ -652,6 +654,9 @@ export const en = {
     restore: 'Restore',
     delete: 'Move to trash',
     trashHint: 'Notes in the trash are deleted for good after 30 days.',
+    archivedToast: 'Note archived',
+    deletedToast: 'Note moved to the trash',
+    undoneToast: 'Note brought back',
     makeShared: 'Share with the organization',
     makePrivate: 'Make private',
     shareTitle: 'Share this note',
@@ -2580,6 +2585,9 @@ export const en = {
     overdue: 'Overdue',
     dueAt: '{day} at {time}',
     completeTodo: 'Mark done: {title}',
+    completedToast: 'Marked done: {title}',
+    deletedToast: 'Moved to the trash: {title}',
+    undoneToast: 'Brought back: {title}',
     reopenTodo: 'Reopen: {title}',
     moveUp: 'Move up: {title}',
     moveDown: 'Move down: {title}',

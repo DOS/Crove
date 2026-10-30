@@ -59,4 +59,18 @@ test('a member writes a note on the overview, pins it, and finds it on the notes
     );
     expect(rows).toEqual([{ title: 'Mật khẩu cổng ngân hàng', visibility: 'private' }]);
   });
+
+  await test.step('moving a note to the trash says so, and its undo brings it back (#2003)', async () => {
+    await page.getByRole('button', { name: 'Chuyển vào thùng rác' }).click();
+    const done = page.getByRole('status').filter({ hasText: 'Đã chuyển ghi chú vào thùng rác' });
+    await expect(done).toBeVisible();
+    await done.getByRole('button', { name: 'Hoàn tác' }).click();
+    await expect(page.getByRole('status').filter({ hasText: 'Đã đưa ghi chú trở lại' })).toBeVisible();
+    const trashed = sql<{ trashed: boolean }>(
+      `SELECT n.deleted_at IS NOT NULL AS trashed FROM crove_notes.note n JOIN crove_kernel.tenant t ON t.org_id = n.org_id
+        WHERE t.slug = :'slug' AND n.title = 'Mật khẩu cổng ngân hàng'`,
+      { slug },
+    );
+    expect(trashed).toEqual([{ trashed: false }]);
+  });
 });

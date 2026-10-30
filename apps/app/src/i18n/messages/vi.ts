@@ -4,6 +4,8 @@
 export const vi = {
   common: {
     toasts: 'Thông báo kết quả',
+    undo: 'Hoàn tác',
+    undoFailed: 'Chưa hoàn tác được: {reason}',
     datePlaceholder: 'dd/mm/yyyy',
     monthPlaceholder: 'mm/yyyy',
     openCalendar: 'Mở lịch',
@@ -650,6 +652,9 @@ export const vi = {
     restore: 'Khôi phục',
     delete: 'Chuyển vào thùng rác',
     trashHint: 'Ghi chú trong thùng rác bị xóa hẳn sau 30 ngày.',
+    archivedToast: 'Đã lưu trữ ghi chú',
+    deletedToast: 'Đã chuyển ghi chú vào thùng rác',
+    undoneToast: 'Đã đưa ghi chú trở lại',
     makeShared: 'Chuyển thành dùng chung',
     makePrivate: 'Chuyển thành riêng tư',
     shareTitle: 'Chuyển ghi chú thành dùng chung',
@@ -2579,6 +2584,9 @@ export const vi = {
     overdue: 'Quá hạn',
     dueAt: '{day} lúc {time}',
     completeTodo: 'Đánh dấu xong: {title}',
+    completedToast: 'Đã đánh dấu xong: {title}',
+    deletedToast: 'Đã chuyển vào thùng rác: {title}',
+    undoneToast: 'Đã đưa việc trở lại: {title}',
     reopenTodo: 'Mở lại: {title}',
     moveUp: 'Chuyển lên: {title}',
     moveDown: 'Chuyển xuống: {title}',

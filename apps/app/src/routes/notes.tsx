@@ -24,6 +24,7 @@ import { Markdown } from '../lib/markdown.tsx';
 import { applyFormat, shortcutFormat, type MarkdownFormat } from '../lib/markdown-edit.ts';
 import { createAutosaver, type Autosaver, type NoteValues, type SaveState } from '../lib/note-autosave.ts';
 import { notesMarkdown, saveText } from '../lib/notes-export.ts';
+import { toast } from '../lib/toast.ts';
 import { listOfNote, looksLikePassword, parseTags, tagCounts, type NotesSearch } from '../lib/notes.ts';
 
 const SAVE_AFTER_MS = 800;
@@ -73,6 +74,7 @@ function Editor({
   onTag: (tag: string) => void;
 }) {
   const t = useTranslations('notes');
+  const common = useTranslations('common');
   const f = useFormat();
   const navigate = useNavigate();
   const [values, setValues] = useState<NoteValues>(() => valuesOf(note));
@@ -165,7 +167,25 @@ function Editor({
       setConfirmShare(false);
       if (action === 'share' || action === 'unshare') saver.setRevision(done.revision);
       void refreshNotes();
-      if (action === 'delete' || action === 'archive') void navigate({ to: '/o/$slug/notes', params: { slug }, search: back });
+      if (action === 'delete' || action === 'archive') {
+        const going = navigate({ to: '/o/$slug/notes', params: { slug }, search: back });
+        // Undo (DESIGN.md §4.5, #2003): restore brings a note back from the archive and the trash at once, so a note
+        // that was archived before it went to the trash goes back to the archive.
+        const ref = { noteId: note.id };
+        const wasArchived = note.archivedAt !== null;
+        const undo = async () => {
+          try {
+            await api.notes.restore(ref);
+            if (action === 'delete' && wasArchived) await api.notes.archive(ref);
+            toast(t('undoneToast'));
+          } catch (error) {
+            toast(common('undoFailed', { reason: errorMessage(error) }), 'error');
+          } finally {
+            void refreshNotes();
+          }
+        };
+        toast(action === 'archive' ? t('archivedToast') : t('deletedToast'), 'success', { holdUntil: going, action: { label: common('undo'), run: () => void undo() } });
+      }
     },
   });
   const blocked = act.isPending || state === 'saving';
