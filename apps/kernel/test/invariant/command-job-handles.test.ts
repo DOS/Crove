@@ -58,6 +58,11 @@ function read(text: string): { defines: boolean; handles: string[] } {
     // member (`rt.defineCommand(...)`), a re-export, a CommandDef literal.
     if (n.type === 'Identifier' && DEFINERS.has(n.name)) defines = true;
     if (n.type === 'Identifier' && HANDLES.has(n.name)) handles.add(`${line(n)}: ${n.name}`);
+    // A computed string key (`rt['defineCommand']`, `deps['boss']`) names the same binding.
+    if (n.type === 'MemberExpression' && n.computed && n.property?.type === 'Literal' && typeof n.property.value === 'string') {
+      if (DEFINERS.has(n.property.value)) defines = true;
+      if (HANDLES.has(n.property.value)) handles.add(`${line(n)}: ${n.property.value}`);
+    }
     // import ... from 'pg-boss' (or a subpath), import type ..., export ... from, import('pg-boss').
     const from: unknown = n.source?.value;
     if (MODULE_NODES.includes(n.type) && typeof from === 'string' && (from === PACKAGE || from.startsWith(`${PACKAGE}/`))) handles.add(`${line(n)}: ${PACKAGE}`);
@@ -159,6 +164,9 @@ describe('no command or query handler holds a pg-boss handle', () => {
     // A definition is recognised through an alias, a namespace, and a hand-built object typed as a CommandDef or a QueryDef.
     expect(read("import { defineCommand as dc } from './rt.ts';\nexport const c = dc({ name: 'x', handler: async () => boss.send('q') });")).toEqual({ defines: true, handles: ['2: boss'] });
     expect(read("import * as rt from './rt.ts';\nexport const c = rt.defineCommand({ name: 'x', handler: async () => boss.send('q') });")).toEqual({ defines: true, handles: ['2: boss'] });
+    expect(read("import * as rt from './rt.ts';\nexport const c = rt['defineCommand']({ name: 'x', handler: async () => boss.send('q') });")).toEqual({ defines: true, handles: ['2: boss'] });
+    // A computed string key names a handle too.
+    expect(read(command("return deps['boss'].send('q');"))).toEqual({ defines: true, handles: ['2: boss'] });
     expect(read("export const c = { name: 'x', handler: async () => boss.send('q') } as CommandDef<unknown, unknown>;")).toEqual({ defines: true, handles: ['1: boss'] });
     expect(read("export const q: QueryDef<I, O> = { name: 'x', handler: async () => boss.send('q') };")).toEqual({ defines: true, handles: ['1: boss'] });
     // A comment, a string and a template text that say the word are not code.
