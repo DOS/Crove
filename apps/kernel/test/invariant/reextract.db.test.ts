@@ -93,10 +93,15 @@ suite('re-extraction invariants on PostgreSQL (issue #40)', () => {
     await runtime.executeOrgless('kernel.member.invite.accept', { token: acceptPath.split('#')[1] }, { actor: asUser(userId) });
   }
 
+  // Every description ends with a word a built-in account rule matches ("phí", 6422), so the line is proposed to an
+  // account as it always was: a line no rule matches is unclassified and cannot be approved as it is (#2091).
+  const RULE_WORD = ' phí';
+  const shown = (description: string) => `${description}${RULE_WORD}`;
+
   // A fresh invoice (its own number, so no duplicate check fires across tests), with a line description to tell
   // readings apart.
   function invoice(number: string, description = 'Cước dịch vụ internet'): ParsedInvoice {
-    return { ...base, number, lines: base.lines.map((l) => (l.lineNo === 1 ? { ...l, description } : l)) };
+    return { ...base, number, lines: base.lines.map((l) => (l.lineNo === 1 ? { ...l, description: shown(description) } : l)) };
   }
 
   // An image the owner uploads (images are read by the AI only, so each read can differ).
@@ -255,7 +260,7 @@ suite('re-extraction invariants on PostgreSQL (issue #40)', () => {
     expect(replacement).not.toBe(second.proposalId);
     expect(await get(second.proposalId)).toMatchObject({ status: 'rejected', revision: 1 });
     expect(await get(replacement as string)).toMatchObject({ status: 'pending', revision: 1, canReextract: true });
-    expect((await get(second.proposalId)).payload?.lines[0]?.description).toBe('Lần đọc đầu');
+    expect((await get(second.proposalId)).payload?.lines[0]?.description).toBe(shown('Lần đọc đầu'));
     // The command acts on the file's newest proposal, so the rejected one no longer offers a re-read.
     expect(await get(second.proposalId)).toMatchObject({ canReextract: false });
     // Once the newest is booked, no proposal of the file offers it, and the command refuses.
@@ -289,7 +294,7 @@ suite('re-extraction invariants on PostgreSQL (issue #40)', () => {
     await extractAndPropose(deps(), orgA, fileId, version);
     const revised = await get(proposalId, users.admin);
     expect(revised).toMatchObject({ revision: 3, status: 'pending', extraction: { version: 2, status: 'done', proposalVersion: 2, inFlight: false } });
-    expect(revised.payload?.lines[0]?.description).toBe('Bản đọc 2');
+    expect(revised.payload?.lines[0]?.description).toBe(shown('Bản đọc 2'));
     // The re-read is its own reading: the line accounts are the module's defaults again, not the edit's.
     expect(revised.payload?.lines[0]?.debitAccount).toBe(line1.debitAccount);
     // Its own earlier revision is not a duplicate of it.
@@ -335,7 +340,7 @@ suite('re-extraction invariants on PostgreSQL (issue #40)', () => {
     expect(rows.every((r) => r.completed_at !== null)).toBe(true);
     const detail = await get(proposalId);
     expect(detail).toMatchObject({ revision: 1, extraction: { version: 2, status: 'failed', proposalVersion: 1 }, canReextract: true });
-    expect(detail.payload?.lines[0]?.description).toBe('Giữ nguyên');
+    expect(detail.payload?.lines[0]?.description).toBe(shown('Giữ nguyên'));
 
     // A late or repeated job for a finished version changes nothing.
     reads.push(invoice('9999', 'Muộn'));
@@ -459,7 +464,7 @@ suite('re-extraction invariants on PostgreSQL (issue #40)', () => {
     reads.push(invoice(number, 'Job bị mất'));
     await expect(extractAndPropose(deps(), orgA, fileId, lost.version)).resolves.toEqual({ proposalId: null });
     reads.length = 0;
-    expect((await get(proposalId)).payload?.lines[0]?.description).toBe('Trước khi mất');
+    expect((await get(proposalId)).payload?.lines[0]?.description).toBe(shown('Trước khi mất'));
   });
 
   it('never lets a late job overwrite what users did after its run went stale', async () => {
@@ -486,6 +491,6 @@ suite('re-extraction invariants on PostgreSQL (issue #40)', () => {
     ]);
     const detail = await get(proposalId);
     expect(detail).toMatchObject({ revision: 2, extraction: { version: 2, status: 'done', proposalVersion: 1 } });
-    expect(detail.payload?.lines[0]).toMatchObject({ description: 'Trước khi sửa', debitAccount: other });
+    expect(detail.payload?.lines[0]).toMatchObject({ description: shown('Trước khi sửa'), debitAccount: other });
   });
 });
