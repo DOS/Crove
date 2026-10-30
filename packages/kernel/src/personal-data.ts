@@ -307,6 +307,12 @@ export function heldFilesReason(until: Date | null): string {
   return `Original files behind posted entries that name this party: accounting evidence, ${kept} and never deleted by Crove (Accounting Law 88/2015, Art. 41)`;
 }
 
+// The fewest digits a value needs before the erasure replaces it inside activity lines (#1948): a shorter number may be
+// an amount or a voucher number there, so its lines are listed for the owner instead, with this reason.
+export const ACTIVITY_REDACT_MIN_DIGITS = 10;
+export const ACTIVITY_SHORT_NUMBER_REASON =
+  'A number of fewer than 10 digits may also be an amount or a voucher number in a timeline line, so the erasure does not replace it there; check these lines and tell the person, or ask for a longer value';
+
 // The name an erased party keeps: a party row cannot lose its name, and nothing in the books names it.
 export const ERASED_PARTY_NAME = 'Đã xóa theo yêu cầu';
 
@@ -428,9 +434,15 @@ export const personalDataErase = defineCommand({
     // Activity lines that quote the person (#1948): the mention is replaced inside the line, through the owner-only
     // definer (tenant roles may not update activity rows). Comments and the books' descriptions are append-only and
     // stay; the finder's answer below lists them with their reasons.
-    const { rows: redacted } = await sql<{ rows: number }>`
-      SELECT crove_kernel.personal_data_redact_activity(${probe.kind}, ${probeValue(probe)}) AS rows`.execute(ctx.trx);
-    add('crove_kernel.activity.summary', Number(redacted[0]?.rows ?? 0));
+    // A number of 8 or 9 digits may as well be an amount or a voucher number in a line, and a redaction cannot be
+    // undone: those lines are left as they are and listed with ACTIVITY_SHORT_NUMBER_REASON (the definer refuses them
+    // too).
+    const shortNumber = probe.kind === 'digits' && probe.digits.length < ACTIVITY_REDACT_MIN_DIGITS;
+    if (!shortNumber) {
+      const { rows: redacted } = await sql<{ rows: number }>`
+        SELECT crove_kernel.personal_data_redact_activity(${probe.kind}, ${probeValue(probe)}) AS rows`.execute(ctx.trx);
+      add('crove_kernel.activity.summary', Number(redacted[0]?.rows ?? 0));
+    }
 
     // What stays, with its reason: the finder's answer after the erasure (the cleared values no longer match).
     const after = await findPersonalData(ctx.trx, ctx.orgId, probe);
@@ -438,8 +450,9 @@ export const personalDataErase = defineCommand({
     // the others).
     const kept = new Map<string, { column: string; rows: number; reason: string }>();
     for (const m of after.matches) {
-      const group = `${m.column}\n${m.reason}`;
-      const k = kept.get(group) ?? { column: m.column, rows: 0, reason: m.reason };
+      const reason = shortNumber && m.column === 'crove_kernel.activity.summary' ? ACTIVITY_SHORT_NUMBER_REASON : m.reason;
+      const group = `${m.column}\n${reason}`;
+      const k = kept.get(group) ?? { column: m.column, rows: 0, reason };
       k.rows += 1;
       kept.set(group, k);
     }

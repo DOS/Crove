@@ -4,14 +4,16 @@
 -- crove_kernel.personal_data_redact_activity(kind, value)
 --     For kernel.personal_data.erase (R3, owners): replaces every mention of the value in the summaries of the
 --     context's org's activity lines with '[đã xóa]' and answers how many lines changed. kind is 'email' (the
---     lowercased address) or 'digits' (8 to 15 digits), as personalDataProbe gives them; the matching is
---     crove_kernel.text_mentions and text_redact (#1678), the same the finder uses. Only the summary changes: the
---     line keeps its record, kind, actor, time and legal entity. Owner-only, checked here too, in the owner's own
---     context: crove_tenant may not update activity rows, so the definer is the one path. It takes the value, never a
---     pattern, so it cannot rewrite anything but mentions of a person.
+--     lowercased address) or 'digits' (10 to 15 digits), as personalDataProbe gives them; the matching is
+--     crove_kernel.text_mentions and text_redact (#1678), the same the finder uses. A value of 8 or 9 digits changes
+--     nothing and answers 0: it may as well be an amount or a voucher number in a line, and a redaction cannot be
+--     undone, so those lines are listed for the owner instead. Only the summary changes: the line keeps its record,
+--     kind, actor, time and legal entity. Owner-only, checked here too, in the owner's own context. It takes the
+--     value, never a pattern, so it cannot rewrite anything but mentions of a person.
 --
--- Activity lines are not append-only and not anchored in the WORM archive (which holds audit events, journal entries
--- and the numbering), so they may change; task comments and the books are append-only and are kept (the registry in
+-- Activity lines are append-only for the tenant roles by grant (they insert and read them, never update them) and are
+-- not anchored in the WORM archive (which holds audit events, journal entries and the numbering), so this definer is
+-- their one update path. Task comments and the books are append-only by trigger and are kept (the registry in
 -- packages/kernel/src/personal-data.ts says why).
 SET LOCAL lock_timeout = '2s';
 
@@ -26,6 +28,9 @@ BEGIN
   END IF;
   -- A kind or a value of the wrong shape is refused (22023) before any row is read, whether or not the org has lines.
   PERFORM crove_kernel.text_mention_pattern(p_kind, p_value);
+  IF p_kind = 'digits' AND pg_catalog.length(p_value) < 10 THEN
+    RETURN 0;
+  END IF;
   UPDATE crove_kernel.activity a
      SET summary = crove_kernel.text_redact(a.summary, p_kind, p_value, '[đã xóa]')
    WHERE a.org_id = v_org AND crove_kernel.text_mentions(a.summary, p_kind, p_value);

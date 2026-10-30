@@ -13,7 +13,7 @@ import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
-import { createOrg, kernelCommands, kernelQueries, PERSONAL_DATA_COLUMNS, personalDataProbe, upsertIdentity, type PersonalDataColumn } from '@crove/kernel';
+import { ACTIVITY_SHORT_NUMBER_REASON, createOrg, kernelCommands, kernelQueries, PERSONAL_DATA_COLUMNS, personalDataProbe, upsertIdentity, type PersonalDataColumn } from '@crove/kernel';
 import type { PersonalDataErasure, PersonalDataResult } from '@crove/kernel-contract';
 import { Runtime } from '@crove/kernel-runtime';
 import { enterUser } from './context-token.ts';
@@ -542,6 +542,27 @@ suite('finding a person in the org (#923)', () => {
     ).rows;
     expect(JSON.stringify(audits).toLowerCase()).not.toContain('tu.tran');
     expect(JSON.stringify(audits)).not.toMatch(/987.?654/);
+  });
+
+  // A number of 8 or 9 digits (an old ID card number) may as well be an amount or a voucher number in a timeline line:
+  // the erasure lists those lines with its reason and leaves them as they are; the definer changes nothing for it
+  // either (#1948, the coordinator's review).
+  it('lists the activity lines a short number matches and leaves them as they are (#1948)', async () => {
+    const line = await admin(
+      async (c) =>
+        (
+          await c.query<{ id: string }>(
+            `INSERT INTO crove_kernel.activity (org_id, record_type, record_id, kind, summary) VALUES ($1, 'kernel.party', $2, 'party.note', 'Mã đối chiếu 23456789 của khách') RETURNING id`,
+            [org.orgId, person],
+          )
+        ).rows[0]?.id as string,
+    );
+    expect((await find('23456789')).matches.filter((m) => m.column === 'crove_kernel.activity.summary').map((m) => m.rowId)).toEqual([line]);
+    const result = await erase('23456789');
+    expect(result.erased.map((e) => e.column)).not.toContain('crove_kernel.activity.summary');
+    expect(result.kept).toContainEqual({ column: 'crove_kernel.activity.summary', rows: 1, reason: ACTIVITY_SHORT_NUMBER_REASON });
+    const summary = (await admin((c) => c.query<{ summary: string }>('SELECT summary FROM crove_kernel.activity WHERE id = $1', [line]))).rows[0]?.summary;
+    expect(summary).toBe('Mã đối chiếu 23456789 của khách');
   });
 
   // Only the erase command reaches the redaction: an owner's own context, never a member's or a raw tenant call.

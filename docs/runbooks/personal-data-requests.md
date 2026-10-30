@@ -28,7 +28,7 @@ The search covers the columns listed in `packages/kernel/src/personal-data.ts`. 
      - the recipient of mails Ludy sent;
      - the org's contact email;
      - the address in Social report schedules (a schedule left with nobody to mail is deleted);
-     - the value wherever an activity line quotes it: it is replaced by "[đã xóa]" inside the line, and the line itself stays (#1948). A short number (8 or 9 digits) can also match an amount or a voucher number written with dots, so check the activity lines the search lists before you erase.
+     - the value wherever an activity line quotes it: it is replaced by "[đã xóa]" inside the line, and the line itself stays (#1948). A number of 8 or 9 digits (an old ID card number) is not replaced in activity lines, since it may as well be an amount or a voucher number there: the result lists those lines with that reason, for you to check.
 
      A party that no recorded invoice, voucher or journal line names also loses its tax code, and its name becomes "Đã xóa theo yêu cầu".
    - **Kept by law** (Accounting Law 88/2015, Art. 41: at least 10 years):
