@@ -220,7 +220,7 @@ Do it right after the key was revoked at the provider; until then a revoked key 
 
 **Symptom.** PDFs and photos are no longer read: after a few minutes the file shows "Không đọc được chứng từ sau nhiều lần thử; hãy kiểm tra cấu hình AI hoặc gửi tệp XML". E-invoice XML files keep working: they need no AI.
 
-**Alert.** None from the prober: the extraction job records the failure on the file and completes, so it is not a dead letter. The AI provider may email the account holder when credits run out.
+**Alert.** The prober counts the readings whose every attempt failed (the AI provider refused or did not answer, or the parser sandbox was down) and pages when more than `PROBER_MAX_EXTRACTION_FAILURES` (default 2) happen within `PROBER_EXTRACTION_WINDOW_SECONDS` (default 3600 s): `[Crove] ALERT ... 3 document reading(s) failed every attempt in the last 3600 s ...`, then `RESOLVED` once the window has none over the limit (#1998). A document that cannot be read (not an invoice, a scanned PDF, an unsupported format, AI switched off) never pages: its uploader is told. The AI provider may also email the account holder when credits run out.
 
 **Checks.**
 

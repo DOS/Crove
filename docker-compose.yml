@@ -360,6 +360,9 @@ services:
       PROBER_MAX_ARCHIVE_VERIFY_AGE_SECONDS: ${PROBER_MAX_ARCHIVE_VERIFY_AGE_SECONDS:-93600}
       # Unset: the larger of 3600 and the archiver's ARCHIVE_LAG_SECONDS plus 900.
       PROBER_MAX_ARCHIVE_LAG_SECONDS: ${PROBER_MAX_ARCHIVE_LAG_SECONDS:-}
+      # AI document readings that failed every attempt (#1998): more than this many in the window alert; 0 turns it off.
+      PROBER_MAX_EXTRACTION_FAILURES: ${PROBER_MAX_EXTRACTION_FAILURES:-2}
+      PROBER_EXTRACTION_WINDOW_SECONDS: ${PROBER_EXTRACTION_WINDOW_SECONDS:-3600}
       ARCHIVE_LAG_SECONDS: ${ARCHIVE_LAG_SECONDS:-600}
     volumes:
       - status:/data/status

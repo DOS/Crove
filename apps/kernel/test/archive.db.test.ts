@@ -226,6 +226,14 @@ suite('bulk intake of a ZIP archive on PostgreSQL (issue #314)', () => {
     );
     await recordLastAttemptFailure(lookupFails, orgA, document, undefined, undefined);
     expect((await batch([document]))[0]).toMatchObject({ status: 'failed' });
+    // Every attempt threw: the reading service failed, which the prober counts (#1998).
+    const failed = await admin((c) =>
+      c.query<{ reason: string | null }>(`SELECT payload ->> 'reason' AS reason FROM crove_kernel.outbox_event WHERE org_id = $1 AND type = 'kernel.file.read_failed' AND payload ->> 'fileId' = $2`, [
+        orgA,
+        document,
+      ]),
+    );
+    expect(failed.rows).toEqual([{ reason: 'service' }]);
   });
 
   it('bounds a batch answer to MAX_BATCH_ENTRIES entries in all, and lists only counts in the recent files', async () => {

@@ -499,7 +499,8 @@ export async function recordLastAttemptFailure(runtime: Runtime, orgId: string, 
     return;
   }
   try {
-    await recordExtractionFailure(runtime, orgId, fileId, 'Không đọc được chứng từ sau nhiều lần thử; hãy kiểm tra cấu hình AI hoặc gửi tệp XML', version);
+    // Every attempt threw: the AI provider or the parser sandbox, not the document (#1998, the prober counts it).
+    await recordExtractionFailure(runtime, orgId, fileId, 'Không đọc được chứng từ sau nhiều lần thử; hãy kiểm tra cấu hình AI hoặc gửi tệp XML', version, 'service');
   } catch (error) {
     if (known === undefined && error instanceof DomainError && error.code === 'ARCHIVE_NOT_READ') {
       await failArchive();
