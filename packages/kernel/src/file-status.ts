@@ -44,6 +44,7 @@ export async function fileStatuses(ctx: QueryContext, filter: FileStatusFilter):
             'x.error',
             'x.version',
             'x.method',
+            'x.created_at as run_at',
             // Only the size of an opened archive's entry list, from its own column (#432): neither the list nor an
             // invoice's result is loaded here.
             sql<number | null>`CASE WHEN x.method = 'archive' AND x.status = 'done' THEN x.entry_count END`.as('entry_count'),
@@ -62,7 +63,7 @@ export async function fileStatuses(ctx: QueryContext, filter: FileStatusFilter):
       (eb) =>
         eb
           .selectFrom('crove_kernel.proposal as q')
-          .select(['q.id', 'q.status', 'q.duplicate_of'])
+          .select(['q.id', 'q.status', 'q.duplicate_of', 'q.decided_at'])
           .whereRef('q.org_id', '=', 'f.org_id')
           .whereRef('q.source_file_id', '=', 'f.id')
           .orderBy('q.created_at', 'desc')
@@ -82,9 +83,11 @@ export async function fileStatuses(ctx: QueryContext, filter: FileStatusFilter):
       'e.method',
       'e.entry_count',
       'e.in_flight',
+      'e.run_at',
       'p.id as proposal_id',
       'p.status as proposal_status',
       'p.duplicate_of',
+      'p.decided_at',
       // Kept for the org's next daily budget (#675): a deferral of the file that is not due yet.
       sql<boolean>`EXISTS (
         SELECT 1 FROM crove_kernel.usage_deferral d
@@ -106,6 +109,14 @@ export async function fileStatuses(ctx: QueryContext, filter: FileStatusFilter):
   return rows.map((r) => {
     const archive = isArchiveType(r.content_type);
     const waiting = !r.extraction_status && r.waiting;
+    const isVoided = r.proposal_status === 'executed' && r.proposal_id !== null && voided.has(r.proposal_id);
+    // A reading started after the proposal was decided (a rejection, an expiry, a failed run, or a posting since voided)
+    // that failed or was left behind (#2032): the file's latest outcome is that failure, shown with its re-read, not the
+    // old decision. A re-read that failed before the decision, or one of a proposal still to be decided, keeps the
+    // proposal, which still stands.
+    const lastRunFailed = r.extraction_status === 'failed' || (r.extraction_status === 'pending' && !r.in_flight);
+    const decided = ['rejected', 'expired', 'failed'].includes(r.proposal_status ?? '') || isVoided;
+    const failedSinceDecision = lastRunFailed && decided && r.decided_at !== null && r.run_at !== null && r.run_at > r.decided_at;
     const status: FileStatus['status'] = waiting
       ? 'waiting'
       : !r.extraction_status || r.in_flight
@@ -114,7 +125,7 @@ export async function fileStatuses(ctx: QueryContext, filter: FileStatusFilter):
           ? r.extraction_status === 'done'
             ? 'expanded'
             : 'failed'
-          : r.proposal_id
+          : r.proposal_id && !failedSinceDecision
             ? r.duplicate_of
               ? 'duplicate'
               : 'proposed'
@@ -134,6 +145,7 @@ export async function fileStatuses(ctx: QueryContext, filter: FileStatusFilter):
               : null,
         proposalId: r.proposal_id,
         proposalStatus: r.proposal_status ?? null,
+        voided: isVoided,
         version: r.version ?? null,
         // The same checks kernel.file.reextract makes; an archive is opened once and never read again.
         canReextract:
@@ -141,7 +153,7 @@ export async function fileStatuses(ctx: QueryContext, filter: FileStatusFilter):
           !archive &&
           Boolean(r.extraction_status) &&
           !r.in_flight &&
-          (r.proposal_status !== 'executed' || (r.proposal_id !== null && voided.has(r.proposal_id))) &&
+          (r.proposal_status !== 'executed' || isVoided) &&
           (r.version ?? 0) < MAX_EXTRACTION_VERSIONS,
         createdAt: r.created_at.toISOString(),
       },
