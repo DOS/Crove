@@ -60,17 +60,39 @@ export interface VoucherForm {
 
 // The first problem with the form, or null when it can be sent.
 export function voucherFormError(form: VoucherForm, t: Translate): string | null {
-  if (!isCalendarDate(form.date)) return t('vouchers.errors.date');
-  if (!form.cashAccount.startsWith(cashRootOf(form.type))) return t('vouchers.errors.cashAccount', { root: cashRootOf(form.type) });
-  if (!form.description.trim()) return t('vouchers.errors.description');
-  if (form.lines.length === 0 || form.lines.length > VOUCHER_MAX_LINES) return t('vouchers.errors.lines', { max: VOUCHER_MAX_LINES });
-  for (const [i, line] of form.lines.entries()) {
-    if (!line.account) return t('vouchers.errors.lineAccount', { line: i + 1 });
-    if (line.account === form.cashAccount) return t('vouchers.errors.lineIsCash', { line: i + 1 });
-    if (!isVoucherAmount(normalizeAmount(line.amount))) return t('vouchers.errors.amount', { line: i + 1 });
+  const fields: VoucherField[] = ['date', 'cashAccount', 'description', 'lines', ...form.lines.map((_, i) => i), 'party'];
+  for (const field of fields) {
+    const error = voucherFieldError(form, field, t);
+    if (error) return error;
   }
-  if (!form.partyId && form.lines.some((l) => needsParty(l.account))) return t('vouchers.errors.party');
   return null;
+}
+
+// A field of the form a problem sits under (DESIGN.md §4.2, #2004): a line by its index, the count of lines below them.
+export type VoucherField = 'date' | 'cashAccount' | 'description' | 'lines' | 'party' | number;
+
+// The problem with one field of the form, or null.
+export function voucherFieldError(form: VoucherForm, field: VoucherField, t: Translate): string | null {
+  switch (field) {
+    case 'date':
+      return isCalendarDate(form.date) ? null : t('vouchers.errors.date');
+    case 'cashAccount':
+      return form.cashAccount.startsWith(cashRootOf(form.type)) ? null : t('vouchers.errors.cashAccount', { root: cashRootOf(form.type) });
+    case 'description':
+      return form.description.trim() ? null : t('vouchers.errors.description');
+    case 'lines':
+      return form.lines.length === 0 || form.lines.length > VOUCHER_MAX_LINES ? t('vouchers.errors.lines', { max: VOUCHER_MAX_LINES }) : null;
+    case 'party':
+      return !form.partyId && form.lines.some((l) => needsParty(l.account)) ? t('vouchers.errors.party') : null;
+    default: {
+      const line = form.lines[field];
+      if (!line) return null;
+      if (!line.account) return t('vouchers.errors.lineAccount', { line: field + 1 });
+      if (line.account === form.cashAccount) return t('vouchers.errors.lineIsCash', { line: field + 1 });
+      if (!isVoucherAmount(normalizeAmount(line.amount))) return t('vouchers.errors.amount', { line: field + 1 });
+      return null;
+    }
+  }
 }
 
 // The sum of whole-VND amounts as a decimal string (BigInt: never a JS number).

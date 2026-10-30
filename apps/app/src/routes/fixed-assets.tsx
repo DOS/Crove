@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useParams } from '@tanstack/react-router';
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { useTranslations } from 'use-intl';
 import type { FixedAsset } from '@crove/kernel-contract';
 import { Alert, AlertDescription } from '@crove/ui/components/alert';
@@ -10,13 +10,25 @@ import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { TableCell, TableRow } from '@crove/ui/components/table';
+import { AmountInput } from '../components/amount-input.tsx';
 import { DateInput } from '../components/date-input.tsx';
 import { useChosenEntity } from '../components/entity-switcher.tsx';
-import { DataTable, Empty, ErrorText, PageHeader, Spinner, TableSkeleton } from '../components/ui.tsx';
+import { DataTable, Empty, ErrorText, FieldError, fieldControl, fieldErrorId, focusFirstInvalid, PageHeader, Spinner, TableSkeleton, useFieldErrors } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { apiFetch, errorMessage, getCurrentOrg, orpc, queryClient } from '../lib/api.ts';
 import { exportQuery } from '../lib/legal-entity-choice.ts';
-import { defaultAccounts, fixedAssetFormProblem, fixedAssetInput, monthLabel, previousMonth, recentMonths, type FixedAssetForm, type FixedAssetKind } from '../lib/fixed-assets.ts';
+import {
+  defaultAccounts,
+  FIXED_ASSET_FORM_FIELDS,
+  fixedAssetFieldProblem,
+  fixedAssetInput,
+  monthLabel,
+  previousMonth,
+  recentMonths,
+  type FixedAssetForm,
+  type FixedAssetFormProblem,
+  type FixedAssetKind,
+} from '../lib/fixed-assets.ts';
 import { localToday } from '../lib/reversal.ts';
 import { canEnterVoucher } from '../lib/vouchers.ts';
 
@@ -36,14 +48,33 @@ function AssetFormCard({ onClose }: { onClose: () => void }) {
     startMonth: localToday().slice(0, 7),
     months: '36',
   }));
-  const [touched, setTouched] = useState(false);
   // One key per form: a retry of the same entry returns the first result.
   const [idempotencyKey] = useState(() => crypto.randomUUID());
   const create = useMutation(orpc.fixedAssets.create.mutationOptions({ onSuccess: () => void queryClient.invalidateQueries() }));
   // Entered in the register of the entity chosen in the shell (#1280).
   const entity = useChosenEntity();
-  const problem = fixedAssetFormProblem(form);
   const set = (patch: Partial<FixedAssetForm>) => setForm((f) => ({ ...f, ...patch }));
+  // Each problem sits under its field, checked on leaving it and on submit (DESIGN.md §4.2, #2004); the accounts' sits
+  // under the last account field and names all three. The kernel checks again.
+  const ids = useId();
+  const idOf = (field: FixedAssetFormProblem) => `${ids}-${field}`;
+  const fields = useFieldErrors<FixedAssetFormProblem>((field) => (fixedAssetFieldProblem(form, field) ? t(`formProblems.${field}`) : null));
+  const control = (field: FixedAssetFormProblem) => fieldControl(idOf(field), { error: Boolean(fields.of(field)) });
+  const edited = (field: FixedAssetFormProblem, patch: Partial<FixedAssetForm>) => {
+    set(patch);
+    fields.edit(field);
+  };
+  const accountsInvalid = Boolean(fields.of('accounts'));
+  const account = { 'aria-invalid': accountsInvalid || undefined, 'aria-describedby': accountsInvalid ? fieldErrorId(idOf('accounts')) : undefined };
+  const accountInput = (key: 'assetAccount' | 'accumulatedAccount' | 'expenseAccount') => (
+    <Input
+      {...account}
+      className="mt-1 font-mono"
+      value={form[key]}
+      onChange={(e) => edited('accounts', { [key]: e.target.value })}
+      onBlur={(e) => fields.blur('accounts', e.target.value)}
+    />
+  );
 
   if (create.data) {
     return (
@@ -65,8 +96,11 @@ function AssetFormCard({ onClose }: { onClose: () => void }) {
         aria-label={t('newTitle')}
         onSubmit={(event) => {
           event.preventDefault();
-          setTouched(true);
-          if (problem || !entity.ready) return;
+          if (!fields.checkAll(FIXED_ASSET_FORM_FIELDS)) {
+            focusFirstInvalid(event.currentTarget);
+            return;
+          }
+          if (!entity.ready) return;
           create.mutate({ ...fixedAssetInput(form), legalEntityId: entity.legalEntityId, idempotencyKey });
         }}
       >
@@ -82,45 +116,98 @@ function AssetFormCard({ onClose }: { onClose: () => void }) {
               value={form.kind}
               onChange={(e) => {
                 const kind = e.target.value as FixedAssetKind;
-                set({ kind, ...defaultAccounts(kind) });
+                edited('accounts', { kind, ...defaultAccounts(kind) });
               }}
             >
               <NativeSelectOption value="fixed_asset">{t('kinds.fixed_asset')}</NativeSelectOption>
               <NativeSelectOption value="prepaid_cost">{t('kinds.prepaid_cost')}</NativeSelectOption>
             </NativeSelect>
           </label>
-          <label className="block text-xs">
-            <span className="text-subtle-foreground">{t('name')}</span>
-            <Input className="mt-1" value={form.name} maxLength={500} onChange={(e) => set({ name: e.target.value })} placeholder={t('namePlaceholder')} />
-          </label>
-          <label className="block text-xs">
-            <span className="text-subtle-foreground">{t('cost')}</span>
-            <Input className="mt-1" inputMode="numeric" value={form.cost} onChange={(e) => set({ cost: e.target.value })} placeholder="36.000.000" />
-          </label>
+          <div className="text-xs">
+            <label className="block">
+              <span className="text-subtle-foreground">{t('name')}</span>
+              <Input
+                {...control('name')}
+                className="mt-1"
+                value={form.name}
+                maxLength={500}
+                onChange={(e) => edited('name', { name: e.target.value })}
+                onBlur={(e) => fields.blur('name', e.target.value)}
+                placeholder={t('namePlaceholder')}
+              />
+            </label>
+            <FieldError id={idOf('name')} className="mt-1">
+              {fields.of('name')}
+            </FieldError>
+          </div>
+          <div className="text-xs">
+            <label className="block">
+              <span className="text-subtle-foreground">{t('cost')}</span>
+              <AmountInput
+                {...control('cost')}
+                className="mt-1 text-right tabular-nums"
+                value={form.cost}
+                onChange={(cost) => edited('cost', { cost })}
+                onBlur={(e) => fields.blur('cost', e.target.value)}
+                placeholder="36.000.000"
+              />
+            </label>
+            <FieldError id={idOf('cost')} className="mt-1">
+              {fields.of('cost')}
+            </FieldError>
+          </div>
           <label className="block text-xs">
             <span className="text-subtle-foreground">{t('assetAccount')}</span>
-            <Input className="mt-1 font-mono" value={form.assetAccount} onChange={(e) => set({ assetAccount: e.target.value })} />
+            {accountInput('assetAccount')}
           </label>
           {form.kind === 'fixed_asset' && (
             <label className="block text-xs">
               <span className="text-subtle-foreground">{t('accumulatedAccount')}</span>
-              <Input className="mt-1 font-mono" value={form.accumulatedAccount} onChange={(e) => set({ accumulatedAccount: e.target.value })} />
+              {accountInput('accumulatedAccount')}
             </label>
           )}
-          <label className="block text-xs">
-            <span className="text-subtle-foreground">{t('expenseAccount')}</span>
-            <Input className="mt-1 font-mono" value={form.expenseAccount} onChange={(e) => set({ expenseAccount: e.target.value })} />
-          </label>
-          <label className="block text-xs">
-            <span className="text-subtle-foreground">{t('startMonth')}</span>
-            <DateInput kind="month" className="mt-1 w-full" value={form.startMonth} onChange={(startMonth) => set({ startMonth })} />
-          </label>
-          <label className="block text-xs">
-            <span className="text-subtle-foreground">{t('months')}</span>
-            <Input className="mt-1" inputMode="numeric" value={form.months} onChange={(e) => set({ months: e.target.value })} />
-          </label>
+          <div className="text-xs">
+            <label className="block">
+              <span className="text-subtle-foreground">{t('expenseAccount')}</span>
+              {accountInput('expenseAccount')}
+            </label>
+            <FieldError id={idOf('accounts')} className="mt-1">
+              {fields.of('accounts')}
+            </FieldError>
+          </div>
+          <div className="text-xs">
+            <label className="block">
+              <span className="text-subtle-foreground">{t('startMonth')}</span>
+              <DateInput
+                kind="month"
+                id={idOf('startMonth')}
+                aria-describedby={fields.of('startMonth') ? fieldErrorId(idOf('startMonth')) : undefined}
+                className="mt-1 w-full"
+                value={form.startMonth}
+                onChange={(startMonth) => edited('startMonth', { startMonth })}
+              />
+            </label>
+            <FieldError id={idOf('startMonth')} className="mt-1">
+              {fields.of('startMonth')}
+            </FieldError>
+          </div>
+          <div className="text-xs">
+            <label className="block">
+              <span className="text-subtle-foreground">{t('months')}</span>
+              <Input
+                {...control('months')}
+                className="mt-1"
+                inputMode="numeric"
+                value={form.months}
+                onChange={(e) => edited('months', { months: e.target.value })}
+                onBlur={(e) => fields.blur('months', e.target.value)}
+              />
+            </label>
+            <FieldError id={idOf('months')} className="mt-1">
+              {fields.of('months')}
+            </FieldError>
+          </div>
         </div>
-        {touched && problem && <ErrorText>{t(`formProblems.${problem}`)}</ErrorText>}
         {create.error && <ErrorText>{errorMessage(create.error)}</ErrorText>}
         <div className="flex gap-2">
           <Button type="submit" disabled={create.isPending}>
