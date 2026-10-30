@@ -435,7 +435,10 @@ suite('bank statement import (#326)', () => {
   // ADR-0039, #2044 part 2a: a bank feed connection's accounts mapped to the org's bank accounts.
   const feed = async (path: string, who: Account, input?: unknown) => rpc(`bankFeeds/${path}`, await tokenFor(who), input, slug, feedApp);
   // Part 2b: the worker's sync of a connection, with the sandbox adapter and the vault the API sealed with.
-  const sync = (connectionId: string, org = orgId) => runBankFeedSync({ runtime: worker, broker: vault, providers: bankFeedProviders({ sandbox: true }) }, { orgId: org, connectionId });
+  // A fixed day, so the sandbox's days do not move under a test that crosses midnight.
+  const SYNC_NOW = () => new Date('2026-11-20T08:00:00Z');
+  const sync = (connectionId: string, org = orgId) =>
+    runBankFeedSync({ runtime: worker, broker: vault, providers: bankFeedProviders({ sandbox: true, now: SYNC_NOW }) }, { orgId: org, connectionId });
 
   it('offers the sandbox bank feed only where the deployment turns it on', async () => {
     expect(((await (await feedApp.request('/api/config')).json()) as { bankFeeds: unknown }).bankFeeds).toEqual({ sandbox: true });
@@ -451,7 +454,8 @@ suite('bank statement import (#326)', () => {
     // The API sealed the login and listed nothing: the worker's sync opens it and records the accounts it reaches.
     expect((await feed('listed', owner, { connectionId })).body).toEqual([]);
     expect(await sync(connectionId)).toMatchObject({ accounts: 2, pages: 0 });
-    expect((await feed('listed', viewer, { connectionId })).body.map((a: { externalAccountId: string }) => a.externalAccountId)).toEqual(['SBX-001', 'SBX-002']);
+    expect((await feed('listed', owner, { connectionId })).body.map((a: { externalAccountId: string }) => a.externalAccountId)).toEqual(['SBX-001', 'SBX-002']);
+    expect((await feed('listed', viewer, { connectionId })).status).toBe(403);
     // Sealed like any channel's: a credential row holds it, and no audit row or answer carries a sandbox secret.
     const stored = await admin(async (c) => (await c.query<{ provider: string }>('SELECT provider FROM crove_kernel.channel_connection WHERE org_id = $1 AND id = $2', [orgId, connectionId])).rows);
     expect(stored).toEqual([{ provider: 'bank_sandbox' }]);
@@ -554,8 +558,11 @@ suite('bank statement import (#326)', () => {
   it('stops syncing once the member who connected the feed may no longer use it', async () => {
     const connectionId = String((await feed('connectSandbox', owner, { displayName: 'Ngân hàng của chủ cũ' })).body.connectionId);
     await sync(connectionId);
-    // The connector is no longer an owner or admin: the channel layer no longer opens the credential for the worker.
+    // The connector is no longer an owner or admin: the channel layer no longer opens the credential for the worker,
+    // and the sync marks the connection expired, so the daily sweep leaves it until it is connected again.
     await admin((c) => c.query(`UPDATE crove_kernel.channel_connection SET connected_by = $3 WHERE org_id = $1 AND id = $2`, [orgId, connectionId, viewer.userId]));
-    await expect(sync(connectionId)).rejects.toBeTruthy();
+    expect(await sync(connectionId)).toEqual({ accounts: 0, pages: 0, stored: 0 });
+    expect(await admin(async (c) => (await c.query<{ status: string }>('SELECT status FROM crove_kernel.channel_connection WHERE org_id = $1 AND id = $2', [orgId, connectionId])).rows[0]?.status)).toBe('expired');
+    expect(await sync(connectionId)).toEqual({ accounts: 0, pages: 0, stored: 0 });
   });
 });

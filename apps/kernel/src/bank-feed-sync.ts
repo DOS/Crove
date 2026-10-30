@@ -5,10 +5,12 @@
 // stored and the cursor moved in one command (finance.bank_feed.record_pull). A retry or an overlapping pull stores
 // nothing twice: every line carries the bank's reference, which keys it (ADR-0021 section 6). The provider is the
 // deployment's adapter for the connection's provider; without one (the adapter switched off) the sync does nothing.
-// kernel.channel.credential refuses once the member who connected the account has left, so the sync stops then.
+// kernel.channel.credential refuses once the member who connected the account may no longer use it, or the connection
+// is no longer active: the sync then marks the connection expired, so the daily sweep skips it and an owner or admin
+// connects it again, rather than failing every day.
 import type { BankFeedProvider } from '@crove/bank-feed';
 import { BANK_FEED_MAX_ACCOUNTS } from '@crove/kernel-contract';
-import type { CredentialBroker, Runtime } from '@crove/kernel-runtime';
+import { DomainError, type CredentialBroker, type Runtime } from '@crove/kernel-runtime';
 
 const SYSTEM = { type: 'system' as const, component: 'finance.bank_feed' };
 // Pages one sync pulls per account at most; the next sync goes on from the cursor.
@@ -34,9 +36,20 @@ interface SealedChannelCredential {
 
 export async function runBankFeedSync(deps: BankFeedSyncDeps, job: BankFeedSyncJob): Promise<{ accounts: number; pages: number; stored: number }> {
   const options = { actor: SYSTEM, orgId: job.orgId };
-  const sealed = await deps.runtime.query<SealedChannelCredential>('kernel.channel.credential', { connectionId: job.connectionId }, options);
-  const provider = deps.providers[sealed.provider];
-  if (!provider) return { accounts: 0, pages: 0, stored: 0 };
+  let sealed: SealedChannelCredential;
+  try {
+    sealed = await deps.runtime.query<SealedChannelCredential>('kernel.channel.credential', { connectionId: job.connectionId }, options);
+  } catch (error) {
+    if (error instanceof DomainError && (error.code === 'CHANNEL_OWNER_LEFT' || error.code === 'CHANNEL_NOT_ACTIVE')) {
+      if (error.code === 'CHANNEL_OWNER_LEFT') {
+        await deps.runtime.execute('kernel.channel.mark_expired', { connectionId: job.connectionId, reason: 'owner_left' }, options);
+      }
+      return { accounts: 0, pages: 0, stored: 0 };
+    }
+    throw error;
+  }
+  if (!Object.hasOwn(deps.providers, sealed.provider)) return { accounts: 0, pages: 0, stored: 0 };
+  const provider = deps.providers[sealed.provider] as BankFeedProvider;
   const secret = deps.broker.open(
     { keyId: sealed.keyId, envelope: Buffer.from(sealed.envelope, 'base64') },
     { orgId: job.orgId, provider: sealed.provider, externalAccountId: sealed.externalAccountId },

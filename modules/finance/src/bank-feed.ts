@@ -138,10 +138,11 @@ export const bankFeedAccounts = defineQuery({
   },
 });
 
+// The managers' alone: the listing is org-wide (no entity), and only they map an account.
 export const bankFeedListed = defineQuery({
   name: 'finance.bank_feed.listed',
   input: z.object({ connectionId: zId }),
-  access: ALL,
+  access: MANAGERS,
   handler: async (ctx, input): Promise<Array<BankFeedListedAccount & { listedAt: string }>> => {
     const rows = await ctx.trx
       .selectFrom('crove_finance.bank_feed_listed_account')
@@ -154,18 +155,22 @@ export const bankFeedListed = defineQuery({
   },
 });
 
-// The mapped accounts of a connection and where each one's next pull starts, for the worker's sync.
+// The mapped accounts of a connection the provider still lists, and where each one's next pull starts, for the
+// worker's sync. A mapped account the provider no longer lists keeps its mapping and lines, and is not pulled.
 export const bankFeedPullDue = defineQuery({
   name: 'finance.bank_feed.pull_due',
   input: z.object({ connectionId: zId }),
   access: 'system',
   handler: async (ctx, input): Promise<Array<{ feedAccountId: string; externalAccountId: string; cursor: string | null }>> => {
     const rows = await ctx.trx
-      .selectFrom('crove_finance.bank_feed_account')
-      .select(['id', 'external_account_id', 'cursor'])
-      .where('org_id', '=', ctx.orgId)
-      .where('channel_connection_id', '=', input.connectionId)
-      .orderBy('external_account_id')
+      .selectFrom('crove_finance.bank_feed_account as a')
+      .innerJoin('crove_finance.bank_feed_listed_account as l', (j) =>
+        j.onRef('l.org_id', '=', 'a.org_id').onRef('l.channel_connection_id', '=', 'a.channel_connection_id').onRef('l.external_account_id', '=', 'a.external_account_id'),
+      )
+      .select(['a.id', 'a.external_account_id', 'a.cursor'])
+      .where('a.org_id', '=', ctx.orgId)
+      .where('a.channel_connection_id', '=', input.connectionId)
+      .orderBy('a.external_account_id')
       .execute();
     return rows.map((r) => ({ feedAccountId: r.id, externalAccountId: r.external_account_id, cursor: r.cursor }));
   },

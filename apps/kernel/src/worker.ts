@@ -1616,6 +1616,8 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
               // pulls the mapped ones.
               if (
                 finance &&
+                deps.channels?.bankFeeds &&
+                Object.keys(deps.channels.bankFeeds).length > 0 &&
                 ((row.type === 'kernel.channel.connected' && String(row.payload.provider).startsWith('bank_')) || row.type === 'finance.bank_feed.sync_requested')
               ) {
                 const connectionId = String(row.payload.connection_id);
