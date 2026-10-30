@@ -25,8 +25,12 @@ import {
   restoreAckKey,
   restoreAckStoreAlert,
   restoreReport,
+  readVerifyMarker,
+  VERIFY_MARKER_PREFIX,
   verifyArchive,
+  verifyMarkerKey,
   writeArchive,
+  writeVerifyMarker,
   type ArchiveBatch,
   type ArchiveHigh,
   type RestoreAck,
@@ -1043,6 +1047,55 @@ describe('series highs and the restore report (#2007)', () => {
     expect(await restoreAckStoreAlert(writableStore(batches, { [restoreAckKey(1)]: 'not json' }), at(1))).toContain(restoreAckKey(1));
     const { writtenAt: _blindAt, ...blindStore } = store();
     expect(await restoreAckStoreAlert(blindStore, at(30))).toContain('at a time the store cannot tell');
+  });
+
+  it('writes a verification marker for a run that passed, with the chain head and no tenant data, and reads it back from the store alone (#2082)', async () => {
+    const batches = chainOf([
+      { version: 7, rows: keptRows, highs: [high('5')] },
+      { version: 7, rows: lostRows, highs: [high('6')] },
+    ]);
+    const db = dbOf({ batches, recorded: 2, present: { [EPOCH]: keptRows, [at(1)]: lostRows }, highs: { [EPOCH]: [high('5')], [at(1)]: [high('6')] }, series: [{ series_id: SERIES, next_number: '7' }] });
+    const store = writableStore(batches);
+    const passed = await verifyArchive(db, store);
+    expect(passed.problems).toEqual([]);
+    expect(passed).toMatchObject({ ok: true, batches: 2, headChainSha256: batches[1]!.chainSha256 });
+
+    // Before the first marker, the store says when it wrote its first batch, so the prober can tell a new deployment
+    // from a verification that never passed.
+    expect(await readVerifyMarker(store)).toEqual({ key: null, writtenAt: null, problem: null, firstBatchAt: await store.writtenAt!(archiveKey(1)) });
+
+    const now = new Date('2026-10-30T02:15:07.123Z');
+    const key = await writeVerifyMarker(store, passed, now);
+    expect(key).toBe('verify/v1/20261030T021507Z.json');
+    expect(key).toBe(verifyMarkerKey(now));
+    // Only the time, the batch count and the chain hash: nothing of an org.
+    const body = JSON.parse(new TextDecoder().decode(store.objects.get(key!)!)) as Record<string, unknown>;
+    expect(body).toEqual({ format: 'crove-verify-marker', version: 1, verifiedAt: now.toISOString(), batches: 2, chainSha256: batches[1]!.chainSha256 });
+    expect(JSON.stringify(body)).not.toContain(ORG);
+    // Create-only: a second run in the same second writes nothing over it.
+    expect(await writeVerifyMarker(store, passed, now)).toBeNull();
+    // A run that did not pass writes none.
+    expect(await writeVerifyMarker(store, { ...passed, ok: false }, new Date('2026-10-31T02:15:07Z'))).toBeNull();
+    expect(await store.list(VERIFY_MARKER_PREFIX)).toEqual([key]);
+
+    // The prober reads the newest marker and the store's own write time for it, not the time the marker states.
+    const read = await readVerifyMarker(store);
+    expect(read).toEqual({ key, writtenAt: await store.writtenAt!(key!), problem: null, firstBatchAt: null });
+
+    // A newer marker that names a chain hash the store's batch does not hold, or that does not parse, is a problem.
+    const forged = writableStore(batches, {
+      [key!]: body,
+      'verify/v1/20261031T021507Z.json': { ...body, chainSha256: batches[0]!.chainSha256 },
+    });
+    expect((await readVerifyMarker(forged)).problem).toBe('it names a chain hash that batch 2 in the store does not hold');
+    const beyond = writableStore(batches, { 'verify/v1/20261031T021507Z.json': { ...body, batches: 3 } });
+    expect((await readVerifyMarker(beyond)).problem).toBe('it names a chain hash that batch 3 in the store does not hold');
+    const garbled = writableStore(batches, { 'verify/v1/20261031T021507Z.json': 'not json' });
+    expect((await readVerifyMarker(garbled)).problem).toBe('it does not read as a verification marker');
+    // A store with no batch yet: a marker of an empty run names no chain hash, and holds.
+    const empty = writableStore([]);
+    expect(await writeVerifyMarker(empty, { ...passed, batches: 0, headChainSha256: null }, now)).toBe(key);
+    expect((await readVerifyMarker(empty)).problem).toBeNull();
   });
 
   it('accepts a row lost with a time before the backup point, as a transaction still open at the backup is (#2020)', async () => {

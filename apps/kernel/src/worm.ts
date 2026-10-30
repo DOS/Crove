@@ -566,6 +566,8 @@ export interface ArchiveVerification {
   restoreAck: number | null;
   restoreAckWrittenAt: string | null;
   alertRestoreAck: boolean;
+  // The chain hash of the newest batch the run read (null with none): what its verification marker names (#2082).
+  headChainSha256: string | null;
 }
 
 // After a restore (#2020): the rows a restore lost, written to the archive store by the restore check
@@ -919,6 +921,7 @@ export async function verifyArchive(
     restoreAck,
     restoreAckWrittenAt: ackWritten ? ackWritten.toISOString() : null,
     alertRestoreAck,
+    headChainSha256: seq > 0 ? prev : null,
   };
   return result;
 }
@@ -938,6 +941,83 @@ export class ArchiveMismatchError extends Error {
     this.problems = result.problems;
     this.result = result;
   }
+}
+
+// The heartbeat of the nightly verification outside the database (#2082). The database owner can stop a verification
+// run from finishing (terminate its session, hold a lock, delete its pg-boss job) and can write archive_verification
+// rows of their own, so a signal that lives in the database cannot prove the verification ran. Each run that passes
+// writes a marker to the archive store instead: verify/v1/<UTC time>.json, create-only like a batch (Object Lock on s3),
+// holding only when the run verified, the newest batch's sequence and its chain hash, no tenant data. The prober reads
+// the newest marker from the store (readVerifyMarker) and alerts when the store wrote it more than about 26 hours ago,
+// or when it names a chain hash the store's batch does not hold. The marker's time that counts is the store's own
+// write time (the oldest version's LastModified on s3), which the writer cannot set.
+export const VERIFY_MARKER_PREFIX = 'verify/v1/';
+// Markers are kept this many days: the alert reads only the newest, and a year of them shows the history.
+export const VERIFY_MARKER_RETENTION_DAYS = 400;
+
+export interface VerifyMarker {
+  format: 'crove-verify-marker';
+  version: 1;
+  verifiedAt: string;
+  batches: number;
+  chainSha256: string | null;
+}
+
+export const verifyMarkerKey = (at: Date) => `${VERIFY_MARKER_PREFIX}${at.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z')}.json`;
+
+// Writes the marker of a run that passed; returns its key, or null for a run that did not pass (it writes none, so the
+// prober alerts once the newest marker grows old). A second run in the same second finds the key taken and writes none.
+export async function writeVerifyMarker(store: ArchiveStore, result: ArchiveVerification, now: Date = new Date()): Promise<string | null> {
+  if (!result.ok) return null;
+  const marker: VerifyMarker = { format: 'crove-verify-marker', version: 1, verifiedAt: now.toISOString(), batches: result.batches, chainSha256: result.headChainSha256 };
+  const key = verifyMarkerKey(now);
+  try {
+    await store.put(key, new TextEncoder().encode(JSON.stringify(marker)), { retentionDays: VERIFY_MARKER_RETENTION_DAYS });
+  } catch (error) {
+    if (error instanceof ArchiveObjectExistsError) return null;
+    throw error;
+  }
+  return key;
+}
+
+function parseVerifyMarker(bytes: Uint8Array): VerifyMarker | null {
+  try {
+    const value = JSON.parse(new TextDecoder().decode(bytes)) as VerifyMarker;
+    if (!value || value.format !== 'crove-verify-marker' || value.version !== 1 || typeof value.verifiedAt !== 'string') return null;
+    if (!Number.isSafeInteger(value.batches) || value.batches < 0) return null;
+    if (value.chainSha256 !== null && (typeof value.chainSha256 !== 'string' || !/^[0-9a-f]{64}$/.test(value.chainSha256))) return null;
+    return value;
+  } catch {
+    return null;
+  }
+}
+
+export interface VerifyMarkerState {
+  // The newest marker's key and when the store wrote it (null: no marker yet, or a store that cannot tell).
+  key: string | null;
+  writtenAt: Date | null;
+  // Why the marker cannot be trusted, if it cannot: it does not parse, or it names a chain hash the store's batch of
+  // that sequence does not hold.
+  problem: string | null;
+  // With no marker yet: when the store wrote its first batch (null with none), so a fresh deployment does not alert
+  // before its first nightly run.
+  firstBatchAt: Date | null;
+}
+
+// The newest verification marker in the store, read from the store alone (#2082): the prober's out-of-band check.
+export async function readVerifyMarker(store: ArchiveStore): Promise<VerifyMarkerState> {
+  const writtenAt = async (key: string) => (store.writtenAt ? await store.writtenAt(key) : null);
+  const key = (await store.list(VERIFY_MARKER_PREFIX)).at(-1) ?? null;
+  if (!key) return { key: null, writtenAt: null, problem: null, firstBatchAt: await writtenAt(archiveKey(1)) };
+  const bytes = await store.get(key);
+  const marker = bytes ? parseVerifyMarker(bytes) : null;
+  let problem: string | null = marker ? null : 'it does not read as a verification marker';
+  if (marker && marker.batches > 0) {
+    const batchBytes = await store.get(archiveKey(marker.batches));
+    const batch = batchBytes ? parseBatch(batchBytes) : null;
+    if (!batch || batch.chainSha256 !== marker.chainSha256) problem = `it names a chain hash that batch ${marker.batches} in the store does not hold`;
+  }
+  return { key, writtenAt: await writtenAt(key), problem, firstBatchAt: null };
 }
 
 // What the worker alerts before a verification run reads the database (#2020): the newest object under restores/v1/, by

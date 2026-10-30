@@ -17,10 +17,12 @@
 // /auth/v1 proxy at PUBLIC_URL, or PUBLIC_AUTH_URL when Auth is hosted elsewhere, or PROBER_AUTH_URL to name another
 // path), and an `auth` finding goes out after PROBER_AUTH_MISSES failed answers in a row. Before, nobody learned of an
 // Auth outage until a member could not sign in.
+import { createS3Client } from '@crove/kernel-runtime';
 import pg from 'pg';
 import { z } from 'zod';
 import { isHostedSupabase, modulesSetting } from './config.ts';
 import { probeStatus, writeStatusFile } from './status-page.ts';
+import { LocalArchiveStore, S3ArchiveStore, readVerifyMarker, type ArchiveStore } from './worm.ts';
 import { effectiveRepeatSeconds, memoryAlertGate, pgAlertGate, problemKey, type AlertGate, type GateResult } from './alert-gate.ts';
 import {
   WEBHOOK_ENV,
@@ -74,6 +76,23 @@ const schema = z.object({
   PROBER_MAX_ARCHIVE_VERIFY_AGE_SECONDS: seconds(93_600),
   PROBER_MAX_ARCHIVE_LAG_SECONDS: optional.pipe(z.coerce.number<string | undefined>().int().min(0).max(604_800).optional()),
   ARCHIVE_LAG_SECONDS: optional.pipe(z.coerce.number<string | undefined>().int().min(60).max(86_400).optional()),
+  // The verification's heartbeat outside the database (#2082): the newest marker the nightly verification wrote to the
+  // WORM store, read from the store itself, older than this (26 h), alerts. 0 turns it off. The store is the worker's:
+  // ARCHIVE_STORE=s3 reads ARCHIVE_S3_BUCKET with S3_ENDPOINT, S3_REGION and S3_FORCE_PATH_STYLE; local reads
+  // ARCHIVE_DIR (the image sets /data/archive; mount the archive volume read-only), and without ARCHIVE_DIR the check is
+  // off. Credentials: PROBER_ARCHIVE_S3_ACCESS_KEY_ID and PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY (a read-only key), else
+  // S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY, else the default credential chain.
+  PROBER_MAX_ARCHIVE_MARKER_AGE_SECONDS: seconds(93_600),
+  ARCHIVE_STORE: optional.pipe(z.enum(['local', 's3']).optional()),
+  ARCHIVE_DIR: optional,
+  ARCHIVE_S3_BUCKET: optional,
+  S3_ENDPOINT: optional.pipe(z.url({ protocol: /^https?$/ }).optional()),
+  S3_REGION: optional,
+  S3_FORCE_PATH_STYLE: optional.pipe(z.enum(['true', 'false']).optional()),
+  PROBER_ARCHIVE_S3_ACCESS_KEY_ID: optional,
+  PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY: optional,
+  S3_ACCESS_KEY_ID: optional,
+  S3_SECRET_ACCESS_KEY: optional,
   // AI document extraction (#1998): more than this many readings in PROBER_EXTRACTION_WINDOW_SECONDS whose every
   // attempt failed (the AI provider refused or did not answer, the parser sandbox was down) alert; a document that
   // cannot be read never does. 0 turns the check off.
@@ -124,7 +143,21 @@ export interface ProberConfig {
   // Failed answers in a row before it alerts (default 2); the time one answer may take (default 10 s).
   authMisses?: number;
   authTimeoutSeconds?: number;
+  // The verification marker check (#2082); unset: off.
+  archiveMarker?: { maxAgeSeconds: number; store: ArchiveStoreSettings } | undefined;
 }
+
+export type ArchiveStoreSettings =
+  | { kind: 'local'; dir: string }
+  | {
+      kind: 's3';
+      bucket: string;
+      region: string;
+      endpoint: string | undefined;
+      forcePathStyle: boolean;
+      accessKeyId: string | undefined;
+      secretAccessKey: string | undefined;
+    };
 
 export interface Thresholds {
   outboxAgeSeconds: number;
@@ -176,7 +209,49 @@ export function loadProberConfig(env: NodeJS.ProcessEnv = process.env, everySeco
     authAnonKey: raw.PUBLIC_AUTH_ANON_KEY,
     authMisses: raw.PROBER_AUTH_MISSES,
     authTimeoutSeconds: raw.PROBER_AUTH_TIMEOUT_SECONDS,
+    archiveMarker: archiveMarkerSettings(raw),
   };
+}
+
+function archiveMarkerSettings(raw: z.infer<typeof schema>): ProberConfig['archiveMarker'] {
+  const maxAgeSeconds = raw.PROBER_MAX_ARCHIVE_MARKER_AGE_SECONDS;
+  if (maxAgeSeconds === 0) return undefined;
+  if (raw.ARCHIVE_STORE === 's3') {
+    if (!raw.ARCHIVE_S3_BUCKET) throw new Error('invalid prober configuration: ARCHIVE_STORE=s3 needs ARCHIVE_S3_BUCKET');
+    const own = raw.PROBER_ARCHIVE_S3_ACCESS_KEY_ID !== undefined || raw.PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY !== undefined;
+    const accessKeyId = own ? raw.PROBER_ARCHIVE_S3_ACCESS_KEY_ID : raw.S3_ACCESS_KEY_ID;
+    const secretAccessKey = own ? raw.PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY : raw.S3_SECRET_ACCESS_KEY;
+    if (Boolean(accessKeyId) !== Boolean(secretAccessKey)) {
+      throw new Error('invalid prober configuration: set both PROBER_ARCHIVE_S3_ACCESS_KEY_ID and PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY, or neither');
+    }
+    return {
+      maxAgeSeconds,
+      store: {
+        kind: 's3',
+        bucket: raw.ARCHIVE_S3_BUCKET,
+        region: raw.S3_REGION ?? 'us-east-1',
+        endpoint: raw.S3_ENDPOINT,
+        forcePathStyle: raw.S3_FORCE_PATH_STYLE === 'true',
+        accessKeyId,
+        secretAccessKey,
+      },
+    };
+  }
+  return raw.ARCHIVE_DIR ? { maxAgeSeconds, store: { kind: 'local', dir: raw.ARCHIVE_DIR } } : undefined;
+}
+
+// The prober only reads: list, get and the store's write times. The lock settings are never used.
+export function proberArchiveStore(settings: ArchiveStoreSettings): ArchiveStore {
+  if (settings.kind === 'local') return new LocalArchiveStore(settings.dir);
+  const client = createS3Client({
+    bucket: settings.bucket,
+    region: settings.region,
+    endpoint: settings.endpoint,
+    accessKeyId: settings.accessKeyId,
+    secretAccessKey: settings.secretAccessKey,
+    forcePathStyle: settings.forcePathStyle,
+  });
+  return new S3ArchiveStore({ client, bucket: settings.bucket, lockMode: 'GOVERNANCE', retentionDays: 1 });
 }
 
 // Where the Auth check asks (#1994): <base>/health, the base being PROBER_AUTH_URL, else PUBLIC_AUTH_URL, else
@@ -401,6 +476,14 @@ export interface ProbeDeps {
   // Supabase Auth's failed answers in a row (#1994). runProber keeps one across --every probes; without it (one probe
   // a run, from cron) a single failed answer alerts, since nothing counts the runs before.
   authState?: { misses: number };
+  // The WORM store the verification marker is read from (#2082). Default: one built from config.archiveMarker.
+  archiveStore?: ArchiveStore;
+  // The marker check's own alert state, kept in the process like outageGate, never in the database (whose owner the
+  // check is about). runProber keeps one across --every probes; default: a fresh one.
+  markerGate?: AlertGate;
+  // When the probe loop started (runProber): with no marker in the store yet, the check waits the marker limit from then,
+  // so the first nightly run after an upgrade can write one.
+  startedAt?: Date;
 }
 
 // The miss count a probe loop starts with: as if the probe before had missed Auth, so a restart during an Auth outage
@@ -582,6 +665,17 @@ async function probe(config: ProberConfig, deps: ProbeDeps): Promise<{ code: num
         }
       : null;
   if (auth && !auth.ok && !authFinding) error(`[prober] Supabase Auth did not answer (${auth.reason}); ${authState.misses} of ${authLimit} misses before it alerts`);
+  // The verification marker (#2082), from the WORM store alone and before the database is read, notified through a gate
+  // the database does not hold: a database owner who stops the verification can neither hide nor silence it.
+  let markerDelivered = true;
+  let markerFinding: Finding | null = null;
+  if (config.archiveMarker) {
+    markerFinding = await checkVerifyMarker(config.archiveMarker, deps, now);
+    if (markerFinding) error(`[prober] FAIL ${markerFinding.check}: ${markerFinding.message}`);
+    const markerGate = deps.markerGate ?? memoryAlertGate(config.repeatSeconds);
+    const markerResult = await markerGate.decide(markerFinding ? markerFinding.check : null, now);
+    markerDelivered = await notify(markerGate, markerResult, notification(markerResult, { instance: config.instance, at }, markerFinding ? [markerFinding] : []));
+  }
   let health: HealthSnapshot;
   try {
     health = await (deps.readHealth ?? readHealth)(config.databaseUrl, config.deadLetterWindowSeconds, config.modules, config.thresholds.extractionWindowSeconds);
@@ -593,13 +687,13 @@ async function probe(config: ProberConfig, deps: ProbeDeps): Promise<{ code: num
     error(`[prober] FAIL probe: could not read crove_kernel.health(): ${reason}`);
     const findings: Finding[] = [{ check: 'probe', value: null, threshold: null, message: `the prober could not read crove_kernel.health(): ${reason}` }];
     const result = await outage.decide('probe', now);
-    const sent = await notify(outage, result, notification(result, { instance: config.instance, at }, findings));
+    const sent = (await notify(outage, result, notification(result, { instance: config.instance, at }, findings))) && markerDelivered;
     return { code: sent ? EXIT.probeFailed : EXIT.deliveryFailed, failing: null, at: now };
   }
 
   // The database answers again after an outage this process alerted about.
   const recovered = await outage.decide(null, now);
-  let delivered = await notify(outage, recovered, notification(recovered, { instance: config.instance, at }, []));
+  let delivered = (await notify(outage, recovered, notification(recovered, { instance: config.instance, at }, []))) && markerDelivered;
 
   const findings = evaluateHealth(health, config.thresholds, config.deadLetterWindowSeconds);
   if (authFinding) findings.push(authFinding);
@@ -628,9 +722,34 @@ async function probe(config: ProberConfig, deps: ProbeDeps): Promise<{ code: num
   }
   const alert = notification(result, { instance: config.instance, at, health: { ...health } }, findings);
   delivered = (await notify(gate, result, alert)) && delivered;
-  const failing = findings.map((f) => f.check);
+  const failing = [...findings, ...(markerFinding ? [markerFinding] : [])].map((f) => f.check);
   if (!delivered) return { code: EXIT.deliveryFailed, failing, at: now };
-  return { code: findings.length === 0 ? EXIT.ok : EXIT.unhealthy, failing, at: now };
+  return { code: failing.length === 0 ? EXIT.ok : EXIT.unhealthy, failing, at: now };
+}
+
+// The verification marker check (#2082): null when the newest marker is recent and names a chain hash the store's batch
+// holds, or when there is nothing to verify yet.
+export async function checkVerifyMarker(settings: NonNullable<ProberConfig['archiveMarker']>, deps: ProbeDeps, now: Date): Promise<Finding | null> {
+  const limit = settings.maxAgeSeconds;
+  const finding = (value: number | null, message: string): Finding => ({ check: 'archive_marker', value, threshold: limit, message: `${message} (docs/runbooks/worm-archive.md)` });
+  let state;
+  try {
+    state = await readVerifyMarker(deps.archiveStore ?? proberArchiveStore(settings.store));
+  } catch (e) {
+    const reason = (e instanceof Error ? e.message : String(e)).replace(/\s+/g, ' ').trim();
+    return finding(null, `the prober could not read the verification marker from the WORM archive store: ${reason}`);
+  }
+  if (state.problem) return finding(null, `the newest WORM verification marker ${state.key} cannot be trusted: ${state.problem}`);
+  if (state.key && !state.writtenAt) return finding(null, `the WORM archive store cannot tell when it wrote the verification marker ${state.key}`);
+  const from = state.writtenAt ?? state.firstBatchAt;
+  // No marker and no batch: nothing to verify yet.
+  if (!from) return null;
+  if (!state.key && deps.startedAt && now.getTime() - deps.startedAt.getTime() <= limit * 1000) return null;
+  const age = Math.max(Math.floor((now.getTime() - from.getTime()) / 1000), 0);
+  if (age <= limit) return null;
+  return state.key
+    ? finding(age, `the WORM archive store wrote the newest verification marker ${hours(age)} ago (limit ${hours(limit)}): the nightly verification has not passed since, or never finished`)
+    : finding(age, `the WORM archive store holds no verification marker, and wrote its first batch ${hours(age)} ago (limit ${hours(limit)}): no nightly verification has passed`);
 }
 
 export async function sendTestAlert(config: ProberConfig, deps: ProbeDeps = {}): Promise<number> {
@@ -736,7 +855,14 @@ export async function runProber(argv: readonly string[], env: NodeJS.ProcessEnv 
   if (args.backupOk) return sendBackupHeartbeat(config, deps);
   if (args.everySeconds === null) return probeOnce(config, deps);
   const every = args.everySeconds;
-  const looping = { ...deps, outageGate: deps.outageGate ?? memoryAlertGate(config.repeatSeconds), authState: deps.authState ?? initialAuthState(config) };
+  const looping = {
+    ...deps,
+    outageGate: deps.outageGate ?? memoryAlertGate(config.repeatSeconds),
+    authState: deps.authState ?? initialAuthState(config),
+    markerGate: deps.markerGate ?? memoryAlertGate(config.repeatSeconds),
+    startedAt: deps.startedAt ?? (deps.now ?? (() => new Date()))(),
+    ...(config.archiveMarker && !deps.archiveStore ? { archiveStore: proberArchiveStore(config.archiveMarker.store) } : {}),
+  };
   // Under Docker this is PID 1, which gets no default SIGTERM handling: stop between probes at once.
   process.once('SIGTERM', () => process.exit(EXIT.ok));
   const heartbeat = config.heartbeatUrl ? `, heartbeat to ${describeHeartbeat(config.heartbeatUrl)}` : '';

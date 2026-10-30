@@ -23,7 +23,8 @@ This runbook covers setting the archive up, reading its two alerts, and what to 
     - They are ids, a doc type, a period key and a number: no personal data.
     - Each value is checked against its row hash, which the chain covers. A value changed in the store fails the verification as `high_mismatch`.
 - **Where batches go.** Each batch is written once to `chain/v1/<sequence>.json` in the archive store, then recorded in `crove_kernel.archive_batch`.
-- **The nightly check.** At 03:10 Vietnam time the verifier reads every batch back from the store, checks the chain, and recomputes every row hash from the database. The result goes to `crove_kernel.archive_verification`.
+- **The nightly check.** At 03:10 Vietnam time the verifier reads every batch back from the store, checks the chain, and recomputes every row hash from the database. The result goes to `crove_kernel.archive_verification`. A run that passes also writes a marker to the store, `verify/v1/<UTC time>.json`, which the prober reads from the store alone ([The verification heartbeat](#the-verification-heartbeat-2082)).
+- **Markers.** A marker holds only when the run passed, how many batches it read and the chain hash of the newest one: no tenant data. Like a batch it is written once (create-only); on `s3` it is locked for 400 days. Add a lifecycle rule that expires objects under `verify/` after 400 days; the worker holds no delete permission.
 - **How alerts reach you.** Both jobs fail loudly:
   - A batch write that keeps failing fails its job (`kernel-archive-write`) after its retries.
   - A verifier run that finds a mismatch fails its job (`kernel-archive-verify`) at once, with a message that starts with `ARCHIVE_MISMATCH`.
@@ -58,6 +59,7 @@ For production, use `s3`.
    - `COMPLIANCE`: nobody can delete an object until its retention ends, the bucket's root account included. Switch to it once the setup is final.
 3. **Retention:** `ARCHIVE_RETENTION_DAYS`, default 3650 (10 years, plan §7.9). It applies to each batch from the moment it is written.
 4. **Credentials.** They need only `s3:PutObject`, `s3:PutObjectRetention`, `s3:GetObject`, `s3:ListBucket`, `s3:ListBucketVersions` and `s3:GetBucketObjectLockConfiguration` on the archive bucket. Do not grant any delete permission. `s3:ListBucketVersions` is needed since #2020: the verifier reads each key's versions, and without it every run fails with `AccessDenied`. If possible, use credentials apart from the evidence bucket's.
+   - **The prober's key (#2082).** The prober reads the verification markers from the bucket. Give it a key of its own that only reads: `s3:ListBucket` and `s3:ListBucketVersions` on the bucket, `s3:GetObject` on `verify/*` and `chain/*`. Set it as `PROBER_ARCHIVE_S3_ACCESS_KEY_ID` and `PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY` on the prober. Without them the prober uses `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY`, the worker's key, which works but hands the prober a key that writes.
 5. **After the first deploy, check the worker log.**
    - On start it prints `[archive] s3 bucket <name>, Object Lock <mode> for <days> days`.
    - Within a few minutes it prints `[archive] wrote N batch(es)`.
@@ -175,7 +177,7 @@ A restore brings the database back to its backup point. The archive store is not
         - because it repeats every night, a webhook down for a night, or a failing run, loses nothing.
 
         Every acknowledgement must match a real restore incident, recorded with its backup run. One that does not is a SEV1 security incident ([incidents.md](incidents.md)). This holds until restores get a credential of their own (below).
-      - **A verification that never finishes (not new here, and true of all WORM verification).** Someone with the database owner's access can stop the nightly verification from finishing: terminate its session, lock a table it reads, or delete its pg-boss job. They can also write `archive_verification` rows of their own, so any signal that lives only in the database can be hidden. The store-only alert above still posts before the run touches the database. The defence for the rest is a heartbeat outside the database, a check that the nightly verification ran, which is a follow-up of its own.
+      - **A verification that never finishes (not new here, and true of all WORM verification).** Someone with the database owner's access can stop the nightly verification from finishing: terminate its session, lock a table it reads, or delete its pg-boss job. They can also write `archive_verification` rows of their own, so any signal that lives only in the database can be hidden. The store-only alert above still posts before the run touches the database. For the rest, the prober checks the verification markers in the store, outside the database: a run that does not pass writes none, and the `archive_marker` alert fires once the newest is about a day old ([The verification heartbeat](#the-verification-heartbeat-2082)).
       - **Production step for later (owner):** give restores a store credential of their own, which the worker does not hold, and a bucket policy that denies the worker's key any write under `restores/`. Then the worker's key alone cannot write an acknowledgement, and the restore check runs with the restore credential. Until then, the alert above is the control.
       - Under GOVERNANCE, deleting the newest acknowledgement with the bypass permission leaves a delete marker, which the version check reports. Use COMPLIANCE in production.
       - **The backup point is the operator's word.** The check reads a restore by the point it is given. `restore.sh` takes it from the backup run, which the database owner does not control. Someone who runs the check by hand with a made-up point, on a database where rows were deleted, can have those rows read as lost to a restore, as long as every newer row is gone too. Run it by hand only right after a restore, with the run's `SNAPSHOT_AT`.
@@ -222,3 +224,24 @@ To look by hand:
 ```sh
 docker compose exec db psql -U postgres -c "SELECT max(verified_at) FROM crove_kernel.archive_verification"
 ```
+
+## The verification heartbeat (#2082)
+
+`archive_verify` reads the database, so whoever owns the database can fake it: stop the nightly run (terminate its session, lock a table it reads, delete its pg-boss job) and write an `archive_verification` row that says it passed. The verification markers are the check they cannot fake.
+
+- **What the worker writes.** Each verification run that passes writes `verify/v1/<UTC time>.json` to the archive store, after the run: `{"format":"crove-verify-marker","version":1,"verifiedAt":...,"batches":N,"chainSha256":...}`. It holds the time, the number of batches the run read and the chain hash of the newest one: no org, no row, no tenant data. It is create-only like a batch (`If-None-Match: *` and Object Lock on `s3`, a read-only file on `local`). A run that fails, or never finishes, writes none. A marker the worker cannot write posts `[archive] ALERT the verification passed, but its marker could not be written to the archive store`.
+- **What the prober checks.** On every probe, before it reads the database, the prober reads the newest marker from the store and alerts `archive_marker` when:
+  - the store wrote it more than `PROBER_MAX_ARCHIVE_MARKER_AGE_SECONDS` ago (93600, 26 h: a day and the slack of one late run). The time that counts is the store's own write time (the oldest version's `LastModified` on `s3`, the file's time on `local`), never the time the marker states;
+  - it does not parse, or names a chain hash that the store's batch of that sequence does not hold;
+  - the store cannot be read (a refused key, a bucket that cannot be reached);
+  - there is no marker yet, and the store wrote its first batch more than the limit ago. A probe loop that started less than the limit ago waits, so the first nightly run after an upgrade can write the first marker; one probe a run (cron) does not wait.
+- **Why the database owner cannot hide it.** The check reads only the store, and its alert state lives in the prober's process, never in the database (unlike the other checks, whose state the `crove_kernel.prober_alert_gate` row keeps). It alerts when the database cannot be read too. Writing a marker needs the store's write key, which the database does not hold.
+- **What it does not cover.** Someone who holds the worker's store key (the host, on `local` the archive volume) can write a marker without a run. The marker check is against the database owner; against the host, `s3` with Object Lock still keeps every batch, and the restore acknowledgement alerts above stay.
+- **Settings.** The prober reads the worker's store settings: `ARCHIVE_STORE`, and `ARCHIVE_S3_BUCKET`, `S3_ENDPOINT`, `S3_REGION`, `S3_FORCE_PATH_STYLE` for `s3`, or `ARCHIVE_DIR` for `local` (the image sets `/data/archive`; Compose mounts the `archive` volume read-only into the prober). Its key: [Setting up the store](#setting-up-the-store), step 4. `PROBER_MAX_ARCHIVE_MARKER_AGE_SECONDS=0` turns the check off; a prober run outside the image without `ARCHIVE_DIR` or `ARCHIVE_STORE=s3` does not check.
+- **When it fires.**
+  1. If `archive_verify` fires too, the verification is not running or keeps failing: follow `archive_verify` above.
+  2. If `archive_verify` does not fire, the database says the verification passed while the store holds no recent marker. Look for `[archive] verified` lines in the worker log for the last nights, and for the marker write alert. A `verified` line with no marker: the store refuses the write (fix the key or the bucket). No `verified` line while the database shows a recent pass: treat it as a SEV1 security incident ([incidents.md](incidents.md)), since something wrote `archive_verification` outside the verifier.
+  3. The marker cannot be trusted (a chain hash the batch does not hold): someone wrote a marker by hand. A SEV1 security incident.
+  4. The store cannot be read: check the prober's key and its permissions (above), and that the bucket answers.
+
+To list the markers by hand: `docker compose exec crove ls /data/archive/verify/v1 | tail -3` (local), or `aws s3api list-object-versions --bucket <archive bucket> --prefix verify/v1/` (s3).
