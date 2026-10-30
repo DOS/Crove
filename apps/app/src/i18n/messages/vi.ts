@@ -5,6 +5,7 @@ export const vi = {
   common: {
     toasts: 'Thông báo kết quả',
     undo: 'Hoàn tác',
+    toastShortcut: 'Nhấn {key} để tới nút {action}.',
     undoFailed: 'Chưa hoàn tác được: {reason}',
     datePlaceholder: 'dd/mm/yyyy',
     monthPlaceholder: 'mm/yyyy',

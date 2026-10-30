@@ -7,6 +7,7 @@ export const en = {
   common: {
     toasts: 'Results',
     undo: 'Undo',
+    toastShortcut: 'Press {key} to reach {action}.',
     undoFailed: 'Could not undo: {reason}',
     datePlaceholder: 'dd/mm/yyyy',
     monthPlaceholder: 'mm/yyyy',
