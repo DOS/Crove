@@ -153,6 +153,25 @@ export function pendingIds(items: readonly IntakeItem[]): string[] {
   });
 }
 
+// Read files whose proposal is still to be decided (#2009): the intake list asks about them again, without polling, when
+// a proposal changes, so a chip that said "waiting" follows the approval or the rejection.
+const UNDECIDED: ReadonlySet<string> = new Set(['pending', 'approved']);
+
+export function undecidedIds(items: readonly IntakeItem[]): string[] {
+  return leaves(items).flatMap((item) => (item.fileId && item.state === 'proposed' && item.proposalStatus && UNDECIDED.has(item.proposalStatus) ? [item.fileId] : []));
+}
+
+// The proposal statuses files.batch gave, on the items (an archive's entries included) whose file it answered for.
+export function withProposalStatuses(items: readonly IntakeItem[], files: readonly FileStatus[]): IntakeItem[] {
+  const byId = new Map(files.map((file) => [file.id, file]));
+  const apply = (item: IntakeItem): IntakeItem => {
+    const file = item.fileId ? byId.get(item.fileId) : undefined;
+    const entries = item.entries.length > 0 ? item.entries.map(apply) : item.entries;
+    return file && item.state === 'proposed' && file.status === 'proposed' ? { ...item, proposalStatus: file.proposalStatus, entries } : { ...item, entries };
+  };
+  return items.map(apply);
+}
+
 // Archives one files.batch call asks about: each holds at most 500 entries, so their entries always fit one answer.
 export const ARCHIVES_PER_POLL = Math.floor(MAX_BATCH_ENTRIES / 500);
 

@@ -3,6 +3,7 @@
 import { useQueries } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslations } from 'use-intl';
+import { MAX_BATCH_FILES } from '@crove/kernel-contract';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
@@ -19,7 +20,9 @@ import {
   pollGroups,
   precheck,
   summarize,
+  undecidedIds,
   uploaded,
+  withProposalStatuses,
   type IntakeItem,
 } from '../lib/intake.ts';
 import { fileChipVariant, fileProposal } from '../lib/status.ts';
@@ -137,6 +140,22 @@ export function useIntake(): Intake {
     const answers = latest.current.flatMap((poll) => poll.data ?? []);
     if (answers.length > 0) setItems((list) => applyBatch(list, answers));
   }, [stamp]);
+
+  // Files read into a proposal still to be decided (#2009): asked about again when a proposal changes (the stream's
+  // proposal hint), not polled, so the chip follows the approval or the rejection made in the Inbox.
+  const undecided = undecidedIds(items);
+  const watched = useQueries({
+    queries: Array.from({ length: Math.ceil(undecided.length / MAX_BATCH_FILES) }, (_, i) =>
+      orpc.files.batch.queryOptions({ input: { ids: undecided.slice(i * MAX_BATCH_FILES, (i + 1) * MAX_BATCH_FILES) } }),
+    ),
+  });
+  const decided = watched.map((query) => query.dataUpdatedAt).join(',');
+  const watchedLatest = useRef(watched);
+  watchedLatest.current = watched;
+  useEffect(() => {
+    const answers = watchedLatest.current.flatMap((query) => query.data ?? []);
+    if (answers.length > 0) setItems((list) => withProposalStatuses(list, answers));
+  }, [decided]);
 
   const clear = useCallback(() => {
     setItems([]);

@@ -32,7 +32,8 @@ export function hintMatches(hint: StreamHint, query: Query): boolean {
   const { id } = hint;
   switch (hint.type) {
     case 'proposal':
-      return path === 'inbox.list' || path === 'files.recent' || (path === 'inbox.get' && inputId(query) === id);
+      // files.batch: the intake list's files whose proposal still waits (#2009), so their chips follow its decision.
+      return path === 'inbox.list' || path === 'files.recent' || path === 'files.batch' || (path === 'inbox.get' && inputId(query) === id);
     case 'file':
     case 'extraction':
       // extraction carries the id of the file whose reading changed.
