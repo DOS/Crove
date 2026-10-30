@@ -321,6 +321,8 @@ suite('prober on PostgreSQL', () => {
     // Aggregates only: no org id or payload leaves the database.
     expect(JSON.stringify(body)).not.toContain(orgId);
     expect(Object.keys(body.crove.health).sort()).toEqual([
+      'archive_lag_seconds',
+      'archive_verify_age_seconds',
       'checked_at',
       'dead_letter_count',
       'inbound_oldest_age_seconds',
