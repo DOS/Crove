@@ -190,15 +190,18 @@ ORDER BY org_id, created_at;
 ROLLBACK;
 ```
 
-If it lists rows:
+If it lists rows, **stop**:
 - Do not tag the release. Raise them on #1928, with the org, the document and the entry of each row.
 - Do not delete or edit them: journal entries are append-only, and the WORM archive anchors them.
-- The owner and the accountant (#61) decide how each one is corrected in the books. The usual way is to reverse the entry and record the replacement or adjustment invoice as a new document.
+- The books cannot clear them either, so the validation would fail again on every deploy:
+  - a reversal does not remove the row;
+  - a reversal of revision 2 would need a second void of the document, which `purchase_document_void` (one per document) refuses.
+- The way out is a decision for the owner (with the accountant, #61, for the books), then a forward migration, tracked on #1928. For example, the validation could name the rows it accepts as they are.
 
 If a release with these migrations runs anyway:
 - The first migration commits, so no new revision 2 can be written.
 - The second fails on the check violation, and the deploy stops on that migration.
-- That half state refuses every new revision 2 and loses nothing. The validation succeeds on the next deploy, once no row is listed.
+- That half state refuses every new revision 2 and loses nothing. It stays until the forward migration above lands.
 
 ## Deploy a release
 
