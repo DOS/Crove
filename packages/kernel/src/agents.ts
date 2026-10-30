@@ -8,6 +8,7 @@
 // - Agents work only through tasks: checkout, comment, status, escalate, delegate. Every write is made under the
 //   lease the run holds (fencing token checked here, run checked by the database triggers).
 // - The worker starts and finishes runs as the system; an agent enters a context only through a live run.
+import { randomUUID } from 'node:crypto';
 import { sql, type Transaction } from 'kysely';
 import { z } from 'zod';
 import { tableWrite, zCheck, zId, type Check } from '@crove/kernel-contract';
@@ -1540,7 +1541,14 @@ export const budgetList = defineQuery({
 // may still return a kind and a title (the human path uses them); they are dropped here.
 // legalEntityId: the entity the preparer named (preparedEntity), carried to the worker that creates the proposal.
 const zPrepared = z.object({ command: z.string().min(1).max(200), payload: z.record(z.string(), z.unknown()), legalEntityId: zId.optional() });
-const zProposalRequested = z.object({ agentId: zId, runId: zId, taskId: zId, preparer: z.string().min(1).max(200), draft: zPrepared });
+// The request carries ids and codes only (#1949, ADR-0017 section 1): an event outlives every erasure, in the outbox and
+// its archive, and a draft names a party. The draft waits on the task (pending_draft) under draftId until the worker
+// creates the proposal from it. A request emitted before the switch carried the draft itself and is still read.
+const zProposalRequested = z.union([
+  z.object({ agentId: zId, runId: zId, taskId: zId, preparer: z.string().min(1).max(200), command: z.string().min(1).max(200), draftId: zId, legalEntityId: zId.optional() }),
+  z.object({ agentId: zId, runId: zId, taskId: zId, preparer: z.string().min(1).max(200), draft: zPrepared }),
+]);
+const zPendingDraft = zPrepared.extend({ id: zId });
 const zProposalApproved = z.object({ agentId: zId, runId: zId, taskId: zId, proposalId: zId, revision: z.number().int().positive() });
 
 // The largest draft payload an agent's request carries (UTF-8 bytes of its JSON), checked when it is recorded and
@@ -1563,7 +1571,7 @@ export const proposeFromTask = defineCommand({
   access: [],
   agent: { roles: 'any', taint: 'propagate' },
   // The preparer it runs declares its own.
-  writes: [tableWrite(TASK_TABLES, 'crove_kernel', 'task', LEASE_COLUMNS), RUN_TAINT_WRITE],
+  writes: [tableWrite(TASK_TABLES, 'crove_kernel', 'task', [...LEASE_COLUMNS, 'pending_draft']), RUN_TAINT_WRITE],
   target: (input) => ({ type: 'kernel.task', id: input.id }),
   handler: async (ctx, input) => {
     const agent = requireAgent(ctx);
@@ -1579,20 +1587,27 @@ export const proposeFromTask = defineCommand({
     if (payloadTooLarge(draft.data.payload)) {
       throw new DomainError('NOT_PROPOSABLE', 422, 'Đề xuất quá lớn', { preparer: input.preparer, reason: 'payload_too_large' });
     }
+    // The draft waits on the task; the event names it (#1949). A later request on the task replaces it, and the worker
+    // then finds an older request's draft gone.
+    const entity = preparedEntity(draft.data);
+    const draftId = randomUUID();
+    const pending: z.infer<typeof zPendingDraft> = { id: draftId, command: draft.data.command, payload: draft.data.payload, ...(entity ? { legalEntityId: entity } : {}) };
     await ctx.emit('kernel.agent.proposal_requested', {
       agentId: agent.agentId,
       runId: agent.runId,
       taskId: task.id,
       preparer: input.preparer,
-      draft: { command: draft.data.command, payload: draft.data.payload, ...(preparedEntity(draft.data) ? { legalEntityId: preparedEntity(draft.data) } : {}) },
+      command: draft.data.command,
+      draftId,
+      ...(entity ? { legalEntityId: entity } : {}),
     } satisfies z.infer<typeof zProposalRequested>);
     await ctx.trx
       .updateTable('crove_kernel.task')
-      .set({ status: 'waiting', checkout_run_id: null, lock_expires_at: null })
+      .set({ status: 'waiting', checkout_run_id: null, lock_expires_at: null, pending_draft: JSON.stringify(pending) })
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', task.id)
       .execute();
-    ctx.audit({ task: task.id, preparer: input.preparer, proposal_command: info.name, risk: info.risk });
+    ctx.audit({ task: task.id, preparer: input.preparer, proposal_command: info.name, risk: info.risk, draft: draftId });
     return { requested: true as const, command: info.name };
   },
 });
@@ -1723,8 +1738,14 @@ export const createAgentProposal = defineCommand({
   handler: async (ctx, input) => {
     const event = await outboxEvent(ctx, input.eventId, 'kernel.agent.proposal_requested', zProposalRequested);
     if (!event) return { proposalId: null, reason: 'no_event' as const };
-    const { agentId, runId, taskId, preparer, draft } = event.data;
-    const bound = await emittedBy(ctx.trx, ctx.orgId, event, 'kernel.task.propose', { type: 'kernel.task', id: taskId }, { preparer, proposal_command: draft.command });
+    const { agentId, runId, taskId, preparer } = event.data;
+    const command = 'draft' in event.data ? event.data.draft.command : event.data.command;
+    const draftId = 'draftId' in event.data ? event.data.draftId : null;
+    const bound = await emittedBy(ctx.trx, ctx.orgId, event, 'kernel.task.propose', { type: 'kernel.task', id: taskId }, {
+      preparer,
+      proposal_command: command,
+      ...(draftId ? { draft: draftId } : {}),
+    });
     const { rows } = bound
       ? await sql<{ run_tainted: boolean; run_status: string; task_tainted: boolean; agent_name: string; stopped: boolean; le_scope: string[] }>`
           SELECT r.tainted AS run_tainted, r.status AS run_status, t.tainted AS task_tainted, a.display_name AS agent_name, p.le_scope,
@@ -1742,6 +1763,28 @@ export const createAgentProposal = defineCommand({
     if (!facts) {
       ctx.audit({ event: event.id, created: false, reason: 'chain_mismatch' });
       return { proposalId: null, reason: 'chain_mismatch' as const };
+    }
+    // The draft the request names, taken off its task whatever comes next (#1949): no draft stays on a task once its
+    // request is answered. Gone or replaced by a later request on the task, it asks for nothing.
+    let draft: z.infer<typeof zPrepared>;
+    if ('draft' in event.data) {
+      draft = event.data.draft;
+    } else {
+      const row = await ctx.trx
+        .selectFrom('crove_kernel.task')
+        .select('pending_draft')
+        .where('org_id', '=', ctx.orgId)
+        .where('id', '=', taskId)
+        .forUpdate()
+        .executeTakeFirst();
+      const pending = zPendingDraft.safeParse(row?.pending_draft);
+      if (!pending.success || pending.data.id !== draftId || pending.data.command !== command) {
+        ctx.audit({ event: event.id, created: false, reason: 'draft_replaced' });
+        return { proposalId: null, reason: 'draft_replaced' as const };
+      }
+      await ctx.trx.updateTable('crove_kernel.task').set({ pending_draft: null }).where('org_id', '=', ctx.orgId).where('id', '=', taskId).execute();
+      const { command: pendingCommand, payload, legalEntityId } = pending.data;
+      draft = { command: pendingCommand, payload, ...(legalEntityId ? { legalEntityId } : {}) };
     }
     // A run cancelled by a kill switch or a stop (or failed, or expired) asks for nothing.
     if (facts.run_status !== 'running' && facts.run_status !== 'succeeded') {

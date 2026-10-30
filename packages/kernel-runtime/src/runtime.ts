@@ -6,6 +6,7 @@ import { v7 as uuidv7 } from 'uuid';
 import type { z } from 'zod';
 import { contextTaint, singleCell, type CellResolver, type Database, type Db, type MemberRole } from '@crove/db';
 import { DomainError, toDomainError } from './errors.ts';
+import { eventPayloadProblem } from './event-payload.ts';
 import { sha256Hex } from './storage.ts';
 
 export type Risk = 'R0' | 'R1' | 'R2' | 'R3';
@@ -1775,6 +1776,9 @@ export class Runtime {
         pending(async () => {
           refuseClosed('ctx.emit');
           if (!type.startsWith(`${def.name.split('.')[0]}.`)) throw new Error(`command ${def.name} cannot emit ${type}`);
+          // Ids and codes only (#1949): an event outlives every erasure, in the outbox and its archive.
+          const problem = eventPayloadProblem(payload);
+          if (problem) throw new Error(`command ${def.name} cannot emit ${type} with ${problem}`);
           const { rows } = await aside(() => sql<{ id: string }>`SELECT crove_kernel.emit(${type}, ${JSON.stringify(payload)}::jsonb, ${commandId}::uuid) AS id`.execute(trx));
           return rows[0]?.id ?? '';
         }),

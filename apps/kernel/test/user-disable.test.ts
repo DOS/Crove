@@ -4,13 +4,17 @@ import { describe, expect, it } from 'vitest';
 import { USER_DISABLE_EXIT, parseUserDisableArgs, runUserDisable, setUserDisabled } from '../src/user-disable.ts';
 
 describe('user-disable arguments', () => {
-  it('takes one account and a reason', () => {
-    expect(parseUserDisableArgs(['a@b.test', '--reason', ' spam '])).toEqual({ ref: 'a@b.test', reason: 'spam' });
-    expect(parseUserDisableArgs(['--', '--reason', 'x', '0190a1b2-0000-7000-8000-000000000001'])).toEqual({ ref: '0190a1b2-0000-7000-8000-000000000001', reason: 'x' });
+  it('takes one account, a reason and a code (other when none is given)', () => {
+    expect(parseUserDisableArgs(['a@b.test', '--reason', ' spam '])).toEqual({ ref: 'a@b.test', reason: 'spam', code: 'other' });
+    expect(parseUserDisableArgs(['--', '--reason', 'x', '0190a1b2-0000-7000-8000-000000000001', '--code', 'abuse'])).toEqual({
+      ref: '0190a1b2-0000-7000-8000-000000000001',
+      reason: 'x',
+      code: 'abuse',
+    });
   });
 
   it('refuses a missing account or reason, a second account and unknown flags', () => {
-    for (const argv of [[], ['a@b.test'], ['--reason', 'x'], ['a@b.test', '--reason', ''], ['a@b.test', '--reason', 'x'.repeat(501)], ['a@b.test', 'c@d.test', '--reason', 'x'], ['a@b.test', '--reason', 'x', '--force']]) {
+    for (const argv of [[], ['a@b.test'], ['--reason', 'x'], ['a@b.test', '--reason', ''], ['a@b.test', '--reason', 'x'.repeat(501)], ['a@b.test', 'c@d.test', '--reason', 'x'], ['a@b.test', '--reason', 'x', '--force'], ['a@b.test', '--reason', 'x', '--code', 'spam'], ['a@b.test', '--reason', 'x', '--code']]) {
       expect(() => parseUserDisableArgs(argv), argv.join(' ')).toThrow();
     }
   });
@@ -43,7 +47,7 @@ describe('user-disable arguments', () => {
         return undefined as never;
       },
     } as unknown as Parameters<typeof setUserDisabled>[0];
-    await expect(setUserDisabled(runtime, true, { ref: 'a@b.test', reason: 'x' })).rejects.toThrow(/audit note failed in org-a \(lock timeout\); run it again/);
+    await expect(setUserDisabled(runtime, true, { ref: 'a@b.test', reason: 'x', code: 'other' })).rejects.toThrow(/audit note failed in org-a \(lock timeout\); run it again/);
     expect(noted).toEqual(['org-b']);
   });
 });
