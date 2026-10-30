@@ -2103,8 +2103,14 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
     expect(declaredLabel?.kind).toBe('t435.declared');
     expect(declaredLabel?.title).toContain('t435.declared');
     expect(declaredLabel?.title).not.toContain('Đã kiểm tra');
-    // The event carries the command and the payload only.
-    expect(Object.keys((await eventPayload(declaredEvent)).draft as Record<string, unknown>).sort()).toEqual(['command', 'payload']);
+    // The event carries the command and the payload only; or, from #1949 on, ids and codes only: the command and the
+    // id of the draft, which waits on the task (step 1 of 2 accepts either).
+    const requested = await eventPayload(declaredEvent);
+    if (requested.draft !== undefined) {
+      expect(Object.keys(requested.draft as Record<string, unknown>).sort()).toEqual(['command', 'payload']);
+    } else {
+      expect(Object.keys(requested).filter((k) => k !== 'legalEntityId').sort()).toEqual(['agentId', 'command', 'draftId', 'preparer', 'runId', 'taskId']);
+    }
     await propose(await liveAgent(orgA, owner), echo('t260.prop_r1'));
     const named = await createFrom(await newestEvent(orgA, 'kernel.agent.proposal_requested'));
     const namedLabel = await proposalLabel(named.proposalId as string);

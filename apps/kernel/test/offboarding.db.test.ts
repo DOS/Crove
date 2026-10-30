@@ -220,6 +220,28 @@ suite('org offboarding on PostgreSQL (#38)', () => {
     const { org, owner, member } = await orgWithMember('Công ty Xuất');
     await runtime.execute('kernel.org.offboard', { confirmSlug: org.slug }, { actor: asMfa(owner.id), orgId: org.orgId });
 
+    // A system audit row, which names the worker process that wrote it (#1951): the org's copy leaves the name out.
+    const systemCommand = randomUUID();
+    const worker = await workerPool.connect();
+    try {
+      await worker.query('BEGIN');
+      await worker.query('SELECT crove_kernel.enter_system_context($1::uuid)', [org.orgId]);
+      await worker.query(
+        `INSERT INTO crove_kernel.audit_event (org_id, actor_type, command, command_id, outcome, input_sha256, detail)
+         VALUES ($1, 'system', 'test.system', $2, 'ok', repeat('0', 64), '{"rows": 1}')`,
+        [org.orgId, systemCommand],
+      );
+      await worker.query('COMMIT');
+    } finally {
+      worker.release();
+    }
+    const reader = new pg.Client({ connectionString: adminUrl });
+    await reader.connect();
+    const stamped = await reader
+      .query<{ detail: Record<string, unknown> }>('SELECT detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command_id = $2', [org.orgId, systemCommand])
+      .finally(() => reader.end());
+    expect(stamped.rows[0]?.detail).toMatchObject({ rows: 1, workerInstance: expect.any(String) });
+
     const generatedAt = new Date('2026-10-16T00:00:00Z');
     const record = await runOrgExport({ runtime: workerRuntime, store, sealer, retentionDays: 40 }, org.orgId, { now: () => generatedAt });
     // The tax portal's purchase lists are kept records (#465): an export carries them.
@@ -249,6 +271,8 @@ suite('org offboarding on PostgreSQL (#38)', () => {
     expect((await rowsOf('kernel.tenant_member')).map((r) => r.user_id).sort()).toEqual([owner.id, member.id].sort());
     expect((await rowsOf('kernel.legal_entity')).map((r) => [r.name, r.is_default])).toEqual([[expect.any(String), true]]);
     expect((await rowsOf('kernel.audit_event')).some((r) => r.command === 'kernel.org.offboard')).toBe(true);
+    expect((await rowsOf('kernel.audit_event')).find((r) => r.command_id === systemCommand)).toMatchObject({ actor_type: 'system', detail: { rows: 1 } });
+    expect((await rowsOf('kernel.audit_event')).every((r) => !(r.detail && typeof r.detail === 'object' && 'workerInstance' in r.detail))).toBe(true);
     const manifest = JSON.parse(decode(sealer.open(await store.get(record.manifestKey), exportAad(org.orgId, 'manifest'), 'aes-256-gcm'))) as OrgExportManifest;
     expect(manifest).toMatchObject({ orgId: org.orgId, generatedAt: '2026-10-16T00:00:00.000Z', snapshot: 'repeatable read', fileCount: 1, parts: record.parts });
     // The stored files are the kernel.file rows: key, generation and sha256 of each blob, which stays under org/.
