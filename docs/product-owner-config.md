@@ -119,9 +119,9 @@ The DOS organization ids are the same in every DOS repository.
   a fresh-context subagent given the diff and the issue; docs-only PRs skip
   both and need `pnpm docs:check`. A protected-path PR also gets the
   coordinator's independent security review before merge.
-- agent_effort: a session whose task touches a protected path runs on Opus
-  at effort high; other sessions (UI, docs, ADRs, ops alerts, tests,
-  design) run on Sonnet at effort max; Codex reviews at effort high
+- agent_effort: every sub-session runs on Sonnet 5.5 (`claude-sonnet-5-5`)
+  at effort xhigh, protected-path tasks included; the coordinator's security
+  review of a protected-path PR runs on Opus; Codex reviews at effort high
   (AGENTS.md, owner decisions 2026-10-27 and 2026-10-30).
 
 ## Sessions
