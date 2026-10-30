@@ -434,7 +434,7 @@ suite('org purge on PostgreSQL (#1024)', () => {
     const text = JSON.stringify(audits[0]?.detail);
     for (const secret of [s.ownerEmail, s.partyEmail, 'Đã xem', 'Bài đã duyệt', 'booked.xml', 'loose.xml', 'Mật khẩu']) expect(text).not.toContain(secret);
 
-    // Every other writer still meets the append-only rule on the two tables, the worker's own session included.
+    // Every other writer still meets the append-only rule on the two tables, the database owner's session included.
     const otherComment = await one('SELECT org_id, id FROM crove_kernel.task_comment WHERE org_id = $1 LIMIT 1', [other.org.orgId]);
     await expect(admin((c) => c.query('DELETE FROM crove_kernel.task_comment WHERE org_id = $1', [other.org.orgId]))).rejects.toThrow(/append-only/);
     await expect(admin((c) => c.query('UPDATE crove_social.post_approval SET comment = $2 WHERE org_id = $1', [other.org.orgId, 'x']))).rejects.toThrow(/append-only/);
@@ -520,6 +520,47 @@ suite('org purge on PostgreSQL (#1024)', () => {
       await inFlight.end();
       await late.end();
     }
+  });
+
+  // The append-only guard of task comments and post approvals lets a DELETE through only inside org_purge (#1032): the
+  // worker login in the system context of an offboarding org, with the purge's mark forged for that org, deletes and
+  // updates nothing by itself.
+  it('refuses the worker its own deletes of task comments and post approvals, the purge mark forged', async () => {
+    const s = await seed('Công ty Giả dấu');
+    await offboard(s.org.orgId);
+    const login = new URL(adminUrl);
+    login.username = 'crove_worker';
+    login.password = 'test-worker-pw';
+    const before = { comments: await count('crove_kernel.task_comment', s.org.orgId), approvals: await count('crove_social.post_approval', s.org.orgId) };
+    expect(before.comments).toBeGreaterThan(0);
+    expect(before.approvals).toBeGreaterThan(0);
+    const client = new pg.Client({ connectionString: login.toString() });
+    await client.connect();
+    try {
+      for (const statement of [
+        'DELETE FROM crove_kernel.task_comment WHERE org_id = $1',
+        'DELETE FROM crove_social.post_approval WHERE org_id = $1',
+        "UPDATE crove_kernel.task_comment SET body = 'x' WHERE org_id = $1",
+        "UPDATE crove_social.post_approval SET comment = 'x' WHERE org_id = $1",
+      ]) {
+        await client.query('BEGIN');
+        try {
+          await client.query('SELECT crove_kernel.enter_system_context($1)', [s.org.orgId]);
+          await client.query("SELECT pg_catalog.set_config('crove.org_purge', $1, true)", [s.org.orgId]);
+          const outcome = await client.query(statement, [s.org.orgId]).then(
+            (r) => `${r.rowCount ?? 0} row(s)`,
+            (e: Error) => e.message,
+          );
+          // Refused by the guard, or by the worker's grants or row policies before it: never a row changed.
+          expect([statement, outcome]).toEqual([statement, expect.stringMatching(/append-only|permission denied|^0 row\(s\)$/)]);
+        } finally {
+          await client.query('ROLLBACK');
+        }
+      }
+    } finally {
+      await client.end();
+    }
+    expect({ comments: await count('crove_kernel.task_comment', s.org.orgId), approvals: await count('crove_social.post_approval', s.org.orgId) }).toEqual(before);
   });
 
   it('leaves a held blob in place and reports it', async () => {

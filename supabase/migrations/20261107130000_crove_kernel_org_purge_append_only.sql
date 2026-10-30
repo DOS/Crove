@@ -18,6 +18,10 @@
 --   - the org is offboarding (org_purge closes it only at its end, under the tenant row lock it holds).
 -- TRUNCATE stays refused by append_only_truncate. Every other append-only table keeps reject_mutation.
 --
+-- The first check means "running as the role that owns org_purge", which owns most definers too, and any session can
+-- set crove.org_purge. So the bypass rests on no other definer of that owner deleting from these two tables: today
+-- org_purge is the only one, and a definer that does must stay out of the worker's reach or check this mark itself.
+--
 -- crove_kernel.org_purge is copied verbatim from 20261103200000_crove_kernel_org_purge_notes_todo.sql (the newest
 -- definition on main), with these deletes added before the keep lists are read: the lists then find no comment or
 -- approval, so nothing is pinned by them, and their 'pinned' counts read 0. The definer's rules are unchanged: the
