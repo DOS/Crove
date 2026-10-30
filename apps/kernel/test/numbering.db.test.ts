@@ -344,6 +344,7 @@ suite('gapless numbering on PostgreSQL (#1401)', () => {
     // A year after today and after every voucher the tests above dated.
     const year = Math.max(new Date().getFullYear() + 1, 2028);
     const from = (y: number) => `${y}-01-01`;
+    await admin((c) => c.query(`INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member') ON CONFLICT DO NOTHING`, [legacyOrg, member]));
 
     await expect(schedule(member, { docType: doc, reset: 'yearly', from: from(year) })).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 });
     // A boundary that is not 1 January, or one already past.
@@ -399,6 +400,25 @@ suite('gapless numbering on PostgreSQL (#1401)', () => {
       { period_key: '-', reset: 'never', last_doc_date: `${year}-12-20` },
       { period_key: String(year + 1), reset: 'yearly', last_doc_date: `${year + 1}-02-01` },
     ]);
+    // A switch written outside the definer into a year the '-' series already numbered: that series is a misfit now.
+    const tampered = await admin(async (c) => {
+      await c.query('BEGIN');
+      try {
+        await c.query(`UPDATE crove_kernel.number_series_policy SET schedule = $3::jsonb WHERE org_id = $1 AND doc_type = $2`, [
+          legacyOrg,
+          doc,
+          JSON.stringify([{ from: from(year), reset: 'yearly' }]),
+        ]);
+        await c.query('SET SESSION AUTHORIZATION crove_worker');
+        return (await c.query<{ ref: string }>('SELECT ref FROM crove_kernel.archive_series_misfits()')).rows.map((r) => r.ref).filter((ref) => ref.includes(legacyOrg));
+      } finally {
+        await c.query('ROLLBACK');
+      }
+    });
+    const dash = await admin(
+      async (c) => (await c.query<{ id: string }>(`SELECT id FROM crove_kernel.number_series WHERE org_id = $1 AND doc_type = $2 AND period_key = '-'`, [legacyOrg, doc])).rows[0]?.id,
+    );
+    expect(tampered).toEqual([`number_series:${legacyOrg}:${dash}`]);
     expect(checked.audits).toEqual([
       expect.objectContaining({ docType: doc, reset: 'monthly', from: from(year + 1), previous: 'never' }),
       expect.objectContaining({ docType: doc, reset: 'yearly', from: from(year + 1), previous: 'monthly' }),

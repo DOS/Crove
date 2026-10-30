@@ -11,16 +11,16 @@
 --                                   else the policy row's reset, else 'yearly' (crove_kernel.number_reset_at). A voucher
 --                                   dated before a switch keeps the old reset, so a back-dated voucher continues the
 --                                   series of its own year.
---   number_series.last_doc_date     the latest document date the series numbered, kept by number_allocate (NULL for a
---                                   series the reseed created and nothing numbered since). The rows of the #1401
---                                   backfill take their vouchers' dates.
+--   number_series.last_doc_date     the latest document date the series numbered, kept by number_allocate. The rows of
+--                                   the #1401 backfill take their vouchers' dates. A series the reseed raised or
+--                                   created after a restore holds numbers whose dates are not known here: 'infinity',
+--                                   which no later allocation lowers.
 --
 -- crove_kernel.number_series_policy_schedule(entity, doc type, reset, from) -> the reset that was in force on that date
 --   Owners and admins, in the org's context and entity scope, as number_series_policy_set. `from` is the first day of
 --   a year (NUMBER_RESET_FROM_INVALID, 22023) after today in Vietnam (NUMBER_RESET_FROM_PAST, 22023), and no number of
 --   the doc type may be dated on or after it (NUMBER_RESET_PERIOD_IN_USE, 55000): no series of a year or month from
---   then on, no '-' series whose last document date is then or later, and no series raised by the reseed whose dates
---   are unknown. A second switch from the same date replaces the first. It takes the advisory lock of number_allocate
+--   then on, and no '-' series whose last document date is then or later (a reseeded one's is 'infinity'). A second switch from the same date replaces the first. It takes the advisory lock of number_allocate
 --   and number_series_policy_set for (org, legal entity, doc type), so an allocation in flight finishes, and is seen,
 --   before it decides; an allocation after it already numbers by the new schedule.
 --
@@ -31,12 +31,23 @@
 -- archive_series_misfits (20261104190000) and the reseed's period check (20261107150000) give for every existing series
 -- what they gave before, and now take a scheduled switch into account. Their bodies are otherwise unchanged;
 -- number_period_key and number_allocate follow the schedule and keep last_doc_date.
+--
+-- A schedule edited outside the definer would change the numbering without changing the '-' series' anchored reset, so
+-- archive_series_misfits also reports a series whose last document date (when known) falls under a reset its period
+-- key does not fit: the latest document a '-' series numbered must have been dated under 'never', a year's under
+-- 'yearly'. For every series numbered under a schedule the definer wrote, and for every series when there is none,
+-- this holds; the reset in force on a date is the reset of the series that date's documents went to.
 SET LOCAL lock_timeout = '2s';
 
 ALTER TABLE crove_kernel.number_series_policy ADD COLUMN IF NOT EXISTS schedule jsonb NOT NULL DEFAULT '[]'::jsonb;
 ALTER TABLE crove_kernel.number_series_policy DROP CONSTRAINT IF EXISTS number_series_policy_schedule_array;
 ALTER TABLE crove_kernel.number_series_policy ADD CONSTRAINT number_series_policy_schedule_array
   CHECK (pg_catalog.jsonb_typeof(schedule) = 'array');
+-- Each switch is a 1 January and a known reset, so the reset in force on a date is never an unknown value.
+ALTER TABLE crove_kernel.number_series_policy DROP CONSTRAINT IF EXISTS number_series_policy_schedule_shape;
+ALTER TABLE crove_kernel.number_series_policy ADD CONSTRAINT number_series_policy_schedule_shape
+  CHECK (NOT pg_catalog.jsonb_path_exists(schedule,
+    '$[*] ? (!(@.reset == "yearly" || @.reset == "monthly" || @.reset == "never") || !(@.from like_regex "^[0-9]{4}-01-01$"))'));
 ALTER TABLE crove_kernel.number_series ADD COLUMN IF NOT EXISTS last_doc_date date;
 
 -- The backfilled series (#1401): the latest date of their vouchers; any other allocation, its day in Vietnam.
@@ -123,7 +134,7 @@ BEGIN
   INSERT INTO crove_kernel.number_series AS s (org_id, legal_entity_id, doc_type, period_key, next_number, last_doc_date)
   VALUES (p_org_id, p_legal_entity_id, p_doc_type, v_period, 2, p_doc_date)
   ON CONFLICT (org_id, legal_entity_id, doc_type, period_key)
-  DO UPDATE SET next_number = s.next_number + 1, last_doc_date = pg_catalog.greatest(s.last_doc_date, EXCLUDED.last_doc_date)
+  DO UPDATE SET next_number = s.next_number + 1, last_doc_date = greatest(s.last_doc_date, EXCLUDED.last_doc_date)
   RETURNING s.id, s.next_number - 1 INTO v_series, v_number;
   INSERT INTO crove_kernel.number_allocation (org_id, series_id, number, target_type, target_id, allocated_by)
   VALUES (p_org_id, v_series, v_number, p_target_type, p_target_id, crove_kernel.ctx_user_id())
@@ -220,7 +231,8 @@ END $$;
 REVOKE ALL ON FUNCTION crove_kernel.archive_series_hashes(timestamptz, timestamptz) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION crove_kernel.archive_series_hashes(timestamptz, timestamptz) TO crove_worker;
 
--- As in 20261104190000, with the reset of the series (number_series_reset).
+-- As in 20261104190000, with the reset of the series (number_series_reset), and the reset in force on its last document
+-- date (see the header).
 CREATE OR REPLACE FUNCTION crove_kernel.archive_series_misfits()
 RETURNS TABLE (ref text)
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
@@ -234,12 +246,19 @@ BEGIN
               WHEN 'monthly' THEN s.period_key ~ '^[0-9]{4}-(0[1-9]|1[0-2])$'
               ELSE s.period_key = '-'
             END
+     OR (pg_catalog.isfinite(s.last_doc_date)
+         AND NOT CASE crove_kernel.number_reset_at(s.org_id, s.legal_entity_id, s.doc_type, s.last_doc_date)
+                   WHEN 'yearly' THEN s.period_key ~ '^[0-9]{4}$'
+                   WHEN 'monthly' THEN s.period_key ~ '^[0-9]{4}-(0[1-9]|1[0-2])$'
+                   ELSE s.period_key = '-'
+                 END)
   ORDER BY 1;
 END $$;
 REVOKE ALL ON FUNCTION crove_kernel.archive_series_misfits() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION crove_kernel.archive_series_misfits() TO crove_worker;
 
--- As in 20261107150000, with the reset of the series (number_series_reset) in the period check.
+-- As in 20261107150000, with the reset of the series (number_series_reset) in the period check, and 'infinity' as the
+-- last document date of a series it raises or creates above 1.
 CREATE OR REPLACE FUNCTION crove_kernel.number_series_reseed(p_series_id uuid, p_legal_entity_id uuid, p_doc_type text,
                                                             p_period_key text, p_next bigint)
 RETURNS TABLE (series_id uuid, previous_next bigint, next_number bigint)
@@ -281,7 +300,8 @@ BEGIN
   FOR UPDATE;
   IF FOUND THEN
     IF v_previous < p_next THEN
-      UPDATE crove_kernel.number_series s SET next_number = p_next WHERE s.org_id = v_org AND s.id = v_id;
+      -- The numbers raised over hold documents whose dates are not known here (#1595).
+      UPDATE crove_kernel.number_series s SET next_number = p_next, last_doc_date = 'infinity' WHERE s.org_id = v_org AND s.id = v_id;
     END IF;
     series_id := v_id;
     previous_next := v_previous;
@@ -289,8 +309,9 @@ BEGIN
     RETURN NEXT;
     RETURN;
   END IF;
-  INSERT INTO crove_kernel.number_series (org_id, id, legal_entity_id, doc_type, period_key, next_number)
-  VALUES (v_org, coalesce(p_series_id, crove_kernel.uuid_v7()), p_legal_entity_id, p_doc_type, p_period_key, p_next)
+  INSERT INTO crove_kernel.number_series (org_id, id, legal_entity_id, doc_type, period_key, next_number, last_doc_date)
+  VALUES (v_org, coalesce(p_series_id, crove_kernel.uuid_v7()), p_legal_entity_id, p_doc_type, p_period_key, p_next,
+          CASE WHEN p_next > 1 THEN 'infinity'::date END)
   RETURNING id INTO v_id;
   series_id := v_id;
   previous_next := NULL;
