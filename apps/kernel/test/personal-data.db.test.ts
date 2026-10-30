@@ -763,6 +763,78 @@ suite('finding a person in the org (#923)', () => {
     expect(summary).toBe('Mã đối chiếu 23456789 của khách');
   });
 
+  // More free text (#1961): a task's title and description are redacted where they quote the person, as the owner,
+  // even on a closed, tainted task (the task guards hold agents, and taint and status stay); a bank statement
+  // line and a journal line's memo are kept, listed with their reasons. A number under 10 digits leaves tasks as they
+  // are too.
+  it("redacts a person quoted in tasks and keeps bank lines and journal line memos (#1961)", async () => {
+    const email = 'Ha.Le@Example.vn';
+    const seeded = await admin(async (c) => {
+      const task = async (title: string, description: string | null, closed = false) =>
+        (
+          await c.query<{ id: string }>(
+            `INSERT INTO crove_kernel.task (org_id, title, description, source, created_by_type, status, tainted)
+             VALUES ($1, $2, $3, 'human', 'user', $4, $5) RETURNING id`,
+            [org.orgId, title, description, closed ? 'done' : 'todo', closed],
+          )
+        ).rows[0]?.id as string;
+      const byTitle = await task(`Gọi lại cho ${email}`, null);
+      const byDescription = await task('Liên hệ khách', 'Số của chị Hà: 0976 543 210, gọi sau 9 giờ', true);
+      const short = await task('Đối chiếu mã 34567890', null);
+      const entity = (await c.query<{ id: string }>('SELECT id FROM crove_kernel.legal_entity WHERE org_id = $1 AND is_default', [org.orgId])).rows[0]?.id;
+      await c.query('BEGIN');
+      // A statement line as the bank wrote it, inserted without the import's checks, which this test is not about.
+      await c.query("SET LOCAL session_replication_role = 'replica'");
+      await c.query(
+        `INSERT INTO crove_finance.bank_line (org_id, bank_account, import_id, position, value_date, description, amount, legal_entity_id)
+         VALUES ($1, '1121', $2, 1, '2026-09-07', $3, 250000, $4)`,
+        [org.orgId, randomUUID(), `CK tu ${email} thanh toan`, entity],
+      );
+      await c.query('COMMIT');
+      await c.query('BEGIN');
+      const entry = (
+        await c.query<{ id: string }>(
+          `INSERT INTO crove_finance.journal_entry (org_id, entry_date, description, source_type, source_id) VALUES ($1, '2026-09-08', 'Chi phí', 'test.pdpl', $2) RETURNING id`,
+          [org.orgId, randomUUID()],
+        )
+      ).rows[0]?.id as string;
+      await c.query(
+        `INSERT INTO crove_finance.journal_line (org_id, entry_id, line_no, account_code, debit, credit, memo) VALUES ($1, $2, 1, '6422', 50000, 0, $3), ($1, $2, 2, '1111', 0, 50000, NULL)`,
+        [org.orgId, entry, `Hoàn ứng cho ${email}`],
+      );
+      await c.query('COMMIT');
+      return { byTitle, byDescription, short };
+    });
+
+    expect(columns(await find(email))).toEqual(['crove_finance.bank_line.description', 'crove_finance.journal_line.memo', 'crove_kernel.task.title']);
+    expect((await find('0976543210')).matches.filter((m) => m.column === 'crove_kernel.task.description').map((m) => m.rowId)).toEqual([seeded.byDescription]);
+
+    const byEmail = await erase(email);
+    expect(byEmail.erased).toContainEqual({ column: 'crove_kernel.task.title', rows: 1 });
+    for (const column of ['crove_finance.bank_line.description', 'crove_finance.journal_line.memo']) {
+      expect(byEmail.kept, column).toContainEqual({ column, rows: 1, reason: expect.any(String) });
+    }
+    const byPhone = await erase('+84 976 543 210');
+    expect(byPhone.erased).toContainEqual({ column: 'crove_kernel.task.description', rows: 1 });
+    const shortNumber = await erase('34567890');
+    expect(shortNumber.erased.map((e) => e.column)).not.toContain('crove_kernel.task.title');
+    expect(shortNumber.kept).toContainEqual({ column: 'crove_kernel.task.title', rows: 1, reason: ACTIVITY_SHORT_NUMBER_REASON });
+
+    const tasks = (
+      await admin((c) =>
+        c.query<{ id: string; title: string; description: string | null; status: string; tainted: boolean }>(
+          'SELECT id, title, description, status, tainted FROM crove_kernel.task WHERE id = ANY($1)',
+          [[seeded.byTitle, seeded.byDescription, seeded.short]],
+        ),
+      )
+    ).rows;
+    const row = (id: string) => tasks.find((t) => t.id === id);
+    expect(row(seeded.byTitle)).toMatchObject({ title: 'Gọi lại cho [đã xóa]', description: null });
+    // The closed, tainted task keeps its status and taint.
+    expect(row(seeded.byDescription)).toMatchObject({ title: 'Liên hệ khách', description: 'Số của chị Hà: [đã xóa], gọi sau 9 giờ', status: 'done', tainted: true });
+    expect(row(seeded.short)?.title).toBe('Đối chiếu mã 34567890');
+  });
+
   // Only the erase command reaches the redaction: an owner's own context, never a member's or a raw tenant call.
   it('redacts activity lines only in an owner context (#1948)', async () => {
     const app = new URL(adminUrl);
