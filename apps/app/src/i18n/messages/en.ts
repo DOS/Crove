@@ -2111,6 +2111,7 @@ export const en = {
     privateAuthor: '{name}: {items}',
     privateHint: 'Only their author can read private notes and to-dos, so only the counts show here, never the text.',
     formerMember: 'Former member',
+    privateOwnersOnly: "Only owners see how many of the members' private notes and to-dos hold this value. Every search is recorded in the activity log.",
     notify: 'Tell the authors',
     notified: 'Told {authors, plural, one {# member} other {# members}}',
     notifyHint: 'An erasure in {brand} deletes the private notes and to-dos whose authors were told, and puts "[đã xóa]" in place of this value in shared notes. Items written or changed after the notice stay until the next one. Give the authors time to read it before you erase, within the legal deadline.',

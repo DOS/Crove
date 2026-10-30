@@ -27,8 +27,8 @@ export const zPersonalDataResult = z.object({
   kind: z.enum(['email', 'digits']),
   matches: z.array(zPersonalDataMatch),
   // Private notes and to-dos that mention the value (#1678, ADR-0037): how many each author has, never which or their
-  // text, so the owner can tell the authors before an erasure.
-  privateItems: z.array(zPrivateItemCount),
+  // text, so the owner can tell the authors before an erasure. Owners only: null for an admin.
+  privateItems: z.array(zPrivateItemCount).nullable(),
   // A column had more matching rows than the finder returns.
   truncated: z.boolean(),
 });
@@ -44,5 +44,6 @@ export type PersonalDataErasure = z.infer<typeof zPersonalDataErasure>;
 
 // The owner's notice before an erasure (#1678, ADR-0037 section 5): the authors it told, with how many of their private
 // notes and to-dos mention the value. The erasure deletes only the items a notice named.
-export const zPersonalDataNotice = z.object({ authors: z.array(zPrivateItemCount) });
+// told: the authors a notification goes to (members now, the owner who sent it aside).
+export const zPersonalDataNotice = z.object({ authors: z.array(zPrivateItemCount), told: z.number().int() });
 export type PersonalDataNotice = z.infer<typeof zPersonalDataNotice>;

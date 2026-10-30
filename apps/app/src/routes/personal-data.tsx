@@ -36,7 +36,14 @@ export function PersonalDataPage() {
   const canRead = org.data?.role === 'owner' || org.data?.role === 'admin';
   const [draft, setDraft] = useState('');
   const [value, setValue] = useState('');
-  const found = useQuery({ ...orpc.org.personalData.queryOptions({ input: { value } }), enabled: canRead && value.length >= 3, retry: false });
+  // Each search is a command that leaves an audit row (#1678): run once per value, never again on focus or by itself.
+  const found = useQuery({
+    ...orpc.org.personalData.queryOptions({ input: { value } }),
+    enabled: canRead && value.length >= 3,
+    retry: false,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+  });
   const isOwner = org.data?.role === 'owner';
   const [confirming, setConfirming] = useState(false);
   // One key per confirmed erasure: a retry after the second factor returns the same result.
@@ -53,7 +60,8 @@ export function PersonalDataPage() {
   // The notice to the authors of private items, with a key of its own: a retry tells nobody twice.
   const [noticeKey, setNoticeKey] = useState(() => crypto.randomUUID());
   const notify = useMutation(orpc.org.personalDataNotify.mutationOptions());
-  const hasPrivate = (found.data?.privateItems.length ?? 0) > 0;
+  const privateItems = found.data?.privateItems ?? [];
+  const hasPrivate = privateItems.length > 0;
   const hasErasable = (found.data?.matches.some((m) => m.handling === 'erase') ?? false) || hasPrivate;
   const hasAny = (found.data?.matches.length ?? 0) > 0 || hasPrivate;
   const nameOf = (userId: string) => {
@@ -145,18 +153,19 @@ export function PersonalDataPage() {
         <Empty title={t('none')} />
       ) : (
         <>
-          {found.data.privateItems.length > 0 && (
+          {found.data.privateItems === null && <p className="mb-4 max-w-3xl text-xs text-muted-foreground">{t('privateOwnersOnly')}</p>}
+          {privateItems.length > 0 && (
             <div className="mb-4 max-w-3xl space-y-1 rounded-lg border p-3 text-sm" data-testid="private-items">
               <p className="font-medium text-foreground">
                 {t('privateSummary', {
                   items: items(
-                    found.data.privateItems.reduce((sum, p) => sum + p.notes, 0),
-                    found.data.privateItems.reduce((sum, p) => sum + p.todos, 0),
+                    privateItems.reduce((sum, p) => sum + p.notes, 0),
+                    privateItems.reduce((sum, p) => sum + p.todos, 0),
                   ),
-                  authors: found.data.privateItems.length,
+                  authors: privateItems.length,
                 })}
               </p>
-              {found.data.privateItems.map((p) => (
+              {privateItems.map((p) => (
                 <p key={p.authorUserId} className="text-xs text-muted-foreground">
                   {t('privateAuthor', { name: nameOf(p.authorUserId), items: items(p.notes, p.todos) })}
                 </p>
@@ -168,7 +177,7 @@ export function PersonalDataPage() {
                     {notify.isPending ? <Spinner className="text-current" /> : null}
                     {t('notify')}
                   </Button>
-                  {notify.data && <span className="text-xs text-foreground">{t('notified', { authors: notify.data.authors.length })}</span>}
+                  {notify.data && <span className="text-xs text-foreground">{t('notified', { authors: notify.data.told })}</span>}
                   {notify.error && <ErrorText>{errorMessage(notify.error)}</ErrorText>}
                 </div>
               )}

@@ -2107,6 +2107,7 @@ export const vi = {
     privateAuthor: '{name}: {items}',
     privateHint: 'Ghi chú riêng và việc riêng chỉ tác giả xem được, nên ở đây chỉ hiện số lượng, không hiện nội dung.',
     formerMember: 'Thành viên cũ',
+    privateOwnersOnly: 'Chỉ chủ sở hữu xem được số ghi chú riêng và việc riêng của thành viên có giá trị này. Mỗi lần tìm đều được ghi vào nhật ký hoạt động.',
     notify: 'Báo cho các tác giả',
     notified: 'Đã báo cho {authors, plural, other {# thành viên}}',
     notifyHint: 'Khi xóa, {brand} xóa hẳn các ghi chú riêng và việc riêng mà tác giả đã được báo, và thay giá trị này bằng "[đã xóa]" trong ghi chú chung. Mục viết hoặc sửa sau lần báo được giữ lại cho đến lần báo sau. Hãy chờ tác giả đọc thông báo trước khi xóa, trong thời hạn luật cho phép.',

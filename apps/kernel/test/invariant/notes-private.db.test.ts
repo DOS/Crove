@@ -346,7 +346,7 @@ suite('private notes on PostgreSQL (#1671, ADR-0037)', () => {
     }
   });
 
-  it('names and deletes private items that mention a value for owners only, deleting only what an earlier notice named (#1678)', async () => {
+  it('names and deletes private items that mention a value for owners only, deleting only what an earlier notice named and told (#1678)', async () => {
     const [named, unnamed] = [randomUUID(), randomUUID()];
     await admin((c) =>
       c.query(
@@ -355,41 +355,66 @@ suite('private notes on PostgreSQL (#1671, ADR-0037)', () => {
         [orgId, named, unnamed, users.author],
       ),
     );
-    const notice = (command: string, ids: string[]) =>
+    // A notice's audit row names each item as '<id>:<revision>' and its event; the dispatch's notification proves the
+    // author was told.
+    const event = randomUUID();
+    const notice = (command: string, ids: string[], key: string) =>
       admin((c) =>
         c.query(
           `INSERT INTO crove_kernel.audit_event (org_id, actor_type, actor_id, command, command_id, outcome, input_sha256, detail)
            VALUES ($1, 'user', $2, $3, $4, 'ok', $5, $6)`,
-          [orgId, users.owner, command, randomUUID(), 'k1:' + '0'.repeat(64), JSON.stringify({ kind: 'email', notes: ids, todos: [], authors: 1 })],
+          [orgId, users.owner, command, randomUUID(), 'k1:' + '0'.repeat(64), JSON.stringify({ kind: 'email', key, notes: ids, todos: [], authors: 1, event })],
         ),
       );
+    // The value's notice key: an owner's only, keyed, and different for another value.
+    const keyOf = (actor: Actor, value: string) => outcome(run(actor, async (c) => (await c.query<{ key: string }>(`SELECT crove_notes.private_notice_key('email', $1) AS key`, [value])).rows[0]?.key));
     try {
+      const keyed = await keyOf(member('an owner', () => users.owner), 'thu.ky@khach.example');
+      const other = await keyOf(member('an owner', () => users.owner), 'khac@khach.example');
+      expect(keyed).toMatchObject({ ok: true, value: expect.stringMatching(/^k1:[0-9a-f]{64}$/) });
+      expect(other).toMatchObject({ ok: true });
+      const key = keyed.ok ? String(keyed.value) : '';
+      expect(other.ok && other.value).not.toBe(key);
       const items = (actor: Actor) => outcome(run(actor, (c) => c.query(`SELECT * FROM crove_notes.private_notice_items('email', 'thu.ky@khach.example')`)));
       const owned = await items(member('an owner', () => users.owner));
       expect(owned).toMatchObject({ ok: true });
       if (owned.ok) {
-        // Ids and authors, never text.
-        expect(owned.value.fields.map((f) => f.name)).toEqual(['item_type', 'item_id', 'author_user_id']);
+        // Ids, authors and revisions, never text.
+        expect(owned.value.fields.map((f) => f.name)).toEqual(['item_type', 'item_id', 'author_user_id', 'revision']);
         expect(owned.value.rows).toEqual(
-          [named, unnamed].sort().map((id) => ({ item_type: 'note', item_id: id, author_user_id: users.author })),
+          [named, unnamed].sort().map((id) => ({ item_type: 'note', item_id: id, author_user_id: users.author, revision: 1 })),
         );
       }
       const erase = (actor: Actor) => outcome(run(actor, (c) => c.query(`SELECT * FROM crove_notes.private_erase('email', 'thu.ky@khach.example')`)));
       const owner = member('an owner', () => users.owner);
       // No notice yet: nothing is deleted, and both are counted as not told.
       expect(await erase(owner)).toMatchObject({ ok: true, value: { rows: [{ author_user_id: users.author, notes: '0', todos: '0', untold_notes: '2', untold_todos: '0' }] } });
-      // A row of another command naming an item is no notice.
-      await notice('kernel.personal_data.erase', [unnamed]);
-      await notice('kernel.personal_data.notify', [named]);
+      // A row of another command naming an item is no notice, nor is a notice of an earlier revision.
+      await notice('kernel.personal_data.erase', [`${unnamed}:1`], key);
+      // Nor is a notice sent for another value, which names both.
+      await notice('kernel.personal_data.notify', [`${named}:1`, `${unnamed}:1`], other.ok ? String(other.value) : '');
+      await notice('kernel.personal_data.notify', [`${named}:1`, `${unnamed}:7`], key);
+      const untold = { ok: true, value: { rows: [{ author_user_id: users.author, notes: '0', todos: '0', untold_notes: '2', untold_todos: '0' }] } };
+      // Named, but the author has no notification of that notice yet (the worker has not dispatched it): kept.
+      expect(await erase(owner)).toMatchObject(untold);
+      await admin((c) =>
+        c.query(`INSERT INTO crove_kernel.notification (org_id, user_id, kind, dedupe_key) VALUES ($1, $2, 'kernel.personal_data_notice', $3)`, [
+          orgId,
+          users.author,
+          `personal_data_notice:${event}`,
+        ]),
+      );
       expect(await erase(owner)).toMatchObject({ ok: true, value: { rows: [{ author_user_id: users.author, notes: '1', todos: '0', untold_notes: '1', untold_todos: '0' }] } });
       for (const actor of [member('an admin', () => users.admin), author, member('another member', () => users.member), member('a viewer', () => users.viewer), agentActor, system]) {
         expect(await items(actor), actor.name).toMatchObject({ ok: false, code: '42501' });
         expect(await erase(actor), actor.name).toMatchObject({ ok: false, code: '42501' });
+        expect(await keyOf(actor, 'thu.ky@khach.example'), actor.name).toMatchObject({ ok: false, code: '42501' });
       }
       // run() rolled the owner's erasure back: both notes are still there.
       expect((await admin((c) => c.query('SELECT count(*)::int AS n FROM crove_notes.note WHERE org_id = $1 AND id = ANY($2)', [orgId, [named, unnamed]]))).rows[0]).toEqual({ n: 2 });
     } finally {
       await admin((c) => c.query('DELETE FROM crove_notes.note WHERE org_id = $1 AND id = ANY($2)', [orgId, [named, unnamed]]));
+      await admin((c) => c.query(`DELETE FROM crove_kernel.notification WHERE org_id = $1 AND kind = 'kernel.personal_data_notice'`, [orgId]));
     }
   });
 

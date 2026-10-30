@@ -52,6 +52,10 @@ export const PII_TEXT_CASES: readonly PiiTextCase[] = [
   // Every regex character in an address is taken literally, and a letter outside ASCII as itself.
   { name: 'regex characters in an address', text: 'Gửi a(b)[c]{1}|d^e$f*g?h\\i@x.example.', value: 'a(b)[c]{1}|d^e$f*g?h\\i@x.example', redacted: `Gửi ${R}.` },
   { name: 'an address outside ASCII', text: 'Gửi đặng@x.example hôm nay', value: 'đặng@x.example', redacted: `Gửi ${R} hôm nay` },
+  // A letter outside ASCII is part of an address on either side (#1955 review), punctuation outside it is not.
+  { name: 'not after a letter outside ASCII', text: 'Gửi đab@x.example và Ăab@x.example', value: 'ab@x.example', redacted: 'Gửi đab@x.example và Ăab@x.example' },
+  { name: 'not before a letter outside ASCII', text: 'ab@x.exampleđ và ab@x.example.đông', value: 'ab@x.example', redacted: 'ab@x.exampleđ và ab@x.example.đông' },
+  { name: 'in curly quotes and before an ellipsis', text: 'Gửi “ab@x.example”, «ab@x.example» và ab@x.example…', value: 'ab@x.example', redacted: `Gửi “${R}”, «${R}» và ${R}…` },
   // But a list still finds each number.
   { name: 'a numbered list', text: '1. 0912 345 678', value: '0912345678', redacted: `1. ${R}` },
   { name: 'one number a line', text: '0912345678\n0987654321', value: '0912345678', redacted: `${R}\n0987654321` },

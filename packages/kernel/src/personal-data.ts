@@ -16,8 +16,8 @@
 // - not_personal: the name matches the pattern but the column holds no data about a person.
 import { sql, type RawBuilder } from 'kysely';
 import type { MemberRole } from '@crove/db';
-import { zPersonalDataQuery, type PersonalDataErasure, type PersonalDataNotice, type PersonalDataResult } from '@crove/kernel-contract';
-import { DomainError, defineCommand, defineQuery, type QueryContext } from '@crove/kernel-runtime';
+import { NOTE_BODY_MAX, NOTE_TITLE_MAX, zPersonalDataQuery, type PersonalDataErasure, type PersonalDataNotice, type PersonalDataResult } from '@crove/kernel-contract';
+import { DomainError, defineCommand, type QueryContext } from '@crove/kernel-runtime';
 
 const ADMINS: readonly MemberRole[] = ['owner', 'admin'];
 const OWNERS: readonly MemberRole[] = ['owner'];
@@ -229,9 +229,9 @@ function requireProbe(value: string): Probe {
   return probe;
 }
 
-// Every row of the org that holds the value, column by column (the finder's answer), and per author how many of their
-// private notes and to-dos mention it (ADR-0037: counted, never shown, whoever runs the finder).
-async function findPersonalData(trx: QueryContext['trx'], orgId: string, probe: Probe): Promise<PersonalDataResult> {
+// Every row of the org that holds the value, column by column (the finder's answer), and, when privateCounts, per author
+// how many of their private notes and to-dos mention it (ADR-0037: counted, never shown, whoever runs the finder).
+async function findPersonalData(trx: QueryContext['trx'], orgId: string, probe: Probe, privateCounts: boolean): Promise<PersonalDataResult> {
   const matches: PersonalDataResult['matches'] = [];
   let truncated = false;
   for (const [key, entry] of Object.entries(PERSONAL_DATA_COLUMNS) as Array<[string, PersonalDataColumn]>) {
@@ -256,21 +256,40 @@ async function findPersonalData(trx: QueryContext['trx'], orgId: string, probe: 
       matches.push({ column: key, handling, reason, rowId: typeof row.id === 'string' ? row.id : null, row });
     }
   }
-  const { rows: privateItems } = await sql<{ author_user_id: string; notes: string; todos: string }>`
-    SELECT author_user_id, notes, todos FROM crove_notes.private_matches(${probe.kind}, ${probeValue(probe)})`.execute(trx);
-  return {
-    kind: probe.kind === 'email' ? 'email' : 'digits',
-    matches,
-    privateItems: privateItems.map((p) => ({ authorUserId: p.author_user_id, notes: Number(p.notes), todos: Number(p.todos) })),
-    truncated,
-  };
+  const privateItems = privateCounts
+    ? (
+        await sql<{ author_user_id: string; notes: string; todos: string }>`
+          SELECT author_user_id, notes, todos FROM crove_notes.private_matches(${probe.kind}, ${probeValue(probe)})`.execute(trx)
+      ).rows.map((p) => ({ authorUserId: p.author_user_id, notes: Number(p.notes), todos: Number(p.todos) }))
+    : null;
+  return { kind: probe.kind === 'email' ? 'email' : 'digits', matches, privateItems, truncated };
 }
 
-export const personalDataFind = defineQuery({
+// The finder (#923), a command so that every search leaves an audit row (#1678 review): the counts of private items are
+// an oracle, since a probe of a guessed value (a salary, an ID number) tells whether some member's private note holds
+// it (ADR-0037 section 3). The row records who searched, the kind and the counts, never the value. Owners and admins
+// find rows; only owners, who send the notice and erase, get the private counts (privateItems null for an admin). It
+// changes nothing else.
+export const personalDataFind = defineCommand({
   name: 'kernel.personal_data.find',
   input: zPersonalDataQuery,
+  risk: 'R1',
+  sideEffect: 'internal',
   access: ADMINS,
-  handler: (ctx, input): Promise<PersonalDataResult> => findPersonalData(ctx.trx, ctx.orgId, requireProbe(input.value)),
+  handler: async (ctx, input): Promise<PersonalDataResult> => {
+    if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới tìm được dữ liệu cá nhân');
+    const probe = requireProbe(input.value);
+    const result = await findPersonalData(ctx.trx, ctx.orgId, probe, ctx.role === 'owner');
+    ctx.audit({
+      kind: probe.kind,
+      matches: result.matches.length,
+      truncated: result.truncated,
+      private: result.privateItems === null
+        ? null
+        : { authors: result.privateItems.length, notes: result.privateItems.reduce((n, p) => n + p.notes, 0), todos: result.privateItems.reduce((n, p) => n + p.todos, 0) },
+    });
+    return result;
+  },
 });
 
 // Why an erasure keeps the original files of posted invoices (issue #1009), with the end of their retention hold.
@@ -287,14 +306,15 @@ export const ERASED_TEXT_MARK = '[đã xóa]';
 // refused, never named in part.
 export const PERSONAL_DATA_NOTICE_ITEMS = 1000;
 export const PERSONAL_DATA_NOTICE_AUTHORS = PERSONAL_DATA_NOTICE_ITEMS;
-// Why an erasure keeps a private item that mentions the value: no notice named it (written or changed since the last
-// one, or never told), so its author does not know yet.
-export const UNTOLD_PRIVATE_REASON = 'A private item whose author was not told yet (written or changed since the last notice): send the notice, then erase again';
+// Why an erasure keeps a private item that mentions the value: no notice named it as it is now (written or changed since
+// the last one), or the notice's notification has not reached its author yet, so the author does not know yet.
+export const UNTOLD_PRIVATE_REASON = 'A private item whose author was not told yet (written or changed since the last notice, or its notification not sent yet): send the notice, wait, then erase again';
 
 // The owner's notice before an erasure (#1678, ADR-0037 section 5): the authors of private notes and to-dos that mention
 // the value are told how many of theirs do, so they know before the erasure deletes them. Nobody but the author reads
 // a private item: crove_notes.private_notice_items answers their ids and authors only, the audit row records the ids
-// (which the erasure checks, crove_notes.private_erase: it deletes only what a notice named), and the event
+// with the value's keyed notice key (which the erasure checks, crove_notes.private_erase: it deletes only what a notice
+// for the same value named, and only once its author got the notification), and the event
 // kernel.personal_data.notified carries the authors and counts, which kernel.notification.dispatch turns into one
 // notification each, sent even when the author turned that kind off. The value itself is in neither.
 export const personalDataNotify = defineCommand({
@@ -306,8 +326,8 @@ export const personalDataNotify = defineCommand({
   handler: async (ctx, input): Promise<PersonalDataNotice> => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới gửi được thông báo này');
     const probe = requireProbe(input.value);
-    const { rows } = await sql<{ item_type: string; item_id: string; author_user_id: string }>`
-      SELECT item_type, item_id, author_user_id FROM crove_notes.private_notice_items(${probe.kind}, ${probeValue(probe)})`.execute(ctx.trx);
+    const { rows } = await sql<{ item_type: string; item_id: string; author_user_id: string; revision: number }>`
+      SELECT item_type, item_id, author_user_id, revision FROM crove_notes.private_notice_items(${probe.kind}, ${probeValue(probe)})`.execute(ctx.trx);
     if (rows.length > PERSONAL_DATA_NOTICE_ITEMS) {
       throw new DomainError('PERSONAL_DATA_NOTICE_TOO_MANY', 422, `Có hơn ${PERSONAL_DATA_NOTICE_ITEMS} ghi chú riêng và việc nhắc đến giá trị này; hãy liên hệ hỗ trợ`);
     }
@@ -318,18 +338,25 @@ export const personalDataNotify = defineCommand({
       else a.todos += 1;
       authors.set(row.author_user_id, a);
     }
-    const told = [...authors.values()];
-    if (told.length > 0) {
-      await ctx.emit('kernel.personal_data.notified', { authors: told.map((a) => ({ userId: a.authorUserId, notes: a.notes, todos: a.todos })) });
-    }
-    // The ids the erasure checks; ids and counts only, never the value or the text.
-    ctx.audit({
-      kind: probe.kind,
-      notes: rows.filter((r) => r.item_type === 'note').map((r) => r.item_id),
-      todos: rows.filter((r) => r.item_type === 'todo').map((r) => r.item_id),
-      authors: told.length,
-    });
-    return { authors: told };
+    const named = [...authors.values()];
+    const { rows: keys } = await sql<{ key: string }>`SELECT crove_notes.private_notice_key(${probe.kind}, ${probeValue(probe)}) AS key`.execute(ctx.trx);
+    // The authors a notification reaches: members now, but the owner sending it (dispatch leaves out the actor).
+    const actor = ctx.actor.userId;
+    const members = named.length === 0 ? [] : await ctx.trx
+      .selectFrom('crove_kernel.tenant_member')
+      .select('user_id')
+      .where('org_id', '=', ctx.orgId)
+      .where('user_id', 'in', named.map((a) => a.authorUserId))
+      .execute();
+    const told = members.filter((m) => m.user_id !== actor).length;
+    const event =
+      named.length > 0 ? await ctx.emit('kernel.personal_data.notified', { authors: named.map((a) => ({ userId: a.authorUserId, notes: a.notes, todos: a.todos })) }) : null;
+    // What the erasure checks: the value's notice key, each item as '<id>:<revision>' (one changed since is not covered),
+    // and the event whose notifications prove the authors were told. A keyed hash, ids and counts, never the value or
+    // the text.
+    const items = (type: string) => rows.filter((r) => r.item_type === type).map((r) => `${r.item_id}:${r.revision}`);
+    ctx.audit({ kind: probe.kind, key: keys[0]?.key ?? null, notes: items('note'), todos: items('todo'), authors: named.length, told, event });
+    return { authors: named, told };
   },
 });
 
@@ -450,7 +477,8 @@ export const personalDataErase = defineCommand({
 
     // Notes (#1678, ADR-0037 section 5). A shared note stays and has every mention of the value edited out, the one
     // case where someone other than its author edits a note: ERASED_TEXT_MARK in its title and body where the value
-    // was, and a tag that mentions it goes (all of them, when the value only shows across tags). Its search words
+    // was, cut to the column's limit should the mark be longer than the value, and a tag that mentions it goes (all of
+    // them, when the value only shows across tags). Its search words
     // follow by trigger. A private note or to-do is its author's alone: crove_notes.private_erase deletes it whole,
     // unread, once an earlier notice told the author (kernel.personal_data.notify); one never named stays, reported
     // below as kept.
@@ -460,8 +488,8 @@ export const personalDataErase = defineCommand({
     const stillAcross = freeTextMatch(probe, sql`pg_catalog.array_to_string(${keptTags}, ' ')`);
     const { rows: notes } = await sql<{ title: boolean; body: boolean; tags: boolean }>`
       UPDATE crove_notes.note t
-         SET title = ${freeTextRedact(probe, sql.ref('t.title'), ERASED_TEXT_MARK)},
-             body = ${freeTextRedact(probe, sql.ref('t.body'), ERASED_TEXT_MARK)},
+         SET title = pg_catalog.left(${freeTextRedact(probe, sql.ref('t.title'), ERASED_TEXT_MARK)}, ${NOTE_TITLE_MAX}::int),
+             body = pg_catalog.left(${freeTextRedact(probe, sql.ref('t.body'), ERASED_TEXT_MARK)}, ${NOTE_BODY_MAX}::int),
              tags = CASE WHEN ${stillAcross} THEN '{}'::text[] ELSE ${keptTags} END,
              revision = t.revision + 1, updated_at = ${ctx.now}
         FROM crove_notes.note o
@@ -480,7 +508,7 @@ export const personalDataErase = defineCommand({
     add('crove_notes.todo', privateDeleted.todos);
 
     // What stays, with its reason: the finder's answer after the erasure (the cleared values no longer match).
-    const after = await findPersonalData(ctx.trx, ctx.orgId, probe);
+    const after = await findPersonalData(ctx.trx, ctx.orgId, probe, false);
     // Grouped by column and reason: rows of one column may be kept for different reasons (the default legal entity and
     // the others).
     const kept = new Map<string, { column: string; rows: number; reason: string }>();
@@ -520,5 +548,4 @@ export const personalDataErase = defineCommand({
   },
 });
 
-export const personalDataQueries = [personalDataFind];
-export const personalDataCommands = [personalDataNotify, personalDataErase];
+export const personalDataCommands = [personalDataFind, personalDataNotify, personalDataErase];
