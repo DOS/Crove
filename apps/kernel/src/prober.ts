@@ -22,7 +22,7 @@ import pg from 'pg';
 import { z } from 'zod';
 import { isHostedSupabase, modulesSetting } from './config.ts';
 import { probeStatus, writeStatusFile } from './status-page.ts';
-import { LocalArchiveStore, S3ArchiveStore, readVerifyMarker, type ArchiveStore } from './worm.ts';
+import { LocalArchiveStore, S3ArchiveStore, readVerifyMarker, type ArchiveS3Sender, type ArchiveStore } from './worm.ts';
 import { effectiveRepeatSeconds, memoryAlertGate, pgAlertGate, problemKey, type AlertGate, type GateResult } from './alert-gate.ts';
 import {
   WEBHOOK_ENV,
@@ -76,23 +76,6 @@ const schema = z.object({
   PROBER_MAX_ARCHIVE_VERIFY_AGE_SECONDS: seconds(93_600),
   PROBER_MAX_ARCHIVE_LAG_SECONDS: optional.pipe(z.coerce.number<string | undefined>().int().min(0).max(604_800).optional()),
   ARCHIVE_LAG_SECONDS: optional.pipe(z.coerce.number<string | undefined>().int().min(60).max(86_400).optional()),
-  // The verification's heartbeat outside the database (#2082): the newest marker the nightly verification wrote to the
-  // WORM store, read from the store itself, older than this (26 h), alerts. 0 turns it off. The store is the worker's:
-  // ARCHIVE_STORE=s3 reads ARCHIVE_S3_BUCKET with S3_ENDPOINT, S3_REGION and S3_FORCE_PATH_STYLE; local reads
-  // ARCHIVE_DIR (the image sets /data/archive; mount the archive volume read-only), and without ARCHIVE_DIR the check is
-  // off. Credentials: PROBER_ARCHIVE_S3_ACCESS_KEY_ID and PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY (a read-only key), both or
-  // neither; neither means the SDK's default credential chain (an instance or task role). Never the worker's
-  // S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY, which read and write every tenant document and write the archive: the
-  // prober gets no such key (Compose passes none), and ignores one in its environment.
-  PROBER_MAX_ARCHIVE_MARKER_AGE_SECONDS: seconds(93_600),
-  ARCHIVE_STORE: optional.pipe(z.enum(['local', 's3']).optional()),
-  ARCHIVE_DIR: optional,
-  ARCHIVE_S3_BUCKET: optional,
-  S3_ENDPOINT: optional.pipe(z.url({ protocol: /^https?$/ }).optional()),
-  S3_REGION: optional,
-  S3_FORCE_PATH_STYLE: optional.pipe(z.enum(['true', 'false']).optional()),
-  PROBER_ARCHIVE_S3_ACCESS_KEY_ID: optional,
-  PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY: optional,
   // AI document extraction (#1998): more than this many readings in PROBER_EXTRACTION_WINDOW_SECONDS whose every
   // attempt failed (the AI provider refused or did not answer, the parser sandbox was down) alert; a document that
   // cannot be read never does. 0 turns the check off.
@@ -115,6 +98,30 @@ const schema = z.object({
   // How many probes in a row Auth must fail to answer before it alerts (one blip is not an outage); 0: no Auth check.
   PROBER_AUTH_MISSES: z.coerce.number().int().min(0).max(100).default(2),
   PROBER_AUTH_TIMEOUT_SECONDS: z.coerce.number().int().min(1).max(60).default(10),
+});
+
+// The verification marker check's own settings (#2082), parsed apart from the rest (#2094): a bad one disables only that
+// check, which then reports it, and never stops the other probes or the backup and test alerts.
+const DEFAULT_MARKER_AGE_SECONDS = 93_600;
+// The newest marker the nightly verification wrote to the WORM store, read from the store itself, older than this (26 h)
+// alerts. 0 turns it off. The store is the worker's: ARCHIVE_STORE=s3 reads ARCHIVE_S3_BUCKET with S3_ENDPOINT, S3_REGION
+// and S3_FORCE_PATH_STYLE; local reads ARCHIVE_DIR (the image sets /data/archive; mount the archive volume read-only), and
+// without ARCHIVE_DIR the check is off. Credentials: PROBER_ARCHIVE_S3_ACCESS_KEY_ID and PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY
+// (a read-only key), both or neither; neither means the SDK's default credential chain (an instance or task role).
+// Never the worker's S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY, which read and write every tenant document and write the
+// archive: Compose passes the prober none, and with one in its environment and no pair of its own the check refuses.
+const markerAge = seconds(DEFAULT_MARKER_AGE_SECONDS);
+const archiveSchema = z.object({
+  ARCHIVE_STORE: optional.pipe(z.enum(['local', 's3']).optional()),
+  ARCHIVE_DIR: optional,
+  ARCHIVE_S3_BUCKET: optional,
+  S3_ENDPOINT: optional.pipe(z.url({ protocol: /^https?$/ }).optional()),
+  S3_REGION: optional,
+  S3_FORCE_PATH_STYLE: optional.pipe(z.enum(['true', 'false']).optional()),
+  PROBER_ARCHIVE_S3_ACCESS_KEY_ID: optional,
+  PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY: optional,
+  // Read only to tell that the worker's key is in this environment; never used.
+  S3_ACCESS_KEY_ID: optional,
 });
 
 export interface ProberConfig {
@@ -143,8 +150,8 @@ export interface ProberConfig {
   // Failed answers in a row before it alerts (default 2); the time one answer may take (default 10 s).
   authMisses?: number;
   authTimeoutSeconds?: number;
-  // The verification marker check (#2082); unset: off.
-  // A setting the check cannot use (error) makes it report, never stops the prober: its backup and test alerts must go out.
+  // The verification marker check (#2082); unset: off. A setting the check cannot use (error) disables the check, which
+  // then reports it on every probe: it never stops the other probes or the backup and test alerts (#2094).
   archiveMarker?: ({ maxAgeSeconds: number } & ({ store: ArchiveStoreSettings } | { error: string })) | undefined;
 }
 
@@ -210,18 +217,38 @@ export function loadProberConfig(env: NodeJS.ProcessEnv = process.env, everySeco
     authAnonKey: raw.PUBLIC_AUTH_ANON_KEY,
     authMisses: raw.PROBER_AUTH_MISSES,
     authTimeoutSeconds: raw.PROBER_AUTH_TIMEOUT_SECONDS,
-    archiveMarker: archiveMarkerSettings(raw),
+    archiveMarker: archiveMarkerSettings(env),
   };
 }
 
-function archiveMarkerSettings(raw: z.infer<typeof schema>): ProberConfig['archiveMarker'] {
-  const maxAgeSeconds = raw.PROBER_MAX_ARCHIVE_MARKER_AGE_SECONDS;
+function archiveMarkerSettings(env: NodeJS.ProcessEnv): ProberConfig['archiveMarker'] {
+  // The limit first: 0 turns the check off whatever else is wrong with the archive settings.
+  const age = markerAge.safeParse(env.PROBER_MAX_ARCHIVE_MARKER_AGE_SECONDS);
+  if (!age.success) return { maxAgeSeconds: DEFAULT_MARKER_AGE_SECONDS, error: 'invalid archive settings: PROBER_MAX_ARCHIVE_MARKER_AGE_SECONDS' };
+  const maxAgeSeconds = age.data;
   if (maxAgeSeconds === 0) return undefined;
+  const parsed = archiveSchema.safeParse(env);
+  if (!parsed.success) {
+    // The names only: a value may be a secret or an internal URL.
+    const fields = [...new Set(parsed.error.issues.map((i) => i.path.join('.')))].join(', ');
+    return { maxAgeSeconds, error: `invalid archive settings: ${fields}` };
+  }
+  const raw = parsed.data;
   if (raw.ARCHIVE_STORE === 's3') {
     if (!raw.ARCHIVE_S3_BUCKET) return { maxAgeSeconds, error: 'ARCHIVE_STORE=s3 needs ARCHIVE_S3_BUCKET' };
     const own = raw.PROBER_ARCHIVE_S3_ACCESS_KEY_ID !== undefined || raw.PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY !== undefined;
     if (own && (!raw.PROBER_ARCHIVE_S3_ACCESS_KEY_ID || !raw.PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY)) {
       return { maxAgeSeconds, error: 'set both PROBER_ARCHIVE_S3_ACCESS_KEY_ID and PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY, or neither' };
+    }
+    // The worker's key in this environment (a prober run from the shared .env, say) and none of its own: the default
+    // credential chain could then resolve to the worker's role, which writes. Refuse rather than guess.
+    if (!own && raw.S3_ACCESS_KEY_ID) {
+      return {
+        maxAgeSeconds,
+        error:
+          "ARCHIVE_STORE=s3 and S3_ACCESS_KEY_ID (the worker's key) is set, but the prober's own PROBER_ARCHIVE_S3_ACCESS_KEY_ID and PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY are not: " +
+          "set them to a read-only key, or unset S3_ACCESS_KEY_ID in the prober's environment to use the default credential chain",
+      };
     }
     // Neither set: the default credential chain, never the worker's S3_* key.
     return {
@@ -240,18 +267,48 @@ function archiveMarkerSettings(raw: z.infer<typeof schema>): ProberConfig['archi
   return raw.ARCHIVE_DIR ? { maxAgeSeconds, store: { kind: 'local', dir: raw.ARCHIVE_DIR } } : undefined;
 }
 
+// Per call to the store: a store that takes the connection and never answers fails the call, and one more attempt, inside
+// the deadline of the whole read (MARKER_TIMEOUT_MS), which also aborts what is still in flight (#2094).
+const STORE_TIMEOUTS = { connectionTimeoutMs: 5_000, requestTimeoutMs: 10_000, maxAttempts: 2 };
+// One client per settings, so the credentials the SDK resolves (an instance role, say) are kept between probes.
+const proberClients = new WeakMap<ArchiveStoreSettings, ArchiveS3Sender>();
+
+// Sends every call with the signal, so aborting it ends the calls still waiting.
+function abortable(client: ArchiveS3Sender, signal: AbortSignal): ArchiveS3Sender {
+  return { send: ((command: never, options?: object) => client.send(command, { ...options, abortSignal: signal })) as ArchiveS3Sender['send'] };
+}
+
 // The prober only reads: list, get and the store's write times. The lock settings are never used.
-export function proberArchiveStore(settings: ArchiveStoreSettings): ArchiveStore {
+export function proberArchiveStore(settings: ArchiveStoreSettings, options: { signal?: AbortSignal; client?: ArchiveS3Sender } = {}): ArchiveStore {
   if (settings.kind === 'local') return new LocalArchiveStore(settings.dir);
-  const client = createS3Client({
-    bucket: settings.bucket,
-    region: settings.region,
-    endpoint: settings.endpoint,
-    accessKeyId: settings.accessKeyId,
-    secretAccessKey: settings.secretAccessKey,
-    forcePathStyle: settings.forcePathStyle,
-  });
-  return new S3ArchiveStore({ client, bucket: settings.bucket, lockMode: 'GOVERNANCE', retentionDays: 1 });
+  let client = options.client ?? proberClients.get(settings);
+  if (!client) {
+    client = createS3Client(
+      {
+        bucket: settings.bucket,
+        region: settings.region,
+        endpoint: settings.endpoint,
+        accessKeyId: settings.accessKeyId,
+        secretAccessKey: settings.secretAccessKey,
+        forcePathStyle: settings.forcePathStyle,
+      },
+      undefined,
+      STORE_TIMEOUTS,
+    );
+    proberClients.set(settings, client);
+  }
+  return new S3ArchiveStore({ client: options.signal ? abortable(client, options.signal) : client, bucket: settings.bucket, lockMode: 'GOVERNANCE', retentionDays: 1 });
+}
+
+// What the start line says about the marker check, so a prober pointed at the wrong store, or one whose check is
+// disabled, shows it at once. Never a credential.
+export function describeMarkerCheck(marker: ProberConfig['archiveMarker']): string {
+  if (!marker) return 'verification marker check off';
+  if ('error' in marker) return `verification marker check disabled (${marker.error})`;
+  const store = marker.store;
+  if (store.kind === 'local') return `verification markers from local files in ${store.dir}`;
+  const where = store.endpoint ? new URL(store.endpoint).host : `AWS ${store.region}`;
+  return `verification markers from s3 bucket ${store.bucket} at ${where}, with ${store.accessKeyId ? "the prober's own key" : 'the default credential chain'}`;
 }
 
 // Where the Auth check asks (#1994): <base>/health, the base being PROBER_AUTH_URL, else PUBLIC_AUTH_URL, else
@@ -476,8 +533,11 @@ export interface ProbeDeps {
   // Supabase Auth's failed answers in a row (#1994). runProber keeps one across --every probes; without it (one probe
   // a run, from cron) a single failed answer alerts, since nothing counts the runs before.
   authState?: { misses: number };
-  // The WORM store the verification marker is read from (#2082). Default: one built from config.archiveMarker.
+  // The WORM store the verification marker is read from (#2082). Default: one built from config.archiveMarker, with
+  // timeouts and an abort signal for the deadline of the read.
   archiveStore?: ArchiveStore;
+  // The S3 client that store is built on instead of the default one (tests).
+  archiveClient?: ArchiveS3Sender;
   // The marker check's own alert state, kept in the process like outageGate, never in the database (whose owner the
   // check is about). runProber keeps one across --every probes; default: a fresh one.
   markerGate?: AlertGate;
@@ -742,12 +802,17 @@ export async function checkVerifyMarker(settings: NonNullable<ProberConfig['arch
   if ('error' in settings) return finding(null, `the prober cannot check the WORM verification marker: ${settings.error}`);
   let state;
   let timer: NodeJS.Timeout | undefined;
+  // Aborted with the deadline, so a call still in flight ends instead of piling up open sockets in the --every loop.
+  const controller = new AbortController();
   try {
     const timeoutMs = deps.markerTimeoutMs ?? MARKER_TIMEOUT_MS;
     const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error(`no answer within ${Math.round(timeoutMs / 1000)} s`)), timeoutMs);
+      timer = setTimeout(() => {
+        controller.abort();
+        reject(new Error(`no answer within ${Math.round(timeoutMs / 1000)} s`));
+      }, timeoutMs);
     });
-    const store = deps.archiveStore ?? proberArchiveStore(settings.store);
+    const store = deps.archiveStore ?? proberArchiveStore(settings.store, { signal: controller.signal, ...(deps.archiveClient ? { client: deps.archiveClient } : {}) });
     state = await Promise.race([readVerifyMarker(store, now), timeout]);
   } catch (e) {
     // One line, and short: a store's error text can run long.
@@ -874,12 +939,6 @@ export async function runProber(argv: readonly string[], env: NodeJS.ProcessEnv 
   if (args.testAlert) return sendTestAlert(config, deps);
   if (args.backupFailed !== null) return sendBackupAlert(config, args.backupFailed, deps);
   if (args.backupOk) return sendBackupHeartbeat(config, deps);
-  // Marker settings the check cannot use stop the probes at the start, like any invalid setting, so a deploy finds out at
-  // once; the test and backup alerts above never depend on them (#2082).
-  if (config.archiveMarker && 'error' in config.archiveMarker) {
-    error(`[prober] invalid prober configuration: ${config.archiveMarker.error}`);
-    return EXIT.probeFailed;
-  }
   if (args.everySeconds === null) return probeOnce(config, deps);
   const every = args.everySeconds;
   const looping = {
@@ -888,15 +947,17 @@ export async function runProber(argv: readonly string[], env: NodeJS.ProcessEnv 
     authState: deps.authState ?? initialAuthState(config),
     markerGate: deps.markerGate ?? memoryAlertGate(config.repeatSeconds),
     startedAt: deps.startedAt ?? (deps.now ?? (() => new Date()))(),
-    ...(config.archiveMarker && 'store' in config.archiveMarker && !deps.archiveStore ? { archiveStore: proberArchiveStore(config.archiveMarker.store) } : {}),
   };
   // Under Docker this is PID 1, which gets no default SIGTERM handling: stop between probes at once.
   process.once('SIGTERM', () => process.exit(EXIT.ok));
   const heartbeat = config.heartbeatUrl ? `, heartbeat to ${describeHeartbeat(config.heartbeatUrl)}` : '';
   // Where the verification marker is read from (#2082): a prober pointed at the wrong store sees no batch and no marker,
-  // which reads as nothing to verify yet, so the log says which store it reads.
-  const marker = config.archiveMarker ? `, verification markers from ${looping.archiveStore?.describe() ?? 'the archive store'}` : ', verification marker check off';
-  (deps.log ?? console.log)(`[prober] probing every ${every} s, alerts to ${alertSink(config, deps).describe()}${heartbeat}${marker}`);
+  // which reads as nothing to verify yet, so the log says which store it reads. Settings the check cannot use disable
+  // only that check (#2094): the other probes run, and archive_marker reports it on every probe until it is fixed.
+  if (config.archiveMarker && 'error' in config.archiveMarker) {
+    error(`[prober] ERROR ${describeMarkerCheck(config.archiveMarker)}: the other checks run, and archive_marker alerts on every probe until the settings are fixed`);
+  }
+  (deps.log ?? console.log)(`[prober] probing every ${every} s, alerts to ${alertSink(config, deps).describe()}${heartbeat}, ${describeMarkerCheck(config.archiveMarker)}`);
   for (;;) {
     await probeOnce(config, looping);
     await new Promise((resolve) => setTimeout(resolve, every * 1000));

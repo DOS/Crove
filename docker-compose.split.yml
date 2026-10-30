@@ -79,7 +79,24 @@ services:
     image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372
     entrypoint: ['sh', '-c']
     # crove-archive: the WORM fact stream (#891) needs a bucket created with Object Lock (which also turns versioning on).
-    command: ['mc mb --ignore-existing local/crove-files && mc version enable local/crove-files && mc mb --ignore-existing --with-lock local/crove-archive']
+    # crove-split-prober (#2094): the prober's own user, which can only list that bucket and read its verify/ and chain/
+    # objects, as docs/runbooks/worm-archive.md advises for a deployment. Attaching a policy twice fails, so a second run of
+    # this container (volumes kept across two `up`s) accepts a user that already has it.
+    command:
+      - |
+        set -e
+        mc mb --ignore-existing local/crove-files
+        mc version enable local/crove-files
+        mc mb --ignore-existing --with-lock local/crove-archive
+        cat > /tmp/archive-reader.json <<'POLICY'
+        {"Version": "2012-10-17", "Statement": [
+          {"Effect": "Allow", "Action": ["s3:ListBucket", "s3:ListBucketVersions"], "Resource": ["arn:aws:s3:::crove-archive"]},
+          {"Effect": "Allow", "Action": ["s3:GetObject"], "Resource": ["arn:aws:s3:::crove-archive/verify/*", "arn:aws:s3:::crove-archive/chain/*"]}
+        ]}
+        POLICY
+        mc admin policy create local archive-reader /tmp/archive-reader.json
+        mc admin user add local crove-split-prober crove-split-prober-secret
+        mc admin policy attach local archive-reader --user crove-split-prober || mc admin user info local crove-split-prober | grep -q archive-reader
     environment:
       MC_HOST_local: http://crove-split:crove-split-minio-secret@minio:9000
     depends_on:
@@ -147,10 +164,9 @@ services:
       S3_ENDPOINT: http://minio:9000
       S3_REGION: us-east-1
       S3_FORCE_PATH_STYLE: 'true'
-      # This layout has one throwaway MinIO key, so the prober's own pair holds it; a deployment gives the prober a
-      # read-only key (docs/runbooks/worm-archive.md), never the worker's.
-      PROBER_ARCHIVE_S3_ACCESS_KEY_ID: crove-split
-      PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY: crove-split-minio-secret
+      # The read-only user minio-init makes for it (#2094), never the worker's key.
+      PROBER_ARCHIVE_S3_ACCESS_KEY_ID: crove-split-prober
+      PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY: crove-split-prober-secret
 
   # Not needed here (sign-up is auto-confirmed); published ports would clash with a running default stack.
   mailpit:

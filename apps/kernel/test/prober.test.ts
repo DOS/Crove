@@ -4,9 +4,30 @@ import { createServer, type Server } from 'node:http';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { memoryAlertGate } from '../src/alert-gate.ts';
 import { alertPayload, deliverAlert } from '../src/alert.ts';
-import { EXIT, checkAuth, evaluateHealth, initialAuthState, loadProberConfig, parseProberArgs, probeOnce, runProber, type HealthSnapshot, type ProberConfig } from '../src/prober.ts';
+import { createS3Client } from '@crove/kernel-runtime';
+import {
+  EXIT,
+  checkAuth,
+  checkVerifyMarker,
+  describeMarkerCheck,
+  evaluateHealth,
+  initialAuthState,
+  loadProberConfig,
+  parseProberArgs,
+  probeOnce,
+  proberArchiveStore,
+  runProber,
+  type HealthSnapshot,
+  type ProberConfig,
+} from '../src/prober.ts';
 import type { AlertGate } from '../src/alert-gate.ts';
-import { archiveKey, type ArchiveStore } from '../src/worm.ts';
+import { archiveKey, type ArchiveS3Sender, type ArchiveStore } from '../src/worm.ts';
+
+// The real client, with its calls recorded: the prober's wiring of timeouts is checked on what it hands the factory.
+vi.mock('@crove/kernel-runtime', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@crove/kernel-runtime')>();
+  return { ...actual, createS3Client: vi.fn(actual.createS3Client) };
+});
 
 const SECRET_HOOK = 'https://hooks.example.test/services/T000/B000/secret-token-123';
 const SECRET_PING = 'https://hc.example.test/ping/secret-check-456';
@@ -694,21 +715,140 @@ describe('WORM verification marker (#2082)', () => {
     expect(loadProberConfig({}).archiveMarker).toBeUndefined();
     expect(loadProberConfig({ ARCHIVE_DIR: '/data/archive' }).archiveMarker).toEqual(settings);
     expect(loadProberConfig({ ARCHIVE_DIR: '/data/archive', PROBER_MAX_ARCHIVE_MARKER_AGE_SECONDS: '0' }).archiveMarker).toBeUndefined();
-    // The worker's own key is in the environment of a prober run from the shared .env: it must never be used.
-    const s3 = { ARCHIVE_STORE: 's3', ARCHIVE_S3_BUCKET: 'archive', S3_ENDPOINT: 'https://s3.example.test', S3_FORCE_PATH_STYLE: 'true', S3_ACCESS_KEY_ID: 'worker', S3_SECRET_ACCESS_KEY: 'w' };
-    expect(loadProberConfig({ ...s3, PROBER_ARCHIVE_S3_ACCESS_KEY_ID: 'reader', PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY: 'r' }).archiveMarker).toEqual({
+    const s3 = { ARCHIVE_STORE: 's3', ARCHIVE_S3_BUCKET: 'archive', S3_ENDPOINT: 'https://s3.example.test', S3_FORCE_PATH_STYLE: 'true' };
+    const reader = { PROBER_ARCHIVE_S3_ACCESS_KEY_ID: 'reader', PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY: 'r' };
+    expect(loadProberConfig({ ...s3, ...reader }).archiveMarker).toEqual({
       maxAgeSeconds: 93_600,
       store: { kind: 's3', bucket: 'archive', region: 'us-east-1', endpoint: 'https://s3.example.test', forcePathStyle: true, accessKeyId: 'reader', secretAccessKey: 'r' },
     });
-    // Neither of the prober's pair set: the default credential chain, never the worker's S3_* key.
+    // Neither of the prober's pair set, and no worker key in its environment: the default credential chain.
     expect(loadProberConfig(s3).archiveMarker).toEqual({
       maxAgeSeconds: 93_600,
       store: { kind: 's3', bucket: 'archive', region: 'us-east-1', endpoint: 'https://s3.example.test', forcePathStyle: true, accessKeyId: undefined, secretAccessKey: undefined },
     });
-    // A setting the check cannot use is reported as one, and refused at the start of the probes (see below).
+    // The worker's key in the environment (a prober run from the shared .env) is never used (#2094): with the prober's own
+    // pair it is ignored; without one the check refuses, naming the pair, and never echoes a key.
+    const worker = { S3_ACCESS_KEY_ID: 'AKIAWORKERKEY', S3_SECRET_ACCESS_KEY: 'worker-secret-123' };
+    expect(loadProberConfig({ ...s3, ...worker, ...reader }).archiveMarker).toMatchObject({ store: { accessKeyId: 'reader', secretAccessKey: 'r' } });
+    const refused = loadProberConfig({ ...s3, ...worker }).archiveMarker;
+    expect(refused).toMatchObject({
+      maxAgeSeconds: 93_600,
+      error: expect.stringContaining('S3_ACCESS_KEY_ID (the worker\'s key) is set, but the prober\'s own PROBER_ARCHIVE_S3_ACCESS_KEY_ID and PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY are not'),
+    });
+    expect(JSON.stringify(refused)).not.toContain('AKIAWORKERKEY');
+    expect(JSON.stringify(refused)).not.toContain('worker-secret-123');
+    // On a local store the worker's key is no matter.
+    expect(loadProberConfig({ ARCHIVE_DIR: '/data/archive', ...worker }).archiveMarker).toEqual(settings);
+    // A setting the check cannot use is reported as one: the check is disabled and says why (below).
     expect(loadProberConfig({ ARCHIVE_STORE: 's3' }).archiveMarker).toEqual({ maxAgeSeconds: 93_600, error: 'ARCHIVE_STORE=s3 needs ARCHIVE_S3_BUCKET' });
     expect(loadProberConfig({ ...s3, PROBER_ARCHIVE_S3_ACCESS_KEY_ID: 'reader' }).archiveMarker).toMatchObject({ error: expect.stringMatching(/PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY/) });
     expect(loadProberConfig({ ...s3, PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY: 'r' }).archiveMarker).toMatchObject({ error: expect.stringMatching(/PROBER_ARCHIVE_S3_ACCESS_KEY_ID/) });
+  });
+
+  it('parses the archive settings apart: a bad one disables only the marker check, never the backup and test alerts (#2094)', async () => {
+    const cases: Array<[Record<string, string>, string]> = [
+      [{ S3_ENDPOINT: 'ftp://s3.example.test' }, 'S3_ENDPOINT'],
+      [{ S3_FORCE_PATH_STYLE: 'maybe' }, 'S3_FORCE_PATH_STYLE'],
+      [{ ARCHIVE_STORE: 'gcs' }, 'ARCHIVE_STORE'],
+      [{ PROBER_MAX_ARCHIVE_MARKER_AGE_SECONDS: 'a day' }, 'PROBER_MAX_ARCHIVE_MARKER_AGE_SECONDS'],
+    ];
+    for (const [bad, field] of cases) {
+      const env = { ALERT_WEBHOOK_URL: SECRET_HOOK, ARCHIVE_STORE: 's3', ARCHIVE_S3_BUCKET: 'archive', ...bad };
+      expect(loadProberConfig(env).archiveMarker).toEqual({ maxAgeSeconds: 93_600, error: `invalid archive settings: ${field}` });
+      const io = capture();
+      const hook = webhook();
+      expect(await runProber(['--backup-failed', 'disk full'], env, { ...io, fetch: hook.fetch })).toBe(EXIT.ok);
+      expect(await runProber(['--test-alert'], env, { ...io, fetch: hook.fetch })).toBe(EXIT.ok);
+      expect(hook.calls).toHaveLength(2);
+    }
+    // A limit of 0 turns the check off, whatever else is wrong with the archive settings.
+    expect(loadProberConfig({ ARCHIVE_STORE: 'gcs', S3_ENDPOINT: 'ftp://x', PROBER_MAX_ARCHIVE_MARKER_AGE_SECONDS: '0' }).archiveMarker).toBeUndefined();
+    // A bad setting of the rest is refused as before.
+    expect(() => loadProberConfig({ ALERT_REPEAT_MINUTES: 'often' })).toThrow(/ALERT_REPEAT_MINUTES/);
+  });
+
+  it('runs the other probes with the check disabled, and the finding names the settings, never their values (#2094)', async () => {
+    const io = capture();
+    const hook = webhook();
+    const env = { PROBER_DATABASE_URL: 'postgres://crove_prober:pw@db:5432/postgres', ALERT_WEBHOOK_URL: SECRET_HOOK, ARCHIVE_STORE: 's3', ARCHIVE_S3_BUCKET: 'archive', S3_ENDPOINT: 'ftp://internal.example.test' };
+    const sick = { ...healthy, worker_heartbeat_age_seconds: 900 };
+    expect(await runProber([], env, { ...io, fetch: hook.fetch, readHealth: async () => sick, now: () => now })).toBe(EXIT.unhealthy);
+    expect(hook.calls).toHaveLength(2);
+    expect(hook.body(0).crove.findings).toEqual([
+      {
+        check: 'archive_marker',
+        value: null,
+        threshold: 93_600,
+        message: 'the prober cannot check the WORM verification marker: invalid archive settings: S3_ENDPOINT (docs/runbooks/worm-archive.md)',
+      },
+    ]);
+    expect(hook.body(1).crove.findings.map((f: { check: string }) => f.check)).toEqual(['heartbeat']);
+    expect(JSON.stringify([io.out, io.err, hook.calls.map((c) => c.init.body)])).not.toContain('internal.example.test');
+  });
+
+  it('says at the start of the loop which store the check reads, and loudly what is wrong when it is disabled (#2094)', async () => {
+    const reader = { PROBER_ARCHIVE_S3_ACCESS_KEY_ID: 'reader', PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY: 'r' };
+    const start = async (env: Record<string, string>) => {
+      const io = capture();
+      const stop = new Error('stop');
+      // The start line is the first the loop logs: throwing from it ends the loop for the test.
+      const log = (line: string) => {
+        io.out.push(line);
+        throw stop;
+      };
+      await expect(runProber(['--every', '10'], { PROBER_DATABASE_URL: 'postgres://crove_prober:pw@db:5432/postgres', ...env }, { ...io, log })).rejects.toBe(stop);
+      return { line: io.out[0] ?? '', err: io.err };
+    };
+    expect(await start({})).toMatchObject({ line: expect.stringMatching(/, verification marker check off$/), err: [] });
+    expect((await start({ ARCHIVE_DIR: '/data/archive' })).line).toMatch(/, verification markers from local files in \/data\/archive$/);
+    expect((await start({ ARCHIVE_STORE: 's3', ARCHIVE_S3_BUCKET: 'archive', S3_ENDPOINT: 'https://s3.example.test', ...reader })).line).toMatch(
+      /, verification markers from s3 bucket archive at s3\.example\.test, with the prober's own key$/,
+    );
+    expect((await start({ ARCHIVE_STORE: 's3', ARCHIVE_S3_BUCKET: 'archive', S3_REGION: 'ap-southeast-1' })).line).toMatch(
+      /, verification markers from s3 bucket archive at AWS ap-southeast-1, with the default credential chain$/,
+    );
+    // Disabled: the line says so, and a loud error names what is wrong and that the other checks run.
+    const disabled = await start({ ARCHIVE_STORE: 's3', ARCHIVE_S3_BUCKET: 'archive', S3_ACCESS_KEY_ID: 'AKIAWORKERKEY' });
+    expect(disabled.line).toMatch(/, verification marker check disabled \(ARCHIVE_STORE=s3 and S3_ACCESS_KEY_ID \(the worker's key\) is set/);
+    expect(disabled.err).toEqual([
+      expect.stringMatching(
+        /^\[prober\] ERROR verification marker check disabled \(.*PROBER_ARCHIVE_S3_ACCESS_KEY_ID and PROBER_ARCHIVE_S3_SECRET_ACCESS_KEY are not.*\): the other checks run, and archive_marker alerts on every probe until the settings are fixed$/,
+      ),
+    ]);
+    expect(JSON.stringify(disabled)).not.toContain('AKIAWORKERKEY');
+    // The label of the helper itself.
+    expect(describeMarkerCheck(undefined)).toBe('verification marker check off');
+  });
+
+  it('aborts the calls still waiting when the read runs past its deadline (#2094)', async () => {
+    const s3 = { maxAgeSeconds: 93_600, store: { kind: 's3' as const, bucket: 'archive', region: 'us-east-1', endpoint: undefined, forcePathStyle: false, accessKeyId: undefined, secretAccessKey: undefined } };
+    const calls: Array<{ command: string; signal: AbortSignal | undefined }> = [];
+    // A store that takes each call and answers only when it is aborted.
+    const hung: ArchiveS3Sender = {
+      send: ((command: object, options?: { abortSignal?: AbortSignal }) => {
+        calls.push({ command: command.constructor.name, signal: options?.abortSignal });
+        return new Promise((_, reject) => {
+          options?.abortSignal?.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+        });
+      }) as ArchiveS3Sender['send'],
+    };
+    const finding = await checkVerifyMarker(s3, { archiveClient: hung, markerTimeoutMs: 20 }, now);
+    expect(finding?.message).toBe('the prober could not read the verification marker from the WORM archive store: no answer within 0 s (docs/runbooks/worm-archive.md)');
+    expect(calls.map((c) => c.command)).toEqual(['ListObjectsV2Command']);
+    expect(calls[0]?.signal?.aborted).toBe(true);
+  });
+
+  it("builds its S3 client with timeouts and attempts, once per settings, and never takes the worker's key (#2094)", () => {
+    const settings = { kind: 's3' as const, bucket: 'archive', region: 'us-east-1', endpoint: 'http://127.0.0.1:9', forcePathStyle: true, accessKeyId: 'reader', secretAccessKey: 'r' };
+    vi.mocked(createS3Client).mockClear();
+    proberArchiveStore(settings);
+    proberArchiveStore(settings);
+    expect(createS3Client).toHaveBeenCalledTimes(1);
+    expect(createS3Client).toHaveBeenCalledWith(expect.objectContaining({ bucket: 'archive', accessKeyId: 'reader', secretAccessKey: 'r' }), undefined, {
+      connectionTimeoutMs: 5000,
+      requestTimeoutMs: 10_000,
+      maxAttempts: 2,
+    });
   });
 
   it('is quiet while the newest marker is recent by the store, and alerts once when it grows old, through a gate outside the database', async () => {
@@ -780,22 +920,6 @@ describe('WORM verification marker (#2082)', () => {
     expect(hook.body(3).crove.findings[0].message).toBe('the prober could not read the verification marker from the WORM archive store: no answer within 0 s (docs/runbooks/worm-archive.md)');
     expect(hook.body(4).crove.findings.map((f: { check: string }) => f.check)).toEqual(['heartbeat']);
     expect(statuses).toEqual([expect.objectContaining({ failing: ['heartbeat', 'archive_marker'] })]);
-  });
-
-  it('refuses to run the probes with marker settings it cannot use, and still sends the backup and test alerts (#2082)', async () => {
-    const io = capture();
-    const hook = webhook();
-    const env = { PROBER_DATABASE_URL: 'postgres://crove_prober:pw@db:5432/postgres', ALERT_WEBHOOK_URL: SECRET_HOOK, ARCHIVE_STORE: 's3' };
-    const deps = { ...io, fetch: hook.fetch, readHealth: async () => healthy };
-    // One probe a run (cron) and the loop both stop at the start, before any probe or alert.
-    expect(await runProber([], env, deps)).toBe(EXIT.probeFailed);
-    expect(await runProber(['--every', '60'], env, deps)).toBe(EXIT.probeFailed);
-    expect(io.err).toEqual(Array(2).fill('[prober] invalid prober configuration: ARCHIVE_STORE=s3 needs ARCHIVE_S3_BUCKET'));
-    expect(hook.calls).toEqual([]);
-    // The backup failure and the test alert never depend on the marker settings.
-    expect(await runProber(['--backup-failed', 'disk full'], env, deps)).toBe(EXIT.ok);
-    expect(await runProber(['--test-alert'], env, deps)).toBe(EXIT.ok);
-    expect(hook.calls).toHaveLength(2);
   });
 
   it('reports a marker key the store keeps more than one version of, but not one a lifecycle rule expired (#2082)', async () => {
