@@ -1,5 +1,6 @@
 // The operator's user-disable and user-enable roles on PostgreSQL 17 (issue #985): an account found by id or email is
-// blocked and unblocked, each of its orgs gets an audit row with the reason and without the email, a repeated run is
+// blocked and unblocked, the reason is kept on the account and each of its orgs gets an audit row with its code, without
+// the reason or the email (#1949), a repeated run is
 // noted as unchanged, and an unknown or ambiguous account changes nothing. Who may run it is in
 // test/invariant/user-disable.db.test.ts. Set CROVE_TEST_ADMIN_URL to a superuser URL; each run makes its own database.
 import { randomUUID } from 'node:crypto';
@@ -40,6 +41,8 @@ suite('user disable and enable on PostgreSQL (#985)', () => {
   const person = (email: string, issuer = 'test') => upsertIdentity(db, { issuer, subject: randomUUID(), email, name: null });
   const disabledAt = (userId: string) =>
     admin(async (c) => (await c.query<{ disabled_at: Date | null }>('SELECT disabled_at FROM crove_kernel.user_account WHERE id = $1', [userId])).rows[0]?.disabled_at);
+  const statusReason = (userId: string) =>
+    admin(async (c) => (await c.query<{ status_reason: string | null }>('SELECT status_reason FROM crove_kernel.user_account WHERE id = $1', [userId])).rows[0]?.status_reason);
   const notes = (userId: string) =>
     admin(async (c) =>
       (
@@ -91,26 +94,31 @@ suite('user disable and enable on PostgreSQL (#985)', () => {
     const { orgId: a } = await createOrg(rt, asUser(userId), 'Org A');
     const { orgId: b } = await createOrg(rt, asUser(userId), 'Org B');
 
-    const disabled = await setUserDisabled(worker, true, { ref: email.toLowerCase(), reason: 'Gửi hóa đơn rác hàng loạt' });
+    const disabled = await setUserDisabled(worker, true, { ref: email.toLowerCase(), reason: 'Gửi hóa đơn rác hàng loạt', code: 'abuse' });
     expect(disabled).toMatchObject({ userId, changed: true, orgs: 2 });
     expect(await disabledAt(userId)).toBeInstanceOf(Date);
+    expect(await statusReason(userId)).toBe('Gửi hóa đơn rác hàng loạt');
     const disabledNotes = await notes(userId);
     expect(disabledNotes.map((n) => n.org_id).sort()).toEqual([a, b].sort());
     for (const note of disabledNotes) {
       expect(note).toMatchObject({ actor_type: 'system', outcome: 'ok', target_type: 'kernel.user' });
-      expect(note.detail).toMatchObject({ disabled: true, changed: true, reason: 'Gửi hóa đơn rác hàng loạt' });
+      expect(note.detail).toMatchObject({ disabled: true, changed: true, code: 'abuse' });
+      // The audit row keeps neither the email nor the operator's words (#1949): they are about a person.
       expect(JSON.stringify(note.detail).toLowerCase()).not.toContain(email.toLowerCase());
+      expect(JSON.stringify(note.detail)).not.toContain('rác');
+      expect(note.detail).not.toHaveProperty('reason');
     }
 
     // Again: nothing changes, and the run is noted as unchanged.
-    expect(await setUserDisabled(worker, true, { ref: email, reason: 'Chạy lại' })).toMatchObject({ changed: false, orgs: 2 });
+    expect(await setUserDisabled(worker, true, { ref: email, reason: 'Chạy lại', code: 'other' })).toMatchObject({ changed: false, orgs: 2 });
     expect((await notes(userId)).slice(2).map((n) => n.detail)).toEqual([
       expect.objectContaining({ disabled: true, changed: false }),
       expect.objectContaining({ disabled: true, changed: false }),
     ]);
 
-    expect(await setUserDisabled(worker, false, { ref: userId, reason: 'Đã xác minh' })).toMatchObject({ changed: true });
+    expect(await setUserDisabled(worker, false, { ref: userId, reason: 'Đã xác minh', code: 'request' })).toMatchObject({ changed: true });
     expect(await disabledAt(userId)).toBeNull();
+    expect(await statusReason(userId)).toBe('Đã xác minh');
     expect((await notes(userId)).slice(4).map((n) => n.detail)).toEqual([
       expect.objectContaining({ disabled: false, changed: true }),
       expect.objectContaining({ disabled: false, changed: true }),
@@ -119,13 +127,13 @@ suite('user disable and enable on PostgreSQL (#985)', () => {
 
   it('blocks an account with no org, and changes nothing for an unknown or shared email', async () => {
     const lonely = await person(`lonely-${randomUUID().slice(0, 8)}@disable.test`);
-    expect(await setUserDisabled(worker, true, { ref: lonely, reason: 'Không thuộc tổ chức nào' })).toMatchObject({ changed: true, orgs: 0 });
+    expect(await setUserDisabled(worker, true, { ref: lonely, reason: 'Không thuộc tổ chức nào', code: 'other' })).toMatchObject({ changed: true, orgs: 0 });
 
     const shared = `shared-${randomUUID().slice(0, 8)}@disable.test`;
     const first = await person(shared, 'issuer-a');
     await person(shared, 'issuer-b');
-    await expect(setUserDisabled(worker, true, { ref: shared, reason: 'x' })).rejects.toThrow(/several accounts share this email/);
-    await expect(setUserDisabled(worker, true, { ref: 'nobody@disable.test', reason: 'x' })).rejects.toThrow(/no account has this id or email/);
+    await expect(setUserDisabled(worker, true, { ref: shared, reason: 'x', code: 'other' })).rejects.toThrow(/several accounts share this email/);
+    await expect(setUserDisabled(worker, true, { ref: 'nobody@disable.test', reason: 'x', code: 'other' })).rejects.toThrow(/no account has this id or email/);
     expect(await disabledAt(first)).toBeNull();
 
     // Through the role's entry point: one line on stderr and exit code 2.

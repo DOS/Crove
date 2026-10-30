@@ -2095,7 +2095,8 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
       return worker.execute('kernel.task.propose', { id: agent.taskId, fence, preparer: 't435.prepare_echo', input }, as);
     };
     // The command's declared kind, or its name; never the kind or title the agent's run supplied.
-    await propose(await liveAgent(orgA, owner), echo('t435.prop_kind'));
+    const declaredAgent = await liveAgent(orgA, owner);
+    await propose(declaredAgent, echo('t435.prop_kind'));
     const declaredEvent = await newestEvent(orgA, 'kernel.agent.proposal_requested');
     const declared = await createFrom(declaredEvent);
     expect(declared.reason).toBeNull();
@@ -2103,14 +2104,21 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
     expect(declaredLabel?.kind).toBe('t435.declared');
     expect(declaredLabel?.title).toContain('t435.declared');
     expect(declaredLabel?.title).not.toContain('Đã kiểm tra');
-    // The event carries the command and the payload only; or, from #1949 on, ids and codes only: the command and the
-    // id of the draft, which waits on the task (step 1 of 2 accepts either).
+    // The event carries ids and codes only (#1949): the command and the id of the draft, which waited on the task and is
+    // taken off it once the proposal exists.
     const requested = await eventPayload(declaredEvent);
-    if (requested.draft !== undefined) {
-      expect(Object.keys(requested.draft as Record<string, unknown>).sort()).toEqual(['command', 'payload']);
-    } else {
-      expect(Object.keys(requested).filter((k) => k !== 'legalEntityId').sort()).toEqual(['agentId', 'command', 'draftId', 'preparer', 'runId', 'taskId']);
-    }
+    expect(Object.keys(requested).filter((k) => k !== 'legalEntityId').sort()).toEqual(['agentId', 'command', 'draftId', 'preparer', 'runId', 'taskId']);
+    expect(JSON.stringify(requested)).not.toContain('payload');
+    const pendingDraft = (taskId: string) =>
+      withAdmin(async (c) => (await c.query<{ d: unknown }>('SELECT pending_draft AS d FROM crove_kernel.task WHERE id = $1', [taskId])).rows[0]?.d);
+    expect(await pendingDraft(declaredAgent.taskId)).toBeNull();
+    // A draft that is no longer the one the request names (replaced on its task) asks for nothing, and stays.
+    const replacedAgent = await liveAgent(orgA, owner);
+    await propose(replacedAgent, echo('t260.prop_r1'));
+    const replacedEvent = await newestEvent(orgA, 'kernel.agent.proposal_requested');
+    await withAdmin((c) => c.query(`UPDATE crove_kernel.task SET pending_draft = jsonb_set(pending_draft, '{id}', to_jsonb(gen_random_uuid()::text)) WHERE id = $1`, [replacedAgent.taskId]));
+    await expect(createFrom(replacedEvent)).resolves.toEqual({ proposalId: null, reason: 'draft_replaced' });
+    expect(await pendingDraft(replacedAgent.taskId)).not.toBeNull();
     await propose(await liveAgent(orgA, owner), echo('t260.prop_r1'));
     const named = await createFrom(await newestEvent(orgA, 'kernel.agent.proposal_requested'));
     const namedLabel = await proposalLabel(named.proposalId as string);

@@ -11,8 +11,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
-import { Runtime } from '@crove/kernel-runtime';
-import { AVAILABLE_MODULES } from '../src/config.ts';
+import { Runtime, type BlobStore } from '@crove/kernel-runtime';
+import { AVAILABLE_MODULES, loadConfig } from '../src/config.ts';
+import { createHttpApp } from '../src/http.ts';
 import { EXIT, evaluateHealth, probeOnce, readHealth, runProber, type ProberConfig } from '../src/prober.ts';
 import { JOB_SCHEMA, QUEUES } from '../src/jobs-schema.ts';
 import { beat } from '../src/worker.ts';
@@ -323,5 +324,78 @@ suite('prober on PostgreSQL', () => {
     expect(await probeOnce(proberConfig({ databaseUrl: login('crove_prober', 'wrong-password') }), quiet)).toBe(EXIT.probeFailed);
     expect(received[0]?.body).toMatchObject({ crove: { kind: 'alert', findings: [{ check: 'probe' }] } });
     await expect(readHealth(adminUrl, 3600)).rejects.toThrow(/refusing to probe as .*connect PROBER_DATABASE_URL as crove_prober/);
+  });
+
+  // #1952 (plan §3.5): an API process of its own is ready only while every live worker runs its build or a newer one,
+  // ordered by CROVE_BUILD_TIME. No live worker, a clean stop and a worker silent for over 90 seconds are not reasons;
+  // a worker of unknown build time (a release before #1952, or one a rollback put back on the same host) is older.
+  it('keeps /readyz waiting while a live worker runs an older build, never for the single "all" process', async () => {
+    const API = '2026-11-01T00:00:00+00:00';
+    const ready = async (env: Record<string, string> = { CROVE_BUILD_TIME: API }, workerBuildCheck = true) => {
+      const app = createHttpApp({
+        config: loadConfig({ DATABASE_URL: 'postgres://localhost/x', AUTH_JWT_SECRET: 'x'.repeat(32), AUTH_ISSUER: 'crove-auth', AUTH_SESSION_CHECK: 'off', MIGRATIONS_DIR: MIGRATIONS, ...env }),
+        runtime: { installed: () => true, modules: () => ['kernel'] } as unknown as Runtime,
+        store: {} as BlobStore,
+        authenticate: async () => {
+          throw new Error('not used');
+        },
+        pool: appPool,
+        aiEnabled: false,
+        workerBuildCheck,
+      });
+      const response = await app.request('/readyz');
+      return { status: response.status, body: await response.json() };
+    };
+    const notReady = { status: 503, body: { ready: false, reason: 'worker_build' } };
+    await admin((c) => c.query('DELETE FROM crove_kernel.worker_heartbeat'));
+    // No live worker: the prober's heartbeat alert, not a reason to take the API out of rotation.
+    expect(await ready()).toEqual({ status: 200, body: { ready: true } });
+    await beat(workerDb, 'worker-a', ['kernel'], { id: 'aaaa', time: API });
+    expect(await ready()).toEqual({ status: 200, body: { ready: true } });
+    // A second, older worker: not ready, unless this process is the single "all" one or knows no build time.
+    await beat(workerDb, 'worker-b', ['kernel'], { id: 'bbbb', time: '2026-10-31T23:59:59+00:00' });
+    expect(await ready()).toEqual(notReady);
+    expect(await ready({ CROVE_BUILD_TIME: API }, false)).toEqual({ status: 200, body: { ready: true } });
+    expect(await ready({})).toEqual({ status: 200, body: { ready: true } });
+    // Its clean stop (no modules) ends the wait at once; so does silence for over 90 seconds.
+    await beat(workerDb, 'worker-b', [], { id: 'bbbb', time: '2026-10-31T23:59:59+00:00' });
+    expect(await ready()).toEqual({ status: 200, body: { ready: true } });
+    await beat(workerDb, 'worker-b', ['kernel'], { id: 'bbbb', time: '2026-10-31T23:59:59+00:00' });
+    expect(await ready()).toEqual(notReady);
+    await admin((c) => c.query(`UPDATE crove_kernel.worker_heartbeat SET beat_at = now() - interval '91 seconds' WHERE instance = 'worker-b'`));
+    expect(await ready()).toEqual({ status: 200, body: { ready: true } });
+    // A newer worker is fine.
+    await beat(workerDb, 'worker-c', ['kernel'], { id: 'cccc', time: '2026-11-02T00:00:00+00:00' });
+    expect(await ready()).toEqual({ status: 200, body: { ready: true } });
+    // A local build (no build time) beside an API that has one: unknown, so older.
+    await beat(workerDb, 'worker-c', ['kernel']);
+    expect(await ready()).toEqual(notReady);
+    // A rollback on the same host: the older release's beat (two arguments, or one) clears the build this one recorded.
+    await beat(workerDb, 'worker-c', ['kernel'], { id: 'cccc', time: '2026-11-02T00:00:00+00:00' });
+    expect(await ready()).toEqual({ status: 200, body: { ready: true } });
+    const worker = new pg.Client({ connectionString: login('crove_worker', 'test-worker-pw') });
+    await worker.connect();
+    try {
+      await worker.query(`SELECT crove_kernel.worker_beat('worker-c', ARRAY['kernel'])`);
+      expect(await ready()).toEqual(notReady);
+      await beat(workerDb, 'worker-c', ['kernel'], { id: 'cccc', time: '2026-11-02T00:00:00+00:00' });
+      await worker.query(`SELECT crove_kernel.worker_beat('worker-c')`);
+      expect(await ready()).toEqual(notReady);
+      // A build id that is not one is refused, as CROVE_BUILD is at boot.
+      await expect(worker.query(`SELECT crove_kernel.worker_beat('worker-c', ARRAY['kernel'], 'a b', now())`)).rejects.toThrow(/WORKER_BEAT_BUILD_INVALID/);
+    } finally {
+      await worker.end();
+    }
+    // The API's role reads counts only: no instance, build or module reaches it.
+    const app = new pg.Client({ connectionString: login('crove_app', 'test-app-pw') });
+    await app.connect();
+    try {
+      const { rows } = await app.query(`SELECT * FROM crove_kernel.worker_build_lag($1::timestamptz)`, [API]);
+      expect(rows).toEqual([{ live: 2, older: 1 }]);
+      await expect(app.query('SELECT * FROM crove_kernel.worker_heartbeat')).rejects.toThrow(/permission denied/);
+    } finally {
+      await app.end();
+    }
+    await admin((c) => c.query('DELETE FROM crove_kernel.worker_heartbeat'));
   });
 });
