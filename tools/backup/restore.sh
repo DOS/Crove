@@ -464,7 +464,11 @@ archive_lost=0
 if [ "$RESTORE_ARCHIVE" = check ]; then
   STEP="checking against the WORM archive (main.ts restore-report --reseed --acknowledge)"
   archive_status=0
-  dc run --rm --no-deps -T "$worker" restore-report --reseed --acknowledge --json </dev/null >"$WORK/archive-report.json" || archive_status=$?
+  # The backup's snapshot time, which the acknowledgement reads the restore by (#2020); a run made before SNAPSHOT_AT was
+  # recorded gives its finish time, a later point that is still sound.
+  backup_point="$(meta_value SNAPSHOT_AT "$RUN/meta.env" 2>/dev/null || true)"
+  [ -n "$backup_point" ] || backup_point="$finished_at"
+  dc run --rm --no-deps -T "$worker" restore-report --reseed --acknowledge --backup-point "$backup_point" --json </dev/null >"$WORK/archive-report.json" || archive_status=$?
   case "$archive_status" in
     0) log "archive: the restored database holds everything the WORM archive holds" ;;
     2)

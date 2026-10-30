@@ -104,6 +104,8 @@ suite('WORM verifier after a restore on PostgreSQL (#2020)', () => {
   const batchesInStore = async () => (await store.list('chain/v1/')).length;
 
   let recordedAtBackup = 0;
+  // When the copy was made: the backup point the restore check is given, as restore.sh gives the backup's snapshot time.
+  let backupPoint = '';
 
   beforeAll(async () => {
     await client(ADMIN as string, (c) => c.query(`CREATE DATABASE ${dbName}`));
@@ -129,6 +131,7 @@ suite('WORM verifier after a restore on PostgreSQL (#2020)', () => {
 
     // The backup point: a copy of the database, which needs every other session to the original closed.
     await Promise.all(pools.splice(0).map((p) => p.end()));
+    backupPoint = new Date().toISOString();
     await client(ADMIN as string, async (c) => {
       await c.query('SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()', [dbName]);
       await c.query(`CREATE DATABASE ${copyName} TEMPLATE ${dbName}`);
@@ -166,7 +169,12 @@ suite('WORM verifier after a restore on PostgreSQL (#2020)', () => {
 
     const runtime = new Runtime(worker, { manifests: TEST_MANIFESTS }).register({ commands: [numberReseedCommand()] });
     const lines: string[] = [];
-    const code = await runRestoreReport({ db: worker, store, runtime, log: (l) => lines.push(l), error: (l) => lines.push(l), out: () => {} }, ['--reseed', '--acknowledge']);
+    const code = await runRestoreReport({ db: worker, store, runtime, log: (l) => lines.push(l), error: (l) => lines.push(l), out: () => {} }, [
+      '--reseed',
+      '--acknowledge',
+      '--backup-point',
+      backupPoint,
+    ]);
     expect(code).toBe(RESTORE_REPORT_EXIT.lost);
     const keys = await store.list(RESTORE_ACK_PREFIX);
     expect(keys).toHaveLength(1);
@@ -238,9 +246,13 @@ suite('WORM verifier after a restore on PostgreSQL (#2020)', () => {
     });
     const runtime = new Runtime(worker, { manifests: TEST_MANIFESTS }).register({ commands: [numberReseedCommand()] });
     const lines: string[] = [];
+    // The operator gives the point of the last real backup, before the vouchers.
+    const lastBackup = new Date(Date.now() - 55 * 60_000).toISOString();
     const code = await runRestoreReport({ db: worker, store: forgedStore, runtime, log: (l) => lines.push(l), error: (l) => lines.push(l), out: () => {} }, [
       '--reseed',
       '--acknowledge',
+      '--backup-point',
+      lastBackup,
     ]);
     expect(code).toBe(RESTORE_REPORT_EXIT.failed);
     expect(lines).toContain('[restore-report] PROBLEM: restore_ack_mismatch in batch 2');

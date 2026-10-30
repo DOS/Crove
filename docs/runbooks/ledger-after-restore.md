@@ -38,10 +38,10 @@ The comparison on `created_xact_start` holds only while the new cluster's clock 
 
 ## What the restore lost
 
-The WORM archive ([worm-archive.md](worm-archive.md)) outlives the database. After a restore, it still holds every posting, voucher number and number allocation made after the backup point. `restore.sh` checks the restored database against it before the stack starts (`main.ts restore-report --reseed --acknowledge`, issues #2007 and #2020). Any restore runs the same check: the steps above, a point-in-time recovery, or a logical restore. Run it by hand in the worker's container, before the stack starts (the service `crove` on the all-in-one stack):
+The WORM archive ([worm-archive.md](worm-archive.md)) outlives the database. After a restore, it still holds every posting, voucher number and number allocation made after the backup point. `restore.sh` checks the restored database against it before the stack starts (`main.ts restore-report --reseed --acknowledge`, issues #2007 and #2020). Any restore runs the same check: the steps above, a point-in-time recovery, or a logical restore. Run it by hand in the worker's container, before the stack starts (the service `crove` on the all-in-one stack). Give it the backup's snapshot time, `SNAPSHOT_AT` in the run's `meta.env` (`FINISHED_AT` for a run made before it was recorded; for a point-in-time recovery, the recovery target time):
 
 ```sh
-docker compose run --rm --no-deps worker restore-report --reseed --acknowledge
+docker compose run --rm --no-deps worker restore-report --reseed --acknowledge --backup-point <SNAPSHOT_AT>
 ```
 
 **What it reports.**
@@ -74,7 +74,7 @@ docker compose run --rm --no-deps worker restore-report --reseed --acknowledge
 3. Once every series the org numbered after the backup point has its floor, confirm it with `--floors-complete <org id>`. For example:
 
    ```sh
-   docker compose run --rm --no-deps worker restore-report --reseed --acknowledge --floor <org id>:<legal entity id>:finance.cash_voucher.pt:2026=41 --floor <org id>:<legal entity id>:finance.journal_voucher:2026=12 --floors-complete <org id>
+   docker compose run --rm --no-deps worker restore-report --reseed --acknowledge --backup-point <SNAPSHOT_AT> --floor <org id>:<legal entity id>:finance.cash_voucher.pt:2026=41 --floor <org id>:<legal entity id>:finance.journal_voucher:2026=12 --floors-complete <org id>
    ```
 
 4. The run exits 2 once every listed series has a floor that the reseed accepted, and the org is confirmed. A floor never lowers a number, so a run with a floor too high leaves a gap; one too low changes nothing.
