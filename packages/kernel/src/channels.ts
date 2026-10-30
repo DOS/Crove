@@ -346,7 +346,11 @@ export const channelsList = defineQuery({
     let q = ctx.trx
       .selectFrom('crove_kernel.channel_connection')
       .select(['id', 'provider', 'external_account_id', 'display_name', 'scopes', 'status', 'status_reason', 'connected_by', 'expires_at', 'connected_at'])
-      .where('org_id', '=', ctx.orgId);
+      .where('org_id', '=', ctx.orgId)
+      // Social and messaging channels only: a bank feed's connection (provider bank_..., ADR-0039) is the finance
+      // module's, listed with its accounts by finance.bank_feed.accounts. Left out before the limit, so they never
+      // crowd a channel out.
+      .where('provider', 'not like', 'bank\\_%');
     if (!input.includeRevoked) q = q.where('status', '<>', 'revoked');
     const rows = await q.orderBy(sql`status = 'revoked'`).orderBy('connected_at', 'desc').limit(500).execute();
     return rows.map((r) => ({

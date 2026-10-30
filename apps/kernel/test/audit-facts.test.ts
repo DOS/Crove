@@ -82,6 +82,10 @@ const ALLOWED: Record<string, Record<string, string>> = {
     'name <- name = input.name ?? account.name': "the new name of an account of the org's chart (crove_finance.account.name, internal)",
   },
   'modules/finance/src/bank.ts': { 'bankAccount <- input.bankAccount': 'the chart account code (112x) the statement is for, not a bank account number' },
+  'modules/finance/src/bank-feed.ts': {
+    'bankAccount <- input.bankAccount': 'the chart account code (112x) a bank feed account maps to, not a bank account number',
+    'bankAccount <- removed.bank_account': 'the chart account code (112x) the removed mapping pointed at, not a bank account number',
+  },
   'modules/finance/src/missing-invoices.ts': { 'skipped <- skipped': 'the periods too large to reconcile' },
   'modules/finance/src/portal-list.ts': { 'skipped <- input.skippedCount': "the count of the portal list's skipped rows, not the rows" },
   'modules/social/src/archive.ts': { 'skipped <- result.skipped.map((s) => ({ post_id: s.postId, reason: s.reason }))': 'the post ids left out and why' },

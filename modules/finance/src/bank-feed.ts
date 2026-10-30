@@ -1,0 +1,126 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Bank feed accounts (ADR-0039 points 2 and 3, #2044): the accounts a bank feed connection reaches, each mapped to one
+// of the org's bank accounts in one legal entity. The connection and its sealed credential are the kernel's channel
+// layer (ADR-0025); this module only says where a connected account's lines go. Owners and admins map and unmap; every
+// member who reads the entity lists the mappings. No network here: the provider is the worker's (part 2b) and the API
+// route's, never the module's.
+// - finance.bank_feed.map: maps an account of an active bank feed connection to a bank account of an entity, or points
+//   an existing mapping at another bank account of the same entity.
+// - finance.bank_feed.unmap: removes a mapping; the lines it brought in stay, as imported ones do.
+// - finance.bank_feed.accounts: the mappings the caller's entities hold, with their connection's name and status.
+import { sql } from 'kysely';
+import { z } from 'zod';
+import type { MemberRole } from '@crove/db';
+import { isBankFeedProviderId, zBankFeedMap, zId, type BankFeedAccountView } from '@crove/kernel-contract';
+import { DomainError, defineCommand, defineQuery } from '@crove/kernel-runtime';
+import { bankAccount } from './bank.ts';
+import { resolveLegalEntity } from './legal-entity.ts';
+
+const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
+const MANAGERS: readonly MemberRole[] = ['owner', 'admin'];
+
+export const bankFeedMap = defineCommand({
+  name: 'finance.bank_feed.map',
+  input: zBankFeedMap,
+  // It decides where a feed's lines are stored and posts nothing (R1, as a bank account is made).
+  risk: 'R1',
+  sideEffect: 'internal',
+  access: MANAGERS,
+  handler: async (ctx, input): Promise<{ feedAccountId: string }> => {
+    const connection = await ctx.trx
+      .selectFrom('crove_kernel.channel_connection')
+      .select(['id', 'provider', 'status'])
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.connectionId)
+      .executeTakeFirst();
+    if (!connection || !isBankFeedProviderId(connection.provider)) throw new DomainError('BANK_FEED_NOT_FOUND', 404, 'Không tìm thấy kết nối nguồn giao dịch ngân hàng');
+    if (connection.status !== 'active') throw new DomainError('BANK_FEED_INACTIVE', 422, 'Kết nối nguồn giao dịch ngân hàng không còn hoạt động; hãy kết nối lại');
+    await bankAccount(ctx, input.bankAccount, true);
+    const legalEntityId = await resolveLegalEntity(ctx, input.legalEntityId);
+    // Two maps of one account at once: the second waits, then finds the first's row and remaps it (a FOR UPDATE of a
+    // row that does not exist yet would lock nothing).
+    await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`crove.bank_feed:${ctx.orgId}:${connection.id}:${input.externalAccountId}`}, 0))`.execute(ctx.trx);
+    const existing = await ctx.trx
+      .selectFrom('crove_finance.bank_feed_account')
+      .select(['id', 'legal_entity_id'])
+      .where('org_id', '=', ctx.orgId)
+      .where('channel_connection_id', '=', connection.id)
+      .where('external_account_id', '=', input.externalAccountId)
+      .forUpdate()
+      .executeTakeFirst();
+    let feedAccountId: string;
+    if (existing) {
+      // Its lines are already in that entity's books: another entity takes an unmap first.
+      if (existing.legal_entity_id !== legalEntityId) {
+        throw new DomainError('BANK_FEED_ACCOUNT_MAPPED', 409, 'Tài khoản này đã gắn với một pháp nhân khác; hãy gỡ liên kết trước');
+      }
+      await ctx.trx.updateTable('crove_finance.bank_feed_account').set({ bank_account: input.bankAccount }).where('org_id', '=', ctx.orgId).where('id', '=', existing.id).execute();
+      feedAccountId = existing.id;
+    } else {
+      const inserted = await ctx.trx
+        .insertInto('crove_finance.bank_feed_account')
+        .values({
+          org_id: ctx.orgId,
+          legal_entity_id: legalEntityId,
+          channel_connection_id: connection.id,
+          external_account_id: input.externalAccountId,
+          bank_account: input.bankAccount,
+          created_by: ctx.actor.type === 'user' ? ctx.actor.userId : null,
+        })
+        .returning('id')
+        .executeTakeFirstOrThrow();
+      feedAccountId = inserted.id;
+    }
+    ctx.audit({ feedAccountId, connectionId: connection.id, provider: connection.provider, bankAccount: input.bankAccount, legalEntityId, remapped: Boolean(existing) });
+    return { feedAccountId };
+  },
+});
+
+export const bankFeedUnmap = defineCommand({
+  name: 'finance.bank_feed.unmap',
+  input: z.strictObject({ feedAccountId: zId }),
+  risk: 'R1',
+  sideEffect: 'internal',
+  access: MANAGERS,
+  handler: async (ctx, input): Promise<{ feedAccountId: string }> => {
+    const removed = await ctx.trx
+      .deleteFrom('crove_finance.bank_feed_account')
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.feedAccountId)
+      .returning(['id', 'bank_account', 'legal_entity_id'])
+      .executeTakeFirst();
+    if (!removed) throw new DomainError('BANK_FEED_ACCOUNT_NOT_FOUND', 404, 'Không tìm thấy tài khoản của nguồn giao dịch ngân hàng');
+    ctx.audit({ feedAccountId: removed.id, bankAccount: removed.bank_account, legalEntityId: removed.legal_entity_id });
+    return { feedAccountId: removed.id };
+  },
+});
+
+export const bankFeedAccounts = defineQuery({
+  name: 'finance.bank_feed.accounts',
+  input: z.object({}),
+  access: ALL,
+  handler: async (ctx): Promise<BankFeedAccountView[]> => {
+    const rows = await ctx.trx
+      .selectFrom('crove_finance.bank_feed_account as a')
+      .innerJoin('crove_kernel.channel_connection as c', (j) => j.onRef('c.org_id', '=', 'a.org_id').onRef('c.id', '=', 'a.channel_connection_id'))
+      .select(['a.id', 'a.channel_connection_id', 'c.provider', 'c.display_name', 'c.status', 'a.external_account_id', 'a.bank_account', 'a.legal_entity_id', 'a.last_synced_at'])
+      .where('a.org_id', '=', ctx.orgId)
+      .orderBy('c.display_name')
+      .orderBy('a.external_account_id')
+      .execute();
+    return rows.map((r) => ({
+      id: r.id,
+      connectionId: r.channel_connection_id,
+      provider: r.provider,
+      connectionName: r.display_name,
+      connectionStatus: r.status as BankFeedAccountView['connectionStatus'],
+      externalAccountId: r.external_account_id,
+      bankAccount: r.bank_account,
+      legalEntityId: r.legal_entity_id,
+      lastSyncedAt: r.last_synced_at ? new Date(r.last_synced_at).toISOString() : null,
+    }));
+  },
+});
+
+export const bankFeedCommands = [bankFeedMap, bankFeedUnmap];
+export const bankFeedQueries = [bankFeedAccounts];

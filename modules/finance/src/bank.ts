@@ -39,7 +39,7 @@ const IMPORTERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
 export const BANK_IMPORT_KIND = 'finance.bank_statement';
 
 // A bank account of the org: a TT133 account under 112, or a sub-account rolling up to one. An import needs it active.
-async function bankAccount(ctx: QueryContext, code: string, active: boolean) {
+export async function bankAccount(ctx: QueryContext, code: string, active: boolean) {
   const account = (await chartAccounts(ctx, [code])).get(code);
   if (!account || !account.rootCode.startsWith('112')) {
     throw new DomainError('NOT_A_BANK_ACCOUNT', 422, `Tài khoản ${code} không phải tài khoản tiền gửi ngân hàng (112) của tổ chức`, { code });

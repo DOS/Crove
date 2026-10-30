@@ -94,7 +94,7 @@ The question is how API feeds fit Ludy. They must not:
 
   There is **no payment capability** in the interface. An adapter for a provider that also offers payments (Tingee's "Chi hộ") implements none of it, and review refuses one that calls such an endpoint.
 - **Connections and credentials** reuse the kernel's channel layer:
-  - a connection in `crove_kernel.channel_connection` (provider `bank:<adapter>`);
+  - a connection in `crove_kernel.channel_connection` (provider `bank_<adapter>`, such as `bank_sandbox`: the channel layer's provider ids allow no colon);
   - its credential sealed in `crove_kernel.credential` with `CREDENTIAL_KEY`;
   - connected and disconnected by owners and admins (R2);
   - opened only by the worker;

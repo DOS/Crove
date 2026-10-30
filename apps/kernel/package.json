@@ -16,6 +16,7 @@
   "dependencies": {
     "@aws-sdk/client-s3": "catalog:",
     "@crove/agent": "workspace:*",
+    "@crove/bank-feed": "workspace:*",
     "@crove/channel": "workspace:*",
     "@crove/db": "workspace:*",
     "@crove/extract-contract": "workspace:*",

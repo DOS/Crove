@@ -216,3 +216,30 @@ export function normalizeStatementAmount(text: string): string {
   if (lastComma >= 0 && compact.indexOf(',') === lastComma) return compact.replace(',', '.');
   return compact;
 }
+
+// A bank feed provider's id as its channel connections name it (ADR-0039): `bank_` and the adapter (`bank_sandbox`),
+// under the channel layer's provider pattern. The Social screens leave these connections out.
+const BANK_FEED_PROVIDER_ID = /^bank_[a-z0-9_]{1,27}$/;
+export const isBankFeedProviderId = (provider: string): boolean => BANK_FEED_PROVIDER_ID.test(provider);
+
+// Maps an account a bank feed connection reaches to one of the org's bank accounts in one legal entity (#2044).
+export const zBankFeedMap = z.strictObject({
+  connectionId: zId,
+  externalAccountId: z.string().trim().min(1).max(200),
+  bankAccount: zAccountCode,
+  legalEntityId: zId.optional(),
+});
+export type BankFeedMap = z.infer<typeof zBankFeedMap>;
+
+export const zBankFeedAccountView = z.object({
+  id: zId,
+  connectionId: zId,
+  provider: z.string(),
+  connectionName: z.string(),
+  connectionStatus: z.enum(['active', 'expired', 'revoked', 'error']),
+  externalAccountId: z.string(),
+  bankAccount: z.string(),
+  legalEntityId: zId,
+  lastSyncedAt: z.string().nullable(),
+});
+export type BankFeedAccountView = z.infer<typeof zBankFeedAccountView>;

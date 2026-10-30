@@ -249,6 +249,9 @@ const schema = z.object({
   CREDENTIAL_KEY_PREVIOUS: optional,
   // The offline sandbox channel (Social plan §3.5): connect and publish without any platform account.
   CHANNEL_SANDBOX: z.enum(['true', 'false']).default('true'),
+  // The offline sandbox bank feed (ADR-0039, #2044): off unless asked for, so a deployment shows no bank feed until it
+  // has one.
+  BANK_FEED_SANDBOX: z.enum(['true', 'false']).default('false'),
   // Bluesky (S9): accounts connect with an app password, no app of the deployment's own is needed. On unless false.
   CHANNEL_BLUESKY: z.enum(['true', 'false']).default('true'),
   // Telegram channels (#747): a bot the shop makes with @BotFather posts to its channel; no app of the deployment's own is
@@ -570,6 +573,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     }
     if (config.AUTH_AUTOCONFIRM === 'true') {
       throw new Error('AUTH_AUTOCONFIRM=true lets anyone claim any email address; set it to false and configure SMTP');
+    }
+    // ADR-0039 point 3: the sandbox feed writes made-up bank lines, so it stays on development deployments.
+    if (config.BANK_FEED_SANDBOX === 'true') {
+      throw new Error('BANK_FEED_SANDBOX=true writes made-up bank lines into the books; it is for local development only');
     }
     if (config.AUTH_SESSION_CHECK === 'off') {
       throw new Error('AUTH_SESSION_CHECK=off keeps signed-out sessions working; use db (bundled Supabase Auth) or jwt');

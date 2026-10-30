@@ -1,0 +1,14 @@
+{
+  "name": "@crove/bank-feed",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "description": "Bank feed providers behind the finance module's bank-feed port (ADR-0039): read-only adapters, the offline sandbox first",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}

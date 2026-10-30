@@ -480,6 +480,8 @@ export function createHttpApp(deps: HttpDeps) {
       signupPolicy: config.AUTH_SIGNUP_POLICY,
       // Channels the app may offer to connect without a platform account (ADR-0025).
       // OAuth providers only with a credential key: their tokens could not be sealed otherwise.
+      // Bank feeds (ADR-0039): which providers this deployment offers; none hides the feature.
+      bankFeeds: { sandbox: Boolean(deps.channels?.bankFeedSandbox) },
       channels: { sandbox: Boolean(deps.channels?.sandbox), bluesky: Boolean(deps.channels?.bluesky), telegram: Boolean(deps.channels?.telegram), mastodon: Boolean(deps.channels?.mastodon), discord: Boolean(deps.channels?.discord), wordpress: Boolean(deps.channels?.wordpress), oauth: deps.channels && deps.channels.broker.id !== 'none' ? Object.keys(deps.channels.connectors ?? {}).sort() : [] },
     }),
   );
