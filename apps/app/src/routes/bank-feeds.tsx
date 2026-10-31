@@ -292,7 +292,12 @@ function ReadOnlyList({ accounts }: { accounts: readonly BankFeedAccountView[] }
 export function BankFeedsCard({ role }: { role: Role }) {
   const t = useTranslations('bankFeeds');
   const canManage = role === 'owner' || role === 'admin';
-  const accounts = useQuery(orpc.bankFeeds.accounts.queryOptions());
+  // A mapped account is pulled by the worker a moment after it is mapped, so ask again for two minutes while one has not
+  // been synced yet; later changes show on the next visit or when the window is focused again.
+  const accounts = useQuery({
+    ...orpc.bankFeeds.accounts.queryOptions(),
+    refetchInterval: (query) => (query.state.data?.some((a) => a.lastSyncedAt === null && a.connectionStatus === 'active') && query.state.dataUpdateCount < 24 ? 5000 : false),
+  });
   const connections = useQuery({ ...orpc.bankFeeds.connections.queryOptions(), enabled: canManage });
   const chart = useQuery({ ...orpc.accounts.list.queryOptions(), enabled: canManage });
   const entities = useQuery({ ...orpc.legalEntities.list.queryOptions(), enabled: canManage });
