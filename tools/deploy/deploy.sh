@@ -11,6 +11,10 @@
 #   deploy.sh status   [--dir <dir>]
 #   deploy.sh smoke <base url> [build id]
 #
+# compose.pilot.yml (the pilot's split API and worker, #2133) is taken from the directory of the --compose file and
+# staged with the release; the host chooses the layout by listing it in COMPOSE_FILE of the env file. A --compose file
+# with no sibling falls back to the copy on the host, or stops before pulling when there is none.
+#
 # Smoke: the checks a user needs to sign in (health, readiness, config, Supabase Auth, the sign-in page), and, with
 # SMOKE_EMAIL, SMOKE_PASSWORD and SMOKE_ORG set, an account step that signs in and uploads one synthetic e-invoice
 # (see smoke_account). Without them it says the account step is skipped. With a build id (#892: the git SHA the image
@@ -397,6 +401,7 @@ ACTIVE_BUILD=''
 activate() {
   local rel="$DEPLOY_DIR/releases/$1"
   [ -f "$rel/release.env" ] || die "$EXIT_USAGE" "release directory $rel is incomplete"
+  rm -f "$DEPLOY_DIR/compose.pilot.yml.tmp"
   cp -f "$rel/docker-compose.yml" "$DEPLOY_DIR/docker-compose.yml.tmp"
   cp -f "$rel/docker-compose.override.yml" "$DEPLOY_DIR/docker-compose.override.yml.tmp"
   CROVE_IMAGE="$(release_field "$1" IMAGE)"
@@ -411,11 +416,12 @@ activate() {
   if pilot_layout; then
     if [ -f "$rel/compose.pilot.yml" ]; then
       cp -f "$rel/compose.pilot.yml" "$DEPLOY_DIR/compose.pilot.yml.tmp"
-      mv -f "$DEPLOY_DIR/compose.pilot.yml.tmp" "$DEPLOY_DIR/compose.pilot.yml"
     elif [ ! -f "$DEPLOY_DIR/compose.pilot.yml" ]; then
       die "$EXIT_USAGE" "COMPOSE_FILE in $ENV_FILE lists compose.pilot.yml but release $1 does not carry it and $DEPLOY_DIR has none (docs/runbooks/deploy.md, \"The pilot layout\")"
     fi
   fi
+  # The three files are moved in a row, so a plain `docker compose` (the backup cron) sees them together as nearly as it can.
+  if [ -f "$DEPLOY_DIR/compose.pilot.yml.tmp" ]; then mv -f "$DEPLOY_DIR/compose.pilot.yml.tmp" "$DEPLOY_DIR/compose.pilot.yml"; fi
   mv -f "$DEPLOY_DIR/docker-compose.yml.tmp" "$DEPLOY_DIR/docker-compose.yml"
   mv -f "$DEPLOY_DIR/docker-compose.override.yml.tmp" "$DEPLOY_DIR/docker-compose.override.yml"
   export CROVE_IMAGE CROVE_EXTRACT_IMAGE

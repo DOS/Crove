@@ -158,9 +158,10 @@ describe.skipIf(!runHere)('deploy.sh', { timeout: 300_000 }, () => {
     expect(deploy('v1.0.0', 'a', { STUB_SERVICES: SPLIT }).status).toBe(0);
     expect(deploy('v1.1.0', 'b', { STUB_SERVICES: SPLIT }).status).toBe(0);
     for (const pin of pins('b')) expect(running()).toContain(pin);
-    // A release staged by an earlier deploy.sh carries the pins in its own override file.
-    const staged = `${dir}/releases/${releaseDir('v1.0.0', 'a')}/docker-compose.override.yml`;
-    writeFileSync(staged, `${readFileSync(staged, 'utf8')}${pins('a').map((l) => `  ${l}\n`).join('')}`);
+    // A release staged by an earlier deploy.sh carries the pins in its own override file. It is release b, the one the
+    // rollback below goes back to, so the pins really are activated again.
+    const staged = `${dir}/releases/${releaseDir('v1.1.0', 'b')}/docker-compose.override.yml`;
+    writeFileSync(staged, `${readFileSync(staged, 'utf8')}${pins('b').map((l) => `  ${l}\n`).join('')}`);
 
     // Back to one container: only COMPOSE_FILE changes. The file stays on the host, unused; no bare api or worker is defined.
     writeFileSync(`${dir}/.env`, NOT_PILOT_ENV);

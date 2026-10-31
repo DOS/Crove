@@ -108,6 +108,12 @@ async function main() {
   writeFileSync(`${DIR}/.env`, '');
   log(`starting ${PROJECT} from ${DIR}`);
   // The images are the ones built before (crove:local and crove-extract:local): the layout is started, not built.
+  try {
+    // A run killed before its cleanup leaves the project and its volumes behind.
+    compose(['down', '-v', '--remove-orphans']);
+  } catch {
+    // nothing to remove
+  }
   compose(['up', '-d', '--no-build']);
 
   await waitFor('the api to be ready (migrations applied, auth grants in place)', 240_000, async () => {
