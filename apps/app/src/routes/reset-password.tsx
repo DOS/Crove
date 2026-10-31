@@ -5,7 +5,7 @@ import { MfaChallengeForm } from '../components/two-factor.tsx';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
-import { ErrorText, Field, focusFirstInvalid, Logo, Spinner, useFieldErrors } from '../components/ui.tsx';
+import { ErrorText, Field, Logo, ScreenTitle, Spinner, focusFirstInvalid, useFieldErrors } from '../components/ui.tsx';
 import { SupportLink } from '../components/support-link.tsx';
 import { auth, authErrorText, authFailure, needsSecondFactor, type AuthFailure } from '../lib/auth.ts';
 
@@ -51,6 +51,7 @@ export function ResetPasswordPage() {
     <main className="flex min-h-full flex-col items-center justify-center bg-background px-4 py-16">
       <Card className="relative block w-full max-w-sm p-6">
         <Logo />
+        <ScreenTitle name={t('title')} />
         <h1 className="mt-6 text-lg font-semibold text-foreground">{t('title')}</h1>
         {needsCode === null ? (
           <div className="mt-6">

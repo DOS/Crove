@@ -9,7 +9,7 @@ import { useTranslations } from 'use-intl';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
-import { ErrorText, Logo, Spinner } from '../components/ui.tsx';
+import { ErrorText, Logo, ScreenTitle, Spinner } from '../components/ui.tsx';
 import { AccentRule, BrandMark, MadeWithCrove, accentStyle } from '../components/social-report-branding.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc } from '../lib/api.ts';
@@ -72,6 +72,7 @@ export function SocialPlanPrintPage() {
         )}
         {range === null ? (
           <Card className="block p-6">
+            <ScreenTitle name={tp('invalidTitle')} />
             <h1 className="text-lg font-semibold">{tp('invalidTitle')}</h1>
             <p className="mt-1 text-sm text-muted-foreground">{tp('invalid')}</p>
           </Card>
@@ -84,6 +85,7 @@ export function SocialPlanPrintPage() {
             <AccentRule brand={brand} />
             <header className="space-y-1">
               {(brand?.name ?? org) && <p className="text-sm text-muted-foreground">{brand?.name ?? org}</p>}
+              <ScreenTitle name={tp('pageTitle')} />
               <h1 className="text-2xl font-semibold">{tp('pageTitle')}</h1>
               <p className="text-sm text-muted-foreground">
                 {tp('period', { from: f.date(search.from), to: f.date(search.to) })} · {tp('count', { count: rows.length })}

@@ -54,6 +54,7 @@ const MACHINERY = new Set([
 // until the table exists, neither its factory nor its MACHINERY entry is stale. Remove an entry once its table is on
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
+  'crove_kernel.calendar_event_link',
   'crove_notes.link',
   'crove_notes.note',
 ]);
@@ -665,6 +666,24 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
       const start = new Date(Date.UTC(2030, 0, 1) + 3_600_000 * calendarHour++);
       return {
         row: { org_id: o.id, id: randomUUID(), user_id: o.owner, starts_at: start.toISOString(), ends_at: new Date(start.getTime() + 1_800_000).toISOString(), time_zone: 'Asia/Ho_Chi_Minh', title: 'RLS matrix event', created_by: o.owner },
+      };
+    },
+  },
+  // What was written of a booking's calendar event to a member's connected calendar (#2124, C6b): one row per
+  // (connection, event), under the same restrictive own-row policy as the connection, so the factory's rows belong to the
+  // owner. Tenant roles update only its state columns (a column grant), so the update probes assign attempts to itself.
+  'crove_kernel.calendar_event_link': {
+    update: { set: 'attempts = attempts' },
+    make: (o) => {
+      const connection = calendarConnectionRow(o);
+      const start = new Date(Date.UTC(2030, 0, 1) + 3_600_000 * calendarHour++);
+      const event = { org_id: o.id, id: randomUUID(), user_id: o.owner, starts_at: start.toISOString(), ends_at: new Date(start.getTime() + 1_800_000).toISOString(), time_zone: 'Asia/Ho_Chi_Minh', title: 'RLS matrix event', created_by: o.owner };
+      return {
+        setup: [
+          { table: 'crove_kernel.calendar_connection', values: connection },
+          { table: 'crove_kernel.calendar_event', values: event },
+        ],
+        row: { org_id: o.id, id: randomUUID(), connection_id: connection.id, event_id: event.id, user_id: o.owner, external_id: `rlsmatrix${tag()}`, state: 'written', synced_hash: 'rls-matrix' },
       };
     },
   },

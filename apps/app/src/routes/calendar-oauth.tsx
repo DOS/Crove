@@ -7,7 +7,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslations } from 'use-intl';
 import type { CalendarOAuthProvider } from '@crove/kernel-contract';
 import { Card } from '@crove/ui/components/card';
-import { ErrorText, Spinner } from '../components/ui.tsx';
+import { ErrorText, ScreenTitle, Spinner } from '../components/ui.tsx';
 import { client, errorMessage, queryClient, setCurrentOrg } from '../lib/api.ts';
 import { takeOAuthAttempt } from '../lib/oauth.ts';
 
@@ -67,6 +67,7 @@ export function CalendarOAuthCallbackPage() {
   return (
     <main className="flex min-h-full items-center justify-center bg-background px-4">
       <Card className="block w-full max-w-md space-y-4 p-6">
+        <ScreenTitle name={t('oauthTitle')} />
         <h1 className="text-lg font-semibold text-foreground">{t('oauthTitle')}</h1>
         {callback?.kind === 'cancelled' && <p className="text-sm text-muted-foreground">{t('oauthCancelled')}</p>}
         {callback?.kind === 'lost' && <ErrorText>{t('oauthLost')}</ErrorText>}
