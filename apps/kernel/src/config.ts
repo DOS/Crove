@@ -40,6 +40,10 @@ export const modulesSetting = optional.transform((value, ctx): readonly ModuleId
   return AVAILABLE_MODULES.filter((module) => module === 'kernel' || names.includes(module));
 });
 
+// The extract jobs a worker runs at once when EXTRACT_WORKER_CONCURRENCY is unset (#2119): the AI call, 10 to 20 s for a PDF
+// that needs it, is what the parallelism hides.
+export const DEFAULT_EXTRACT_WORKER_CONCURRENCY = 4;
+
 const schema = z.object({
   PORT: z.coerce.number().int().positive().default(8080),
   // Loopback by default; the Docker image sets 0.0.0.0 and compose publishes the port on loopback.
@@ -350,6 +354,16 @@ const schema = z.object({
   // crove-extract, the parsing sandbox (plan §7.6, External-tenant gate T12), e.g. http://crove-extract:8090.
   // Required for the worker role: the worker never parses PDF, XML or MIME itself. The API role does not use it.
   EXTRACT_URL: optional.pipe(z.url({ protocol: /^https?$/ }).optional()),
+  // Extract jobs the worker runs at once (#2119), each one reading a file and, for a PDF or a photo, calling the AI. Unset:
+  // 4, or the sandbox's slots when it has fewer. EXTRACT_CONCURRENCY is the sandbox's own setting of that name (its
+  // parser slots, 1 to 8); give the worker the same value, since it cannot ask. The worker never runs more extract jobs
+  // than the sandbox has slots, and keeps within the AI provider's rate limit by this setting going down, not up.
+  EXTRACT_WORKER_CONCURRENCY: z.preprocess((v) => (typeof v === 'string' && v.trim() === '' ? undefined : v), z.coerce.number().int().min(1).max(8).optional()),
+  EXTRACT_CONCURRENCY: z.preprocess((v) => (typeof v === 'string' && v.trim() === '' ? undefined : v), z.coerce.number().int().min(1).max(8).default(DEFAULT_EXTRACT_WORKER_CONCURRENCY)),
+  // Times the AI SDK sends an invoice-reading call again after a 429, a 5xx or a network error, before the document's
+  // job fails and pg-boss retries it (#2119). Each attempt waits up to 120 s, so the default 1 holds a
+  // concurrency slot for at most 2 x 120 s instead of the SDK's 3 x 120 s; 0 sends each call once.
+  AI_MAX_RETRIES: z.preprocess((v) => (typeof v === 'string' && v.trim() === '' ? undefined : v), z.coerce.number().int().min(0).max(5).default(1)),
   // Outbound mail (invites, issue #129), the same SMTP settings the bundled Supabase Auth uses. Unset SMTP_HOST: mail
   // is off, and the inviter passes the link on. Port 465 is implicit TLS; with SMTP_USER and SMTP_PASS on any other
   // port the server must offer STARTTLS.
@@ -516,6 +530,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
         'with a remote Supabase Auth, restrict sign-up there and leave AUTH_SIGNUP_POLICY unset',
     );
   }
+  if (config.EXTRACT_WORKER_CONCURRENCY !== undefined && config.EXTRACT_WORKER_CONCURRENCY > config.EXTRACT_CONCURRENCY) {
+    throw new Error('EXTRACT_WORKER_CONCURRENCY must not exceed EXTRACT_CONCURRENCY, the sandbox parser slots: more extract jobs than slots only wait, or are refused as busy');
+  }
   if (config.STORAGE === 's3' && !config.S3_BUCKET) throw new Error('STORAGE=s3 needs S3_BUCKET');
   if (config.ARCHIVE_STORE === 's3' && !config.ARCHIVE_S3_BUCKET) throw new Error('ARCHIVE_STORE=s3 needs ARCHIVE_S3_BUCKET');
   // Fails the boot on a malformed key rather than at the first export or download.
@@ -635,6 +652,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     throw new Error('hosted Supabase Auth needs PUBLIC_AUTH_ANON_KEY (the publishable key) for the R3 live check');
   }
   return config;
+}
+
+// The extract jobs this worker runs at once: EXTRACT_WORKER_CONCURRENCY, else 4 or the sandbox's slots if fewer (#2119).
+export function extractConcurrency(config: Pick<Config, 'EXTRACT_WORKER_CONCURRENCY' | 'EXTRACT_CONCURRENCY'>): number {
+  return config.EXTRACT_WORKER_CONCURRENCY ?? Math.min(DEFAULT_EXTRACT_WORKER_CONCURRENCY, config.EXTRACT_CONCURRENCY);
 }
 
 // How many client addresses it must take, at least, to use up Supabase Auth's deployment-wide email budget.

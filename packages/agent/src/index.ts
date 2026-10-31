@@ -19,6 +19,10 @@ export interface AiConfig {
   model: string;
   supportsStructuredOutputs?: boolean;
   timeoutMs?: number;
+  // Times a call is sent again after a 429, a 5xx or a network error (the AI SDK's own retry, with its backoff and the
+  // provider's retry-after). Unset: the SDK's default of 2. Each attempt can take timeoutMs, so a document's call holds a
+  // worker slot for (1 + maxRetries) x timeoutMs at most (#2119).
+  maxRetries?: number;
 }
 
 const zDecimal = z.string().describe('Plain decimal digits, no thousands separators, e.g. "1250000" or "12.5"');
@@ -101,6 +105,7 @@ export class InvoiceExtractor {
       system: INSTRUCTIONS,
       prompt: `Invoice text extracted from a PDF:\n\n${text.slice(0, 60_000)}`,
       abortSignal: AbortSignal.timeout(this.config.timeoutMs ?? 120_000),
+      ...(this.config.maxRetries === undefined ? {} : { maxRetries: this.config.maxRetries }),
     });
     reportUsage(onUsage, usage);
     return output ? toParsed(output) : null;
@@ -121,6 +126,7 @@ export class InvoiceExtractor {
         },
       ],
       abortSignal: AbortSignal.timeout(this.config.timeoutMs ?? 120_000),
+      ...(this.config.maxRetries === undefined ? {} : { maxRetries: this.config.maxRetries }),
     });
     reportUsage(onUsage, usage);
     return output ? toParsed(output) : null;

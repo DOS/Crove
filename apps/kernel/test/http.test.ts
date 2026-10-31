@@ -21,7 +21,7 @@ import {
 } from '@crove/kernel-runtime';
 import type { AuthUser } from '../src/auth.ts';
 import { ConcurrencyLimiter } from '../src/concurrency.ts';
-import { assertExportKey, assertSplitRoles, loadConfig } from '../src/config.ts';
+import { assertExportKey, assertSplitRoles, extractConcurrency, loadConfig } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
 import { secretMatches } from '../src/inbound.ts';
 import { buildZip } from '../../extract/test/zip-fixture.ts';
@@ -107,6 +107,28 @@ describe('configuration guards', () => {
     // A laptop needs no opt-in.
     expect(() => assertSplitRoles(loadConfig(base), 'all')).not.toThrow();
     expect(() => loadConfig({ ...base, CROVE_ALLOW_ALL_IN_ONE: 'yes' })).toThrow(/CROVE_ALLOW_ALL_IN_ONE/);
+  });
+
+  // #2119: how many extract jobs the worker runs at once, and how often an AI call is sent again.
+  it('runs 4 extract jobs at once by default, never more than the sandbox has slots, and bounds the AI retries', () => {
+    expect(extractConcurrency(loadConfig(base))).toBe(4);
+    expect(loadConfig(base).EXTRACT_CONCURRENCY).toBe(4);
+    // A blank value (a compose `${VAR:-}`) is unset.
+    expect(extractConcurrency(loadConfig({ ...base, EXTRACT_WORKER_CONCURRENCY: '', EXTRACT_CONCURRENCY: '' }))).toBe(4);
+    // Fewer sandbox slots lower the default; the setting goes down for the AI provider's rate limit, not up past the slots.
+    expect(extractConcurrency(loadConfig({ ...base, EXTRACT_CONCURRENCY: '2' }))).toBe(2);
+    expect(extractConcurrency(loadConfig({ ...base, EXTRACT_WORKER_CONCURRENCY: '1' }))).toBe(1);
+    expect(extractConcurrency(loadConfig({ ...base, EXTRACT_WORKER_CONCURRENCY: '8', EXTRACT_CONCURRENCY: '8' }))).toBe(8);
+    expect(() => loadConfig({ ...base, EXTRACT_WORKER_CONCURRENCY: '5', EXTRACT_CONCURRENCY: '4' })).toThrow(/must not exceed EXTRACT_CONCURRENCY/);
+    expect(() => loadConfig({ ...base, EXTRACT_WORKER_CONCURRENCY: '5' })).toThrow(/must not exceed EXTRACT_CONCURRENCY/);
+    for (const bad of ['0', '9', '2.5', 'many']) {
+      expect(() => loadConfig({ ...base, EXTRACT_WORKER_CONCURRENCY: bad }), bad).toThrow(/EXTRACT_WORKER_CONCURRENCY/);
+      expect(() => loadConfig({ ...base, EXTRACT_CONCURRENCY: bad }), bad).toThrow(/EXTRACT_CONCURRENCY/);
+    }
+    expect(loadConfig(base).AI_MAX_RETRIES).toBe(1);
+    expect(loadConfig({ ...base, AI_MAX_RETRIES: '' }).AI_MAX_RETRIES).toBe(1);
+    expect(loadConfig({ ...base, AI_MAX_RETRIES: '0' }).AI_MAX_RETRIES).toBe(0);
+    for (const bad of ['-1', '6', '1.5', 'x']) expect(() => loadConfig({ ...base, AI_MAX_RETRIES: bad }), bad).toThrow(/AI_MAX_RETRIES/);
   });
 
   // ADR-0028 section 1 and 3.

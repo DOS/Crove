@@ -104,6 +104,14 @@ function sendAgentWake(boss: JobSender, orgId: string, agentId: string) {
 }
 const EXTRACT_RETRY_LIMIT = 3;
 export const EXTRACT_POLL_SECONDS = 0.5;
+
+// Extract jobs this worker runs at once (#2119): the extract client's own slots toward the sandbox (EXTRACT_WORKER_CONCURRENCY,
+// capped by the sandbox's EXTRACT_CONCURRENCY in config.ts), 1 for a client that names none. pg-boss starts that many
+// workers on the queue, each taking one job at a time, so never more run at once. The AI call of a PDF or a photo is what
+// they overlap; the sandbox calls inside them wait for a slot in the client.
+export function extractWorkers(extract: ExtractClient): number {
+  return Math.max(1, Math.floor(extract.concurrency ?? 1));
+}
 const INBOUND_RETRY_LIMIT = 3;
 const MAIL_EVENT_RETRY_LIMIT = 5;
 const SIGN_OUT_RETRY_LIMIT = 5;
@@ -577,11 +585,12 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   // Background, agent and bulk queues, paused under back-pressure (#894, plan §4.9). Registered with background.add.
   const background = new PausableWork(boss);
 
+  if (finance) console.log(`[extract] up to ${extractWorkers(deps.extract)} extract job(s) at once`);
   // version: a requested re-extraction (kernel.file.reextract_requested); absent for the first read of a new file.
   // pg-boss waits the polling interval between fetches (2 s by default, less the job's run time), so a batch of 200
   // documents (bulk intake, #314) would wait about 400 s; 0.5 s, the shortest it allows, lets one sandbox call follow
   // the other. An idle worker asks for extraction jobs twice a second.
-  if (finance) await boss.work<ExtractJob>(QUEUES.extract, { batchSize: 1, pollingIntervalSeconds: EXTRACT_POLL_SECONDS }, async ([job]) => {
+  if (finance) await boss.work<ExtractJob>(QUEUES.extract, { batchSize: 1, localConcurrency: extractWorkers(deps.extract), pollingIntervalSeconds: EXTRACT_POLL_SECONDS }, async ([job]) => {
     if (!job) return;
     const { orgId, fileId, version } = job.data;
     // A ZIP archive (#314) is opened into documents of its own instead of being read; it is never read again.
