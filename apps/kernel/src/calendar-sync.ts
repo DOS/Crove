@@ -44,13 +44,80 @@ export type CalendarSyncOutcome = { outcome: 'synced'; added: number; removed: n
 // A page of the active calendar connections of active orgs after a key (crove_kernel.calendar_sync_due, the worker
 // login's alone), for the 15 minute sweep.
 export const CALENDAR_SYNC_PAGE = 1000;
-export async function calendarSyncDue(workerDb: Db, after: { orgId: string; connectionId: string } | null): Promise<Array<{ orgId: string; connectionId: string; provider: string }>> {
+export async function calendarSyncDue(
+  workerDb: Db,
+  after: { orgId: string; connectionId: string } | null,
+): Promise<Array<{ orgId: string; connectionId: string; provider: string }>> {
   const { rows } = await sql<{ org_id: string; connection_id: string; provider: string }>`
     SELECT org_id, connection_id, provider FROM crove_kernel.calendar_sync_due(${after?.orgId ?? null}::uuid, ${after?.connectionId ?? null}::uuid, ${CALENDAR_SYNC_PAGE}::int)`.execute(workerDb);
   return rows.map((r) => ({ orgId: r.org_id, connectionId: r.connection_id, provider: r.provider }));
 }
 
 const adapterFor = (adapters: CalendarSyncDeps['adapters'], provider: string): CalendarAdapter | undefined => Object.values(adapters).find((a) => a?.provider === provider);
+
+// A disconnecting connection the provider kept refusing to revoke for this long is removed anyway: the token is useless to
+// us from then on, and the member can take the grant away in their account (the audit row says it was not revoked).
+const REVOKE_GIVE_UP_MS = 3 * DAY_MS;
+
+export type CalendarDisconnectOutcome = { outcome: 'disconnected'; revoked: boolean; reason?: string } | { outcome: 'skipped' | 'retry'; reason: string };
+
+// The errors a credential read answers with when there is nothing to revoke with: the member's connection is gone or has no
+// token. Any other error (a statement timeout, a lock, a reset connection) is a passing failure: the next sweep tries again.
+const NO_TOKEN_CODES = new Set(['CALENDAR_NOT_FOUND']);
+// A credential sealed with a key this server no longer has (a rotation that dropped it too early) may come back with the
+// key; every other CredentialError is a damaged envelope or another binding, which no retry opens.
+const UNKNOWN_KEY = 'credential sealed with an unknown key';
+
+// Finishes a disconnect the member asked for: revokes the grant at the provider with the token only the worker can open,
+// then removes the connection and its sealed token (kernel.calendar.finish_disconnect). A provider that cannot be reached
+// is tried again at the next sweep, for three days. The credential is handed out for a disconnecting connection whatever
+// became of its member (left, demoted, disabled): the revoke is the one use it has there.
+export async function runCalendarDisconnect(deps: CalendarSyncDeps, job: CalendarSyncJob): Promise<CalendarDisconnectOutcome> {
+  const options = { actor: ACTOR, orgId: job.orgId };
+  const now = deps.now ?? (() => new Date());
+  const state = await deps.runtime.query<{ status: string; provider: string; updatedAt: string } | null>('kernel.calendar.connection_state', { connectionId: job.connectionId }, options);
+  if (!state || state.status !== 'disconnecting') return { outcome: 'skipped', reason: 'not_disconnecting' };
+  return disconnectSeen(deps, job, state, now);
+}
+
+async function disconnectSeen(deps: CalendarSyncDeps, job: CalendarSyncJob, state: { provider: string; updatedAt: string }, now: () => Date): Promise<CalendarDisconnectOutcome> {
+  const options = { actor: ACTOR, orgId: job.orgId };
+  const expired = now().getTime() - Date.parse(state.updatedAt) > REVOKE_GIVE_UP_MS;
+  // ifVersion: the version this disconnect saw. A member who connected the same account again since has a newer one, and
+  // a revoke of the old grant also ends the new one: the kernel then expires that connection for them to connect again.
+  const finish = async (revoked: boolean, reason?: string): Promise<CalendarDisconnectOutcome> => {
+    const done = await deps.runtime.execute<{ finished: boolean }>('kernel.calendar.finish_disconnect', { connectionId: job.connectionId, revoked, ifVersion: state.updatedAt, ...(reason ? { reason } : {}) }, options);
+    if (!done.finished) return { outcome: 'skipped', reason: 'changed' };
+    return { outcome: 'disconnected', revoked, ...(reason ? { reason } : {}) };
+  };
+  const adapter = adapterFor(deps.adapters, state.provider);
+  let sealed: SealedCalendarCredential;
+  try {
+    sealed = await deps.runtime.query<SealedCalendarCredential>('kernel.calendar.credential', { connectionId: job.connectionId }, options);
+  } catch (error) {
+    if (error instanceof DomainError && NO_TOKEN_CODES.has(error.code)) return finish(false, 'no_credential');
+    throw error;
+  }
+  if (!adapter) {
+    // The app credentials were removed from this server: the revoke cannot be made; keep trying until the give-up time.
+    return expired ? finish(false, 'no_adapter') : { outcome: 'retry', reason: 'no_adapter' };
+  }
+  let secret: string;
+  try {
+    secret = deps.broker.open({ keyId: sealed.keyId, envelope: Buffer.from(sealed.envelope, 'base64') }, calendarBinding(job.orgId, sealed.provider as CalendarProvider, sealed.externalAccount));
+  } catch (error) {
+    // No credential key on the server at all (the key and its file removed, the Google app still configured): the broker
+    // answers BROKER_NOT_CONFIGURED. The key may come back, so retry until the give-up time, then remove the connection.
+    if (error instanceof DomainError && error.code === 'BROKER_NOT_CONFIGURED') return expired ? finish(false, 'no_credential_key') : { outcome: 'retry', reason: 'no_credential_key' };
+    if (!(error instanceof CredentialError)) throw error;
+    if (error.message.startsWith(UNKNOWN_KEY) && !expired) return { outcome: 'retry', reason: 'unknown_key' };
+    return finish(false, 'credential_unreadable');
+  }
+  const answer = await adapter.revoke(secret);
+  if ('revoked' in answer) return answer.revoked ? finish(true) : finish(false, answer.reason);
+  if (expired) return finish(false, 'revoke_failed');
+  return { outcome: 'retry', reason: answer.failed };
+}
 
 export async function runCalendarSync(deps: CalendarSyncDeps, job: CalendarSyncJob): Promise<CalendarSyncOutcome> {
   const options = { actor: ACTOR, orgId: job.orgId };
@@ -161,9 +228,14 @@ export interface CalendarSweepDeps {
   // Runs the sweep while no other worker process does (the worker holds the connection the lock lives on); { ran: false }
   // when another one has it.
   exclusive: <T>(run: () => Promise<T>) => Promise<{ ran: true; value: T } | { ran: false }>;
+  // The page of connections to take care of after a key; calendarSyncDue on the worker's database unless a test gives one.
+  listDue?: (after: { orgId: string; connectionId: string } | null) => Promise<Array<{ orgId: string; connectionId: string; provider: string }>>;
+  now?: () => Date;
 }
 
 export interface CalendarSweepOutcome {
+  // Disconnects finished: the grant revoked at the provider and the connection removed.
+  disconnected: number;
   synced: number;
   expired: number;
   retry: number;
@@ -175,19 +247,40 @@ export interface CalendarSweepOutcome {
 // A sweep over every active connection, one at a time across worker processes: a connection that fails ends only its
 // own sync, and the rest go on.
 export async function syncCalendars(deps: CalendarSweepDeps): Promise<CalendarSweepOutcome> {
-  const outcome: CalendarSweepOutcome = { synced: 0, expired: 0, retry: 0, skipped: 0, busy: false };
+  const outcome: CalendarSweepOutcome = { disconnected: 0, synced: 0, expired: 0, retry: 0, skipped: 0, busy: false };
   const providers = new Set(Object.values(deps.adapters).map((a) => a?.provider));
-  if (providers.size === 0) return outcome;
+  const listDue = deps.listDue ?? ((after) => calendarSyncDue(deps.workerDb, after));
   const ran = await deps.exclusive(async () => {
     let after: { orgId: string; connectionId: string } | null = null;
     for (;;) {
-      const page = await calendarSyncDue(deps.workerDb, after);
-      for (const row of page.filter((r) => providers.has(r.provider as CalendarAdapter['provider']))) {
-        const done = await runCalendarSync(deps, { orgId: row.orgId, connectionId: row.connectionId }).catch((error: unknown) => {
+      const page = await listDue(after);
+      for (const row of page) {
+        const job = { orgId: row.orgId, connectionId: row.connectionId };
+        const failed = (error: unknown) => {
           // The connection's id and the error's name only: never a token or an interval.
           console.error(`[calendar-sync] connection ${row.connectionId.slice(0, 8)}`, error instanceof Error ? error.name : typeof error);
           return null;
-        });
+        };
+        // Which of the two it is, from its state: the list holds the connections to sync and the ones to remove. A
+        // disconnecting one is taken care of whatever the server has configured (its grant is revoked, or given up on, and the
+        // sealed token and the member's address go); an active one only when the server has an adapter for its provider.
+        const seen = await deps.runtime.query<{ status: string; provider: string; updatedAt: string } | null>('kernel.calendar.connection_state', { connectionId: row.connectionId }, { actor: ACTOR, orgId: row.orgId }).catch(failed);
+        if (seen === null) {
+          outcome.retry += 1;
+          continue;
+        }
+        if (seen.status === 'disconnecting') {
+          const gone = await disconnectSeen(deps, job, seen, deps.now ?? (() => new Date())).catch(failed);
+          if (gone === null || gone.outcome === 'retry') outcome.retry += 1;
+          else if (gone.outcome === 'disconnected') outcome.disconnected += 1;
+          else outcome.skipped += 1;
+          continue;
+        }
+        if (!providers.has(row.provider as CalendarAdapter['provider'])) {
+          outcome.skipped += 1;
+          continue;
+        }
+        const done = await runCalendarSync(deps, job).catch(failed);
         if (done === null) outcome.retry += 1;
         else if (done.outcome === 'synced') outcome.synced += 1;
         else outcome[done.outcome] += 1;

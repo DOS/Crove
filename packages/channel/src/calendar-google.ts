@@ -50,6 +50,10 @@ export interface CalendarAdapter {
   exchange(input: ExchangeInput): Promise<CalendarAccount>;
   refresh(secret: string): Promise<CalendarRefreshResult>;
   busy(secret: string, from: Date, to: Date): Promise<CalendarBusyResult>;
+  // Takes the grant away at the provider (a disconnect): the whole grant, not only this token. A grant the provider no
+  // longer knows counts as revoked. failed: the provider did not answer well; the worker tries again later.
+  // revoked=false names why nothing was revoked (the secret holds no token).
+  revoke(secret: string): Promise<{ revoked: true } | { revoked: false; reason: string } | { failed: string }>;
 }
 
 export interface GoogleCalendarSecret {
@@ -175,6 +179,28 @@ export class GoogleCalendarAdapter implements CalendarAdapter {
       // invalid_grant: the grant was revoked, or expired (an app in testing mode gets 7-day refresh tokens).
       if (error instanceof GoogleCalendarError && error.reason === 'invalid_grant') return { refused: 'invalid_grant' };
       return { failed: error instanceof GoogleCalendarError ? (error.reason ?? String(error.status)) : 'NETWORK' };
+    }
+  }
+
+  // https://oauth2.googleapis.com/revoke with the refresh token ends the whole grant (and its access tokens); with only
+  // an access token it would end just that one. Google answers 200 when it did, 400 invalid_token for a token it does not
+  // know (already revoked, or the member removed the app in their account): both mean the grant is gone.
+  async revoke(secret: string): Promise<{ revoked: true } | { revoked: false; reason: string } | { failed: string }> {
+    const s = googleCalendarSecretOf(secret);
+    if (!s) return { revoked: false, reason: 'no_token' };
+    try {
+      const response = await this.fetch('https://oauth2.googleapis.com/revoke', {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
+        body: new URLSearchParams({ token: s.refreshToken }).toString(),
+        signal: AbortSignal.timeout(30_000),
+      });
+      if (response.ok) return { revoked: true };
+      const body = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+      if (response.status === 400 && body?.error === 'invalid_token') return { revoked: true };
+      return { failed: typeof body?.error === 'string' ? body.error : String(response.status) };
+    } catch {
+      return { failed: 'NETWORK' };
     }
   }
 
