@@ -227,6 +227,7 @@ export const portalSyncList = defineCommand({
       .where('org_id', '=', ctx.orgId)
       .where('legal_entity_id', '=', legalEntityId)
       .where('period', '=', input.period)
+      .where('direction', '=', 'purchase')
       .where('removed_at', 'is', null)
       .execute();
     // The portal answered exactly as for a list already in the period: nothing new to record.

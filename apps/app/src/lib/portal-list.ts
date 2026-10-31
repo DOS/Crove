@@ -1,8 +1,25 @@
 // The tax portal reconciliation screen (issue #465): who may import a list, which sections the outcomes fall into and
 // in what order, and when to poll. The kernel decides every rule; these only arrange its answer.
-import { MAX_IMPORT_BYTES, type MissingInvoiceStatusView, type PortalReconciliation, type ReconcileOutcome } from '@crove/kernel-contract';
+import { z } from 'zod';
+import { MAX_IMPORT_BYTES, type MissingInvoiceStatusView, type PortalListDirection, type PortalReconciliation, type ReconcileOutcome } from '@crove/kernel-contract';
+import { readSearch, type Defined } from './search.ts';
+import { periodChoiceOf } from './vat.ts';
 
 export type ReconcileItem = PortalReconciliation['items'][number];
+
+// ?period= (as the VAT screen, #1513) and ?direction=sale of the screen: the sales tab (#2141), left out for the
+// purchase list, so a notification about a sales list opens the right tab.
+const zPortalSearch = z.object({
+  period: z.string().refine((key) => periodChoiceOf(key) !== null).optional().catch(undefined),
+  direction: z.literal('sale').optional().catch(undefined),
+});
+export type PortalSearch = Defined<z.output<typeof zPortalSearch>>;
+export const parsePortalSearch = (search: Record<string, unknown>): PortalSearch => readSearch(zPortalSearch, search);
+
+// The search to write for a picked period and tab: the default period and the purchase tab leave no param.
+export function portalSearch(key: string, defaultKey: string, direction: PortalListDirection): PortalSearch {
+  return { ...(key === defaultKey ? {} : { period: key }), ...(direction === 'sale' ? { direction: 'sale' as const } : {}) };
+}
 
 // The roles that may import and remove lists (finance.portal_list.import and .remove); the kernel checks again.
 export function canImportPortalList(role: string | null | undefined): boolean {

@@ -512,11 +512,14 @@ export type JournalVoucherTable = Refine<
 // update trigger stamps recorded_at and removed_at with the database clock. Rows are append-only.
 export const PORTAL_LIST_STATUSES = ['pending', 'done', 'failed'] as const;
 export const PORTAL_INVOICE_STATUSES = ['original', 'replacement', 'adjustment', 'replaced', 'adjusted', 'cancelled', 'unknown'] as const;
+// The org is the buyer (the purchase list) or the seller (the sales list, #2141).
+export const PORTAL_LIST_DIRECTIONS = ['purchase', 'sale'] as const;
 
 export type PortalInvoiceListTable = Refine<
   G.FinancePortalInvoiceListTable,
   {
     status: ColumnType<(typeof PORTAL_LIST_STATUSES)[number], (typeof PORTAL_LIST_STATUSES)[number] | undefined, (typeof PORTAL_LIST_STATUSES)[number]>;
+    direction: ColumnType<(typeof PORTAL_LIST_DIRECTIONS)[number], (typeof PORTAL_LIST_DIRECTIONS)[number] | undefined, never>;
     legal_entity_id: LegalEntityColumn;
   },
   'legal_entity_id'

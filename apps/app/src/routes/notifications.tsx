@@ -49,7 +49,7 @@ function useLine() {
       case 'finance.portal_attention':
         return n.detail.failed === 'true'
           ? t('text.portal_failed', { period: period(n.detail.period) })
-          : t('text.portal_attention', { period: period(n.detail.period), missing: Number(n.detail.missing ?? 0), mismatch: Number(n.detail.amountMismatch ?? 0) });
+          : t(n.detail.direction === 'sale' ? 'text.portal_attention_sale' : 'text.portal_attention', { period: period(n.detail.period), missing: Number(n.detail.missing ?? 0), mismatch: Number(n.detail.amountMismatch ?? 0) });
       case 'finance.period_closing':
         return t('text.period_closing', { period: period(n.detail.period), due: n.detail.dueDate ? f.date(n.detail.dueDate) : '' });
       case 'notes.todo_due':
@@ -108,7 +108,7 @@ export function NotificationsPage() {
     if (target?.to === 'proposal') void navigate({ to: '/o/$slug/inbox/$id', params: { slug, id: target.id } });
     else if (target?.to === 'inbox') void navigate({ to: '/o/$slug/inbox', params: { slug } });
     else if (target?.to === 'bank') void navigate({ to: '/o/$slug/bank', params: { slug }, search: target.account ? { account: target.account } : {} });
-    else if (target?.to === 'portal') void navigate({ to: '/o/$slug/portal-invoices', params: { slug } });
+    else if (target?.to === 'portal') void navigate({ to: '/o/$slug/portal-invoices', params: { slug }, search: { ...(target.sale ? { direction: 'sale' as const } : {}), ...(typeof n.detail.period === 'string' && n.detail.period ? { period: n.detail.period } : {}) } });
     else if (target?.to === 'ledger') void navigate({ to: '/o/$slug/ledger', params: { slug } });
     else if (target?.to === 'myWork') void navigate({ to: '/o/$slug/my-work', params: { slug } });
     else if (target?.to === 'task') void navigate({ to: '/o/$slug/tasks/$id', params: { slug, id: target.id } });

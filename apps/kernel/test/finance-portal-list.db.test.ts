@@ -158,12 +158,12 @@ suite('tax portal purchase list (#465)', () => {
   });
 
   // Uploads a list, imports it for the period and runs the worker step.
-  async function importList(invoices: PortalInvoiceSpec[], period: string) {
+  async function importList(invoices: PortalInvoiceSpec[], period: string, direction?: 'purchase' | 'sale') {
     const bytes = portalListXlsx(invoices);
     const uploaded = await upload(await tokenFor(owner), `ds-${period}.xlsx`, bytes);
     expect(uploaded.status).toBe(200);
     const fileId = uploaded.body.files[0].fileId as string;
-    const imported = await rpc('portalList/import', await tokenFor(owner), { period, fileId });
+    const imported = await rpc('portalList/import', await tokenFor(owner), { period, fileId, ...(direction ? { direction } : {}) });
     expect(imported.status, JSON.stringify(imported.body)).toBe(200);
     const listId = imported.body.listId as string;
     await importPortalList({ runtime: workerRuntime, store, extract }, org.orgId, listId);
@@ -589,5 +589,98 @@ suite('tax portal purchase list (#465)', () => {
     const byId = new Map(states.map((r) => [r.id as string, r]));
     expect([byId.get(first)?.status, byId.get(second)?.status]).toEqual(['done', 'done']);
     expect(byId.get(third)).toMatchObject({ status: 'failed', error: expect.stringContaining('đã có 40.000 hóa đơn từ các danh sách đã nhập, thêm 10.001 hóa đơn của danh sách này sẽ vượt mức 50.000 hóa đơn mỗi kỳ') });
+  }, 60_000);
+
+  // The sales list (#2141): the org is the seller, so the fixture's sides are swapped.
+  const saleInvoice = (number: string, date: string) =>
+    new TextEncoder().encode(
+      FIXTURE.replace('<SHDon>1234</SHDon>', `<SHDon>${number}</SHDon>`)
+        .replace('<NLap>2026-09-15</NLap>', `<NLap>${date}</NLap>`)
+        .replace(`<MST>${SELLER}</MST>`, '<MST>__SELLER__</MST>')
+        .replace(`<MST>${BUYER}</MST>`, `<MST>${SELLER}</MST>`)
+        .replace('<MST>__SELLER__</MST>', `<MST>${BUYER}</MST>`),
+    );
+
+  async function receiveSale(number: string, date: string) {
+    const bytes = saleInvoice(number, date);
+    const sha256 = sha256Hex(bytes);
+    const storageKey = fileKey(org.orgId, sha256);
+    const generation = await store.put(storageKey, bytes);
+    const { fileId } = await runtime.execute<{ fileId: string }>(
+      'kernel.file.ingest',
+      { filename: 'hd-ban.xml', contentType: 'application/xml', sizeBytes: bytes.byteLength, sha256, storageKey, generation, source: 'upload' },
+      { actor: asUser(owner.userId), orgId: org.orgId },
+    );
+    const { proposalId } = await extractAndPropose({ runtime: workerRuntime, store, extractor: null, extract, today: () => '2026-10-17' }, org.orgId, fileId);
+    return runtime.execute<{ documentId: string }>(
+      'kernel.proposal.approve',
+      { acceptUnverifiedSignature: true, id: proposalId, revision: 1 },
+      { actor: asMfa(owner.userId), orgId: org.orgId, idempotencyKey: randomUUID() },
+    );
+  }
+
+  // A sale on the portal's sales list: the org (BUYER here) is the seller and the fixture's seller the customer.
+  const saleSpec = (number: string, date: string, extra: Partial<PortalInvoiceSpec> = {}): PortalInvoiceSpec =>
+    spec(number, date, { sellerTaxCode: BUYER, buyerTaxCode: SELLER, ...extra });
+
+  it('flags a sale the tax portal has that the books lack, or that is booked with another VAT (#2141)', async () => {
+    // 8001 booked and on the portal; 8002 booked, the portal says VAT 200,000; 8003 only on the portal; 8004 booked,
+    // not on the portal; 8005 cancelled on the portal and booked.
+    await receiveSale('8001', '2026-09-03');
+    await receiveSale('8002', '2026-09-05');
+    await receiveSale('8004', '2026-09-09');
+    await receiveSale('8005', '2026-09-11');
+    const portalSales = [
+      saleSpec('8001', '03/09/2026'),
+      saleSpec('8002', '05/09/2026', { vat: 200_000 }),
+      saleSpec('8003', '07/09/2026'),
+      saleSpec('8005', '11/09/2026', { status: 'Hóa đơn đã bị hủy' }),
+    ];
+    const first = await importList(portalSales, '2026-09', 'sale');
+    const result = await rpc('portalList/reconcile', await tokenFor(viewer), { period: '2026-09', direction: 'sale' });
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(result.body.direction).toBe('sale');
+    expect(result.body.lists).toEqual([expect.objectContaining({ id: first.listId, direction: 'sale', status: 'done', rowCount: 4, error: null })]);
+    const byNumber = Object.fromEntries(result.body.items.map((i: any) => [i.portal?.number ?? i.crove?.number, { outcome: i.outcome, differences: i.differences }]));
+    expect(byNumber).toEqual({
+      '8001': { outcome: 'matched', differences: [] },
+      '8002': { outcome: 'amount_mismatch', differences: ['vat'] },
+      '8003': { outcome: 'missing', differences: [] },
+      '8004': { outcome: 'not_on_portal', differences: [] },
+      '8005': { outcome: 'void_in_crove', differences: [] },
+    });
+    expect(result.body.summary).toMatchObject({ portalInvoices: 4, matched: 1, amountMismatch: 1, missing: 1, notOnPortal: 1, voidInCrove: 1 });
+    // The customer is carried on both sides.
+    expect(result.body.items.find((i: any) => i.portal?.number === '8003').portal).toMatchObject({ buyerTaxCode: SELLER, sellerTaxCode: BUYER });
+    expect(result.body.items.find((i: any) => i.portal?.number === '8001').crove).toMatchObject({ buyerTaxCode: SELLER, buyerName: expect.any(String) });
+    // The purchase side of the period knows nothing of the sales list, and the books are untouched by the comparison.
+    const purchases = await rpc('portalList/reconcile', await tokenFor(viewer), { period: '2026-09' });
+    expect(purchases.body.direction).toBe('purchase');
+    expect(purchases.body.lists.every((l: any) => l.direction === 'purchase')).toBe(true);
+    expect(purchases.body.items.some((i: any) => ['8001', '8002', '8003', '8004', '8005'].includes(i.portal?.number ?? i.crove?.number))).toBe(false);
+    const sales = await admin(async (c) => (await c.query(`SELECT count(*)::int AS n FROM crove_finance.purchase_document WHERE org_id = $1 AND direction = 'sale'`, [org.orgId])).rows[0]);
+    expect(sales.n).toBe(4);
+
+    // The same file is refused again; the same list exported again (other bytes) flags nothing new.
+    const again = await rpc('portalList/import', await tokenFor(owner), { period: '2026-09', fileId: first.fileId, direction: 'sale' });
+    expect(again.status).toBe(409);
+    expect(again.body.code).toBe('PORTAL_LIST_EXISTS');
+    await importList([...portalSales].reverse(), '2026-09', 'sale');
+    const twice = await rpc('portalList/reconcile', await tokenFor(viewer), { period: '2026-09', direction: 'sale' });
+    expect(twice.body.lists).toHaveLength(2);
+    expect(twice.body.summary).toMatchObject({ portalInvoices: 4, matched: 1, amountMismatch: 1, missing: 1, notOnPortal: 1, voidInCrove: 1, duplicateRows: 4 });
+  }, 60_000);
+
+  it('refuses a purchase list imported as a sales list and the other way round (#2141)', async () => {
+    const asSale = await importList([spec('8101', '03/09/2026')], '2025-08', 'sale');
+    const august = await rpc('portalList/reconcile', await tokenFor(owner), { period: '2025-08', direction: 'sale' });
+    expect(august.body.lists).toEqual([expect.objectContaining({ id: asSale.listId, status: 'failed', error: expect.stringContaining('Đây là danh sách hóa đơn mua vào') })]);
+    const asPurchase = await importList([saleSpec('8102', '03/09/2026')], '2025-07', 'purchase');
+    const july = await rpc('portalList/reconcile', await tokenFor(owner), { period: '2025-07' });
+    expect(july.body.lists).toEqual([expect.objectContaining({ id: asPurchase.listId, status: 'failed', error: expect.stringContaining('Đây là danh sách hóa đơn bán ra') })]);
+    // Another company's sales list is refused with its tax code.
+    const foreign = await importList([saleSpec('8103', '03/09/2026', { sellerTaxCode: '0100109107' })], '2025-06', 'sale');
+    const june = await rpc('portalList/reconcile', await tokenFor(owner), { period: '2025-06', direction: 'sale' });
+    expect(june.body.lists).toEqual([expect.objectContaining({ id: foreign.listId, status: 'failed', error: expect.stringContaining('0100109107') })]);
   }, 60_000);
 });

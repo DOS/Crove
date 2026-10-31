@@ -1,4 +1,4 @@
-# Tax portal purchase-invoice list (issue #465)
+# Tax portal invoice list: purchases (issue #465) and sales (issue #2141)
 
 The tax authority's e-invoice portal ([hoadondientu.gdt.gov.vn](https://hoadondientu.gdt.gov.vn)) has no buyer API,
 and an unattended login needs software CAPTCHA solving, which Crove does not do (spike #322, option 1). The
@@ -19,7 +19,8 @@ VAT period and shows which invoices the tax authority has that Crove lacks, and 
 - **Load:** a period holds at most 50,000 rows of done lists (a list that would pass it is recorded as failed), and
   the reconciliation lists at most 500 items per outcome; the summary and the section titles count all of them, and
   the screen says when a section is cut short.
-- **Only purchases.** The org's sales (#313) are the org's own invoices and are not compared here.
+- **Purchases and sales.** The default is the purchase list ("mua vào"). The sales list ("bán ra", #2141) goes through
+  the same import and screen, as its own tab, with `direction: 'sale'` (see "The sales list" below).
 
 ## How the accountant gets the file
 
@@ -32,6 +33,34 @@ VAT period and shows which invoices the tax authority has that Crove lacks, and 
    invoices are on a separate tab, **Hóa đơn có mã khởi tạo từ máy tính tiền**, with its own export. A month can
    therefore take two or three files; each is imported into the same period (at most 12 per period), and an invoice
    on several lists counts once.
+
+## The sales list (#2141)
+
+The same screen has a second tab, "Hóa đơn bán ra". The accountant exports **Tra cứu hóa đơn điện tử bán ra** from the
+portal the same way (the columns are the same; the seller is the org and the buyer is the customer) and uploads it
+with `portalList.import` and `direction: 'sale'`. The comparison answers the question "is every sale the tax authority
+has in the books, with the same VAT?", so output VAT is not understated. It writes nothing to the books: a person
+books a missing sale as any other, from its XML in the Inbox.
+
+- **Direction is fixed per list.** The period's purchase and sales lists never mix: each direction has its own
+  limit of 12 lists and 50,000 rows, and `portalList.reconcile` takes `direction` (default `purchase`). Every other
+  consumer of the purchase comparison (the missing-invoice request and reminder, the assisted sync) stays on purchases.
+- **The worker checks the direction.** On a sales list the org (or one of its branches) must be the seller. Rows where
+  the org is the buyer, or another company is the seller, are dropped and counted (the screen shows them next to the
+  skipped rows); a list with nothing left is refused as "the purchase list" or as another company's. The line above the
+  header is not used: the rows tell.
+- **Same invoice:** a recorded sale does not say which branch issued it, so it meets a portal row on the series and
+  number (and a template that does not contradict), when exactly one portal invoice of the period has them: the rule
+  for an invoice without a tax code. Two branches' invoices of the same series and number are therefore flagged (each
+  "missing", the booked one "not on the portal"), never merged into one. The screen does not repeat "matched without
+  tax code" on sales. The customer's tax code (`buyer_tax_code` on the row) and the customer's name from the recorded
+  sale are shown.
+- **Flags:** "missing" (on the portal, not in the books), "amount_mismatch" (another total, VAT or currency; one dong
+  of rounding is allowed), "void_in_crove" (cancelled or replaced on the portal but still booked), "not_on_portal"
+  (booked in the period, on none of the lists). A sale on two lists of the period counts once, so importing the same
+  list again (a second file with the same invoices) flags nothing new; the very same file is refused.
+- **Notifications:** reading a sales list tells the importer and the owners and admins when sales are missing or
+  differ, in words that name sales.
 
 ## Sources
 
@@ -170,6 +199,10 @@ purchase documents (not voided) and the purchase proposals waiting in the Inbox:
 - Today's wording of Kết quả kiểm tra.
 - Headers before 2026: every source found is from 2026.
 - The extra cell in "không mã" rows (single source C).
+- The sales export ("bán ra", #2141): that it has the same 19 columns as the purchase export is taken from the purchase
+  export's layout (the guide above says so for both, without a source of its own); no recorded sample of the sales
+  export was found. A file with other headers is refused with the missing columns named (see "Unknown layout fails clearly"). Ask
+  the partner's accountant for one real sales export per tab (#61).
 - Foreign-currency invoices: C reports that the amounts are sometimes in the original currency and sometimes already
   in VND. Crove compares in the currency the row names, so such an invoice may show as an amount mismatch.
 

@@ -511,6 +511,7 @@ export interface FinancePortalInvoiceListTable {
   own_sales_count: Generated<number>;
   other_buyer_count: Generated<number>;
   legal_entity_id: ColumnType<string, string, NotGranted>;
+  direction: ColumnType<string, string | undefined, NotGranted>;
 }
 
 /** crove_finance.portal_invoice_row */
@@ -532,6 +533,7 @@ export interface FinancePortalInvoiceRowTable {
   status_label: ColumnType<string | null, string | null, NotGranted>;
   check_result: ColumnType<string | null, string | null, NotGranted>;
   legal_entity_id: ColumnType<string, string, NotGranted>;
+  buyer_tax_code: ColumnType<string | null, string | null, NotGranted>;
 }
 
 /** crove_finance.purchase_document */

@@ -225,7 +225,7 @@ import {
   zTodoWritten,
 } from './notes.ts';
 import { zOpeningBalanceImport, zOpeningBalancePreview } from './opening-balance.ts';
-import { MISSING_INVOICE_REMINDER_DAY_MAX, zMissingInvoiceStatus, zPortalReconciliation } from './portal-list.ts';
+import { MISSING_INVOICE_REMINDER_DAY_MAX, PORTAL_LIST_DIRECTIONS, zMissingInvoiceStatus, zPortalReconciliation } from './portal-list.ts';
 import { zPortalCaptcha, zPortalListResult, zPortalLoginInput, zPortalSession, zPortalXmlResult } from './portal-sync.ts';
 import { zBankFeedAccountView, zBankFeedConnectionView, zBankFeedMap, zBankImportPreview, zBankImportResult, zBankLineVoucher, zBankLines, zBankOpenLines, zBankStatementImport } from './bank-statement.ts';
 import { zTimeline } from './timeline.ts';
@@ -1390,13 +1390,15 @@ export const contract = {
     // or takes both back (done false). The next period's [22] is prefilled from this [43].
     markReturn: oc.input(zVatReturnMark).output(z.object({ period: zVatPeriod, done: z.boolean() })),
   },
-  // The tax portal's purchase-invoice list (issue #465) for one VAT period. reconcile: every role; the lists of the
-  // period and how their invoices compare with Crove's purchases. import (owners, admins, members; R1): files an .xlsx
+  // The tax portal's invoice list (issue #465) for one VAT period. direction 'purchase' (the default) is the "mua vào"
+  // export compared with Crove's purchases; 'sale' (#2141) is the "bán ra" export compared with the recorded sales, so a
+  // sale missing from the books or booked with another amount is flagged. reconcile: every role; the lists of the
+  // period and how their invoices compare with Crove's. import (owners, admins, members; R1): files an .xlsx
   // uploaded with purpose 'import' as a list of the period; the worker reads it (poll reconcile until no list is
   // pending). remove (owners, admins, members; R1): takes a list out of its period; it is kept.
   portalList: {
-    reconcile: oc.input(z.object({ period: zVatPeriod, legalEntityId: zId.optional() })).output(zPortalReconciliation),
-    import: oc.input(z.object({ period: zVatPeriod, fileId: zId, legalEntityId: zId.optional() })).output(z.object({ listId: zId })),
+    reconcile: oc.input(z.object({ period: zVatPeriod, legalEntityId: zId.optional(), direction: z.enum(PORTAL_LIST_DIRECTIONS).optional() })).output(zPortalReconciliation),
+    import: oc.input(z.object({ period: zVatPeriod, fileId: zId, legalEntityId: zId.optional(), direction: z.enum(PORTAL_LIST_DIRECTIONS).optional() })).output(z.object({ listId: zId })),
     remove: oc.input(z.object({ listId: zId })).output(z.object({ listId: zId })),
   },
   // The assisted sync from the tax portal (issue #325, ADR-0036), off unless the deployment sets TAX_PORTAL_SYNC=true

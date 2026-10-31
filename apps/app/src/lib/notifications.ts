@@ -32,7 +32,7 @@ export type NotificationTarget =
   | { to: 'proposal'; id: string }
   | { to: 'inbox' }
   | { to: 'bank'; account?: string }
-  | { to: 'portal' }
+  | { to: 'portal'; sale?: true }
   | { to: 'ledger' }
   | { to: 'myWork' }
   | { to: 'task'; id: string }
@@ -52,7 +52,8 @@ export function notificationTarget(item: { kind: string; subjectId: string | nul
     case 'finance.bank_attention':
       return item.detail.bankAccount ? { to: 'bank', account: item.detail.bankAccount } : { to: 'bank' };
     case 'finance.portal_attention':
-      return { to: 'portal' };
+      // A sales list's notification (#2141) opens the sales tab.
+      return item.detail.direction === 'sale' ? { to: 'portal', sale: true } : { to: 'portal' };
     case 'finance.period_closing':
       return { to: 'ledger' };
     case 'notes.todo_due':
