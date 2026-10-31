@@ -199,6 +199,10 @@ purchase documents (not voided) and the purchase proposals waiting in the Inbox:
 - Today's wording of Kết quả kiểm tra.
 - Headers before 2026: every source found is from 2026.
 - The extra cell in "không mã" rows (single source C).
+- The sales export ("bán ra", #2141): that it has the same 19 columns as the purchase export is taken from the purchase
+  export's layout (the guide above says so for both, without a source of its own); no recorded sample of the sales
+  export was found. A file with other headers is refused with the missing columns named (see "Unknown layout fails clearly"). Ask
+  the partner's accountant for one real sales export per tab (#61).
 - Foreign-currency invoices: C reports that the amounts are sometimes in the original currency and sometimes already
   in VND. Crove compares in the currency the row names, so such an invoice may show as an amount mismatch.
 

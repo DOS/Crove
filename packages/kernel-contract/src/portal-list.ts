@@ -80,7 +80,7 @@ export const zCroveInvoice = z.object({
   id: zId,
   sellerTaxCode: z.string().nullable(),
   sellerName: z.string(),
-  // The customer of a recorded sale (null on a purchase); on a sale sellerTaxCode and sellerName are the org's own.
+  // The customer of a recorded sale (null on a purchase); on a sale sellerTaxCode is null and sellerName empty: the seller is the org and a recorded sale does not say which branch issued it.
   buyerTaxCode: z.string().nullable(),
   buyerName: z.string().nullable(),
   template: z.string().nullable(),

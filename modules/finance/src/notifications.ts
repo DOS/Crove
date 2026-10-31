@@ -54,7 +54,7 @@ export const notificationDispatch = defineCommand({
           .where('id', '=', e.data.listId)
           .executeTakeFirst();
         if (!list || list.removed_at !== null || list.status === 'pending') return { sent: 0 };
-        let detail: Record<string, string> = { period: list.period, failed: 'true' };
+        let detail: Record<string, string> = { period: list.period, failed: 'true', ...(list.direction === 'sale' ? { direction: 'sale' } : {}) };
         if (list.status === 'done') {
           // The reconciliation of the list's legal entity (#1280).
           const found = await ctx.query<PortalReconciliation>('finance.portal_list.reconcile', {

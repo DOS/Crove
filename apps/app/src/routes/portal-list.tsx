@@ -502,7 +502,7 @@ export function PortalListPage() {
                 const items = grouped.get(outcome) ?? [];
                 return items.length > 0 ? <Section key={outcome} outcome={outcome} items={items} total={outcomeTotal(data.summary, outcome)} folded={folded} slug={slug} direction={direction} /> : null;
               })}
-              {data.items.length > 0 && data.summary.missing + data.summary.amountMismatch + data.summary.voidInCrove + data.summary.notOnPortal === 0 && (
+              {data.items.length > 0 && data.summary.missing + data.summary.amountMismatch + data.summary.voidInCrove + data.summary.notOnPortal + data.summary.void === 0 && (
                 <Empty title={t('allClear')} hint={t(`${sx}allClearHint`)} />
               )}
             </>
