@@ -28,7 +28,7 @@ const zInstant = z.iso.datetime({ offset: true });
 const OAUTH_ATTEMPT_SECONDS = 600;
 // A block is at most this long (the table allows 31 days); a longer busy interval is cut into pieces.
 const PIECE_MS = 30 * 86_400_000;
-const MAX_BUSY = 3000;
+const MAX_BUSY = 20_000;
 
 function requireUser(ctx: CommandContext): string {
   if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới kết nối được lịch');
@@ -251,7 +251,7 @@ export const calendarRefresh = defineCommand({
       .where('id', '=', input.connectionId)
       .execute();
     ctx.audit({ connection_id: input.connectionId, provider: row.provider });
-    return { connectionId: input.connectionId, refreshed: true };
+    return { connectionId: input.connectionId, refreshed: true, updatedAt: ctx.now.toISOString() };
   },
 });
 

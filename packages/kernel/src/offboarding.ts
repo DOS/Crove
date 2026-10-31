@@ -41,8 +41,6 @@ export const EXPORT_TABLES = {
   // Members' calendars (#1313): working hours and events, bookings included.
   'kernel.availability_rule': { from: 'crove_kernel.availability_rule', omit: [] },
   'kernel.calendar_event': { from: 'crove_kernel.calendar_event', omit: [] },
-  // Members' connected outside calendars (#2123); their sealed tokens (crove_kernel.calendar_credential) stay out.
-  'kernel.calendar_connection': { from: 'crove_kernel.calendar_connection', omit: [] },
   // Connected channel accounts (ADR-0025). Their sealed tokens (crove_kernel.credential) are secrets and stay out.
   'kernel.channel_connection': { from: 'crove_kernel.channel_connection', omit: [] },
   // Outbound mail (#538): the mail log, its delivery events (#539) and the org's suppression list. The address hashes

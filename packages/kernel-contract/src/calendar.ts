@@ -345,7 +345,8 @@ export const CALENDAR_OAUTH_PROVIDERS = ['google_calendar', 'microsoft_calendar'
 export const zCalendarOAuthProvider = z.enum(CALENDAR_OAUTH_PROVIDERS);
 export type CalendarOAuthProvider = z.infer<typeof zCalendarOAuthProvider>;
 export const CALENDAR_CONNECTION_STATUSES = ['active', 'expired'] as const;
-export const CALENDAR_SYNC_DAYS = 60;
+// The farthest an event type books ahead (crm horizonDays, at most 365) plus a day: busy time is read that far.
+export const CALENDAR_SYNC_DAYS = 366;
 
 export const zCalendarConnectionView = z.strictObject({
   id: zId,

@@ -41,7 +41,7 @@ function fakeRuntime(state: { status: string; provider: string; expiresAt: strin
     execute: async (name: string, input: Record<string, unknown>) => {
       calls.push({ kind: 'execute', name, input });
       if (name === 'kernel.calendar.busy_replace') return { replaced: true, added: 2, removed: 1 };
-      if (name === 'kernel.calendar.refresh') return { refreshed: true };
+      if (name === 'kernel.calendar.refresh') return { refreshed: true, updatedAt: '2026-11-03T05:30:00.000Z' };
       return { marked: true };
     },
   } as unknown as Runtime;
@@ -61,7 +61,8 @@ function adapter(over: Partial<CalendarAdapter> = {}): CalendarAdapter & { busyC
     refresh: async () => ({ secret: JSON.stringify({ accessToken: 'a-2', refreshToken: 'r-1' }), expiresAt: new Date(NOW.getTime() + 3_600_000) }),
     busy: async (secret, from, to) => {
       busyCalls.push({ secret, from, to });
-      return { busy: [{ start: '2026-11-04T02:00:00.000Z', end: '2026-11-04T03:00:00.000Z' }] };
+      // One interval, in the first piece of the year only.
+      return { busy: busyCalls.length === 1 ? [{ start: '2026-11-04T02:00:00.000Z', end: '2026-11-04T03:00:00.000Z' }] : [] };
     },
     busyCalls,
     ...over,
@@ -72,16 +73,17 @@ const fresh = { status: 'active', provider: 'google', expiresAt: new Date(NOW.ge
 const run = (rt: Runtime, a: CalendarAdapter) => runCalendarSync({ runtime: rt, broker: vault, adapters: { google_calendar: a }, now: () => NOW }, { orgId: ORG, connectionId: CONNECTION });
 
 describe('runCalendarSync', () => {
-  it('asks for the next 60 days from the start of the hour and replaces the blocks with the answer', async () => {
+  it('asks for the next year from the start of the hour, in pieces, and replaces the blocks with the answer', async () => {
     const { runtime, calls } = fakeRuntime(fresh, seal(SECRET));
     const a = adapter();
     expect(await run(runtime, a)).toEqual({ outcome: 'synced', added: 2, removed: 1 });
-    expect(a.busyCalls).toHaveLength(1);
+    expect(a.busyCalls).toHaveLength(4);
+    expect(a.busyCalls.map((c) => c.to.getTime() - c.from.getTime())).toEqual([100, 100, 100, 66].map((d) => d * 86_400_000));
     expect(a.busyCalls[0]?.secret).toBe(SECRET);
     expect(a.busyCalls[0]?.from.toISOString()).toBe('2026-11-03T05:00:00.000Z');
-    expect(a.busyCalls[0]?.to.toISOString()).toBe('2027-01-02T05:00:00.000Z');
+    expect(a.busyCalls.at(-1)?.to.toISOString()).toBe('2027-11-04T05:00:00.000Z');
     const replace = calls.find((c) => c.name === 'kernel.calendar.busy_replace');
-    expect(replace?.input).toEqual({ connectionId: CONNECTION, from: '2026-11-03T05:00:00.000Z', to: '2027-01-02T05:00:00.000Z', busy: [{ start: '2026-11-04T02:00:00.000Z', end: '2026-11-04T03:00:00.000Z' }] });
+    expect(replace?.input).toEqual({ connectionId: CONNECTION, from: '2026-11-03T05:00:00.000Z', to: '2027-11-04T05:00:00.000Z', busy: [{ start: '2026-11-04T02:00:00.000Z', end: '2026-11-04T03:00:00.000Z' }] });
     // A token with an hour left is not renewed.
     expect(calls.some((c) => c.name === 'kernel.calendar.refresh')).toBe(false);
   });
@@ -111,6 +113,17 @@ describe('runCalendarSync', () => {
     expect(await run(onBusy.runtime, adapter({ busy: async () => ({ refused: 'invalid_token' }) }))).toEqual({ outcome: 'expired', reason: 'invalid_token' });
     expect(onBusy.calls.at(-1)).toMatchObject({ name: 'kernel.calendar.mark_failed', input: { status: 'expired' } });
     expect(onBusy.calls.some((c) => c.name === 'kernel.calendar.busy_replace')).toBe(false);
+  });
+
+  it('expires only the version its own token belongs to: after a renewal, the renewed one', async () => {
+    const soon = { ...fresh, expiresAt: null };
+    const { runtime, calls } = fakeRuntime(soon, seal(SECRET));
+    expect(await run(runtime, adapter({ busy: async () => ({ refused: 'invalid_token' }) }))).toEqual({ outcome: 'expired', reason: 'invalid_token' });
+    // The refresh stored a new version; the refusal names that one, so a reconnect since leaves the new connection alone.
+    expect(calls.at(-1)).toMatchObject({ name: 'kernel.calendar.mark_failed', input: { status: 'expired', ifVersion: '2026-11-03T05:30:00.000Z' } });
+    const plain = fakeRuntime(fresh, seal(SECRET));
+    await run(plain.runtime, adapter({ busy: async () => ({ refused: 'invalid_token' }) }));
+    expect(plain.calls.at(-1)).toMatchObject({ input: { ifVersion: fresh.updatedAt } });
   });
 
   it('notes a passing failure and leaves the connection active', async () => {

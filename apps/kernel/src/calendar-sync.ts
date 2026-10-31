@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // A connected outside calendar's sync (issue #2123, part of #1374), run by the worker as the system. The credential is
 // opened here and nowhere else: the API only seals it (ADR-0025). A sync renews the access token when it is about to
-// run out, asks the provider for the busy times of the next 60 days and replaces the connection's busy blocks with them
+// run out, asks the provider for the busy times of the next year and replaces the connection's busy blocks with them
 // (kernel.calendar.busy_replace). Only start and end instants cross: no title, no attendee.
 // A provider that refuses the grant (the member revoked the app) expires the connection, which drops the dead token;
 // the member reconnects. Any other failure leaves the connection active with the reason noted, and the next sweep,
@@ -22,6 +22,8 @@ const LOCK_KEY = 'crove.calendar-sync';
 const REFRESH_AHEAD_MS = 5 * 60_000;
 const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
+// One free/busy request spans at most this many days.
+const CHUNK_DAYS = 100;
 
 export interface CalendarSyncJob {
   orgId: string;
@@ -75,8 +77,11 @@ export async function runCalendarSync(deps: CalendarSyncDeps, job: CalendarSyncJ
     await deps.runtime.execute('kernel.calendar.mark_failed', { connectionId: job.connectionId, status: 'expired', reason: 'credential_unreadable', ifVersion: state.updatedAt }, options);
     return { outcome: 'expired', reason: 'credential_unreadable' };
   }
-  const expire = async (reason: string, ifVersion?: string): Promise<CalendarSyncOutcome> => {
-    await deps.runtime.execute('kernel.calendar.mark_failed', { connectionId: job.connectionId, status: 'expired', reason: `refused (${reason})`.slice(0, 200), ...(ifVersion ? { ifVersion } : {}) }, options);
+  // The connection's version this sync's token belongs to: a member who connects again while a call is out has a
+  // newer one, and a refusal of the old token must not expire the new connection.
+  let version = state.updatedAt;
+  const expire = async (reason: string): Promise<CalendarSyncOutcome> => {
+    await deps.runtime.execute('kernel.calendar.mark_failed', { connectionId: job.connectionId, status: 'expired', reason: `refused (${reason})`.slice(0, 200), ifVersion: version }, options);
     return { outcome: 'expired', reason };
   };
   const retry = async (reason: string): Promise<CalendarSyncOutcome> => {
@@ -85,17 +90,18 @@ export async function runCalendarSync(deps: CalendarSyncDeps, job: CalendarSyncJ
   };
   if (state.expiresAt === null || Date.parse(state.expiresAt) - now().getTime() < REFRESH_AHEAD_MS) {
     const result = await adapter.refresh(secret);
-    if ('refused' in result) return expire(result.refused, state.updatedAt);
+    if ('refused' in result) return expire(result.refused);
     if ('failed' in result) return retry(result.failed);
     const next = deps.broker.seal(result.secret, binding);
-    const command = { connectionId: job.connectionId, ifVersion: state.updatedAt, expiresAt: result.expiresAt?.toISOString() ?? null, credential: { keyId: next.keyId, envelope: next.envelope.toString('base64') } };
+    const command = { connectionId: job.connectionId, ifVersion: version, expiresAt: result.expiresAt?.toISOString() ?? null, credential: { keyId: next.keyId, envelope: next.envelope.toString('base64') } };
     // The provider may have rotated the refresh token: this write is the only copy of the new pair, so a passing
     // database error is retried.
     for (let attempt = 1; ; attempt++) {
       try {
-        const stored = await deps.runtime.execute<{ refreshed: boolean }>('kernel.calendar.refresh', command, options);
+        const stored = await deps.runtime.execute<{ refreshed: boolean; updatedAt?: string }>('kernel.calendar.refresh', command, options);
         // Reconnected or disconnected meanwhile: that connection's own sync takes it from here.
-        if (!stored.refreshed) return { outcome: 'skipped', reason: 'changed' };
+        if (!stored.refreshed || !stored.updatedAt) return { outcome: 'skipped', reason: 'changed' };
+        version = stored.updatedAt;
         break;
       } catch (error) {
         if (attempt >= 3 || error instanceof DomainError) throw error;
@@ -107,12 +113,17 @@ export async function runCalendarSync(deps: CalendarSyncDeps, job: CalendarSyncJ
   // From the start of the hour, so a busy interval that began earlier keeps one stable key from sync to sync.
   const from = new Date(Math.floor(now().getTime() / HOUR_MS) * HOUR_MS);
   const to = new Date(from.getTime() + CALENDAR_SYNC_DAYS * DAY_MS);
-  const answer = await adapter.busy(secret, from, to);
-  if ('refused' in answer) return expire(answer.refused);
-  if ('failed' in answer) return retry(answer.failed);
+  // The farthest an event type may book ahead is a year: the whole of it is read, in pieces a request can bear.
+  const busy: Array<{ start: string; end: string }> = [];
+  for (let start = from.getTime(); start < to.getTime(); start += CHUNK_DAYS * DAY_MS) {
+    const answer = await adapter.busy(secret, new Date(start), new Date(Math.min(to.getTime(), start + CHUNK_DAYS * DAY_MS)));
+    if ('refused' in answer) return expire(answer.refused);
+    if ('failed' in answer) return retry(answer.failed);
+    busy.push(...answer.busy);
+  }
   const done = await deps.runtime.execute<{ replaced: boolean; added: number; removed: number }>(
     'kernel.calendar.busy_replace',
-    { connectionId: job.connectionId, from: from.toISOString(), to: to.toISOString(), busy: answer.busy },
+    { connectionId: job.connectionId, from: from.toISOString(), to: to.toISOString(), busy },
     options,
   );
   return done.replaced ? { outcome: 'synced', added: done.added, removed: done.removed } : { outcome: 'skipped', reason: 'not_active' };
