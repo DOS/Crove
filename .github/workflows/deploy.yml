@@ -283,7 +283,11 @@ jobs:
           REMOTE: ${{ steps.config.outputs.remote }}
         run: |
           set -euo pipefail
-          tar -cf - -C tools/deploy deploy.sh -C "$GITHUB_WORKSPACE" docker-compose.yml \
+          # compose.pilot.yml travels with the release (#2133): deploy.sh stages it from the directory of the compose file.
+          # A release from before the file existed has none to send.
+          files=(deploy.sh)
+          if [ -f tools/deploy/compose.pilot.yml ]; then files+=(compose.pilot.yml); fi
+          tar -cf - -C tools/deploy "${files[@]}" -C "$GITHUB_WORKSPACE" docker-compose.yml \
             | ssh -F "$SSH_CONFIG" crove-target "umask 077 && mkdir -p '$REMOTE' && tar -xf - -C '$REMOTE'"
 
       - name: Deploy, or roll back, on the host

@@ -4,15 +4,17 @@
 # every secret, and every module is on, Social's public routes included. That is right for `docker compose up` on a
 # laptop and wrong for a deployment other people reach.
 #
-# Copy this file next to the release's docker-compose.yml on the host (/opt/crove) and list it right after it in COMPOSE_FILE,
-# before the pins that extend it (the order deploy.sh uses):
+# Nothing to copy: the deploy workflow uploads this file with each release, next to its docker-compose.yml, and deploy.sh makes
+# it the host's copy when it activates the release (#2133). The host chooses the layout by listing the file in COMPOSE_FILE,
+# right after docker-compose.yml and before the pins that extend it (the order deploy.sh uses):
 #
 #   COMPOSE_FILE=docker-compose.yml:compose.pilot.yml:docker-compose.override.yml:compose.host.yml
 #
-# tools/deploy/deploy.sh passes it on in that order when it is there, and rolls the worker before the API. It
-# extends the release's `crove` service, so every setting of docker-compose.yml reaches both and stays in step. Images:
-# the release's digest, which deploy.sh pins for api and worker in docker-compose.override.yml when this file is on the
-# host; a stack built from a checkout runs the locally built crove:local, as `crove` does.
+# deploy.sh then passes it on in that order, pins api and worker, and rolls the worker before the API. It extends the
+# release's `crove` service, so every setting of docker-compose.yml reaches both and stays in step. Images: the release's
+# digest, which deploy.sh pins for api and worker in docker-compose.override.yml in this layout; a stack built from a checkout
+# runs the locally built crove:local, as `crove` does. The api role refuses to start on a public PUBLIC_URL with
+# WORKER_DATABASE_URL set, so the `!reset` below is not the only thing keeping that login out of the API.
 services:
   # Not started unless COMPOSE_PROFILES lists all-in-one; `pnpm pilot:check` fails a public deployment that does.
   crove:

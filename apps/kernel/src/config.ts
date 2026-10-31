@@ -751,11 +751,22 @@ export function assertExportKey(config: Pick<Config, 'PUBLIC_URL' | 'EXPORT_ENCR
 // the worker's database login, which enters the system context of every org, and on every secret. A missing
 // compose.pilot.yml, or a stray profile, would otherwise do that silently. Run api and worker as two processes
 // (docs/runbooks/deploy.md, "The pilot layout"). Checked when a role starts, like the export key above.
-export function assertSplitRoles(config: Pick<Config, 'PUBLIC_URL' | 'CROVE_ALLOW_ALL_IN_ONE'>, role: 'api' | 'worker' | 'all'): void {
+//
+// The api role holds no worker login at all on a public PUBLIC_URL (#2133): it refuses to start when WORKER_DATABASE_URL is
+// set. The pilot layout keeps it out with `!reset` under `extends`, which needs compose 2.24 or newer, and a host file or
+// an `env_file` can put it back; the API is the process the internet reaches, and the worker's login enters the system
+// context of every org, so the kernel checks it itself and does not rely on how the container was composed.
+export function assertSplitRoles(config: Pick<Config, 'PUBLIC_URL' | 'CROVE_ALLOW_ALL_IN_ONE' | 'WORKER_DATABASE_URL'>, role: 'api' | 'worker' | 'all'): void {
   if (role === 'all' && !isLocalUrl(config.PUBLIC_URL) && config.CROVE_ALLOW_ALL_IN_ONE !== 'true') {
     throw new Error(
       'the all role runs the API on the worker database login and every secret; on a public PUBLIC_URL run api and worker as separate processes ' +
         '(docs/runbooks/deploy.md, "The pilot layout"), or set CROVE_ALLOW_ALL_IN_ONE=true to accept that',
+    );
+  }
+  if (role === 'api' && !isLocalUrl(config.PUBLIC_URL) && config.WORKER_DATABASE_URL !== undefined) {
+    throw new Error(
+      'the api role must not hold WORKER_DATABASE_URL on a public PUBLIC_URL: that login enters the system context of every org, and only the worker needs it; ' +
+        'remove it from the api container (docs/runbooks/deploy.md, "The pilot layout")',
     );
   }
 }
