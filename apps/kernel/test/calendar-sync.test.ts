@@ -7,7 +7,7 @@ import type { CalendarAdapter, CalendarWriteResult } from '@crove/channel';
 import { busyPieces, cutOut } from '@crove/kernel';
 import { calendarBinding } from '@crove/kernel-contract';
 import { CredentialVault, DomainError, parseVaultKey, type Runtime } from '@crove/kernel-runtime';
-import { runCalendarDisconnect, runCalendarSync, syncCalendars } from '../src/calendar-sync.ts';
+import { runCalendarDisconnect, runCalendarSync, runCalendarWriteBack, syncCalendars } from '../src/calendar-sync.ts';
 
 const ORG = '11111111-1111-4111-8111-111111111111';
 const CONNECTION = '22222222-2222-4222-8222-222222222222';
@@ -364,12 +364,105 @@ describe('write-back in the sweep', () => {
     spy.mockRestore();
   });
 
+  it('leaves the write-back to the job that holds the connection\'s lock, and still reads the busy times', async () => {
+    const { runtime, calls } = fakeRuntime(on, seal(SECRET), { actions: [upsert] });
+    const a = adapter();
+    const busy = async () => ({ ran: false as const });
+    expect(await runCalendarSync({ runtime, broker: vault, adapters: { google_calendar: a }, now: () => NOW, lockConnection: busy }, { orgId: ORG, connectionId: CONNECTION })).toMatchObject({ outcome: 'synced' });
+    expect(a.writes).toEqual([]);
+    expect(calls.some((c) => c.name === 'kernel.calendar.writeback_plan')).toBe(false);
+    expect(calls.some((c) => c.name === 'kernel.calendar.busy_replace')).toBe(true);
+  });
+
   it('stops writing when the grant lacks the events permission, and the busy read goes on', async () => {
     const { runtime, calls } = fakeRuntime(on, seal(SECRET), { actions: [upsert, remove] });
     const a = adapter({ writeEvent: async () => ({ scope: true }) });
     expect(await run(runtime, a)).toMatchObject({ outcome: 'synced' });
     expect(a.writes).toEqual([]);
     expect(records(calls)).toEqual([]);
+  });
+});
+
+describe('runCalendarWriteBack (the job a booking event queues)', () => {
+  const on = { ...fresh, writeBack: true };
+  const upsert = { eventId: 'e1', externalId: 'ext1ext1ext1', kind: 'upsert', summary: 'Tư vấn: Lan', startsAt: '2026-11-04T02:00:00.000Z', endsAt: '2026-11-04T03:00:00.000Z', hash: 'sha256:aaa' };
+  const records = (calls: Call[]) => calls.filter((c) => c.name === 'kernel.calendar.link.record').map((c) => ({ connectionId: c.input.connectionId, eventId: c.input.eventId, state: c.input.state }));
+  const CONN_B = '99999999-9999-4999-8999-999999999999';
+  // The runtime the job sees: the org's write-back connections and a state for each; plan and credential as in the sweep tests.
+  function jobRuntime(ids: string[], states: Record<string, unknown>, credential: unknown = seal(SECRET)) {
+    const base = fakeRuntime(on, credential, { actions: [upsert] });
+    const query = (base.runtime as unknown as { query: (n: string, i: Record<string, unknown>) => Promise<unknown> }).query;
+    const runtime = {
+      ...base.runtime,
+      query: async (name: string, input: Record<string, unknown>) => {
+        if (name === 'kernel.calendar.writeback_connections') return ids;
+        if (name === 'kernel.calendar.connection_state') {
+          base.calls.push({ kind: 'query', name, input });
+          return states[String(input.connectionId)] ?? null;
+        }
+        return query(name, input);
+      },
+    } as unknown as Runtime;
+    return { runtime, calls: base.calls };
+  }
+  const job = (rt: Runtime, a: CalendarAdapter) => runCalendarWriteBack({ runtime: rt, broker: vault, adapters: { google_calendar: a }, now: () => NOW }, { orgId: ORG });
+
+  it('makes each write-back connection of the org match its bookings, with the token it has, and renews nothing', async () => {
+    const { runtime, calls } = jobRuntime([CONNECTION, CONN_B], { [CONNECTION]: on, [CONN_B]: on });
+    const a = adapter({ refresh: async () => Promise.reject(new Error('the job never renews')) });
+    expect(await job(runtime, a)).toEqual({ connections: 2, ran: 2, busy: 0 });
+    expect(a.writes).toEqual(['write ext1ext1ext1 Tư vấn: Lan 2026-11-04T02:00:00.000Z', 'write ext1ext1ext1 Tư vấn: Lan 2026-11-04T02:00:00.000Z']);
+    expect(records(calls)).toEqual([
+      { connectionId: CONNECTION, eventId: 'e1', state: 'written' },
+      { connectionId: CONN_B, eventId: 'e1', state: 'written' },
+    ]);
+    // It reads no busy times: that is the sweep's.
+    expect(calls.some((c) => c.name === 'kernel.calendar.busy_replace' || c.name === 'kernel.calendar.refresh')).toBe(false);
+  });
+
+  it('leaves a connection that is off, gone, without an adapter or with a token about to run out to the sweep', async () => {
+    const soon = { ...on, expiresAt: new Date(NOW.getTime() + 60_000).toISOString() };
+    const { runtime } = jobRuntime(['c-off', 'c-gone', 'c-soon', CONNECTION], { 'c-off': { ...on, writeBack: false }, 'c-soon': soon, [CONNECTION]: on });
+    const a = adapter();
+    expect(await job(runtime, a)).toEqual({ connections: 4, ran: 1, busy: 0 });
+    expect(a.writes).toHaveLength(1);
+    const { runtime: other } = jobRuntime([CONNECTION], { [CONNECTION]: { ...on, provider: 'microsoft' } });
+    expect(await job(other, adapter())).toEqual({ connections: 1, ran: 0, busy: 0 });
+  });
+
+  it('does not renew or expire a connection whose token the provider refuses: the sweep does that', async () => {
+    const { runtime, calls } = jobRuntime([CONNECTION], { [CONNECTION]: on });
+    const a = adapter({ writeEvent: async () => ({ refused: 'invalid_token' }), refresh: async () => Promise.reject(new Error('the job never renews')) });
+    expect(await job(runtime, a)).toEqual({ connections: 1, ran: 1, busy: 0 });
+    expect(calls.some((c) => c.name === 'kernel.calendar.mark_failed' || c.name === 'kernel.calendar.refresh' || c.name === 'kernel.calendar.link.record')).toBe(false);
+  });
+
+  it('runs a connection\'s batch under that connection\'s lock, and counts one the sweep or another job holds as busy', async () => {
+    const { runtime, calls } = jobRuntime([CONNECTION, CONN_B], { [CONNECTION]: on, [CONN_B]: on });
+    const held: string[] = [];
+    const a = adapter();
+    const lockConnection = async <T,>(id: string, run: () => Promise<T>) => {
+      if (id === CONN_B) return { ran: false as const };
+      held.push(`lock ${id}`);
+      const value = await run();
+      held.push(`unlock ${id}`);
+      return { ran: true as const, value };
+    };
+    expect(await runCalendarWriteBack({ runtime, broker: vault, adapters: { google_calendar: a }, now: () => NOW, lockConnection }, { orgId: ORG })).toEqual({ connections: 2, ran: 1, busy: 1 });
+    // The write happened between the lock and its release; the busy connection was left alone.
+    expect(held).toEqual([`lock ${CONNECTION}`, `unlock ${CONNECTION}`]);
+    expect(records(calls)).toEqual([{ connectionId: CONNECTION, eventId: 'e1', state: 'written' }]);
+  });
+
+  it('goes on with the other connections when one fails', async () => {
+    const { runtime, calls } = jobRuntime([CONNECTION, CONN_B], { [CONNECTION]: on, [CONN_B]: on });
+    let n = 0;
+    const a = adapter({ writeEvent: async () => (++n === 1 ? Promise.reject(new Error('socket hang up')) : { ok: true }) });
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    expect(await job(runtime, a)).toEqual({ connections: 2, ran: 1, busy: 0 });
+    expect(records(calls)).toEqual([{ connectionId: CONN_B, eventId: 'e1', state: 'written' }]);
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining('[calendar-writeback]'));
+    spy.mockRestore();
   });
 });
 

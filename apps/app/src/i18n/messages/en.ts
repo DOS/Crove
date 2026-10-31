@@ -6203,6 +6203,7 @@ export const en = {
           set: 'Turn writing appointments to an outside calendar on or off',
         },
         writeback_plan: 'Read what has to be written to an outside calendar',
+        writeback_connections: 'List the outside calendars that bookings are written to',
         link: {
           record: 'Record the result of writing an appointment to an outside calendar',
         },

@@ -53,7 +53,7 @@ import {
 import type { SessionRevoker, SignOutTarget } from './sessions.ts';
 import { opsAlert } from './ops-alert.ts';
 import { BANK_FEEDS_DUE_PAGE, bankFeedsDue, runBankFeedSync, type BankFeedSyncJob } from './bank-feed-sync.ts';
-import { CALENDAR_SYNC_SWEEP_MS, syncCalendars } from './calendar-sync.ts';
+import { CALENDAR_SYNC_SWEEP_MS, runCalendarWriteBack, syncCalendars, type CalendarWriteBackJob } from './calendar-sync.ts';
 import { BANK_FEED_NOTICE_CLAIM, claimBankFeedNotices } from './bank-feed-webhook.ts';
 import type { BankFeedProvider } from '@crove/bank-feed';
 
@@ -319,6 +319,12 @@ export function sendExtractJob(boss: JobSender, row: OutboxRow, priority: number
 // The daily pull of every bank feed (ADR-0039), early morning in Vietnam; a sync retries a few times, then dead-letters.
 const BANK_FEED_SYNC_CRON = '30 5 * * *';
 const BANK_FEED_SYNC_RETRY_LIMIT = 3;
+// A booking's event handed to a calendar write-back job: it fails only when the org's connections cannot be listed (a
+// database error), which pg-boss retries a few times, then dead-letters. A failing provider call is left to the 15 minute sweep.
+const CALENDAR_WRITEBACK_RETRY_LIMIT = 3;
+// A job that finds a connection's write-back held by the sweep or another job tries again this many times, this far apart.
+const CALENDAR_WRITEBACK_BUSY_TRIES = 4;
+const CALENDAR_WRITEBACK_BUSY_WAIT_MS = 5_000;
 // One sync a connection per slot for the signed notices that ask for one.
 const BANK_FEED_NOTICE_SLOT_SECONDS = 30;
 
@@ -1393,6 +1399,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   // Outside calendars (#2123, #1374): the busy times of every active connection are read every 15 minutes, a sweep at a
   // time across worker processes. The adapters are the deployment's; with none on, nothing runs.
   const calendars = channels?.calendars ?? {};
+  const calendarWriteBackOn = Object.keys(calendars).length > 0;
   // A session advisory lock on one connection of the worker's pool, so two worker processes never sweep at once.
   const calendarExclusive = <T>(run: () => Promise<T>) =>
     deps.workerDb.connection().execute(async (db) => {
@@ -1404,12 +1411,25 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
         await sql`SELECT pg_catalog.pg_advisory_unlock(pg_catalog.hashtextextended('crove.calendar-sync', 0))`.execute(db);
       }
     });
+  // The same, for one connection's write-back (the sweep's batch and the booking-event job's), so a write and a delete of one
+  // event never cross: the lock is taken for the plan, the provider calls and their records.
+  const calendarConnectionLock = <T>(connectionId: string, run: () => Promise<T>) =>
+    deps.workerDb.connection().execute(async (db) => {
+      const key = `crove.calendar-writeback:${connectionId}`;
+      const { rows } = await sql<{ locked: boolean }>`SELECT pg_catalog.pg_try_advisory_lock(pg_catalog.hashtextextended(${key}, 0)) AS locked`.execute(db);
+      if (!rows[0]?.locked) return { ran: false as const };
+      try {
+        return { ran: true as const, value: await run() };
+      } finally {
+        await sql`SELECT pg_catalog.pg_advisory_unlock(pg_catalog.hashtextextended(${key}, 0))`.execute(db);
+      }
+    });
   let calendarSyncing = false;
   const calendarSweep = async () => {
     if (calendarSyncing || !channels) return;
     calendarSyncing = true;
     try {
-      const done = await syncCalendars({ runtime: deps.runtime, broker: channels.broker, workerDb: deps.workerDb, adapters: calendars, exclusive: calendarExclusive });
+      const done = await syncCalendars({ runtime: deps.runtime, broker: channels.broker, workerDb: deps.workerDb, adapters: calendars, exclusive: calendarExclusive, lockConnection: calendarConnectionLock });
       if (done.synced + done.expired + done.retry + done.disconnected > 0) console.log(`[calendar-sync] synced ${done.synced}, expired ${done.expired}, to retry ${done.retry}, disconnected ${done.disconnected}`);
     } catch (error) {
       console.error('[calendar-sync] sweep', error instanceof Error ? error.name : typeof error);
@@ -1422,6 +1442,21 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   const calendarTimer = channels ? setInterval(() => void calendarSweep(), CALENDAR_SYNC_SWEEP_MS) : null;
   calendarTimer?.unref();
   void calendarSweep();
+
+  // A booking confirmed, moved or cancelled (#2124): the events of the org's write-back connections are made to match at once,
+  // from a job the relay queues, instead of at the next sweep (which stays as the backstop and does the token renewals).
+  if (channels && calendarWriteBackOn) {
+    await boss.work<CalendarWriteBackJob>(QUEUES.calendarWriteback, { batchSize: 1 }, async ([job]) => {
+      if (!job) return;
+      // A connection the sweep or another job is working on is tried again a few times, so a booking that committed after their
+      // plan was read is still written; held longer than that, the sweep that holds it comes back within 15 minutes.
+      for (let attempt = 1; ; attempt++) {
+        const done = await runCalendarWriteBack({ runtime: deps.runtime, broker: channels.broker, adapters: channels.calendars ?? {}, lockConnection: calendarConnectionLock }, job.data);
+        if (done.busy === 0 || attempt >= CALENDAR_WRITEBACK_BUSY_TRIES) break;
+        await new Promise((resolve) => setTimeout(resolve, CALENDAR_WRITEBACK_BUSY_WAIT_MS));
+      }
+    });
+  }
 
   // Sizes of Social images uploaded before sizes were read at upload (#668): a batch every 10 minutes, a round a day.
   const sizes = { after: null as string | null, pausedUntil: 0 };
@@ -1719,6 +1754,16 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                   singletonKey: jobKey(row.org_id, QUEUES.crmBooking, `${bookingId}:${requestId}`),
                   retryLimit: BOOKING_RETRY_LIMIT,
                   retryDelay: 2,
+                  retryBackoff: true,
+                });
+              }
+              // A booking confirmed, moved or cancelled (#2124): the events of the org's write-back connections are made to
+              // match it, beside whatever else the event starts. One job per event; the jobs name the org only.
+              if (crm && calendarWriteBackOn && (row.type === 'crm.booking.scheduled' || row.type === 'crm.booking.cancelled')) {
+                await boss.send(QUEUES.calendarWriteback, { orgId: row.org_id } satisfies CalendarWriteBackJob, {
+                  singletonKey: jobKey(row.org_id, QUEUES.calendarWriteback, row.event_id),
+                  retryLimit: CALENDAR_WRITEBACK_RETRY_LIMIT,
+                  retryDelay: 10,
                   retryBackoff: true,
                 });
               }
