@@ -26,14 +26,16 @@ const ROOT = fileURLToPath(new URL('../../', import.meta.url)).replaceAll('\\', 
 const KEEP = process.argv.includes('--keep');
 const PREFIX = process.env.DRILL_PREFIX ?? 'crove-wal-drill';
 if (!/^[a-z][a-z0-9-]{0,30}$/.test(PREFIX)) throw new Error('DRILL_PREFIX is lower-case letters, digits and -');
+// The drill removes volumes and containers by this name: a prefix without `drill` (a mistyped `crove`) could be a stack.
+if (!PREFIX.includes('drill')) throw new Error('DRILL_PREFIX must contain "drill", so it can never name a real stack');
 const BASH = process.env.DRILL_BASH ?? 'bash';
 const DIR = mkdtempSync(join(tmpdir(), `${PREFIX}-`)).replaceAll('\\', '/');
 const T0 = Date.now();
 
 const settings = {
   BACKUP_S3_BUCKET: 'crove-wal-drill',
-  BACKUP_S3_ACCESS_KEY_ID: 'crove-wal-drill',
-  BACKUP_S3_SECRET_ACCESS_KEY: 'crove-wal-drill-secret-0123456789',
+  WAL_S3_ACCESS_KEY_ID: 'crove-wal-drill',
+  WAL_S3_SECRET_ACCESS_KEY: 'crove-wal-drill-secret-0123456789',
   BACKUP_S3_PREFIX: 'drill',
   WAL_ENCRYPTION_KEY: 'drill-encryption-key-not-a-secret-0123456789',
   WAL_S3_ENDPOINT: 'minio',

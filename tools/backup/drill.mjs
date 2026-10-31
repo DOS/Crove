@@ -60,6 +60,8 @@ if (!['s3', 'local'].includes(STORAGE) || !['s3', 'local'].includes(RESTORE_STOR
 if (!['on', 'off'].includes(SEAL)) throw new Error('--seal is on or off');
 const PREFIX = process.env.DRILL_PREFIX ?? 'crove-drill';
 if (!/^[a-z][a-z0-9-]{0,30}$/.test(PREFIX)) throw new Error('DRILL_PREFIX is lower-case letters, digits and -');
+// The drill removes volumes, networks and images by this name: a prefix without `drill` (a mistyped `crove`) could be a stack.
+if (!PREFIX.includes('drill')) throw new Error('DRILL_PREFIX must contain "drill", so it can never name a real stack');
 const TAG = PREFIX;
 const BASH = process.env.DRILL_BASH ?? 'bash';
 const MC_IMAGE = 'pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372';

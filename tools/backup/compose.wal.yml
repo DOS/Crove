@@ -10,7 +10,8 @@
 # `wal.sh backup` takes the base backups a restore starts from; together they restore the database to any moment since the
 # oldest base backup kept, to the second.
 #
-# The bucket is the backup bucket (BACKUP_S3_*), under <BACKUP_S3_PREFIX>/wal, sealed by pgBackRest with its own key,
+# The bucket is the backup bucket (BACKUP_S3_BUCKET), under <BACKUP_S3_PREFIX>/wal, reached with a key pair of its own
+# (WAL_S3_ACCESS_KEY_ID and WAL_S3_SECRET_ACCESS_KEY, scoped to that prefix), sealed by pgBackRest with its own key,
 # WAL_ENCRYPTION_KEY (aes-256-cbc, the key as passphrase), so the bucket alone does not expose the books. Keep that key
 # apart from the bucket, as BACKUP_ENCRYPTION_KEY is: without it no WAL segment opens. pgBackRest cannot change a
 # repository's passphrase in place, so unlike the nightly key this one is not rotated; see the runbook.
@@ -33,8 +34,11 @@ services:
       PGBACKREST_REPO1_S3_URI_STYLE: ${WAL_S3_URI_STYLE:-host}
       # n only for a bucket behind a certificate the image does not know (a test MinIO): the drill sets it.
       PGBACKREST_REPO1_STORAGE_VERIFY_TLS: ${WAL_S3_VERIFY_TLS:-y}
-      PGBACKREST_REPO1_S3_KEY: ${BACKUP_S3_ACCESS_KEY_ID:?set BACKUP_S3_ACCESS_KEY_ID}
-      PGBACKREST_REPO1_S3_KEY_SECRET: ${BACKUP_S3_SECRET_ACCESS_KEY:?set BACKUP_S3_SECRET_ACCESS_KEY}
+      # The database container's own key pair, never BACKUP_S3_*: that one can write and delete every nightly run, and
+      # whoever reaches the postgres user (or runs COPY ... TO PROGRAM as a superuser) can read this container's environment.
+      # Scope it to <BACKUP_S3_PREFIX>/wal/* (list, get, put, delete).
+      PGBACKREST_REPO1_S3_KEY: ${WAL_S3_ACCESS_KEY_ID:?set WAL_S3_ACCESS_KEY_ID to a key pair scoped to the wal/ prefix, not BACKUP_S3_ACCESS_KEY_ID}
+      PGBACKREST_REPO1_S3_KEY_SECRET: ${WAL_S3_SECRET_ACCESS_KEY:?set WAL_S3_SECRET_ACCESS_KEY, the secret of that key pair}
       PGBACKREST_REPO1_PATH: /${BACKUP_S3_PREFIX:-crove}/wal
       PGBACKREST_REPO1_CIPHER_TYPE: aes-256-cbc
       PGBACKREST_REPO1_CIPHER_PASS: ${WAL_ENCRYPTION_KEY:?set WAL_ENCRYPTION_KEY, which the WAL is sealed with}

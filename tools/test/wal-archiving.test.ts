@@ -58,8 +58,8 @@ interface Service {
 describe.skipIf(!hasCompose)('compose.wal.yml', { timeout: 60_000 }, () => {
   const settings = {
     BACKUP_S3_BUCKET: 'bucket-ref',
-    BACKUP_S3_ACCESS_KEY_ID: 'key-id-ref',
-    BACKUP_S3_SECRET_ACCESS_KEY: 'key-secret-ref',
+    WAL_S3_ACCESS_KEY_ID: 'wal-key-id-ref',
+    WAL_S3_SECRET_ACCESS_KEY: 'wal-key-secret-ref',
     WAL_ENCRYPTION_KEY: 'encryption-key-ref',
     WAL_S3_ENDPOINT: 's3.storage.example',
   };
@@ -91,6 +91,21 @@ describe.skipIf(!hasCompose)('compose.wal.yml', { timeout: 60_000 }, () => {
     });
     expect(services(settings)['prober']?.environment?.['PROBER_MAX_WAL_ARCHIVE_AGE_SECONDS']).toBe('600');
     expect(services(settings)['prober']?.environment?.['PROBER_MAX_WAL_PENDING_SEGMENTS']).toBe('20');
+  });
+
+  // The database container's environment is readable by anyone who reaches the postgres user: it must never carry the key
+  // that can delete the nightly runs.
+  it('never gives the db container the nightly backup key, and uses the WAL key pair for pgBackRest', () => {
+    const nightly = { BACKUP_S3_ACCESS_KEY_ID: 'nightly-key-id', BACKUP_S3_SECRET_ACCESS_KEY: 'nightly-key-secret', BACKUP_S3_ENDPOINT: 'https://s3.storage.example' };
+    const db = services({ ...settings, ...nightly })['db'];
+    const keys = Object.keys(db?.environment ?? {});
+    expect(keys.filter((k) => k.startsWith('BACKUP_'))).toEqual([]);
+    expect(Object.values(db?.environment ?? {}).filter((v) => String(v).includes('nightly-key'))).toEqual([]);
+    expect(db?.environment).toMatchObject({ PGBACKREST_REPO1_S3_KEY: 'wal-key-id-ref', PGBACKREST_REPO1_S3_KEY_SECRET: 'wal-key-secret-ref' });
+    // With no WAL pair set, the nightly pair is no fallback: the stack does not load.
+    const missing = config({ ...settings, ...nightly, WAL_S3_ACCESS_KEY_ID: '', WAL_S3_SECRET_ACCESS_KEY: '' });
+    expect(missing.status).not.toBe(0);
+    expect(missing.stderr).toContain('set WAL_S3_ACCESS_KEY_ID');
   });
 
   it('follows the prefix and the TLS and style settings', () => {
