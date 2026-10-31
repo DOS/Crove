@@ -773,6 +773,21 @@ export interface KernelCalendarConnectionTable {
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
 }
 
+/** crove_kernel.calendar_event_link */
+export interface KernelCalendarEventLinkTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  connection_id: ColumnType<string, string, NotGranted>;
+  event_id: ColumnType<string, string, NotGranted>;
+  user_id: ColumnType<string, string, NotGranted>;
+  external_id: ColumnType<string, string, NotGranted>;
+  state: string;
+  synced_hash: string;
+  attempts: Generated<number>;
+  last_error: string | null;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
 /** crove_kernel.calendar_event */
 export interface KernelCalendarEventTable {
   org_id: string;
@@ -790,21 +805,6 @@ export interface KernelCalendarEventTable {
   cancelled_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   source_id: string | null;
   external_id: string | null;
-}
-
-/** crove_kernel.calendar_event_link */
-export interface KernelCalendarEventLinkTable {
-  org_id: ColumnType<string, string, NotGranted>;
-  id: ColumnType<string, string | undefined, NotGranted>;
-  connection_id: ColumnType<string, string, NotGranted>;
-  event_id: ColumnType<string, string, NotGranted>;
-  user_id: ColumnType<string, string, NotGranted>;
-  external_id: ColumnType<string, string, NotGranted>;
-  state: string;
-  synced_hash: string;
-  attempts: Generated<number>;
-  last_error: string | null;
-  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
 }
 
 /** crove_kernel.channel_connection */
