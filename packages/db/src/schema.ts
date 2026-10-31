@@ -116,13 +116,23 @@ export type NumberSeriesPolicyTable = Refine<G.KernelNumberSeriesPolicyTable, { 
 
 // The calendar core (issue #1313): a member's weekly working hours and the events on their calendar. Holidays and the
 // slot rules are in @crove/kernel-contract (calendar.ts).
-export const CALENDAR_EVENT_KINDS = ['manual', 'time_off', 'booking'] as const;
+export const CALENDAR_EVENT_KINDS = ['manual', 'time_off', 'booking', 'google', 'microsoft', 'caldav'] as const;
+export const CALENDAR_CONNECTION_STATUSES = ['active', 'expired'] as const;
+export const CALENDAR_PROVIDERS = ['google', 'microsoft', 'caldav'] as const;
 export const CALENDAR_EVENT_STATUSES = ['active', 'cancelled'] as const;
 export type CalendarEventTable = Refine<
   G.KernelCalendarEventTable,
   {
     kind: Generated<(typeof CALENDAR_EVENT_KINDS)[number]>;
     status: Generated<(typeof CALENDAR_EVENT_STATUSES)[number]>;
+  }
+>;
+
+export type CalendarConnectionTable = Refine<
+  G.KernelCalendarConnectionTable,
+  {
+    provider: ColumnType<(typeof CALENDAR_PROVIDERS)[number], (typeof CALENDAR_PROVIDERS)[number], never>;
+    status: Generated<(typeof CALENDAR_CONNECTION_STATUSES)[number]>;
   }
 >;
 
@@ -720,6 +730,7 @@ type Refined = Tables<{
   'crove_notes.link': NotesLinkTable;
   'crove_notes.note': NotesNoteTable;
   'crove_notes.todo': NotesTodoTable;
+  'crove_kernel.calendar_connection': CalendarConnectionTable;
   'crove_kernel.calendar_event': CalendarEventTable;
   'crove_kernel.legal_entity': LegalEntityTable;
   'crove_kernel.number_series_policy': NumberSeriesPolicyTable;

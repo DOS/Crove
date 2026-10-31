@@ -12,6 +12,7 @@ import { Checkbox } from '@crove/ui/components/checkbox';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { DateInput } from '../components/date-input.tsx';
 import { TimeInput } from '../components/time-input.tsx';
+import { ExternalCalendars } from './calendar-connections.tsx';
 import { ErrorText, RowsSkeleton, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { errorMessage, orpc, queryClient } from '../lib/api.ts';
@@ -161,6 +162,7 @@ export function WorkingHoursCard({ canEdit }: { canEdit: boolean }) {
         <>
           <HoursForm key={JSON.stringify(calendar.data.hours)} calendar={calendar.data} canEdit={canEdit} />
           <DaysOff calendar={calendar.data} canEdit={canEdit} />
+          <ExternalCalendars canEdit={canEdit} />
         </>
       ) : null}
     </Card>

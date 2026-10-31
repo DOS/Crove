@@ -26,7 +26,7 @@ const KERNEL_SCREENS = {
   ],
   // Signing in and the screens before an org: the landing redirect, the home of several orgs, sign-in, the second
   // factor, a password reset, an invite to accept and a new org.
-  outside: [{ path: '/' }, { path: '/clients' }, { path: '/login' }, { path: '/mfa' }, { path: '/reset-password' }, { path: '/-/invite' }, { path: '/onboarding' }],
+  outside: [{ path: '/' }, { path: '/clients' }, { path: '/login' }, { path: '/mfa' }, { path: '/reset-password' }, { path: '/-/invite' }, { path: '/onboarding' }, { path: '/calendar/oauth/$provider/callback' }],
   nav: [
     { app: 'home', group: 'work', path: 'overview', label: 'overview' },
     { app: 'home', group: 'work', path: 'inbox', label: 'inbox' },

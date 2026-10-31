@@ -1,9 +1,9 @@
 // oRPC implementation of @crove/kernel-contract. Handlers only call the runtime (execute/query).
 import { implement, ORPCError } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
-import { OAUTH_MAX_ACCOUNTS_PER_GRANT, contract } from '@crove/kernel-contract';
+import { CALENDAR_OAUTH_PROVIDERS, OAUTH_MAX_ACCOUNTS_PER_GRANT, calendarBinding, contract } from '@crove/kernel-contract';
 import { sandboxBankFeed } from '@crove/bank-feed';
-import { BlueskyError, ConnectorError, blueskyLogin, connectBluesky, connectDiscord, connectMastodon, connectTelegram, connectWordPress, discordLogin, mastodonLogin, telegramLogin, wordpressLogin, newOAuthAttempt, oauthStateHash, sandbox, type OAuthConnector } from '@crove/channel';
+import { type CalendarAdapter, BlueskyError, ConnectorError, blueskyLogin, connectBluesky, connectDiscord, connectMastodon, connectTelegram, connectWordPress, discordLogin, mastodonLogin, telegramLogin, wordpressLogin, newOAuthAttempt, oauthStateHash, sandbox, type OAuthConnector } from '@crove/channel';
 import {
   ALT_TEXT_IMAGE_MAX_BYTES,
   ALT_TEXT_IMAGE_TYPES,
@@ -220,6 +220,8 @@ export interface RpcChannels {
   wordpress?: boolean;
   // Providers connected through an OAuth dialog that this deployment configured (Social plan S6), by provider id.
   connectors?: Readonly<Partial<Record<string, OAuthConnector>>>;
+  // Outside calendars members connect (#2123) through an OAuth dialog this deployment configured, by OAuth provider id.
+  calendars?: Readonly<Partial<Record<string, CalendarAdapter>>>;
   // PUBLIC_URL: the provider sends the browser back to PUBLIC_URL/channels/oauth/:provider/callback.
   publicUrl?: string;
   // Stock photos from Pexels for the media library (#1106, MEDIA_PEXELS_API_KEY); unset: off, and no Pexels call is
@@ -351,6 +353,18 @@ export function createRpcHandler(
     // would go through the provider's dialog for nothing.
     if (channels.broker.id === 'none') throw new DomainError('BROKER_NOT_CONFIGURED', 503, 'Chưa cấu hình khóa mã hóa thông tin kết nối (CREDENTIAL_KEY)');
     return { orgId, actor: actorOf(context.user), connector, broker: channels.broker };
+  };
+  const calendarRedirectUri = (provider: string) => `${(channels?.publicUrl ?? '').replace(/\/$/, '')}/calendar/oauth/${provider}/callback`;
+  // The adapter of a calendar provider this deployment configured, for a member who edits (a viewer has no calendar of
+  // their own to connect). The commands check the role again.
+  const calendarAdapter = async (context: RpcContext, provider: string) => {
+    const { orgId, role } = await resolveMembership(runtime, context.user, context.orgSlug);
+    if (role === 'viewer') throw new DomainError('FORBIDDEN', 403, 'Người xem không kết nối được lịch');
+    const adapter = channels?.calendars?.[provider];
+    if (!channels || !adapter) throw new DomainError('CALENDAR_PROVIDER_DISABLED', 404, 'Loại lịch này chưa được cấu hình trên máy chủ');
+    // Checked before an attempt is written or used up: without a key the tokens could never be sealed.
+    if (channels.broker.id === 'none') throw new DomainError('BROKER_NOT_CONFIGURED', 503, 'Chưa cấu hình khóa mã hóa thông tin kết nối (CREDENTIAL_KEY)');
+    return { orgId, actor: actorOf(context.user), adapter, broker: channels.broker };
   };
   // The org's team chat for Social alerts (#863): the target is checked with the platform and sealed here, then saved by
   // the command. The API never reads it back: a test line is only asked for, and the worker sends it.
@@ -1501,6 +1515,60 @@ export function createRpcHandler(
       saveHours: os.calendar.saveHours.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.execute('kernel.calendar.hours.save', input, { actor, orgId }))),
       addEvent: os.calendar.addEvent.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.execute('kernel.calendar.event.add', input, { actor, orgId }))),
       cancelEvent: os.calendar.cancelEvent.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.execute('kernel.calendar.event.cancel', input, { actor, orgId }))),
+      // Outside calendars (#2123). Providers: only those with app credentials and a credential key, so the screen shows
+      // no connect button the server could not finish.
+      providers: os.calendar.providers.handler(({ context }) =>
+        guard(async () => {
+          await resolveMembership(runtime, context.user, context.orgSlug);
+          if (!channels || channels.broker.id === 'none') return [];
+          return CALENDAR_OAUTH_PROVIDERS.filter((p) => channels.calendars?.[p] !== undefined);
+        }),
+      ),
+      connections: os.calendar.connections.handler(({ context }) => inOrg(context, (orgId, actor) => runtime.query('kernel.calendar.connections', {}, { actor, orgId }))),
+      // The state and the PKCE verifier are made here; only the state's hash and the verifier reach the database.
+      connectStart: os.calendar.connectStart.handler(({ context, input }) =>
+        guard(async () => {
+          const { orgId, actor, adapter } = await calendarAdapter(context, input.provider);
+          const attempt = newOAuthAttempt(adapter.pkce);
+          const begun = await runtime.execute<{ attemptId: string; expiresAt: string }>(
+            'kernel.calendar.oauth_begin',
+            { provider: input.provider, stateHash: attempt.stateHash, codeVerifier: attempt.codeVerifier },
+            { actor, orgId },
+          );
+          const authorizeUrl = adapter.authorizeUrl({ state: attempt.state, redirectUri: calendarRedirectUri(input.provider), codeChallenge: attempt.codeChallenge });
+          return { authorizeUrl, state: attempt.state, expiresAt: begun.expiresAt };
+        }),
+      ),
+      // The attempt is consumed before the code is exchanged, so a code and state work once even if the exchange
+      // fails. The tokens the provider returns are sealed here and dropped; only the envelope reaches the command.
+      connectFinish: os.calendar.connectFinish.handler(({ context, input }) =>
+        guard(async () => {
+          const { orgId, actor, adapter, broker } = await calendarAdapter(context, input.provider);
+          const { codeVerifier } = await runtime.execute<{ codeVerifier: string | null }>(
+            'kernel.calendar.oauth_consume',
+            { provider: input.provider, stateHash: oauthStateHash(input.state) },
+            { actor, orgId },
+          );
+          if (adapter.pkce && !codeVerifier) throw new DomainError('OAUTH_STATE_INVALID', 400, 'Lượt kết nối này không hợp lệ hoặc không phải của bạn, hãy bắt đầu lại');
+          const account = await adapter.exchange({ code: input.code, redirectUri: calendarRedirectUri(input.provider), codeVerifier }).catch((error: unknown) => {
+            throw connectorFailure(error);
+          });
+          const sealed = broker.seal(account.secret, calendarBinding(orgId, adapter.provider, account.externalAccount));
+          return runtime.execute<{ connectionId: string; reconnected: boolean }>(
+            'kernel.calendar.connect',
+            {
+              provider: adapter.provider,
+              externalAccount: account.externalAccount,
+              displayName: account.displayName,
+              scopes: account.scopes,
+              expiresAt: account.expiresAt?.toISOString() ?? null,
+              credential: { keyId: sealed.keyId, envelope: sealed.envelope.toString('base64') },
+            },
+            { actor, orgId },
+          ).then((done) => ({ ...done, displayName: account.displayName }));
+        }),
+      ),
+      disconnect: os.calendar.disconnect.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.execute('kernel.calendar.disconnect', input, { actor, orgId }))),
     },
     // Org-less: any signed-in user may look up a tax code before the org exists. Nothing is written, so no command.
     taxRegistry: {

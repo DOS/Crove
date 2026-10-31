@@ -94,6 +94,7 @@ describe('module screens against the router (#1652)', () => {
       '/-/report',
       '/-/review',
       '/-/share',
+      '/calendar/oauth/$provider/callback',
       '/channels/oauth/$provider/callback',
       '/clients',
       '/login',

@@ -25,6 +25,8 @@ import {
   YouTubePublisher,
   YouTubeRefresher,
   GoogleBusinessConnector,
+  GoogleCalendarAdapter,
+  type CalendarAdapter,
   GoogleBusinessPublisher,
   GoogleBusinessRefresher,
   LinkedInPublisher,
@@ -270,6 +272,14 @@ const pinterestApp = (config: Pick<Config, 'CHANNEL_PINTEREST_APP_ID' | 'CHANNEL
   config.CHANNEL_PINTEREST_APP_ID && config.CHANNEL_PINTEREST_APP_SECRET ? { appId: config.CHANNEL_PINTEREST_APP_ID, appSecret: config.CHANNEL_PINTEREST_APP_SECRET } : null;
 const zaloApp = (config: Pick<Config, 'CHANNEL_ZALO_APP_ID' | 'CHANNEL_ZALO_APP_SECRET'>) => (config.CHANNEL_ZALO_APP_ID && config.CHANNEL_ZALO_APP_SECRET ? { appId: config.CHANNEL_ZALO_APP_ID, appSecret: config.CHANNEL_ZALO_APP_SECRET } : null);
 
+// The outside calendar providers this deployment has an OAuth app for (#2123), by OAuth provider id; one without
+// credentials is not offered, and with none the connect buttons are hidden.
+export function calendarAdapters(config: Pick<Config, 'CALENDAR_GOOGLE_CLIENT_ID' | 'CALENDAR_GOOGLE_CLIENT_SECRET'>): Partial<Record<string, CalendarAdapter>> {
+  const adapters: Partial<Record<string, CalendarAdapter>> = {};
+  if (config.CALENDAR_GOOGLE_CLIENT_ID && config.CALENDAR_GOOGLE_CLIENT_SECRET) adapters.google_calendar = new GoogleCalendarAdapter({ clientId: config.CALENDAR_GOOGLE_CLIENT_ID, clientSecret: config.CALENDAR_GOOGLE_CLIENT_SECRET });
+  return adapters;
+}
+
 export function channelConnectors(config: Omit<ChannelConfig, 'CHANNEL_SANDBOX'>): Partial<Record<string, OAuthConnector>> {
   const connectors: Partial<Record<string, OAuthConnector>> = {};
   if (config.CHANNEL_META_APP_ID && config.CHANNEL_META_APP_SECRET) {
@@ -475,7 +485,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
           bankFeedWebhooks: Object.fromEntries(
             Object.entries(bankFeedProviders({ sandbox: config.BANK_FEED_SANDBOX === 'true', sandboxWebhookSecret: config.BANK_FEED_SANDBOX_WEBHOOK_SECRET })).filter(([, p]) => p.verifyWebhook),
           ),
-          channels: { broker: resolved.broker, sandbox: config.CHANNEL_SANDBOX === 'true', bankFeedSandbox: config.BANK_FEED_SANDBOX === 'true', bluesky: config.CHANNEL_BLUESKY === 'true', telegram: config.CHANNEL_TELEGRAM === 'true', mastodon: config.CHANNEL_MASTODON === 'true', discord: config.CHANNEL_DISCORD === 'true', wordpress: config.CHANNEL_WORDPRESS === 'true', connectors: channelConnectors(config), publicUrl: config.PUBLIC_URL, ...(config.MEDIA_PEXELS_API_KEY ? { stockPhotos: createPexels({ apiKey: config.MEDIA_PEXELS_API_KEY, store }) } : {}), mediaUrls: createMediaUrls({ store }), ...(vapid ? { push: { publicKey: vapid.publicKey } } : {}) },
+          channels: { broker: resolved.broker, sandbox: config.CHANNEL_SANDBOX === 'true', bankFeedSandbox: config.BANK_FEED_SANDBOX === 'true', bluesky: config.CHANNEL_BLUESKY === 'true', telegram: config.CHANNEL_TELEGRAM === 'true', mastodon: config.CHANNEL_MASTODON === 'true', discord: config.CHANNEL_DISCORD === 'true', wordpress: config.CHANNEL_WORDPRESS === 'true', connectors: channelConnectors(config), calendars: calendarAdapters(config), publicUrl: config.PUBLIC_URL, ...(config.MEDIA_PEXELS_API_KEY ? { stockPhotos: createPexels({ apiKey: config.MEDIA_PEXELS_API_KEY, store }) } : {}), mediaUrls: createMediaUrls({ store }), ...(vapid ? { push: { publicKey: vapid.publicKey } } : {}) },
           ...(stream ? { stream } : {}),
           // An API process of its own waits in /readyz for its workers' build (#1952); the single "all" process is its
           // own worker, so it has none to wait for.
@@ -522,7 +532,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
             exportSealer: exportSealer(config),
             exportRetentionDays: config.EXPORT_RETENTION_DAYS,
             evidenceLockDays: config.EVIDENCE_LOCK_DAYS,
-            channels: { broker: resolved.broker, publishers: channelPublishers(config), refreshers: channelRefreshers(config), bankFeeds: bankFeedProviders({ sandbox: config.BANK_FEED_SANDBOX === 'true', sandboxWebhookSecret: config.BANK_FEED_SANDBOX_WEBHOOK_SECRET }) },
+            channels: { broker: resolved.broker, publishers: channelPublishers(config), refreshers: channelRefreshers(config), calendars: calendarAdapters(config), bankFeeds: bankFeedProviders({ sandbox: config.BANK_FEED_SANDBOX === 'true', sandboxWebhookSecret: config.BANK_FEED_SANDBOX_WEBHOOK_SECRET }) },
             publicUrl: config.PUBLIC_URL,
             brand: config.BRAND_NAME,
             // Bounce reports reach this deployment only with both inbound settings (as for the invite mail).

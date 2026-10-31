@@ -58,6 +58,7 @@ export interface CroveKernelSchema {
   'crove_kernel.audit_event': KernelAuditEventTable;
   'crove_kernel.availability_rule': KernelAvailabilityRuleTable;
   'crove_kernel.budget_policy': KernelBudgetPolicyTable;
+  'crove_kernel.calendar_connection': KernelCalendarConnectionTable;
   'crove_kernel.calendar_event': KernelCalendarEventTable;
   'crove_kernel.channel_connection': KernelChannelConnectionTable;
   'crove_kernel.currency': KernelCurrencyTable;
@@ -751,6 +752,24 @@ export interface KernelBudgetPolicyTable {
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
 }
 
+/** crove_kernel.calendar_connection */
+export interface KernelCalendarConnectionTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  user_id: ColumnType<string, string, NotGranted>;
+  provider: ColumnType<string, string, NotGranted>;
+  external_account: ColumnType<string, string, NotGranted>;
+  display_name: string;
+  scopes: Generated<string[]>;
+  status: Generated<string>;
+  status_reason: string | null;
+  expires_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  last_synced_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  write_back: Generated<boolean>;
+  connected_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
 /** crove_kernel.calendar_event */
 export interface KernelCalendarEventTable {
   org_id: string;
@@ -766,6 +785,8 @@ export interface KernelCalendarEventTable {
   created_at: ColumnType<Date, Date | string | undefined, Date | string>;
   cancelled_by: string | null;
   cancelled_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  source_id: string | null;
+  external_id: string | null;
 }
 
 /** crove_kernel.channel_connection */

@@ -21,6 +21,7 @@ import {
 import { sql } from 'kysely';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type QueryContext } from '@crove/kernel-runtime';
+import { calendarConnectionCommands, calendarConnectionQueries } from './calendar-connections.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 // A viewer reads their calendar but changes nothing, as everywhere else.
@@ -198,6 +199,8 @@ export const calendarEventCancel = defineCommand({
     if (!event) throw new DomainError('CALENDAR_EVENT_NOT_FOUND', 404, 'Không tìm thấy sự kiện này trên lịch của bạn');
     // A booking is cancelled through the booking (crm, #1319), which tells the visitor.
     if (event.kind === 'booking') throw new DomainError('CALENDAR_EVENT_IS_BOOKING', 409, 'Đây là lịch hẹn của khách; hãy hủy từ mục Lịch hẹn');
+    // A block of a connected calendar is the provider's: it goes when the member disconnects that calendar.
+    if (event.kind !== 'manual' && event.kind !== 'time_off') throw new DomainError('CALENDAR_EVENT_IS_EXTERNAL', 409, 'Đây là giờ bận từ lịch bên ngoài; hãy ngắt kết nối lịch đó nếu không muốn dùng');
     if (event.status === 'active') {
       await ctx.trx
         .updateTable('crove_kernel.calendar_event')
@@ -211,5 +214,5 @@ export const calendarEventCancel = defineCommand({
   },
 });
 
-export const calendarCommands = [calendarHoursSave, calendarEventAdd, calendarEventCancel];
-export const calendarQueries = [calendarGet, calendarSlots];
+export const calendarCommands = [calendarHoursSave, calendarEventAdd, calendarEventCancel, ...calendarConnectionCommands];
+export const calendarQueries = [calendarGet, calendarSlots, ...calendarConnectionQueries];

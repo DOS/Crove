@@ -23,7 +23,9 @@ export const kernelManifest = defineModule({
       auth_session_org: columns(['org_id', 'user_id', 'session_id', 'status', 'first_seen_at', 'last_seen_at', 'revoked_at', 'revoked_by', 'reason']),
       availability_rule: columns(['org_id', 'id', 'user_id', 'weekday', 'start_minute', 'end_minute', 'time_zone', 'created_by', 'created_at']),
       budget_policy: columns(['org_id', 'id', 'scope', 'target', 'monthly_limit', 'warn_percent', 'hard_stop', 'updated_by', 'updated_at']),
-      calendar_event: columns(['org_id', 'id', 'user_id', 'starts_at', 'ends_at', 'time_zone', 'title', 'kind', 'status', 'created_by', 'created_at', 'cancelled_by', 'cancelled_at']),
+      calendar_event: columns(['org_id', 'id', 'user_id', 'starts_at', 'ends_at', 'time_zone', 'title', 'kind', 'status', 'created_by', 'created_at', 'cancelled_by', 'cancelled_at', 'source_id', 'external_id']),
+      calendar_credential: columns(['org_id', 'connection_id', 'key_id', 'created_at', 'sealed_at'], { envelope: 'sensitive' }),
+      calendar_connection: columns(['org_id', 'id', 'user_id', 'provider', 'scopes', 'status', 'status_reason', 'expires_at', 'last_synced_at', 'write_back', 'connected_at', 'updated_at'], { external_account: 'pii', display_name: 'pii' }),
       channel_connection: columns(['org_id', 'id', 'provider', 'scopes', 'status', 'status_reason', 'connected_by', 'expires_at', 'connected_at', 'updated_at'], { external_account_id: 'pii', display_name: 'pii' }),
       context_key: columns(['id', 'created_at'], { k_ipad: 'sensitive', k_opad: 'sensitive' }),
       context_token_key: columns(['slot', 'installed_at'], { k_ipad: 'sensitive', k_opad: 'sensitive' }),
@@ -102,6 +104,7 @@ export const kernelManifest = defineModule({
   entities: [
     { type: 'kernel.agent', table: 'agent', legalEntityScoped: false, audit: 'command' },
     { type: 'kernel.ai_run', table: 'ai_run', legalEntityScoped: false, audit: 'command' },
+    { type: 'kernel.calendar_connection', table: 'calendar_connection', legalEntityScoped: false, audit: 'command' },
     { type: 'kernel.channel_connection', table: 'channel_connection', legalEntityScoped: false, audit: 'command' },
     { type: 'kernel.file', table: 'file', legalEntityScoped: false, audit: 'command' },
     { type: 'kernel.file_upload', table: 'file_upload', legalEntityScoped: false, audit: 'command' },
