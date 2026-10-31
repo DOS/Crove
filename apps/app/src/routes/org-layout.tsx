@@ -265,7 +265,7 @@ export function OrgLayout() {
       </a>
       {/* Names the new screen to a screen reader after a navigation (#2115). */}
       <div role="status" aria-live="polite" data-route-announcer className="sr-only">
-        {screenName}
+        <span key={screenName.seq}>{screenName.name}</span>
       </div>
       <aside className="sticky top-0 hidden h-screen w-72 shrink-0 border-r bg-sidebar md:flex">{shellNav()}</aside>
       <div className="min-w-0 flex-1">

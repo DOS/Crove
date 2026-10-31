@@ -99,9 +99,13 @@ test.describe('screen titles, skip link and focus on navigation (#2115)', () => 
     expect(await where(page)).toMatch(/^sidebar:/);
     await page.keyboard.press('Enter');
     await expect(page).toHaveURL(new RegExp(`/o/${slug}/settings$`));
-    await expect.poll(() => where(page)).toMatch(/^(heading|main)$/);
+    await expect(page.locator('main h1').first()).toBeVisible();
     const heading = (await page.locator('main h1').first().innerText()).trim();
+    // The new screen's own heading has the focus (not the old screen's, which is gone), and it stays there.
+    await expect(page.locator('main h1').first()).toBeFocused();
     await expect(page.locator('[data-route-announcer]')).toHaveText(heading);
+    await page.waitForTimeout(500);
+    await expect(page.locator('main h1').first()).toBeFocused();
 
     // Back keeps the focus where the browser puts it: not on the screen's heading.
     await page.goBack();
