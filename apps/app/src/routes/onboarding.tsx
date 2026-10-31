@@ -8,7 +8,7 @@ import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { Label } from '@crove/ui/components/label';
 import { NavIcon } from '@crove/ui/components/nav-icon';
-import { ErrorText, Field, FieldError, fieldControl, focusFirstInvalid, isEmailAddress, Logo, OrgLeftNotice, useFieldErrors } from '../components/ui.tsx';
+import { ErrorText, Field, FieldError, Logo, OrgLeftNotice, ScreenTitle, fieldControl, focusFirstInvalid, isEmailAddress, useFieldErrors } from '../components/ui.tsx';
 import { SupportLink } from '../components/support-link.tsx';
 import { client, clientForOrg, errorMessage, orglessClient, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
@@ -86,6 +86,7 @@ export function OnboardingPage() {
       <Card className="block w-full max-w-md p-6">
         <OrgLeftNotice />
         <Logo />
+        <ScreenTitle name={hasOrgs ? t('titleAnother') : t('title')} />
         <h1 className="mt-6 text-lg font-semibold text-foreground">{hasOrgs ? t('titleAnother') : t('title')}</h1>
         <form className="mt-6 space-y-3" noValidate onSubmit={submit}>
           {finance && (

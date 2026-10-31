@@ -4,7 +4,7 @@ import { useTranslations } from 'use-intl';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
-import { ErrorText, Field, focusFirstInvalid, isEmailAddress, Logo, Notice, useFieldErrors } from '../components/ui.tsx';
+import { ErrorText, Field, Logo, Notice, ScreenTitle, focusFirstInvalid, isEmailAddress, useFieldErrors } from '../components/ui.tsx';
 import { LocaleSwitcher } from '../i18n/provider.tsx';
 import { auth, authErrorText, authFailure, callbackNoticeText, clearCallbackNotice, peekCallbackNotice, type AuthFailure, type CallbackNotice } from '../lib/auth.ts';
 import { LegalConsent } from '../components/legal-consent.tsx';
@@ -77,6 +77,7 @@ export function AuthPage() {
           <Logo />
           <LocaleSwitcher />
         </div>
+        <ScreenTitle name={titles[mode]} />
         <h1 className="mt-6 text-lg font-semibold text-foreground">{titles[mode]}</h1>
         <p className="mt-1 text-sm text-muted-foreground">{t('tagline')}</p>
         <form className="mt-6 space-y-3" noValidate onSubmit={submit}>

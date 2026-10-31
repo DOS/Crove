@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslations } from 'use-intl';
 import { OAUTH_MAX_ACCOUNTS_PER_GRANT, type OAUTH_CHANNEL_PROVIDERS } from '@crove/kernel-contract';
 import { Card } from '@crove/ui/components/card';
-import { ErrorText, Spinner } from '../components/ui.tsx';
+import { ErrorText, ScreenTitle, Spinner } from '../components/ui.tsx';
 import { client, errorMessage, queryClient, setCurrentOrg } from '../lib/api.ts';
 import { takeOAuthAttempt } from '../lib/oauth.ts';
 import { providerName } from '../lib/social.ts';
@@ -68,6 +68,7 @@ export function OAuthCallbackPage() {
   return (
     <main className="flex min-h-full items-center justify-center bg-background px-4">
       <Card className="block w-full max-w-md space-y-4 p-6">
+        <ScreenTitle name={`${t('oauthTitle')}: ${providerName(provider)}`} />
         <h1 className="text-lg font-semibold text-foreground">
           {t('oauthTitle')}: {providerName(provider)}
         </h1>

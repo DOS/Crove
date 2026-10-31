@@ -2,7 +2,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { useTranslations } from 'use-intl';
 import { MfaChallengeForm } from '../components/two-factor.tsx';
 import { Card } from '@crove/ui/components/card';
-import { Logo } from '../components/ui.tsx';
+import { Logo, ScreenTitle } from '../components/ui.tsx';
 import { SupportLink } from '../components/support-link.tsx';
 import { signOut } from '../lib/session-actions.ts';
 
@@ -14,6 +14,7 @@ export function MfaPage() {
     <main className="flex min-h-full flex-col items-center justify-center bg-background px-4 py-16">
       <Card className="relative block w-full max-w-sm p-6">
         <Logo />
+        <ScreenTitle name={t('title')} />
         <h1 className="mt-6 text-lg font-semibold text-foreground">{t('title')}</h1>
         <p className="mt-1 text-sm text-muted-foreground">{t('signInIntro')}</p>
         <div className="mt-6">
