@@ -49,10 +49,12 @@ books a missing sale as any other, from its XML in the Inbox.
   the org is the buyer, or another company is the seller, are dropped and counted (the screen shows them next to the
   skipped rows); a list with nothing left is refused as "the purchase list" or as another company's. The line above the
   header is not used: the rows tell.
-- **Same invoice:** the org's series and number (and a template that does not contradict), on the portal row and on
-  the recorded sale or the sale waiting in the Inbox. Both sides carry the org's own tax code as the seller, so an
-  invoice issued by one of its branches meets the document recorded without a seller. The customer's tax code
-  (`buyer_tax_code` on the row) and the customer's name from the recorded sale are shown.
+- **Same invoice:** a recorded sale does not say which branch issued it, so it meets a portal row on the series and
+  number (and a template that does not contradict), when exactly one portal invoice of the period has them: the rule
+  for an invoice without a tax code. Two branches' invoices of the same series and number are therefore flagged (each
+  "missing", the booked one "not on the portal"), never merged into one. The screen does not repeat "matched without
+  tax code" on sales. The customer's tax code (`buyer_tax_code` on the row) and the customer's name from the recorded
+  sale are shown.
 - **Flags:** "missing" (on the portal, not in the books), "amount_mismatch" (another total, VAT or currency; one dong
   of rounding is allowed), "void_in_crove" (cancelled or replaced on the portal but still booked), "not_on_portal"
   (booked in the period, on none of the lists). A sale on two lists of the period counts once, so importing the same

@@ -27,9 +27,11 @@ import {
   pickProblem,
   pollWhilePending,
   pollWhileSending,
+  portalSearch,
+  type PortalSearch,
   type ReconcileItem,
 } from '../lib/portal-list.ts';
-import { defaultPeriod, periodChoiceOf, periodKey, periodSearch, switchKind, yearOptions, type PeriodChoice, type PeriodKind, type PeriodSearch } from '../lib/vat.ts';
+import { defaultPeriod, periodChoiceOf, periodKey, switchKind, yearOptions, type PeriodChoice, type PeriodKind } from '../lib/vat.ts';
 
 const SKIPPED_SHOWN = 20;
 
@@ -46,7 +48,8 @@ function ItemRow({ item, slug, direction }: { item: ReconcileItem; slug: string;
   if (item.outsidePeriod && item.outcome !== 'declared_late') notes.push(t('notes.outsidePeriod'));
   if (item.outcome === 'declared_late' && item.crove?.postingDate) notes.push(t('notes.postedOn', { date: f.date(item.crove.postingDate) }));
   if (item.declaredInLaterPeriod && item.crove?.postingDate) notes.push(t('notes.declaredInLaterPeriod', { date: f.date(item.crove.postingDate) }));
-  if (item.withoutTaxCode) notes.push(t('notes.withoutTaxCode'));
+  // A recorded sale has no seller code (it does not say which branch issued it), so every match is on series and number.
+  if (item.withoutTaxCode && direction !== 'sale') notes.push(t('notes.withoutTaxCode'));
   if (item.duplicateInCrove) notes.push(t('notes.duplicateInCrove'));
   if (item.duplicateRows > 0) notes.push(t('notes.duplicateRows', { count: item.duplicateRows }));
   for (const d of item.differences) notes.push(t(`differences.${d}`));
@@ -235,16 +238,17 @@ export function PortalListPage() {
   const { slug } = useParams({ strict: false }) as { slug: string };
   const org = useQuery(orpc.org.get.queryOptions());
   // The period lives in the address (#1513), left out for the default month.
-  const search: PeriodSearch = useSearch({ strict: false });
+  const search: PortalSearch = useSearch({ strict: false });
+  // The purchase list ("mua vào") or the sales list ("bán ra", #2141); each is imported and compared on its own. The tab
+  // is in the address too, so a notification about a sales list opens it.
+  const direction: PortalListDirection = search.direction === 'sale' ? 'sale' : 'purchase';
   const navigate = useNavigate();
   const fallback = defaultPeriod('month');
   const choice = (search.period ? periodChoiceOf(search.period) : null) ?? fallback;
-  const setChoice = (next: PeriodChoice) => void navigate({ to: '/o/$slug/portal-invoices', params: { slug }, search: periodSearch(periodKey(next), periodKey(fallback)) });
+  const setChoice = (next: PeriodChoice) => void navigate({ to: '/o/$slug/portal-invoices', params: { slug }, search: portalSearch(periodKey(next), periodKey(fallback), direction) });
   const period = periodKey(choice);
   // The portal's list against the books of the entity chosen in the shell (#1280); an imported list is for it too.
   const entity = useChosenEntity();
-  // The purchase list ("mua vào") or the sales list ("bán ra", #2141); each is imported and compared on its own.
-  const [direction, setDirection] = useState<PortalListDirection>('purchase');
   const sales = direction === 'sale';
   const sx = sales ? 'sale.' : '';
   const report = useQuery({
@@ -325,7 +329,7 @@ export function PortalListPage() {
               importList.reset();
               setProblem(null);
               setSyncOpen(false);
-              setDirection(d);
+              void navigate({ to: '/o/$slug/portal-invoices', params: { slug }, search: portalSearch(period, periodKey(fallback), d) });
             }}
           >
             {t(`tabs.${d}`)}

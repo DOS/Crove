@@ -31,6 +31,7 @@ describe('notificationTarget', () => {
     expect(notificationTarget({ kind: 'kernel.task_rerouted', subjectId: null, detail: {} })).toEqual({ to: 'tasks' });
     expect(notificationTarget({ kind: 'finance.bank_attention', subjectId: id, detail: { bankAccount: '1121' } })).toEqual({ to: 'bank', account: '1121' });
     expect(notificationTarget({ kind: 'finance.portal_attention', subjectId: id, detail: {} })).toEqual({ to: 'portal' });
+    expect(notificationTarget({ kind: 'finance.portal_attention', subjectId: id, detail: { direction: 'sale' } })).toEqual({ to: 'portal', sale: true });
     expect(notificationTarget({ kind: 'finance.period_closing', subjectId: null, detail: {} })).toEqual({ to: 'ledger' });
     expect(notificationTarget({ kind: 'notes.todo_due', subjectId: id, detail: {} })).toEqual({ to: 'myWork' });
     expect(notificationTarget({ kind: 'later.kind', subjectId: null, detail: {} })).toBeNull();

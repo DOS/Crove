@@ -50,6 +50,7 @@ import { parseLedgerSearch } from './lib/ledger.ts';
 import { parseInboxSearch } from './lib/review.ts';
 import { parseAuditSearch } from './lib/audit.ts';
 import { parsePeriodSearch } from './lib/vat.ts';
+import { parsePortalSearch } from './lib/portal-list.ts';
 import { parseVouchersSearch } from './lib/vouchers.ts';
 import { SocialChannelsPage } from './routes/social-channels.tsx';
 import { OAuthCallbackPage } from './routes/social-oauth.tsx';
@@ -340,7 +341,7 @@ const fixedAssetsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'fi
 // VAT working per month or quarter (issue #316); ?period= keeps the one picked (#1513), as on the portal list.
 const vatRoute = createRoute({ getParentRoute: () => orgRoute, path: 'vat', validateSearch: parsePeriodSearch, component: VatPage });
 // Reconciliation with the tax portal's purchase list (issue #465).
-const portalListRoute = createRoute({ getParentRoute: () => orgRoute, path: 'portal-invoices', validateSearch: parsePeriodSearch, component: PortalListPage });
+const portalListRoute = createRoute({ getParentRoute: () => orgRoute, path: 'portal-invoices', validateSearch: parsePortalSearch, component: PortalListPage });
 // Ledger reports per month, quarter or year (issue #321); ?period=&report=&account= keep what is shown (#1513).
 const ledgerRoute = createRoute({ getParentRoute: () => orgRoute, path: 'ledger', validateSearch: parseLedgerSearch, component: LedgerPage });
 // Bank statements per bank account (issue #326). ?account=1121&month=2026-09 opens that account and month (the Inbox

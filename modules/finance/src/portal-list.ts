@@ -381,9 +381,11 @@ function addDays(date: string, days: number): string {
 // the period of their posting date, so the reconciliation reports them there (declared_late, #560). Each document
 // carries its posting date, the date of its own journal entry (every document has one: purchase_document_entry). All of
 // one legal entity (#1280): its documents, and the proposals that name it (or name none, for the default entity).
-// direction 'sale' (#2141): the recorded sales instead of the purchases. A sale's party is its buyer, and its seller is
-// the org itself, so ownTaxCode stands in the seller's place (the portal rows of a sales list get it too, in
-// reconcilePeriod), and the buyer is carried for the screen.
+// direction 'sale' (#2141): the recorded sales instead of the purchases. A sale's party is its buyer; the seller is the
+// org itself, and a recorded sale does not say which branch issued it, so its seller tax code is left empty and it meets
+// the portal row on series and number alone (reconcilePortalList does that only when exactly one portal invoice has
+// them, so two branches' invoices of the same series and number are flagged, never merged). The buyer is carried for
+// the screen.
 async function croveInvoices(
   ctx: QueryContext,
   from: string,
@@ -391,7 +393,6 @@ async function croveInvoices(
   period: { from: string; to: string },
   legalEntityId: string,
   direction: PortalListDirection,
-  ownTaxCode: string | null,
 ): Promise<CroveInvoice[]> {
   const sale = direction === 'sale';
   const documents = await ctx.trx
@@ -448,7 +449,7 @@ async function croveInvoices(
   const out: CroveInvoice[] = documents.map((d) => ({
     kind: 'document',
     id: d.id,
-    sellerTaxCode: sale ? ownTaxCode : d.tax_code,
+    sellerTaxCode: sale ? null : d.tax_code,
     sellerName: sale ? '' : d.name,
     buyerTaxCode: sale ? d.tax_code : null,
     buyerName: sale ? d.name : null,
@@ -472,7 +473,7 @@ async function croveInvoices(
     out.push({
       kind: 'proposal',
       id: p.id,
-      sellerTaxCode: sale ? ownTaxCode : taxCode,
+      sellerTaxCode: sale ? null : taxCode,
       sellerName: sale ? '' : typeof payload?.seller?.name === 'string' ? payload.seller.name : '',
       buyerTaxCode: sale ? buyerTaxCode : null,
       buyerName: sale ? (typeof payload?.buyer?.name === 'string' ? payload.buyer.name : '') : null,
@@ -542,19 +543,13 @@ export async function reconcilePeriod(
           status: r.status,
           statusLabel: r.status_label,
         }));
-  // A sale's seller is the org whatever branch issued it, so both sides carry the org's tax code and an invoice of one
-  // of its branches meets the document recorded without one.
-  const ownTaxCode =
-    direction === 'sale' ? ((await ctx.trx.selectFrom('crove_kernel.tenant').select('tax_code').where('org_id', '=', ctx.orgId).executeTakeFirst())?.tax_code ?? null) : null;
-  const ownCode = parseTaxCode(ownTaxCode)?.normalized ?? null;
-  if (ownCode) for (const r of rows) r.sellerTaxCode = ownCode;
   // Rows dated outside the period are still matched, so Crove's side is read for every date the rows have, and a
   // month around it (an invoice booked on a slightly different date than the portal shows still counts).
   const dates = rows.map((r) => r.issueDate).sort();
   const from = addDays([period.from, dates[0] ?? period.from].sort()[0] ?? period.from, -31);
   const to = addDays([period.to, dates.at(-1) ?? period.to].sort().at(-1) ?? period.to, 31);
   // Without a list there is nothing to compare: Crove's invoices are not all reported as "not on the portal".
-  const reconciliation = done.length === 0 ? reconcilePortalList([], [], period) : reconcilePortalList(rows, await croveInvoices(ctx, from, to, period, legalEntityId, direction, ownCode), period);
+  const reconciliation = done.length === 0 ? reconcilePortalList([], [], period) : reconcilePortalList(rows, await croveInvoices(ctx, from, to, period, legalEntityId, direction), period);
   return { period, lists, reconciliation };
 }
 

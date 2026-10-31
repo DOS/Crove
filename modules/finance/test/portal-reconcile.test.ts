@@ -350,7 +350,7 @@ describe('checkPortalList', () => {
 describe('sales list', () => {
   const sale = (number: string, extra: Partial<PortalRow> = {}): PortalRow => portal(number, { sellerTaxCode: OTHER, sellerName: 'Công ty', buyerTaxCode: SELLER, ...extra });
   const sold = (number: string, extra: Partial<CroveInvoice> = {}): CroveInvoice =>
-    crove(number, { sellerTaxCode: OTHER, sellerName: '', buyerTaxCode: SELLER, buyerName: 'Khách hàng', ...extra });
+    crove(number, { sellerTaxCode: null, sellerName: '', buyerTaxCode: SELLER, buyerName: 'Khách hàng', ...extra });
 
   it('flags a sale the books lack and a sale booked with another VAT or total', () => {
     const result = reconcilePortalList(
@@ -374,6 +374,16 @@ describe('sales list', () => {
     const twice = reconcilePortalList([sale('1'), sale('2'), sale('2', { rowNo: 90 }), sale('1', { rowNo: 91 })], [sold('1')], PERIOD);
     expect(twice.items.map((i) => [i.portal?.number, i.outcome])).toEqual(once.items.map((i) => [i.portal?.number, i.outcome]));
     expect(twice.summary).toMatchObject({ missing: 1, matched: 1, duplicateRows: 2 });
+  });
+
+  it("never merges two branches' sales of the same series and number: both are flagged", () => {
+    const result = reconcilePortalList(
+      [sale('1', { sellerTaxCode: `${OTHER}-001` }), sale('1', { sellerTaxCode: `${OTHER}-002` }), sale('2', { sellerTaxCode: `${OTHER}-001` })],
+      [sold('1'), sold('2')],
+      PERIOD,
+    );
+    expect(result.summary).toMatchObject({ portalInvoices: 3, matched: 1, missing: 2, notOnPortal: 1 });
+    expect(result.items.filter((i) => i.outcome === 'missing').map((i) => i.portal?.sellerTaxCode)).toEqual([`${OTHER}-001`, `${OTHER}-002`]);
   });
 
   it('keeps a cancelled sale that is still booked apart, and a cancelled one that is not booked', () => {

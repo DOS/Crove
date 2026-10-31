@@ -7,9 +7,10 @@
 // Crove invoice without a seller tax code matches on series and number when exactly one portal invoice has them.
 // The amount is a check, not part of the key: a match with a different total (or VAT, or currency) is reported.
 //
-// The same function compares the sales list (#2141, the portal's "bán ra" export) with the org's recorded sales: both
-// sides then name the org as the seller (the caller passes its tax code on every row and every sale, so a branch's
-// invoice and a document without a seller still meet), and the key is the org's series and number. "missing" is a sale
+// The same function compares the sales list (#2141, the portal's "bán ra" export) with the org's recorded sales: the
+// portal rows keep the seller that issued them (the org or one of its branches) and a recorded sale has no seller, so it
+// meets a row on series and number, when exactly one portal invoice has them (the rule for an invoice without a tax
+// code), and two branches' invoices of the same series and number are flagged rather than merged. "missing" is a sale
 // the tax authority has that the books lack (output VAT understated), "amount_mismatch" a sale booked with another
 // total or VAT. Nothing here writes to the books.
 //
