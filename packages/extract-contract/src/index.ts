@@ -363,6 +363,9 @@ export const EXTRACT_ERROR_STATUS: Record<ExtractErrorCode, 400 | 413 | 422 | 50
 // The worker's view of the sandbox.
 export interface ExtractClient {
   extract<K extends ExtractKind>(kind: K, bytes: Uint8Array): Promise<ExtractResult<K>>;
+  // How many calls this client keeps in flight to the sandbox at most (a client made by createExtractClient holds the
+  // rest back), which is also how many extract jobs the worker runs at once (#2119). Absent: 1.
+  readonly concurrency?: number;
 }
 
 export type ExtractServiceFailure = 'unreachable' | 'timeout' | 'unavailable' | 'response_too_large' | 'malformed';
@@ -385,6 +388,9 @@ export interface ExtractClientOptions {
   timeoutMs?: number;
   maxResponseBytes?: number;
   fetch?: typeof fetch;
+  // Calls in flight at once, at most the sandbox's own EXTRACT_CONCURRENCY (its slots); a call over it waits here, its
+  // timeout starting once it is sent. Default 1, as the sandbox's default.
+  concurrency?: number;
 }
 
 // Timing shared by the service defaults and the client (plan §7.6: 60 s per call). A request can wait for every
@@ -468,54 +474,89 @@ export function createExtractClient(options: ExtractClientOptions): ExtractClien
   const timeoutMs = options.timeoutMs ?? EXTRACT_CLIENT_TIMEOUT_MS;
   const maxResponse = options.maxResponseBytes ?? EXTRACT_LIMITS.maxResponseBytes;
   const fetchImpl = options.fetch ?? fetch;
+  const concurrency = options.concurrency ?? 1;
+  if (!Number.isInteger(concurrency) || concurrency < 1) throw new Error('the extract client needs a whole concurrency of at least 1');
+  const slots = createSlots(concurrency);
 
   return {
+    concurrency,
     async extract<K extends ExtractKind>(kind: K, bytes: Uint8Array): Promise<ExtractResult<K>> {
       if (bytes.byteLength > maxRequestBytes(kind)) {
         return { ok: false, code: 'too_large', message: 'file is larger than crove-extract accepts' };
       }
-      const url = new URL(endpoint);
-      url.searchParams.set('kind', kind);
-      const signal = AbortSignal.timeout(timeoutMs);
-      const timedOut = () => new ExtractServiceError('timeout', `crove-extract did not answer within ${timeoutMs} ms`);
-      let text: string;
-      let status: number;
+      const release = await slots.take();
       try {
-        const response = await fetchImpl(url, {
-          method: 'POST',
-          body: requestBody(bytes),
-          headers: { 'content-type': 'application/octet-stream' },
-          // The sandbox must answer itself; a redirect would point the worker somewhere else.
-          redirect: 'error',
-          signal,
-        });
-        status = response.status;
-        text = await readCapped(response, maxResponse);
-      } catch (error) {
-        if (error instanceof ExtractServiceError) throw error;
-        if (signal.aborted) throw timedOut();
-        throw new ExtractServiceError('unreachable', 'crove-extract is unreachable');
+        return await call(kind, bytes);
+      } finally {
+        release();
       }
+    },
+  };
 
-      let json: unknown;
-      try {
-        json = JSON.parse(text);
-      } catch {
-        throw new ExtractServiceError('malformed', `crove-extract answered ${status} without JSON`);
+  async function call<K extends ExtractKind>(kind: K, bytes: Uint8Array): Promise<ExtractResult<K>> {
+    const url = new URL(endpoint);
+    url.searchParams.set('kind', kind);
+    const signal = AbortSignal.timeout(timeoutMs);
+    const timedOut = () => new ExtractServiceError('timeout', `crove-extract did not answer within ${timeoutMs} ms`);
+    let text: string;
+    let status: number;
+    try {
+      const response = await fetchImpl(url, {
+        method: 'POST',
+        body: requestBody(bytes),
+        headers: { 'content-type': 'application/octet-stream' },
+        // The sandbox must answer itself; a redirect would point the worker somewhere else.
+        redirect: 'error',
+        signal,
+      });
+      status = response.status;
+      text = await readCapped(response, maxResponse);
+    } catch (error) {
+      if (error instanceof ExtractServiceError) throw error;
+      if (signal.aborted) throw timedOut();
+      throw new ExtractServiceError('unreachable', 'crove-extract is unreachable');
+    }
+
+    let json: unknown;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      throw new ExtractServiceError('malformed', `crove-extract answered ${status} without JSON`);
+    }
+    const parsed = zExtractResponse.safeParse(json);
+    if (!parsed.success) throw new ExtractServiceError('malformed', `crove-extract answer failed validation (${status})`);
+    const result = parsed.data;
+    if (result.ok) {
+      if (status !== 200) throw new ExtractServiceError('malformed', `crove-extract answered ${status} with a result`);
+      if (result.kind !== kind) throw new ExtractServiceError('malformed', 'crove-extract answered for another kind');
+      return result as ExtractResult<K>;
+    }
+    if (status !== EXTRACT_ERROR_STATUS[result.code]) {
+      throw new ExtractServiceError('malformed', `crove-extract answered ${status} for ${result.code}`);
+    }
+    if (!INPUT_ERROR_CODES.includes(result.code)) throw new ExtractServiceError('unavailable', `crove-extract failed: ${result.code}`);
+    return result;
+  }
+}
+
+// At most `size` holders at once; the others wait in order. take() resolves with the function that gives the slot back,
+// which hands it straight to the oldest waiter.
+function createSlots(size: number) {
+  let active = 0;
+  const waiting: Array<() => void> = [];
+  const release = () => {
+    const next = waiting.shift();
+    if (next) next();
+    else active -= 1;
+  };
+  return {
+    async take(): Promise<() => void> {
+      if (active < size) {
+        active += 1;
+        return release;
       }
-      const parsed = zExtractResponse.safeParse(json);
-      if (!parsed.success) throw new ExtractServiceError('malformed', `crove-extract answer failed validation (${status})`);
-      const result = parsed.data;
-      if (result.ok) {
-        if (status !== 200) throw new ExtractServiceError('malformed', `crove-extract answered ${status} with a result`);
-        if (result.kind !== kind) throw new ExtractServiceError('malformed', 'crove-extract answered for another kind');
-        return result as ExtractResult<K>;
-      }
-      if (status !== EXTRACT_ERROR_STATUS[result.code]) {
-        throw new ExtractServiceError('malformed', `crove-extract answered ${status} for ${result.code}`);
-      }
-      if (!INPUT_ERROR_CODES.includes(result.code)) throw new ExtractServiceError('unavailable', `crove-extract failed: ${result.code}`);
-      return result;
+      await new Promise<void>((resolve) => waiting.push(resolve));
+      return release;
     },
   };
 }

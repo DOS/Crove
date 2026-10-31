@@ -69,7 +69,7 @@ import { socialAgentPrograms, socialCommands, socialManifest, socialOverviewCont
 import { crmAgentPrograms, crmCommands, crmManifest, crmQueries } from '@crove/mod-crm';
 import { notesCommands, notesManifest, notesQueries } from '@crove/mod-notes';
 import { createAuthenticator, type Authenticate } from './auth.ts';
-import { AVAILABLE_MODULES, assertExportKey, assertSplitRoles, usageLimits, type Config, type ModuleId } from './config.ts';
+import { AVAILABLE_MODULES, assertExportKey, assertSplitRoles, extractConcurrency, usageLimits, type Config, type ModuleId } from './config.ts';
 import { createCredentialBroker, noCredentialBroker } from './credentials.ts';
 import { rebindExports as rebindOrgExports } from './export-rebind.ts';
 import { numberReseedCommand, runRestoreReport } from './restore-report.ts';
@@ -524,7 +524,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
             instance,
             store,
             extractor: resolved.ai,
-            extract: createExtractClient({ url: extractUrl }),
+            extract: createExtractClient({ url: extractUrl, concurrency: extractConcurrency(config) }),
             inboundDomain: config.INBOUND_DOMAIN ?? null,
             revoker: resolved.identity.revoker,
             refusalTallyRetentionDays: config.REFUSAL_TALLY_RETENTION_DAYS,
@@ -656,7 +656,7 @@ export function socialDrafter(writer: NonNullable<KernelAdapters['writer']>, sto
 export function defaultAdapters(config: Config): KernelAdapters {
   const aiConfig =
     config.AI_BASE_URL && config.AI_MODEL
-      ? { baseURL: config.AI_BASE_URL, apiKey: config.AI_API_KEY ?? null, model: config.AI_MODEL, supportsStructuredOutputs: config.AI_STRUCTURED_OUTPUTS === 'true' }
+      ? { baseURL: config.AI_BASE_URL, apiKey: config.AI_API_KEY ?? null, model: config.AI_MODEL, supportsStructuredOutputs: config.AI_STRUCTURED_OUTPUTS === 'true', maxRetries: config.AI_MAX_RETRIES }
       : null;
   return {
     identity: {

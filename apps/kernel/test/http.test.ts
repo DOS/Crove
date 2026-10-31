@@ -21,7 +21,7 @@ import {
 } from '@crove/kernel-runtime';
 import type { AuthUser } from '../src/auth.ts';
 import { ConcurrencyLimiter } from '../src/concurrency.ts';
-import { assertExportKey, assertSplitRoles, loadConfig } from '../src/config.ts';
+import { assertExportKey, assertSplitRoles, extractConcurrency, loadConfig } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
 import { secretMatches } from '../src/inbound.ts';
 import { buildZip } from '../../extract/test/zip-fixture.ts';
@@ -107,6 +107,36 @@ describe('configuration guards', () => {
     // A laptop needs no opt-in.
     expect(() => assertSplitRoles(loadConfig(base), 'all')).not.toThrow();
     expect(() => loadConfig({ ...base, CROVE_ALLOW_ALL_IN_ONE: 'yes' })).toThrow(/CROVE_ALLOW_ALL_IN_ONE/);
+  });
+
+  // #2119: how many extract jobs the worker runs at once, and how often an AI call is sent again.
+  it('runs up to 4 extract jobs at once, never more than the sandbox has slots, and bounds the AI retries', () => {
+    const sandbox = { EXTRACT_URL: 'http://crove-extract:8090' };
+    // Without a word about the sandbox's slots, one job at a time, as the sandbox's own default of one slot allows.
+    expect(loadConfig(base).EXTRACT_CONCURRENCY).toBe(1);
+    expect(extractConcurrency(loadConfig(base))).toBe(1);
+    // docker compose gives both 4; a blank value (a compose `${VAR:-}`) is unset.
+    expect(extractConcurrency(loadConfig({ ...base, EXTRACT_CONCURRENCY: '4' }))).toBe(4);
+    expect(extractConcurrency(loadConfig({ ...base, EXTRACT_WORKER_CONCURRENCY: '', EXTRACT_CONCURRENCY: '4' }))).toBe(4);
+    expect(extractConcurrency(loadConfig({ ...base, EXTRACT_WORKER_CONCURRENCY: '', EXTRACT_CONCURRENCY: '' }))).toBe(1);
+    // More slots than 4 do not raise the default; fewer lower it; the setting goes down for the AI provider's rate limit.
+    expect(extractConcurrency(loadConfig({ ...base, EXTRACT_CONCURRENCY: '8' }))).toBe(4);
+    expect(extractConcurrency(loadConfig({ ...base, EXTRACT_CONCURRENCY: '2' }))).toBe(2);
+    expect(extractConcurrency(loadConfig({ ...base, EXTRACT_WORKER_CONCURRENCY: '1', EXTRACT_CONCURRENCY: '4' }))).toBe(1);
+    expect(extractConcurrency(loadConfig({ ...base, EXTRACT_WORKER_CONCURRENCY: '8', EXTRACT_CONCURRENCY: '8' }))).toBe(8);
+    // Never past the slots: refused where the sandbox is used.
+    expect(() => loadConfig({ ...base, ...sandbox, EXTRACT_WORKER_CONCURRENCY: '5', EXTRACT_CONCURRENCY: '4' })).toThrow(/must not exceed EXTRACT_CONCURRENCY/);
+    expect(() => loadConfig({ ...base, ...sandbox, EXTRACT_WORKER_CONCURRENCY: '2' })).toThrow(/must not exceed EXTRACT_CONCURRENCY/);
+    // The API resets EXTRACT_URL, so a stray value there never stops it.
+    expect(() => loadConfig({ ...base, EXTRACT_WORKER_CONCURRENCY: '5', EXTRACT_CONCURRENCY: '4' })).not.toThrow();
+    for (const bad of ['0', '9', '2.5', 'many']) {
+      expect(() => loadConfig({ ...base, EXTRACT_WORKER_CONCURRENCY: bad }), bad).toThrow(/EXTRACT_WORKER_CONCURRENCY/);
+      expect(() => loadConfig({ ...base, EXTRACT_CONCURRENCY: bad }), bad).toThrow(/EXTRACT_CONCURRENCY/);
+    }
+    expect(loadConfig(base).AI_MAX_RETRIES).toBe(1);
+    expect(loadConfig({ ...base, AI_MAX_RETRIES: '' }).AI_MAX_RETRIES).toBe(1);
+    expect(loadConfig({ ...base, AI_MAX_RETRIES: '0' }).AI_MAX_RETRIES).toBe(0);
+    for (const bad of ['-1', '6', '1.5', 'x']) expect(() => loadConfig({ ...base, AI_MAX_RETRIES: bad }), bad).toThrow(/AI_MAX_RETRIES/);
   });
 
   // ADR-0028 section 1 and 3.

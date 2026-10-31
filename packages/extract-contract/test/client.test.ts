@@ -162,3 +162,57 @@ describe('crove-extract client', () => {
     expect(() => createExtractClient({ url: 'file:///etc/passwd' })).toThrow(/http/);
   });
 });
+
+// #2119: the worker runs several extract jobs at once; the client never has more calls in flight than its slots.
+describe('crove-extract client concurrency (#2119)', () => {
+  function slowClient(concurrency: number | undefined) {
+    const state = { inFlight: 0, max: 0, calls: 0 };
+    const client = createExtractClient({
+      url: 'http://crove-extract:8090',
+      ...(concurrency === undefined ? {} : { concurrency }),
+      fetch: async () => {
+        state.calls += 1;
+        state.inFlight += 1;
+        state.max = Math.max(state.max, state.inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 15));
+        state.inFlight -= 1;
+        return new Response(JSON.stringify({ ok: false, code: 'invalid', message: 'x' }), { status: 422, headers: { 'content-type': 'application/json' } });
+      },
+    });
+    return { client, state };
+  }
+
+  it.each([
+    [undefined, 1],
+    [1, 1],
+    [3, 3],
+    [8, 8],
+  ])('keeps at most its slots in flight and uses them all (concurrency %s)', async (concurrency, slots) => {
+    const { client, state } = slowClient(concurrency);
+    expect(client.concurrency).toBe(slots);
+    const results = await Promise.all(Array.from({ length: slots * 3 + 1 }, () => client.extract('einvoice_xml', bytes)));
+    expect(results).toHaveLength(slots * 3 + 1);
+    expect(state.calls).toBe(slots * 3 + 1);
+    expect(state.max).toBe(slots);
+  });
+
+  it('gives a slot back after a failed call, so one failure cannot stall the rest', async () => {
+    let n = 0;
+    const client = createExtractClient({
+      url: 'http://crove-extract:8090',
+      concurrency: 1,
+      fetch: async () => {
+        n += 1;
+        if (n === 1) throw new TypeError('fetch failed');
+        return new Response(JSON.stringify({ ok: false, code: 'invalid', message: 'x' }), { status: 422, headers: { 'content-type': 'application/json' } });
+      },
+    });
+    const [first, second] = await Promise.allSettled([client.extract('einvoice_xml', bytes), client.extract('einvoice_xml', bytes)]);
+    expect(first.status).toBe('rejected');
+    expect(second.status).toBe('fulfilled');
+  });
+
+  it('refuses a concurrency that is not a whole number of at least 1', () => {
+    for (const concurrency of [0, -1, 1.5, Number.NaN]) expect(() => createExtractClient({ url: 'http://crove-extract:8090', concurrency })).toThrow(/concurrency/);
+  });
+});
