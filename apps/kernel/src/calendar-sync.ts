@@ -135,6 +135,11 @@ export async function runCalendarSync(deps: CalendarSyncDeps, job: CalendarSyncJ
     if (error instanceof DomainError) return { outcome: 'skipped', reason: error.code };
     throw error;
   }
+  // The credential is handed out for a disconnecting connection too (its revoke needs it), so the state is read again now: a
+  // disconnect, or a reconnect, between the first read and this one would have this sync work with, and perhaps rotate,
+  // the token of a connection on its way out, and the revoke would then send a token the provider no longer knows.
+  const again = await deps.runtime.query<{ status: string; updatedAt: string } | null>('kernel.calendar.connection_state', { connectionId: job.connectionId }, options);
+  if (!again || again.status !== 'active' || again.updatedAt !== state.updatedAt) return { outcome: 'skipped', reason: 'changed' };
   const binding = calendarBinding(job.orgId, sealed.provider as CalendarProvider, sealed.externalAccount);
   let secret: string;
   try {
@@ -170,7 +175,14 @@ export async function runCalendarSync(deps: CalendarSyncDeps, job: CalendarSyncJ
       try {
         const stored = await deps.runtime.execute<{ refreshed: boolean; updatedAt?: string }>('kernel.calendar.refresh', command, options);
         // Reconnected or disconnected meanwhile: that connection's own sync takes it from here.
-        if (!stored.refreshed || !stored.updatedAt) return { outcome: 'skipped', reason: 'changed' };
+        if (!stored.refreshed || !stored.updatedAt) {
+          // A provider that rotates refresh tokens has just made a new pair this connection never stored. If the member
+          // disconnected meanwhile (or the connection is gone), that grant would outlive the revoke, which will send the old
+          // token: revoke the new pair now. A reconnected connection keeps its own, newer grant.
+          const current = await deps.runtime.query<{ status: string } | null>('kernel.calendar.connection_state', { connectionId: job.connectionId }, options);
+          if (!current || current.status === 'disconnecting') await adapter.revoke(result.secret);
+          return { outcome: 'skipped', reason: 'changed' };
+        }
         version = stored.updatedAt;
         break;
       } catch (error) {
