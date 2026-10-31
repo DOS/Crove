@@ -6,7 +6,7 @@ import { z } from 'zod';
 import type { ExtractClient, ExtractFailure } from '@crove/extract-contract';
 import type { UsageMetric } from '@crove/db';
 import { zId, zLocalDate, zPurchaseProposal, zRelatedInvoiceRef, type DocumentDirection, type PurchaseProposal, type RelatedInvoiceRef } from '@crove/kernel-contract';
-import { defineQuery, readVerified, type BlobStore, type Runtime } from '@crove/kernel-runtime';
+import { defineQuery, readVerified, sha256Hex, type BlobStore, type Runtime } from '@crove/kernel-runtime';
 import { AiNotConfiguredError, AmountFormatError, type AiUsage, type InvoiceReader } from '@crove/agent';
 import { journalMemo } from './memo.ts';
 import { BOOK_CURRENCY, convertInvoice, type ForeignAmounts } from './domain/foreign-currency.ts';
@@ -556,7 +556,8 @@ export async function extractAndPropose(
         // Documents are read at the same time: the record asks the lookup again under a lock on this invoice, so two
         // copies in one batch cannot both pass (#2137). The key is the identity the lookup matches on.
         duplicateGuard: {
-          key: [lookup.direction === 'sale' ? 'sale' : 'purchase', lookup.direction === 'sale' ? '' : (sellerTaxCode ?? invoice.seller.name), invoice.series, invoice.number].join('|'),
+          // Hashed: a seller name can be 500 characters, and the key is only a name for the lock.
+          key: sha256Hex(new TextEncoder().encode(JSON.stringify([lookup.direction === 'sale' ? 'sale' : 'purchase', lookup.direction === 'sale' ? '' : (sellerTaxCode ?? invoice.seller.name), invoice.series, invoice.number]))),
           lookup: lookupInput,
           check: DUPLICATE_CHECK,
         },
