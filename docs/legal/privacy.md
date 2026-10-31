@@ -12,6 +12,7 @@ Version [number], effective [date]. Under the Law on Personal Data Protection (L
    - Activity: sign-in times, IP address, browser, and the audit trail of who approved what and when.
    - Documents and books: e-invoices, PDFs, photos, statements, entries, tax codes, partners' names and addresses.
    - Support messages.
+   - Outside calendars: when a member connects their own Google calendar, the address of the Google account and the busy time ranges (start and end), never titles or attendees. Every member of the organization sees these busy ranges (without content), and they are part of the organization's data export. Disconnecting deletes the address and the busy ranges and revokes the grant at Google.
 
    Some financial data may be sensitive personal data, so all documents and books get the protection of sensitive data. [Lawyer to confirm, question 2.]
 3. **Purposes.**

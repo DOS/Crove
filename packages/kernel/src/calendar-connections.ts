@@ -171,17 +171,61 @@ export const calendarDisconnect = defineCommand({
     // The row policy shows a member only their own, so another member's connection is not found.
     const row = await ctx.trx
       .selectFrom('crove_kernel.calendar_connection')
-      .select(['provider', 'user_id'])
+      .select(['provider', 'user_id', 'status'])
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', input.connectionId)
       .forUpdate()
       .executeTakeFirst();
     if (!row || row.user_id !== userId) throw new DomainError('CALENDAR_NOT_FOUND', 404, 'Không tìm thấy lịch đã kết nối này');
-    // The tokens first, then the row: its foreign keys delete the busy blocks it made.
+    // Asked twice: already on its way out.
+    if (row.status === 'disconnecting') return { connectionId: input.connectionId, disconnected: true as const };
+    if (row.status === 'expired') {
+      // The provider refused the grant already and the token is gone: nothing to revoke. The tokens first, then the
+      // row: its foreign keys delete the busy blocks it made.
+      await sql`SELECT crove_kernel.calendar_credential_drop(${input.connectionId}::uuid)`.execute(ctx.trx).catch(calendarError);
+      await ctx.trx.deleteFrom('crove_kernel.calendar_connection').where('org_id', '=', ctx.orgId).where('id', '=', input.connectionId).execute();
+    } else {
+      // The API cannot open the sealed token, so it cannot revoke the grant at the provider: the connection is marked, its
+      // busy blocks go now (the slots are free at once) and the worker revokes the grant and finishes the removal
+      // (kernel.calendar.finish_disconnect). It no longer shows in the member's list.
+      await ctx.trx.deleteFrom('crove_kernel.calendar_event').where('org_id', '=', ctx.orgId).where('source_id', '=', input.connectionId).execute();
+      await ctx.trx
+        .updateTable('crove_kernel.calendar_connection')
+        .set({ status: 'disconnecting', status_reason: null, updated_at: ctx.now })
+        .where('org_id', '=', ctx.orgId)
+        .where('id', '=', input.connectionId)
+        .execute();
+    }
+    ctx.audit({ connection_id: input.connectionId, provider: row.provider, revoke_pending: row.status !== 'expired' });
+    return { connectionId: input.connectionId, disconnected: true as const };
+  },
+});
+
+// The worker revoked the grant at the provider (or could not, and says why): the sealed token goes and the connection
+// with it. Only for a connection that is disconnecting, so a member who connected the same account again meanwhile
+// keeps it. revoked=false names the reason (the member left, the token cannot be opened, the provider kept refusing
+// the revoke for days): the grant may still be live at the provider and the member can remove it in their account.
+export const calendarFinishDisconnect = defineCommand({
+  name: 'kernel.calendar.finish_disconnect',
+  input: z.strictObject({ connectionId: zId, revoked: z.boolean(), reason: z.string().min(1).max(100).optional() }),
+  risk: 'R1',
+  sideEffect: 'internal',
+  access: 'system',
+  target: (input) => ({ type: 'kernel.calendar_connection', id: input.connectionId }),
+  handler: async (ctx, input) => {
+    if (ctx.actor.type !== 'system') throw new DomainError('FORBIDDEN', 403, 'Chỉ tiến trình hệ thống mới thực hiện được việc này');
+    const row = await ctx.trx
+      .selectFrom('crove_kernel.calendar_connection')
+      .select(['status', 'provider'])
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.connectionId)
+      .forUpdate()
+      .executeTakeFirst();
+    if (!row || row.status !== 'disconnecting') return { connectionId: input.connectionId, finished: false };
     await sql`SELECT crove_kernel.calendar_credential_drop(${input.connectionId}::uuid)`.execute(ctx.trx).catch(calendarError);
     await ctx.trx.deleteFrom('crove_kernel.calendar_connection').where('org_id', '=', ctx.orgId).where('id', '=', input.connectionId).execute();
-    ctx.audit({ connection_id: input.connectionId, provider: row.provider });
-    return { connectionId: input.connectionId, disconnected: true as const };
+    ctx.audit({ connection_id: input.connectionId, provider: row.provider, revoked: input.revoked, ...(input.reason ? { reason: input.reason } : {}) });
+    return { connectionId: input.connectionId, finished: true };
   },
 });
 
@@ -207,6 +251,8 @@ export const calendarMarkFailed = defineCommand({
       .forUpdate()
       .executeTakeFirst();
     if (!row) throw new DomainError('CALENDAR_NOT_FOUND', 404, 'Không tìm thấy lịch đã kết nối này');
+    // A connection on its way out is not marked: the member took it away.
+    if (row.status === 'disconnecting') return { connectionId: input.connectionId, marked: false };
     if (input.ifVersion !== undefined && Math.floor(row.updated_at.getTime()) !== Date.parse(input.ifVersion)) return { connectionId: input.connectionId, marked: false };
     await ctx.trx
       .updateTable('crove_kernel.calendar_connection')
@@ -410,13 +456,15 @@ export const calendarConnections = defineQuery({
       .select(['id', 'provider', 'display_name', 'status', 'status_reason', 'last_synced_at', 'write_back', 'connected_at'])
       .where('org_id', '=', ctx.orgId)
       .where('user_id', '=', ctx.actor.userId)
+      // One on its way out (the worker has yet to revoke its grant) is already gone for the member.
+      .where('status', '<>', 'disconnecting')
       .orderBy('connected_at')
       .execute();
     return rows.map((r) => ({
       id: r.id,
       provider: r.provider,
       displayName: r.display_name,
-      status: r.status,
+      status: r.status === 'expired' ? ('expired' as const) : ('active' as const),
       statusReason: r.status_reason,
       lastSyncedAt: r.last_synced_at ? r.last_synced_at.toISOString() : null,
       writeBack: r.write_back,
@@ -425,5 +473,5 @@ export const calendarConnections = defineQuery({
   },
 });
 
-export const calendarConnectionCommands = [calendarOAuthBegin, calendarOAuthConsume, calendarConnect, calendarDisconnect, calendarMarkFailed, calendarRefresh, calendarBusyReplace];
+export const calendarConnectionCommands = [calendarOAuthBegin, calendarOAuthConsume, calendarConnect, calendarDisconnect, calendarFinishDisconnect, calendarMarkFailed, calendarRefresh, calendarBusyReplace];
 export const calendarConnectionQueries = [calendarCredential, calendarConnectionState, calendarConnections];

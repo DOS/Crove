@@ -119,6 +119,28 @@ describe('GoogleCalendarAdapter', () => {
     expect(await run({ body: {} })).toEqual({ failed: 'NO_FREEBUSY' });
   });
 
+  it('revokes the whole grant with the refresh token, and counts a grant Google no longer knows as revoked', async () => {
+    const { fetchImpl, calls } = google({
+      'POST oauth2.googleapis.com/revoke': [{ body: {} }, { status: 400, body: { error: 'invalid_token', error_description: 'Token expired or revoked' } }, { status: 503, body: { error: 'backendError' } }, { status: 400, body: { error: 'invalid_request' } }],
+    });
+    const adapter = new GoogleCalendarAdapter(APP, fetchImpl);
+    expect(await adapter.revoke(SECRET)).toEqual({ revoked: true });
+    expect(calls[0]?.body).toEqual({ token: '1//refresh-1' });
+    expect(await adapter.revoke(SECRET)).toEqual({ revoked: true });
+    expect(await adapter.revoke(SECRET)).toEqual({ failed: 'backendError' });
+    expect(await adapter.revoke(SECRET)).toEqual({ failed: 'invalid_request' });
+    // A secret with no token has nothing to revoke.
+    expect(await adapter.revoke('not json')).toEqual({ revoked: true });
+    expect(calls).toHaveLength(4);
+  });
+
+  it('answers a revoke it could not make as a passing failure', async () => {
+    const down: Fetch = async () => {
+      throw new Error('connection reset');
+    };
+    expect(await new GoogleCalendarAdapter(APP, down).revoke(SECRET)).toEqual({ failed: 'NETWORK' });
+  });
+
   it('talks only to Google, over https, and follows no redirect', async () => {
     let called = '';
     const hostile: Fetch = async (input) => {

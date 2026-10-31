@@ -1401,7 +1401,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     calendarSyncing = true;
     try {
       const done = await syncCalendars({ runtime: deps.runtime, broker: channels.broker, workerDb: deps.workerDb, adapters: calendars, exclusive: calendarExclusive });
-      if (done.synced + done.expired + done.retry > 0) console.log(`[calendar-sync] synced ${done.synced}, expired ${done.expired}, to retry ${done.retry}`);
+      if (done.synced + done.expired + done.retry + done.disconnected > 0) console.log(`[calendar-sync] synced ${done.synced}, expired ${done.expired}, to retry ${done.retry}, disconnected ${done.disconnected}`);
     } catch (error) {
       console.error('[calendar-sync] sweep', error instanceof Error ? error.name : typeof error);
     } finally {

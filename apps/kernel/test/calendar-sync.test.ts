@@ -7,7 +7,7 @@ import type { CalendarAdapter } from '@crove/channel';
 import { busyPieces } from '@crove/kernel';
 import { calendarBinding } from '@crove/kernel-contract';
 import { CredentialVault, DomainError, parseVaultKey, type Runtime } from '@crove/kernel-runtime';
-import { runCalendarSync } from '../src/calendar-sync.ts';
+import { runCalendarDisconnect, runCalendarSync } from '../src/calendar-sync.ts';
 
 const ORG = '11111111-1111-4111-8111-111111111111';
 const CONNECTION = '22222222-2222-4222-8222-222222222222';
@@ -65,6 +65,7 @@ function adapter(over: Partial<CalendarAdapter> = {}): CalendarAdapter & { busyC
       return { busy: busyCalls.length === 1 ? [{ start: '2026-11-04T02:00:00.000Z', end: '2026-11-04T03:00:00.000Z' }] : [] };
     },
     busyCalls,
+    revoke: async () => ({ revoked: true }),
     ...over,
   };
 }
@@ -196,6 +197,46 @@ describe('runCalendarSync', () => {
     const { runtime, calls } = fakeRuntime(fresh, wrong);
     expect(await run(runtime, adapter())).toEqual({ outcome: 'expired', reason: 'credential_unreadable' });
     expect(calls.at(-1)).toMatchObject({ name: 'kernel.calendar.mark_failed', input: { status: 'expired', reason: 'credential_unreadable' } });
+  });
+});
+
+describe('runCalendarDisconnect', () => {
+  const going = { status: 'disconnecting', provider: 'google', expiresAt: null, updatedAt: '2026-11-03T05:00:00.000Z' };
+  const disconnect = (rt: Runtime, a: CalendarAdapter | null, now = NOW) =>
+    runCalendarDisconnect({ runtime: rt, broker: vault, adapters: a ? { google_calendar: a } : {}, now: () => now }, { orgId: ORG, connectionId: CONNECTION });
+
+  it('revokes the grant with the refresh token, then finishes the removal', async () => {
+    const { runtime, calls } = fakeRuntime(going, seal(SECRET));
+    let revokedWith = '';
+    expect(await disconnect(runtime, adapter({ revoke: async (secret) => ((revokedWith = secret), { revoked: true }) }))).toEqual({ outcome: 'disconnected', revoked: true });
+    expect(revokedWith).toBe(SECRET);
+    expect(calls.at(-1)).toMatchObject({ name: 'kernel.calendar.finish_disconnect', input: { connectionId: CONNECTION, revoked: true } });
+  });
+
+  it('leaves a connection whose revoke failed for the next sweep, and gives up after three days', async () => {
+    const { runtime, calls } = fakeRuntime(going, seal(SECRET));
+    const failing = adapter({ revoke: async () => ({ failed: 'backendError' }) });
+    expect(await disconnect(runtime, failing)).toEqual({ outcome: 'retry', reason: 'backendError' });
+    expect(calls.some((c) => c.name === 'kernel.calendar.finish_disconnect')).toBe(false);
+    const later = fakeRuntime(going, seal(SECRET));
+    expect(await disconnect(later.runtime, failing, new Date(NOW.getTime() + 4 * 86_400_000))).toEqual({ outcome: 'disconnected', revoked: false, reason: 'revoke_failed' });
+    expect(later.calls.at(-1)).toMatchObject({ name: 'kernel.calendar.finish_disconnect', input: { revoked: false, reason: 'revoke_failed' } });
+  });
+
+  it('finishes without a revoke when the token cannot be handed out or opened, and says why', async () => {
+    const left = fakeRuntime(going, new DomainError('CALENDAR_OWNER_LEFT', 409, 'x'));
+    expect(await disconnect(left.runtime, adapter())).toEqual({ outcome: 'disconnected', revoked: false, reason: 'owner_left' });
+    const other = vault.seal(SECRET, calendarBinding(ORG, 'google', 'someone-else@gmail.test'));
+    const wrong = fakeRuntime(going, { provider: 'google', externalAccount: ACCOUNT, keyId: other.keyId, envelope: other.envelope.toString('base64') });
+    expect(await disconnect(wrong.runtime, adapter())).toEqual({ outcome: 'disconnected', revoked: false, reason: 'credential_unreadable' });
+  });
+
+  it('keeps trying while the app credentials are off the server, and touches only a disconnecting connection', async () => {
+    expect(await disconnect(fakeRuntime(going, seal(SECRET)).runtime, null)).toEqual({ outcome: 'retry', reason: 'no_adapter' });
+    const active = fakeRuntime(fresh, seal(SECRET));
+    expect(await disconnect(active.runtime, adapter())).toEqual({ outcome: 'skipped', reason: 'not_disconnecting' });
+    expect(active.calls.some((c) => c.kind === 'execute')).toBe(false);
+    expect(await disconnect(fakeRuntime(null, seal(SECRET)).runtime, adapter())).toEqual({ outcome: 'skipped', reason: 'not_disconnecting' });
   });
 });
 

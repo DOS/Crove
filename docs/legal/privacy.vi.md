@@ -19,6 +19,7 @@ Chính sách này giải thích cách [Tên đơn vị vận hành] ("**chúng t
 | Hoạt động | Thời điểm đăng nhập, địa chỉ IP, trình duyệt, nhật ký thao tác (ai duyệt chứng từ nào, lúc nào) | Hệ thống tự ghi |
 | Chứng từ và sổ sách | Hóa đơn điện tử, PDF, ảnh chụp, sao kê, bút toán, mã số thuế, tên và địa chỉ đối tác | Tổ chức của bạn tải lên, gửi qua email hoặc nhập |
 | Liên lạc | Email bạn gửi cho bộ phận hỗ trợ, góp ý trong ứng dụng | Bạn gửi |
+| Lịch bên ngoài | Khi một thành viên tự kết nối lịch Google của mình: địa chỉ tài khoản Google và các khoảng giờ bận (giờ bắt đầu, giờ kết thúc), không đọc tiêu đề hay người tham dự. Mọi thành viên của tổ chức thấy các khoảng giờ bận này (không kèm nội dung) và chúng nằm trong bản xuất dữ liệu của tổ chức. Ngắt kết nối thì xóa địa chỉ, giờ bận và thu hồi quyền tại Google | Thành viên tự kết nối và tự ngắt |
 
 Một số dữ liệu tài chính có thể là dữ liệu cá nhân nhạy cảm, ví dụ sổ sách của hộ kinh doanh hoặc thông tin tài khoản ngân hàng của cá nhân. Chúng tôi áp dụng mức bảo vệ của dữ liệu nhạy cảm cho toàn bộ chứng từ và sổ sách. [Cần luật sư xác nhận, xem câu hỏi 2.]
 
