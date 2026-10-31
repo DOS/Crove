@@ -80,6 +80,9 @@ export interface InvoiceLookup {
   relatedDocumentId: string | null;
 }
 
+// The check a duplicate invoice carries: from the lookup before the record, or from the record's own (#2137).
+const DUPLICATE_CHECK: InvoiceCheck = { id: 'duplicate', status: 'fail', code: 'duplicate.found', message: 'Hóa đơn này đã có trong Inbox hoặc đã ghi sổ' };
+
 export const purchaseLookup = defineQuery({
   name: 'finance.extraction.lookup',
   // fileId: the file being read. Its own proposals are not duplicates of it (a re-extraction revises them).
@@ -466,26 +469,20 @@ export async function extractAndPropose(
   if (!invoice) return fail(error ?? 'Không đọc được chứng từ');
 
   const sellerTaxCode = parseTaxCode(invoice.seller.taxCode)?.normalized ?? null;
-  const lookup = await deps.runtime.query<InvoiceLookup>(
-    'finance.extraction.lookup',
-    {
-      fileId,
-      sellerTaxCode,
-      sellerName: invoice.seller.name,
-      series: invoice.series,
-      number: invoice.number,
-      related: invoice.related ? { series: invoice.related.series, number: invoice.related.number } : null,
-    },
-    { actor, orgId },
-  );
+  const lookupInput = {
+    sellerTaxCode,
+    sellerName: invoice.seller.name,
+    series: invoice.series,
+    number: invoice.number,
+    related: invoice.related ? { series: invoice.related.series, number: invoice.related.number } : null,
+  };
+  const lookup = await deps.runtime.query<InvoiceLookup>('finance.extraction.lookup', { fileId, ...lookupInput }, { actor, orgId });
 
   const checks = checkInvoice(invoice, deps.today?.());
   // A foreign-currency e-invoice with its own rate is proposed in VND (#918); the checks above read it as issued.
   const converted = bookedInVnd(invoice);
   const booked = converted?.invoice ?? invoice;
-  if (lookup.duplicateDocumentId || lookup.duplicateProposalId) {
-    checks.unshift({ id: 'duplicate', status: 'fail', code: 'duplicate.found', message: 'Hóa đơn này đã có trong Inbox hoặc đã ghi sổ' });
-  }
+  if (lookup.duplicateDocumentId || lookup.duplicateProposalId) checks.unshift(DUPLICATE_CHECK);
   const related = relatedRef(invoice, lookup.relatedDocumentId);
   if (related) checks.push(relatedCheck(related));
   // A sale (issue #313) books every line to revenue; a purchase proposes an expense or asset account per line.
@@ -556,6 +553,13 @@ export async function extractAndPropose(
         title: `${memo}`.slice(0, 300),
         payload,
         duplicateOf: lookup.duplicateProposalId,
+        // Documents are read at the same time: the record asks the lookup again under a lock on this invoice, so two
+        // copies in one batch cannot both pass (#2137). The key is the identity the lookup matches on.
+        duplicateGuard: {
+          key: [lookup.direction === 'sale' ? 'sale' : 'purchase', lookup.direction === 'sale' ? '' : (sellerTaxCode ?? invoice.seller.name), invoice.series, invoice.number].join('|'),
+          lookup: lookupInput,
+          check: DUPLICATE_CHECK,
+        },
       },
     },
     { actor, orgId },
