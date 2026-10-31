@@ -207,7 +207,7 @@ export const calendarDisconnect = defineCommand({
 // the revoke for days): the grant may still be live at the provider and the member can remove it in their account.
 export const calendarFinishDisconnect = defineCommand({
   name: 'kernel.calendar.finish_disconnect',
-  input: z.strictObject({ connectionId: zId, revoked: z.boolean(), reason: z.string().min(1).max(100).optional() }),
+  input: z.strictObject({ connectionId: zId, revoked: z.boolean(), reason: z.string().min(1).max(100).optional(), ifVersion: zInstant.optional() }),
   risk: 'R1',
   sideEffect: 'internal',
   access: 'system',
@@ -216,12 +216,29 @@ export const calendarFinishDisconnect = defineCommand({
     if (ctx.actor.type !== 'system') throw new DomainError('FORBIDDEN', 403, 'Chỉ tiến trình hệ thống mới thực hiện được việc này');
     const row = await ctx.trx
       .selectFrom('crove_kernel.calendar_connection')
-      .select(['status', 'provider'])
+      .select(['status', 'provider', 'updated_at'])
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', input.connectionId)
       .forUpdate()
       .executeTakeFirst();
-    if (!row || row.status !== 'disconnecting') return { connectionId: input.connectionId, finished: false };
+    if (!row) return { connectionId: input.connectionId, finished: false };
+    if (row.status !== 'disconnecting') {
+      // The member connected the same account again after the worker read this disconnect, and the provider's revoke ended
+      // the whole grant, the new tokens too: the new connection is expired now, so the member connects again at once and
+      // does not find out at the next sync.
+      const reconnected = row.status === 'active' && input.revoked && input.ifVersion !== undefined && Math.floor(row.updated_at.getTime()) !== Date.parse(input.ifVersion);
+      if (reconnected) {
+        await ctx.trx
+          .updateTable('crove_kernel.calendar_connection')
+          .set({ status: 'expired', status_reason: 'grant revoked while reconnecting: connect again', updated_at: ctx.now })
+          .where('org_id', '=', ctx.orgId)
+          .where('id', '=', input.connectionId)
+          .execute();
+        await sql`SELECT crove_kernel.calendar_credential_drop(${input.connectionId}::uuid)`.execute(ctx.trx).catch(calendarError);
+        ctx.audit({ connection_id: input.connectionId, provider: row.provider, expired_by_revoke: true });
+      }
+      return { connectionId: input.connectionId, finished: false };
+    }
     await sql`SELECT crove_kernel.calendar_credential_drop(${input.connectionId}::uuid)`.execute(ctx.trx).catch(calendarError);
     await ctx.trx.deleteFrom('crove_kernel.calendar_connection').where('org_id', '=', ctx.orgId).where('id', '=', input.connectionId).execute();
     ctx.audit({ connection_id: input.connectionId, provider: row.provider, revoked: input.revoked, ...(input.reason ? { reason: input.reason } : {}) });

@@ -129,8 +129,8 @@ describe('GoogleCalendarAdapter', () => {
     expect(await adapter.revoke(SECRET)).toEqual({ revoked: true });
     expect(await adapter.revoke(SECRET)).toEqual({ failed: 'backendError' });
     expect(await adapter.revoke(SECRET)).toEqual({ failed: 'invalid_request' });
-    // A secret with no token has nothing to revoke.
-    expect(await adapter.revoke('not json')).toEqual({ revoked: true });
+    // A secret with no token has nothing to revoke, and says so instead of reporting a revoke it did not make.
+    expect(await adapter.revoke('not json')).toEqual({ revoked: false, reason: 'no_token' });
     expect(calls).toHaveLength(4);
   });
 

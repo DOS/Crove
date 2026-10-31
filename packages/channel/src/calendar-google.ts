@@ -52,7 +52,8 @@ export interface CalendarAdapter {
   busy(secret: string, from: Date, to: Date): Promise<CalendarBusyResult>;
   // Takes the grant away at the provider (a disconnect): the whole grant, not only this token. A grant the provider no
   // longer knows counts as revoked. failed: the provider did not answer well; the worker tries again later.
-  revoke(secret: string): Promise<{ revoked: true } | { failed: string }>;
+  // revoked=false names why nothing was revoked (the secret holds no token).
+  revoke(secret: string): Promise<{ revoked: true } | { revoked: false; reason: string } | { failed: string }>;
 }
 
 export interface GoogleCalendarSecret {
@@ -184,9 +185,9 @@ export class GoogleCalendarAdapter implements CalendarAdapter {
   // https://oauth2.googleapis.com/revoke with the refresh token ends the whole grant (and its access tokens); with only
   // an access token it would end just that one. Google answers 200 when it did, 400 invalid_token for a token it does not
   // know (already revoked, or the member removed the app in their account): both mean the grant is gone.
-  async revoke(secret: string): Promise<{ revoked: true } | { failed: string }> {
+  async revoke(secret: string): Promise<{ revoked: true } | { revoked: false; reason: string } | { failed: string }> {
     const s = googleCalendarSecretOf(secret);
-    if (!s) return { revoked: true };
+    if (!s) return { revoked: false, reason: 'no_token' };
     try {
       const response = await this.fetch('https://oauth2.googleapis.com/revoke', {
         method: 'POST',

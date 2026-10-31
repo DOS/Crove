@@ -7,7 +7,7 @@ import type { CalendarAdapter } from '@crove/channel';
 import { busyPieces } from '@crove/kernel';
 import { calendarBinding } from '@crove/kernel-contract';
 import { CredentialVault, DomainError, parseVaultKey, type Runtime } from '@crove/kernel-runtime';
-import { runCalendarDisconnect, runCalendarSync } from '../src/calendar-sync.ts';
+import { runCalendarDisconnect, runCalendarSync, syncCalendars } from '../src/calendar-sync.ts';
 
 const ORG = '11111111-1111-4111-8111-111111111111';
 const CONNECTION = '22222222-2222-4222-8222-222222222222';
@@ -42,6 +42,7 @@ function fakeRuntime(state: { status: string; provider: string; expiresAt: strin
       calls.push({ kind: 'execute', name, input });
       if (name === 'kernel.calendar.busy_replace') return { replaced: true, added: 2, removed: 1 };
       if (name === 'kernel.calendar.refresh') return { refreshed: true, updatedAt: '2026-11-03T05:30:00.000Z' };
+      if (name === 'kernel.calendar.finish_disconnect') return { finished: true };
       return { marked: true };
     },
   } as unknown as Runtime;
@@ -65,7 +66,7 @@ function adapter(over: Partial<CalendarAdapter> = {}): CalendarAdapter & { busyC
       return { busy: busyCalls.length === 1 ? [{ start: '2026-11-04T02:00:00.000Z', end: '2026-11-04T03:00:00.000Z' }] : [] };
     },
     busyCalls,
-    revoke: async () => ({ revoked: true }),
+    revoke: async (): Promise<{ revoked: true } | { revoked: false; reason: string } | { failed: string }> => ({ revoked: true }),
     ...over,
   };
 }
@@ -210,7 +211,8 @@ describe('runCalendarDisconnect', () => {
     let revokedWith = '';
     expect(await disconnect(runtime, adapter({ revoke: async (secret) => ((revokedWith = secret), { revoked: true }) }))).toEqual({ outcome: 'disconnected', revoked: true });
     expect(revokedWith).toBe(SECRET);
-    expect(calls.at(-1)).toMatchObject({ name: 'kernel.calendar.finish_disconnect', input: { connectionId: CONNECTION, revoked: true } });
+    // The version it saw goes along, so a reconnect since is noticed.
+    expect(calls.at(-1)).toMatchObject({ name: 'kernel.calendar.finish_disconnect', input: { connectionId: CONNECTION, revoked: true, ifVersion: going.updatedAt } });
   });
 
   it('leaves a connection whose revoke failed for the next sweep, and gives up after three days', async () => {
@@ -223,16 +225,42 @@ describe('runCalendarDisconnect', () => {
     expect(later.calls.at(-1)).toMatchObject({ name: 'kernel.calendar.finish_disconnect', input: { revoked: false, reason: 'revoke_failed' } });
   });
 
-  it('finishes without a revoke when the token cannot be handed out or opened, and says why', async () => {
-    const left = fakeRuntime(going, new DomainError('CALENDAR_OWNER_LEFT', 409, 'x'));
-    expect(await disconnect(left.runtime, adapter())).toEqual({ outcome: 'disconnected', revoked: false, reason: 'owner_left' });
+  it('finishes without a revoke only when there is no token, or one nothing can open, and says why', async () => {
+    const gone = fakeRuntime(going, new DomainError('CALENDAR_NOT_FOUND', 404, 'x'));
+    expect(await disconnect(gone.runtime, adapter())).toEqual({ outcome: 'disconnected', revoked: false, reason: 'no_credential' });
     const other = vault.seal(SECRET, calendarBinding(ORG, 'google', 'someone-else@gmail.test'));
     const wrong = fakeRuntime(going, { provider: 'google', externalAccount: ACCOUNT, keyId: other.keyId, envelope: other.envelope.toString('base64') });
     expect(await disconnect(wrong.runtime, adapter())).toEqual({ outcome: 'disconnected', revoked: false, reason: 'credential_unreadable' });
+    const noToken = fakeRuntime(going, seal('not json'));
+    expect(await disconnect(noToken.runtime, adapter({ revoke: async () => ({ revoked: false, reason: 'no_token' }) }))).toEqual({ outcome: 'disconnected', revoked: false, reason: 'no_token' });
+  });
+
+  it('does not finish on a passing database error: the grant is revoked at a later sweep', async () => {
+    // Every error a query raises is a DomainError; only "not found" means there is no token.
+    for (const error of [new DomainError('INTERNAL', 500, 'x'), new DomainError('OVERLOADED', 503, 'x'), new DomainError('CALENDAR_OWNER_LEFT', 409, 'x')]) {
+      const { runtime, calls } = fakeRuntime(going, error);
+      await expect(disconnect(runtime, adapter())).rejects.toBe(error);
+      expect(calls.some((c) => c.name === 'kernel.calendar.finish_disconnect')).toBe(false);
+    }
+  });
+
+  it('keeps a credential sealed with a key the server lacks until the give-up time', async () => {
+    const stranger = new CredentialVault([parseVaultKey(randomBytes(32).toString('base64'))]);
+    const s2 = stranger.seal(SECRET, calendarBinding(ORG, 'google', ACCOUNT));
+    const unknown = { provider: 'google', externalAccount: ACCOUNT, keyId: s2.keyId, envelope: s2.envelope.toString('base64') };
+    expect(await disconnect(fakeRuntime(going, unknown).runtime, adapter())).toEqual({ outcome: 'retry', reason: 'unknown_key' });
+    expect(await disconnect(fakeRuntime(going, unknown).runtime, adapter(), new Date(NOW.getTime() + 4 * 86_400_000))).toEqual({ outcome: 'disconnected', revoked: false, reason: 'credential_unreadable' });
+  });
+
+  it('counts a finish the kernel did not make as skipped, not as a disconnect', async () => {
+    const { runtime } = fakeRuntime(going, seal(SECRET));
+    (runtime as unknown as { execute: () => Promise<unknown> }).execute = async () => ({ finished: false });
+    expect(await disconnect(runtime, adapter())).toEqual({ outcome: 'skipped', reason: 'changed' });
   });
 
   it('keeps trying while the app credentials are off the server, and touches only a disconnecting connection', async () => {
     expect(await disconnect(fakeRuntime(going, seal(SECRET)).runtime, null)).toEqual({ outcome: 'retry', reason: 'no_adapter' });
+    expect(await disconnect(fakeRuntime(going, seal(SECRET)).runtime, null, new Date(NOW.getTime() + 4 * 86_400_000))).toEqual({ outcome: 'disconnected', revoked: false, reason: 'no_adapter' });
     const active = fakeRuntime(fresh, seal(SECRET));
     expect(await disconnect(active.runtime, adapter())).toEqual({ outcome: 'skipped', reason: 'not_disconnecting' });
     expect(active.calls.some((c) => c.kind === 'execute')).toBe(false);
@@ -269,5 +297,37 @@ describe('busyPieces', () => {
       { start: 30 * D, end: 60 * D },
       { start: 60 * D, end: 70 * D },
     ]);
+  });
+});
+
+describe('syncCalendars', () => {
+  const exclusive = async <T>(run: () => Promise<T>) => ({ ran: true as const, value: await run() });
+  const row = (provider = 'google') => ({ orgId: ORG, connectionId: CONNECTION, provider });
+  const sweep = (rt: Runtime, adapters: Record<string, CalendarAdapter>, rows = [row()]) =>
+    syncCalendars({ runtime: rt, broker: vault, workerDb: null as never, adapters, exclusive, listDue: async (after) => (after ? [] : rows), now: () => NOW });
+
+  it('finishes a disconnect with no adapter on the server, and leaves an active connection alone', async () => {
+    const going = { status: 'disconnecting', provider: 'google', expiresAt: null, updatedAt: new Date(NOW.getTime() - 4 * 86_400_000).toISOString() };
+    const old = fakeRuntime(going, seal(SECRET));
+    expect(await sweep(old.runtime, {})).toMatchObject({ disconnected: 1, synced: 0 });
+    expect(old.calls.at(-1)).toMatchObject({ name: 'kernel.calendar.finish_disconnect', input: { revoked: false, reason: 'no_adapter' } });
+    const active = fakeRuntime(fresh, seal(SECRET));
+    expect(await sweep(active.runtime, {})).toMatchObject({ skipped: 1, disconnected: 0, synced: 0 });
+    expect(active.calls.some((c) => c.kind === 'execute')).toBe(false);
+  });
+
+  it('syncs the active ones and revokes the disconnecting ones, whichever the list holds', async () => {
+    const a = adapter();
+    const sync = fakeRuntime(fresh, seal(SECRET));
+    expect(await sweep(sync.runtime, { google_calendar: a })).toMatchObject({ synced: 1, disconnected: 0 });
+    const going = fakeRuntime({ status: 'disconnecting', provider: 'google', expiresAt: null, updatedAt: NOW.toISOString() }, seal(SECRET));
+    expect(await sweep(going.runtime, { google_calendar: a })).toMatchObject({ synced: 0, disconnected: 1 });
+    expect(a.busyCalls.length).toBeGreaterThan(0);
+  });
+
+  it('counts a failing connection as a retry and goes on', async () => {
+    const boom = new DomainError('INTERNAL', 500, 'x');
+    const failing = fakeRuntime({ status: 'disconnecting', provider: 'google', expiresAt: null, updatedAt: NOW.toISOString() }, boom);
+    expect(await sweep(failing.runtime, { google_calendar: adapter() })).toMatchObject({ retry: 1, disconnected: 0 });
   });
 });

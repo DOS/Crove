@@ -1408,7 +1408,9 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       calendarSyncing = false;
     }
   };
-  const calendarTimer = Object.keys(calendars).length > 0 ? setInterval(() => void calendarSweep(), CALENDAR_SYNC_SWEEP_MS) : null;
+  // Also with no adapter on: a member's disconnect is finished (the grant revoked, or given up on after three days, and the
+  // sealed token removed) whatever the server has configured.
+  const calendarTimer = channels ? setInterval(() => void calendarSweep(), CALENDAR_SYNC_SWEEP_MS) : null;
   calendarTimer?.unref();
   void calendarSweep();
 

@@ -6,10 +6,12 @@
 -- stay untouched.
 --
 -- calendar_connection.status         gains `disconnecting`.
--- calendar_credential_get            also hands out the sealed credential of a disconnecting connection (to the worker, as
---                                    before: system context only, while its member is still in the org).
--- calendar_sync_due                  also lists the disconnecting connections of active orgs, flagged, whose member may
---                                    since have left (the removal is finished either way); same grants as before.
+-- calendar_credential_get            also hands out the sealed credential of a disconnecting connection to the worker (system
+--                                    context only, as before), and for that one whatever became of its member: the revoke at
+--                                    the provider is the only use of the token there, and a member who left, was demoted to
+--                                    viewer or was disabled after disconnecting still gets the grant revoked.
+-- calendar_sync_due                  also lists the disconnecting connections of active orgs, whose member may since have
+--                                    left (the removal is finished either way); same signature, result and grants.
 SET LOCAL lock_timeout = '2s';
 
 DO $$
@@ -24,8 +26,8 @@ END $$;
 
 -- The sealed credential of an active or disconnecting connection, for the worker in the system context of its org.
 -- Raises NO_CONTEXT (42501) outside a system context, CALENDAR_NOT_FOUND (P0002) when the org has no such connection or
--- it has no credential, CALENDAR_NOT_ACTIVE (55000) when the connection is expired, and CALENDAR_OWNER_LEFT (42501)
--- when the member who owns it has left the org, no longer edits in it, or is disabled.
+-- it has no credential, CALENDAR_NOT_ACTIVE (55000) when the connection is expired, and, for an active one,
+-- CALENDAR_OWNER_LEFT (42501) when the member who owns it has left the org, no longer edits in it, or is disabled.
 CREATE OR REPLACE FUNCTION crove_kernel.calendar_credential_get(p_connection_id uuid)
 RETURNS TABLE (key_id text, envelope bytea, provider text, external_account text)
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
@@ -40,7 +42,7 @@ BEGIN
   IF NOT FOUND THEN
     RAISE EXCEPTION 'CALENDAR_NOT_FOUND' USING ERRCODE = 'P0002';
   END IF;
-  IF NOT EXISTS (
+  IF v_connection.status = 'active' AND NOT EXISTS (
     SELECT 1 FROM crove_kernel.tenant_member m JOIN crove_kernel.user_account u ON u.id = m.user_id
     WHERE m.org_id = v_org AND m.user_id = v_connection.user_id AND m.role IN ('owner', 'admin', 'member') AND u.disabled_at IS NULL
   ) THEN
@@ -62,12 +64,11 @@ GRANT EXECUTE ON FUNCTION crove_kernel.calendar_credential_get(uuid) TO crove_wo
 
 -- A page of the connections the worker has to take care of, after a key, in key order: the active ones of members who are
 -- still in the org (to sync) and the disconnecting ones (to revoke and remove, whether or not their member is still in
--- the org). The return type gains `disconnecting`, so the function is dropped and made again with its grants.
-DROP FUNCTION IF EXISTS crove_kernel.calendar_sync_due(uuid, uuid, int);
-CREATE FUNCTION crove_kernel.calendar_sync_due(p_after_org uuid, p_after_id uuid, p_limit int)
-RETURNS TABLE (org_id uuid, connection_id uuid, provider text, disconnecting boolean)
+-- the org). The worker reads each one's state to tell them apart (kernel.calendar.connection_state).
+CREATE OR REPLACE FUNCTION crove_kernel.calendar_sync_due(p_after_org uuid, p_after_id uuid, p_limit int)
+RETURNS TABLE (org_id uuid, connection_id uuid, provider text)
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
-  SELECT c.org_id, c.id, c.provider, c.status = 'disconnecting'
+  SELECT c.org_id, c.id, c.provider
   FROM crove_kernel.calendar_connection c
   JOIN crove_kernel.tenant t ON t.org_id = c.org_id AND t.status = 'active'
   WHERE (p_after_org IS NULL OR (c.org_id, c.id) > (p_after_org, p_after_id))

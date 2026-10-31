@@ -245,8 +245,10 @@ suite('outside calendars on PostgreSQL (#2123)', () => {
     expect(await o.sys('kernel.calendar.mark_failed', { connectionId: a.connectionId, status: 'expired', reason: 'refused (x)' })).toMatchObject({ marked: false });
     expect(await o.exec(o.member, 'kernel.calendar.disconnect', { connectionId: a.connectionId })).toMatchObject({ disconnected: true });
     // The worker's list names it as disconnecting; only the system finishes it.
-    const due = await workerPool.query<{ connection_id: string; disconnecting: boolean }>('SELECT connection_id, disconnecting FROM crove_kernel.calendar_sync_due(NULL, NULL, 1000) WHERE org_id = $1 ORDER BY connection_id', [o.orgId]);
-    expect(Object.fromEntries(due.rows.map((r) => [r.connection_id, r.disconnecting]))).toEqual({ [a.connectionId]: true, [b.connectionId]: false });
+    const due = await workerPool.query<{ connection_id: string }>('SELECT connection_id FROM crove_kernel.calendar_sync_due(NULL, NULL, 1000) WHERE org_id = $1', [o.orgId]);
+    expect(due.rows.map((r) => r.connection_id).sort()).toEqual([a.connectionId, b.connectionId].sort());
+    const states = await Promise.all([a, b].map((c) => o.sysQuery<{ status: string }>('kernel.calendar.connection_state', { connectionId: c.connectionId })));
+    expect(states.map((s) => s.status)).toEqual(['disconnecting', 'active']);
     await expect(o.exec(o.member, 'kernel.calendar.finish_disconnect', { connectionId: a.connectionId, revoked: true })).rejects.toMatchObject({ status: 403 });
     // Step 2.
     expect(await o.sys('kernel.calendar.finish_disconnect', { connectionId: a.connectionId, revoked: true })).toEqual({ connectionId: a.connectionId, finished: true });
@@ -283,15 +285,52 @@ suite('outside calendars on PostgreSQL (#2123)', () => {
     expect(await o.query<unknown[]>(o.member, 'kernel.calendar.connections', {})).toHaveLength(1);
   });
 
-  it('finishes the removal of a disconnecting connection whose member has left, with no token handed out', async () => {
+  it('still hands the worker the token of a disconnecting connection whose member left, was demoted or was disabled', async () => {
     const o = await org();
     const c = await connect(o, o.member);
     await o.exec(o.member, 'kernel.calendar.disconnect', { connectionId: c.connectionId });
     await admin((cl) => cl.query('DELETE FROM crove_kernel.tenant_member WHERE org_id = $1 AND user_id = $2', [o.orgId, o.member]));
-    await expect(o.sysQuery('kernel.calendar.credential', { connectionId: c.connectionId })).rejects.toMatchObject({ code: 'CALENDAR_OWNER_LEFT' });
-    const due = await workerPool.query<{ disconnecting: boolean }>('SELECT disconnecting FROM crove_kernel.calendar_sync_due(NULL, NULL, 1000) WHERE org_id = $1 AND connection_id = $2', [o.orgId, c.connectionId]);
-    expect(due.rows).toEqual([{ disconnecting: true }]);
-    expect(await o.sys('kernel.calendar.finish_disconnect', { connectionId: c.connectionId, revoked: false, reason: 'owner_left' })).toMatchObject({ finished: true });
+    // The revoke is the one use the token has there, so it is handed out whatever became of the member.
+    const sealed = await o.sysQuery<SealedCalendarCredential>('kernel.calendar.credential', { connectionId: c.connectionId });
+    expect(JSON.parse(vault.open({ keyId: sealed.keyId, envelope: Buffer.from(sealed.envelope, 'base64') }, calendarBinding(o.orgId, 'google', c.account)))).toMatchObject({ refreshToken: 'refresh-1' });
+    const due = await workerPool.query<{ connection_id: string }>('SELECT connection_id FROM crove_kernel.calendar_sync_due(NULL, NULL, 1000) WHERE org_id = $1', [o.orgId]);
+    expect(due.rows).toEqual([{ connection_id: c.connectionId }]);
+    expect(await o.sysQuery('kernel.calendar.connection_state', { connectionId: c.connectionId })).toMatchObject({ status: 'disconnecting' });
+    expect(await o.sys('kernel.calendar.finish_disconnect', { connectionId: c.connectionId, revoked: true })).toMatchObject({ finished: true });
+  });
+
+  it('hands the token of a disconnecting connection to the worker for a demoted or disabled member, and an active one still refuses', async () => {
+    const o = await org();
+    const viewerDemoted = await connect(o, o.member);
+    const disabled = await connect(o, o.other);
+    const stillActive = await connect(o, o.owner);
+    await o.exec(o.member, 'kernel.calendar.disconnect', { connectionId: viewerDemoted.connectionId });
+    await o.exec(o.other, 'kernel.calendar.disconnect', { connectionId: disabled.connectionId });
+    await admin((cl) => cl.query("UPDATE crove_kernel.tenant_member SET role = 'viewer' WHERE org_id = $1 AND user_id = $2", [o.orgId, o.member]));
+    await admin((cl) => cl.query('UPDATE crove_kernel.user_account SET disabled_at = now() WHERE id = $1', [o.other]));
+    await expect(o.sysQuery('kernel.calendar.credential', { connectionId: viewerDemoted.connectionId })).resolves.toMatchObject({ provider: 'google' });
+    await expect(o.sysQuery('kernel.calendar.credential', { connectionId: disabled.connectionId })).resolves.toMatchObject({ provider: 'google' });
+    // A refresh and a sync of a disconnecting connection are refused: it is the revoke's token only.
+    const state = await o.sysQuery<{ updatedAt: string }>('kernel.calendar.connection_state', { connectionId: viewerDemoted.connectionId });
+    const next = vault.seal(JSON.stringify({ accessToken: 'x', refreshToken: 'y' }), calendarBinding(o.orgId, 'google', viewerDemoted.account));
+    expect(await o.sys('kernel.calendar.refresh', { connectionId: viewerDemoted.connectionId, ifVersion: state.updatedAt, expiresAt: null, credential: { keyId: next.keyId, envelope: next.envelope.toString('base64') } })).toMatchObject({ refreshed: false });
+    // An active connection of a member who is still in the org is as before.
+    await expect(o.sysQuery('kernel.calendar.credential', { connectionId: stillActive.connectionId })).resolves.toMatchObject({ provider: 'google' });
+  });
+
+  it('expires a connection the member connected again while the worker was revoking the old grant', async () => {
+    const o = await org();
+    const c = await connect(o, o.member);
+    await o.exec(o.member, 'kernel.calendar.disconnect', { connectionId: c.connectionId });
+    const seen = await o.sysQuery<{ updatedAt: string }>('kernel.calendar.connection_state', { connectionId: c.connectionId });
+    // The member connects again after the worker read the state, then Google's revoke ends the whole grant.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await connect(o, o.member, c.account, JSON.stringify({ accessToken: 'access-5', refreshToken: 'refresh-5' }));
+    expect(await o.sys('kernel.calendar.finish_disconnect', { connectionId: c.connectionId, revoked: true, ifVersion: seen.updatedAt })).toMatchObject({ finished: false });
+    const list = await o.query<{ status: string; statusReason: string | null }[]>(o.member, 'kernel.calendar.connections', {});
+    expect(list[0]).toMatchObject({ status: 'expired' });
+    const sealedLeft = await admin((cl) => cl.query('SELECT 1 FROM crove_kernel.calendar_credential WHERE org_id = $1 AND id = $2', [o.orgId, c.connectionId]));
+    expect(sealedLeft.rowCount).toBe(0);
   });
 
   it('expires a refused connection (dropping its token, keeping its blocks) and notes a passing failure', async () => {
