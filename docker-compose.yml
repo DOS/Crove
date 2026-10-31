@@ -244,6 +244,11 @@ services:
       UPLOAD_BEGIN_LIMIT_PER_MINUTE: ${UPLOAD_BEGIN_LIMIT_PER_MINUTE:-20}
       # Every PDF, XML and MIME parse happens in crove-extract (External-tenant gate T12).
       EXTRACT_URL: http://crove-extract:8090
+      # Extract jobs the worker runs at once, and the sandbox's parser slots it never exceeds (#2119; set the same value on
+      # crove-extract below). Unset worker value: 4, or the slots if fewer. AI_MAX_RETRIES: times a failing AI call is sent again.
+      EXTRACT_CONCURRENCY: ${EXTRACT_CONCURRENCY:-4}
+      EXTRACT_WORKER_CONCURRENCY: ${EXTRACT_WORKER_CONCURRENCY:-}
+      AI_MAX_RETRIES: ${AI_MAX_RETRIES:-1}
       # Seals channel tokens (ADR-0025). Set CREDENTIAL_KEY to bring your own; otherwise the container creates a key
       # file on the `keys` volume at first start. Back it up apart from the database (docs/runbooks/credential-key.md).
       CREDENTIAL_KEY: ${CREDENTIAL_KEY:-}
@@ -302,9 +307,12 @@ services:
       crove-extract:
         condition: service_healthy
 
-  # The parsing sandbox (plan §7.6). Bytes in, JSON out; only the worker calls it. No environment on purpose: it
-  # holds no credentials and refuses to start with any. Its only network is `extract`, which has no route out,
+  # The parsing sandbox (plan §7.6). Bytes in, JSON out; only the worker calls it. No credentials on purpose: it refuses
+  # to start with any variable but its own EXTRACT_* settings. Its only network is `extract`, which has no route out,
   # and no port is published. Each parse also runs in a short-lived process with no network permission.
+  # EXTRACT_CONCURRENCY parser slots (#2119, 1 to 8, default 4): the worker runs that many extract jobs at once. Memory,
+  # CPUs and processes are sized for four slots (a parser process is held to 768 MB resident, so 3 GB is the worst case; a
+  # PDF rarely uses a tenth of that); with more slots, raise them in compose.host.yml (docs/runbooks/extract-sizing.md).
   crove-extract:
     build:
       context: .
@@ -316,10 +324,12 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
-    mem_limit: 1g
-    memswap_limit: 1g
-    cpus: 1
-    pids_limit: 128
+    mem_limit: 3g
+    memswap_limit: 3g
+    cpus: 2
+    pids_limit: 256
+    environment:
+      EXTRACT_CONCURRENCY: ${EXTRACT_CONCURRENCY:-4}
     networks:
       - extract
 
