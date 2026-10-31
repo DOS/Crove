@@ -135,6 +135,11 @@ export async function runCalendarSync(deps: CalendarSyncDeps, job: CalendarSyncJ
     if (error instanceof DomainError) return { outcome: 'skipped', reason: error.code };
     throw error;
   }
+  // The credential is handed out for a disconnecting connection too (its revoke needs it), so the state is read again now: a
+  // disconnect, or a reconnect, between the first read and this one would have this sync work with, and perhaps rotate,
+  // the token of a connection on its way out, and the revoke would then send a token the provider no longer knows.
+  const again = await deps.runtime.query<{ status: string; updatedAt: string } | null>('kernel.calendar.connection_state', { connectionId: job.connectionId }, options);
+  if (!again || again.status !== 'active' || again.updatedAt !== state.updatedAt) return { outcome: 'skipped', reason: 'changed' };
   const binding = calendarBinding(job.orgId, sealed.provider as CalendarProvider, sealed.externalAccount);
   let secret: string;
   try {
@@ -166,18 +171,37 @@ export async function runCalendarSync(deps: CalendarSyncDeps, job: CalendarSyncJ
     const command = { connectionId: job.connectionId, ifVersion: version, expiresAt: result.expiresAt?.toISOString() ?? null, credential: { keyId: next.keyId, envelope: next.envelope.toString('base64') } };
     // The provider may have rotated the refresh token: this write is the only copy of the new pair, so a passing
     // database error is retried.
+    let stored: { refreshed: boolean; updatedAt?: string } | null = null;
     for (let attempt = 1; ; attempt++) {
       try {
-        const stored = await deps.runtime.execute<{ refreshed: boolean; updatedAt?: string }>('kernel.calendar.refresh', command, options);
-        // Reconnected or disconnected meanwhile: that connection's own sync takes it from here.
-        if (!stored.refreshed || !stored.updatedAt) return { outcome: 'skipped', reason: 'changed' };
-        version = stored.updatedAt;
+        stored = await deps.runtime.execute<{ refreshed: boolean; updatedAt?: string }>('kernel.calendar.refresh', command, options);
         break;
       } catch (error) {
         if (attempt >= 3 || error instanceof DomainError) throw error;
         await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
       }
     }
+    // Reconnected or disconnected meanwhile: that connection's own sync takes it from here.
+    if (!stored?.refreshed || !stored.updatedAt) {
+      // A provider that rotates refresh tokens has just made a new pair this connection never stored. If the member
+      // disconnected meanwhile, that grant would outlive the revoke, which will send the old token: revoke the new pair now.
+      // A reconnected connection keeps its own, newer grant; a connection that is gone was finished or purged already.
+      const current = await deps.runtime.query<{ status: string; updatedAt: string } | null>('kernel.calendar.connection_state', { connectionId: job.connectionId }, options);
+      if (current?.status === 'disconnecting') {
+        const gone = await adapter.revoke(result.secret).catch(() => ({ failed: 'NETWORK' }) as const);
+        if ('failed' in gone) console.error(`[calendar-sync] connection ${job.connectionId.slice(0, 8)} could not revoke the pair a refresh made: ${gone.failed}`);
+        // A member who connected the same account again while that call was out has a grant it just ended too: that
+        // connection is expired now, so they connect again at once instead of finding out at the next sync.
+        if ('revoked' in gone && gone.revoked) {
+          const after = await deps.runtime.query<{ status: string; updatedAt: string } | null>('kernel.calendar.connection_state', { connectionId: job.connectionId }, options);
+          if (after && after.status === 'active' && after.updatedAt !== current.updatedAt) {
+            await deps.runtime.execute('kernel.calendar.mark_failed', { connectionId: job.connectionId, status: 'expired', reason: 'grant revoked while reconnecting: connect again', ifVersion: after.updatedAt }, options);
+          }
+        }
+      }
+      return { outcome: 'skipped', reason: 'changed' };
+    }
+    version = stored.updatedAt;
     secret = result.secret;
     renewed = true;
     return null;

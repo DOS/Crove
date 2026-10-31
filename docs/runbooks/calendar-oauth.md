@@ -33,6 +33,8 @@ Each step has a check and a rollback. Never write a secret, a project id or an i
 
 ## When something goes wrong
 
+- **Closing an organization.** An organization being offboarded is not swept: its calendar connections, sealed tokens and addresses stay until the org purge deletes them, and their grants are never revoked (a disconnect made once `kernel.org.offboard` has run is marked but not finished, and only owners can enter an offboarding org). Before running the offboard, have every member disconnect their calendar and wait 15 minutes for the sweep: the audit rows of `kernel.calendar.finish_disconnect` confirm each one. Reopening the org (a staff step) lets the sweep take its connections up again.
+
 - **The button is missing.** Both `CALENDAR_GOOGLE_*` variables are set on the API, `CREDENTIAL_KEY` is set, and the user is not a viewer.
 - **"Quyền truy cập đã bị thu hồi hoặc hết hạn".** Google refused the grant (the member revoked the app, or a test-mode grant ran 7 days). The sealed token is dropped; the member connects again. The busy blocks stay until then, so time that may still be busy is not offered.
 - **"Lần đồng bộ gần nhất gặp lỗi".** A passing failure (a quota, an outage); the next sweep retries. The log line is `[calendar-sync] connection <id prefix>` with an error name, never a token.

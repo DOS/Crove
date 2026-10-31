@@ -90,6 +90,64 @@ describe('runCalendarSync', () => {
     expect(calls.some((c) => c.name === 'kernel.calendar.refresh')).toBe(false);
   });
 
+  // A runtime whose connection state answers in turn: the sync reads it once before the credential and once after.
+  const turns = (states: Array<{ status: string; provider: string; expiresAt: string | null; updatedAt: string } | null>, credential: unknown, refreshed = true) => {
+    const base = fakeRuntime(states[0] ?? null, credential);
+    const inner = base.runtime as unknown as { query: (name: string, input: Record<string, unknown>) => Promise<unknown>; execute: (name: string, input: Record<string, unknown>) => Promise<unknown> };
+    const baseQuery = inner.query.bind(inner);
+    const baseExecute = inner.execute.bind(inner);
+    let n = 0;
+    inner.query = async (name, input) => {
+      if (name !== 'kernel.calendar.connection_state') return baseQuery(name, input);
+      base.calls.push({ kind: 'query', name, input });
+      return states[Math.min(n++, states.length - 1)] ?? null;
+    };
+    inner.execute = async (name, input) => (name === 'kernel.calendar.refresh' ? (base.calls.push({ kind: 'execute', name, input }), { refreshed, ...(refreshed ? { updatedAt: '2026-11-03T05:30:00.000Z' } : {}) }) : baseExecute(name, input));
+    return base;
+  };
+
+  it('does not sync with a token read for a connection that was disconnected or connected again in between', async () => {
+    for (const second of [{ ...fresh, status: 'disconnecting' }, { ...fresh, updatedAt: '2026-11-03T05:10:00.000Z' }, null]) {
+      const { runtime, calls } = turns([fresh, second], seal(SECRET));
+      const a = adapter();
+      expect(await run(runtime, a)).toEqual({ outcome: 'skipped', reason: 'changed' });
+      expect(a.busyCalls).toEqual([]);
+      expect(calls.some((c) => c.kind === 'execute')).toBe(false);
+    }
+  });
+
+  it('revokes the pair a refresh made for a connection that was disconnected meanwhile, and leaves a reconnected one alone', async () => {
+    const soon = { ...fresh, expiresAt: new Date(NOW.getTime() + 60_000).toISOString() };
+    const revoked: string[] = [];
+    const a = adapter({ revoke: async (secret) => (revoked.push(secret), { revoked: true }) });
+    // The state reads: before the credential, after it, then after the refresh was refused (now disconnecting).
+    const going = { ...soon, status: 'disconnecting' };
+    const gone = turns([soon, soon, going], seal(SECRET), false);
+    expect(await run(gone.runtime, a)).toEqual({ outcome: 'skipped', reason: 'changed' });
+    expect(revoked).toEqual([JSON.stringify({ accessToken: 'a-2', refreshToken: 'r-1' })]);
+    // The revoke follows the refused refresh, not the other way round.
+    const order = gone.calls.map((c) => c.name);
+    expect(order.indexOf('kernel.calendar.refresh')).toBeGreaterThan(-1);
+    // A connection that is gone, or expired, has nothing to revoke: the purge or the finish already ran, or the grant is dead.
+    for (const other of [null, { ...soon, status: 'expired' }]) {
+      revoked.length = 0;
+      const none = turns([soon, soon, other], seal(SECRET), false);
+      expect(await run(none.runtime, a)).toEqual({ outcome: 'skipped', reason: 'changed' });
+      expect(revoked).toEqual([]);
+    }
+    // Connected again instead: that connection's own grant is not touched.
+    revoked.length = 0;
+    const again = turns([soon, soon, { ...soon, updatedAt: '2026-11-03T05:20:00.000Z' }], seal(SECRET), false);
+    expect(await run(again.runtime, a)).toEqual({ outcome: 'skipped', reason: 'changed' });
+    expect(revoked).toEqual([]);
+    // Disconnecting when read, then connected again while the revoke was out: that grant is gone too, so the connection is
+    // expired at once, for the version it is at now.
+    const reconnected = { ...soon, updatedAt: '2026-11-03T05:25:00.000Z' };
+    const during = turns([soon, soon, going, reconnected], seal(SECRET), false);
+    expect(await run(during.runtime, a)).toEqual({ outcome: 'skipped', reason: 'changed' });
+    expect(during.calls.at(-1)).toMatchObject({ name: 'kernel.calendar.mark_failed', input: { status: 'expired', ifVersion: reconnected.updatedAt } });
+  });
+
   it('renews a token that runs out within five minutes, seals the new pair, then syncs with it', async () => {
     const soon = { ...fresh, expiresAt: new Date(NOW.getTime() + 60_000).toISOString() };
     const { runtime, calls } = fakeRuntime(soon, seal(SECRET));
