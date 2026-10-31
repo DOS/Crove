@@ -191,7 +191,7 @@ import { zStatementsHtkkCheck, zStatementsHtkkYear } from './statements-htkk.ts'
 import { zTaxObligationMark, zTaxProfile } from './tax-calendar.ts';
 import { zBookEntity, zLegalEntity, zLegalEntityInput } from './legal-entity.ts';
 import { zMemberRoles, zRoleAssignInput } from './roles.ts';
-import { zCalendarEventAdd, zCalendarEventCancel, zCalendarEventView, zCalendarRange, zCalendarSlot, zCalendarSlotsQuery, zMyCalendar, zWorkingHours } from './calendar.ts';
+import { zCalendarConnectionView, zCalendarEventAdd, zCalendarEventCancel, zCalendarEventView, zCalendarRange, zCalendarSlot, zCalendarSlotsQuery, zCalendarOAuthProvider, zMyCalendar, zWorkingHours } from './calendar.ts';
 import { zBookingCancel, zBookingItem, zBookingListQuery, zBookingMove, zBookingSuggestInput, zBookingSuggestion, zEventType, zEventTypeInput, zEventTypeSetActive, zEventTypeUpdate } from './crm.ts';
 import {
   zNote,
@@ -349,6 +349,18 @@ export const contract = {
     saveHours: oc.input(zWorkingHours).output(z.strictObject({ hours: zWorkingHours, saved: z.boolean() })),
     addEvent: oc.input(zCalendarEventAdd).output(zCalendarEventView),
     cancelEvent: oc.input(zCalendarEventCancel).output(z.strictObject({ eventId: zId, cancelled: z.literal(true) })),
+    // Outside calendars (#2123): the OAuth providers this server offers (empty without the app credentials), the
+    // member's own connections, and connect and disconnect. Start returns where to send the browser; the provider
+    // sends it back to /calendar/oauth/:provider/callback, whose screen finishes the attempt with the code and state.
+    providers: oc.output(z.array(zCalendarOAuthProvider)),
+    connections: oc.output(z.array(zCalendarConnectionView)),
+    connectStart: oc
+      .input(z.strictObject({ provider: zCalendarOAuthProvider }))
+      .output(z.strictObject({ authorizeUrl: z.url({ protocol: /^https$/ }), state: zOAuthState, expiresAt: z.iso.datetime({ offset: true }) })),
+    connectFinish: oc
+      .input(z.strictObject({ provider: zCalendarOAuthProvider, state: zOAuthState, code: z.string().min(1).max(2048) }))
+      .output(z.strictObject({ connectionId: zId, displayName: z.string(), reconnected: z.boolean() })),
+    disconnect: oc.input(z.strictObject({ connectionId: zId })).output(z.strictObject({ connectionId: zId, disconnected: z.literal(true) })),
   },
   taxRegistry: {
     lookup: oc.input(z.object({ taxCode: z.string().trim().max(20) })).output(zTaxRegistryEntry),

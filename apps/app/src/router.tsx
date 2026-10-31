@@ -53,6 +53,7 @@ import { parsePeriodSearch } from './lib/vat.ts';
 import { parseVouchersSearch } from './lib/vouchers.ts';
 import { SocialChannelsPage } from './routes/social-channels.tsx';
 import { OAuthCallbackPage } from './routes/social-oauth.tsx';
+import { CalendarOAuthCallbackPage } from './routes/calendar-oauth.tsx';
 import { SocialComposePage, SocialPostPage } from './routes/social-post.tsx';
 import { SocialSharePage } from './routes/social-share.tsx';
 import { SHARE_PATH, forgetShare, pendingShare, readShareFragment, readShareOrg, rememberShare } from './lib/social-share.ts';
@@ -260,6 +261,17 @@ const oauthCallbackRoute = createRoute({
   component: OAuthCallbackPage,
 });
 
+// Where a calendar provider's OAuth dialog sends the browser back (#2123); the attempt remembers its org the same way.
+const calendarOAuthCallbackRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/calendar/oauth/$provider/callback',
+  beforeLoad: async ({ matches }) => {
+    requireInstalledOutside(matches);
+    await requireAuth();
+  },
+  component: CalendarOAuthCallbackPage,
+});
+
 const onboardingRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/onboarding',
@@ -440,6 +452,7 @@ const routeTree = rootRoute.addChildren([
   onboardingRoute,
   clientsRoute,
   oauthCallbackRoute,
+  calendarOAuthCallbackRoute,
   orgRoute.addChildren([orgIndexRoute, overviewRoute, inboxRoute, inboxDetailRoute, documentsRoute, customersRoute, vendorsRoute, journalRoute, vouchersRoute, fixedAssetsRoute, vatRoute, portalListRoute, ledgerRoute, bankRoute, openingBalanceRoute, socialRoute.addChildren([socialIndexRoute, socialNewRoute, socialChannelsRoute, socialImportRoute, socialSnippetsRoute, socialLabelsRoute, socialIdeasRoute, socialFeedsRoute, socialBioRoute, socialNotificationsRoute, socialPostRoute]), notificationsRoute, agentsRoute, tasksRoute, taskDetailRoute, bookingsRoute, notesRoute, myWorkRoute, settingsRoute, auditRoute, personalDataRoute, guideRoute]),
 ]);
 

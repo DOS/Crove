@@ -1,0 +1,215 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Google Calendar free/busy (issue #2123, part of #1374), written from the Google Calendar API (freeBusy.query) and
+// Google OAuth 2.0 docs. It uses an OAuth web client the operator makes for it: CALENDAR_GOOGLE_CLIENT_ID and
+// CALENDAR_GOOGLE_CLIENT_SECRET, never the YouTube or Business Profile project's.
+//
+// Connect: Google's consent screen for calendar.freebusy (busy intervals only: no titles, no attendees) plus the
+// account's email, with offline access so a refresh token comes back. The access token lives an hour; the sync renews
+// it a few minutes before it runs out. One grant is one Google account, its primary calendar.
+// Busy: POST /calendar/v3/freeBusy for the primary calendar over a range; the answer is a list of start and end
+// instants and nothing else.
+import { ConnectorError, allowlistedFetch, type AuthorizeInput, type ExchangeInput, type Fetch } from './oauth.ts';
+
+export const GOOGLE_CALENDAR_HOSTS = ['oauth2.googleapis.com', 'www.googleapis.com'] as const;
+export const GOOGLE_CALENDAR_FREEBUSY_SCOPE = 'https://www.googleapis.com/auth/calendar.freebusy';
+const AUTH_SCOPES = ['openid', 'email', GOOGLE_CALENDAR_FREEBUSY_SCOPE] as const;
+
+export interface GoogleCalendarAppConfig {
+  clientId: string;
+  clientSecret: string;
+}
+
+export interface CalendarAccount {
+  // The account's address, lowercased.
+  externalAccount: string;
+  displayName: string;
+  scopes: string[];
+  expiresAt: Date | null;
+  // The tokens as the kernel seals them; never logged.
+  secret: string;
+}
+
+export interface BusyInterval {
+  start: string;
+  end: string;
+}
+
+// refused: the provider will not serve this grant any more (revoked or expired), the member reconnects; failed: it did
+// not answer well (a quota, an outage), the next sync tries again.
+export type CalendarBusyResult = { busy: BusyInterval[] } | { refused: string } | { failed: string };
+export type CalendarRefreshResult = { secret: string; expiresAt: Date | null } | { refused: string } | { failed: string };
+
+// What one outside calendar provider offers the kernel: the connect dialog, a renewed token, and busy times.
+export interface CalendarAdapter {
+  readonly provider: 'google' | 'microsoft' | 'caldav';
+  // The OAuth provider id of the connect dialog (the oauth_state row and the redirect URI carry it).
+  readonly oauthProvider: 'google_calendar' | 'microsoft_calendar';
+  readonly pkce: boolean;
+  authorizeUrl(input: AuthorizeInput): string;
+  // Throws ConnectorError for a provider answer; never puts a token or the code in the error.
+  exchange(input: ExchangeInput): Promise<CalendarAccount>;
+  refresh(secret: string): Promise<CalendarRefreshResult>;
+  busy(secret: string, from: Date, to: Date): Promise<CalendarBusyResult>;
+}
+
+export interface GoogleCalendarSecret {
+  accessToken: string;
+  refreshToken: string;
+}
+
+export function googleCalendarSecretOf(secret: string): GoogleCalendarSecret | null {
+  try {
+    const s = JSON.parse(secret) as Partial<GoogleCalendarSecret>;
+    return typeof s.accessToken === 'string' && s.accessToken && typeof s.refreshToken === 'string' && s.refreshToken ? { accessToken: s.accessToken, refreshToken: s.refreshToken } : null;
+  } catch {
+    return null;
+  }
+}
+
+class GoogleCalendarError extends Error {
+  readonly status: number;
+  readonly reason: string | undefined;
+  constructor(status: number, body: Record<string, unknown> | null) {
+    const error = body?.error;
+    const nested = error !== null && typeof error === 'object' ? (error as { message?: unknown; status?: unknown; errors?: { reason?: unknown }[] }) : null;
+    super(typeof nested?.message === 'string' ? nested.message : typeof body?.error_description === 'string' ? body.error_description : `Google answered ${status}`);
+    this.name = 'GoogleCalendarError';
+    this.status = status;
+    const reason = nested?.errors?.find((e) => typeof e?.reason === 'string')?.reason ?? nested?.status ?? (typeof error === 'string' ? error : undefined);
+    this.reason = typeof reason === 'string' ? reason : undefined;
+  }
+}
+
+interface TokenAnswer {
+  access_token?: unknown;
+  refresh_token?: unknown;
+  expires_in?: unknown;
+  scope?: unknown;
+}
+
+const expiryOf = (a: TokenAnswer, now = Date.now()) => {
+  const seconds = Number(a.expires_in);
+  return new Date(now + (Number.isFinite(seconds) && seconds > 0 ? seconds : 3600) * 1000);
+};
+
+export class GoogleCalendarAdapter implements CalendarAdapter {
+  readonly provider = 'google' as const;
+  readonly oauthProvider = 'google_calendar' as const;
+  readonly pkce = true;
+  private readonly fetch: Fetch;
+  private readonly app: GoogleCalendarAppConfig;
+
+  constructor(app: GoogleCalendarAppConfig, fetchImpl?: Fetch) {
+    if (!app.clientId) throw new Error('missing Google client id');
+    if (!app.clientSecret) throw new Error('missing Google client secret');
+    this.app = app;
+    this.fetch = allowlistedFetch(GOOGLE_CALENDAR_HOSTS, fetchImpl);
+  }
+
+  authorizeUrl(input: AuthorizeInput): string {
+    const url = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+    url.searchParams.set('client_id', this.app.clientId);
+    url.searchParams.set('redirect_uri', input.redirectUri);
+    url.searchParams.set('response_type', 'code');
+    url.searchParams.set('scope', AUTH_SCOPES.join(' '));
+    url.searchParams.set('state', input.state);
+    // Offline access with consent each time, so Google returns a refresh token even for an account connected before.
+    url.searchParams.set('access_type', 'offline');
+    url.searchParams.set('prompt', 'consent');
+    url.searchParams.set('include_granted_scopes', 'false');
+    if (input.codeChallenge) {
+      url.searchParams.set('code_challenge', input.codeChallenge);
+      url.searchParams.set('code_challenge_method', 'S256');
+    }
+    return url.toString();
+  }
+
+  private async token(form: Record<string, string>): Promise<TokenAnswer> {
+    const response = await this.fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
+      body: new URLSearchParams({ client_id: this.app.clientId, client_secret: this.app.clientSecret, ...form }).toString(),
+    });
+    const json = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+    if (!response.ok || !json) throw new GoogleCalendarError(response.status, json);
+    return json as TokenAnswer;
+  }
+
+  private async call(method: 'GET' | 'POST', url: string, token: string, json?: unknown): Promise<Record<string, unknown>> {
+    const headers: Record<string, string> = { authorization: `Bearer ${token}`, accept: 'application/json' };
+    if (json !== undefined) headers['content-type'] = 'application/json; charset=UTF-8';
+    const response = await this.fetch(url, { method, headers, signal: AbortSignal.timeout(30_000), ...(json === undefined ? {} : { body: JSON.stringify(json) }) });
+    const body = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+    if (!response.ok) throw new GoogleCalendarError(response.status, body);
+    return body ?? {};
+  }
+
+  async exchange(input: ExchangeInput, now = Date.now()): Promise<CalendarAccount> {
+    const answer = await this.token({ grant_type: 'authorization_code', code: input.code, redirect_uri: input.redirectUri, ...(input.codeVerifier ? { code_verifier: input.codeVerifier } : {}) }).catch((error: unknown) => {
+      throw connectorError(error, true);
+    });
+    if (typeof answer.access_token !== 'string' || !answer.access_token) throw new ConnectorError('provider', 'Google answered without an access token');
+    if (typeof answer.refresh_token !== 'string' || !answer.refresh_token) throw new ConnectorError('provider', 'Google answered without a refresh token');
+    const granted = typeof answer.scope === 'string' ? answer.scope.split(' ').filter(Boolean) : [];
+    // Google lets the member untick a permission on the consent screen.
+    if (!granted.includes(GOOGLE_CALENDAR_FREEBUSY_SCOPE)) throw new ConnectorError('denied', 'Google did not grant the calendar permission this app needs', 'MISSING_PERMISSION');
+    const info = await this.call('GET', 'https://www.googleapis.com/oauth2/v3/userinfo', answer.access_token).catch((error: unknown) => {
+      throw connectorError(error);
+    });
+    const email = typeof info.email === 'string' ? info.email.trim().toLowerCase() : '';
+    if (!email || info.email_verified === false) throw new ConnectorError('denied', 'Google did not give a verified email for this account', 'NO_EMAIL');
+    const secret: GoogleCalendarSecret = { accessToken: answer.access_token, refreshToken: answer.refresh_token };
+    return { externalAccount: email.slice(0, 200), displayName: email.slice(0, 200), scopes: granted.slice(0, 20), expiresAt: expiryOf(answer, now), secret: JSON.stringify(secret) };
+  }
+
+  async refresh(secret: string): Promise<CalendarRefreshResult> {
+    const s = googleCalendarSecretOf(secret);
+    if (!s) return { refused: 'NO_REFRESH_TOKEN' };
+    try {
+      const answer = await this.token({ grant_type: 'refresh_token', refresh_token: s.refreshToken });
+      if (typeof answer.access_token !== 'string' || !answer.access_token) return { failed: 'NO_ACCESS_TOKEN' };
+      // Google may hand out a new refresh token; otherwise the old one stays.
+      const next: GoogleCalendarSecret = { accessToken: answer.access_token, refreshToken: typeof answer.refresh_token === 'string' && answer.refresh_token ? answer.refresh_token : s.refreshToken };
+      return { secret: JSON.stringify(next), expiresAt: expiryOf(answer) };
+    } catch (error) {
+      // invalid_grant: the grant was revoked, or expired (an app in testing mode gets 7-day refresh tokens).
+      if (error instanceof GoogleCalendarError && error.reason === 'invalid_grant') return { refused: 'invalid_grant' };
+      return { failed: error instanceof GoogleCalendarError ? (error.reason ?? String(error.status)) : 'NETWORK' };
+    }
+  }
+
+  async busy(secret: string, from: Date, to: Date): Promise<CalendarBusyResult> {
+    const s = googleCalendarSecretOf(secret);
+    if (!s) return { refused: 'NO_ACCESS_TOKEN' };
+    let body: Record<string, unknown>;
+    try {
+      body = await this.call('POST', 'https://www.googleapis.com/calendar/v3/freeBusy', s.accessToken, {
+        timeMin: from.toISOString(),
+        timeMax: to.toISOString(),
+        items: [{ id: 'primary' }],
+      });
+    } catch (error) {
+      if (error instanceof GoogleCalendarError) return error.status === 401 ? { refused: 'invalid_token' } : { failed: error.reason ?? String(error.status) };
+      return { failed: 'NETWORK' };
+    }
+    const primary = (body.calendars as Record<string, { busy?: unknown; errors?: unknown }> | undefined)?.primary;
+    if (!primary || (Array.isArray(primary.errors) && primary.errors.length > 0) || !Array.isArray(primary.busy)) return { failed: 'NO_FREEBUSY' };
+    const busy: BusyInterval[] = [];
+    for (const b of primary.busy as Array<{ start?: unknown; end?: unknown }>) {
+      if (typeof b?.start !== 'string' || typeof b.end !== 'string') continue;
+      const start = Date.parse(b.start);
+      const end = Date.parse(b.end);
+      if (Number.isFinite(start) && Number.isFinite(end) && end > start) busy.push({ start: new Date(start).toISOString(), end: new Date(end).toISOString() });
+    }
+    return { busy };
+  }
+}
+
+function connectorError(error: unknown, codeStep = false): ConnectorError {
+  if (error instanceof ConnectorError) return error;
+  if (error instanceof GoogleCalendarError) {
+    if (codeStep && error.reason === 'invalid_grant') return new ConnectorError('invalid_grant', 'Google refused the authorization code', error.reason);
+    return new ConnectorError(error.status === 403 || error.status === 429 ? 'denied' : 'provider', error.message, error.reason ?? String(error.status));
+  }
+  return new ConnectorError('provider', `Google could not be reached: ${error instanceof Error ? `${error.name}: ${error.message}` : typeof error}`);
+}

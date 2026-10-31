@@ -8,7 +8,7 @@ import { vietnamToday } from '@crove/kernel-contract';
 import { DomainError, inboundKey, type AgentProgram, type BlobStore, type CredentialBroker, type Runtime } from '@crove/kernel-runtime';
 import { KERNEL_NOTIFYING_EVENTS, PROPOSAL_NUDGE_SWEEP_MS, runAgentWake, sweepProposalNudges, type UsageLimits } from '@crove/kernel';
 import { aiDocumentFailure, type InvoiceReader } from '@crove/agent';
-import type { Publisher, Refresher } from '@crove/channel';
+import type { CalendarAdapter, Publisher, Refresher } from '@crove/channel';
 import { postMessage, type WebhookTarget } from './alert.ts';
 import { REFRESH_SWEEP_MS, refreshChannels } from './channel-refresh.ts';
 import { RESEAL_SWEEP_MS, resealCredentials, unopenableKeysLog } from './credential-reseal.ts';
@@ -53,6 +53,7 @@ import {
 import type { SessionRevoker, SignOutTarget } from './sessions.ts';
 import { opsAlert } from './ops-alert.ts';
 import { BANK_FEEDS_DUE_PAGE, bankFeedsDue, runBankFeedSync, type BankFeedSyncJob } from './bank-feed-sync.ts';
+import { CALENDAR_SYNC_SWEEP_MS, syncCalendars } from './calendar-sync.ts';
 import { BANK_FEED_NOTICE_CLAIM, claimBankFeedNotices } from './bank-feed-webhook.ts';
 import type { BankFeedProvider } from '@crove/bank-feed';
 
@@ -348,6 +349,8 @@ export interface WorkerDeps {
     publishers: Readonly<Record<string, Publisher>>;
     refreshers?: Readonly<Record<string, Refresher>>;
     bankFeeds?: Readonly<Record<string, BankFeedProvider>>;
+    // The outside calendar adapters this deployment offers (#2123), by OAuth provider id.
+    calendars?: Readonly<Partial<Record<string, CalendarAdapter>>>;
   };
   // PUBLIC_URL, where Social short links (#706) point.
   publicUrl?: string;
@@ -1378,6 +1381,37 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   const refreshTimer = Object.keys(refreshers).length > 0 ? setInterval(() => void refreshSweep(), REFRESH_SWEEP_MS) : null;
   void refreshSweep();
 
+  // Outside calendars (#2123, #1374): the busy times of every active connection are read every 15 minutes, a sweep at a
+  // time across worker processes. The adapters are the deployment's; with none on, nothing runs.
+  const calendars = channels?.calendars ?? {};
+  // A session advisory lock on one connection of the worker's pool, so two worker processes never sweep at once.
+  const calendarExclusive = <T>(run: () => Promise<T>) =>
+    deps.workerDb.connection().execute(async (db) => {
+      const { rows } = await sql<{ locked: boolean }>`SELECT pg_catalog.pg_try_advisory_lock(pg_catalog.hashtextextended('crove.calendar-sync', 0)) AS locked`.execute(db);
+      if (!rows[0]?.locked) return { ran: false as const };
+      try {
+        return { ran: true as const, value: await run() };
+      } finally {
+        await sql`SELECT pg_catalog.pg_advisory_unlock(pg_catalog.hashtextextended('crove.calendar-sync', 0))`.execute(db);
+      }
+    });
+  let calendarSyncing = false;
+  const calendarSweep = async () => {
+    if (calendarSyncing || !channels) return;
+    calendarSyncing = true;
+    try {
+      const done = await syncCalendars({ runtime: deps.runtime, broker: channels.broker, workerDb: deps.workerDb, adapters: calendars, exclusive: calendarExclusive });
+      if (done.synced + done.expired + done.retry > 0) console.log(`[calendar-sync] synced ${done.synced}, expired ${done.expired}, to retry ${done.retry}`);
+    } catch (error) {
+      console.error('[calendar-sync] sweep', error instanceof Error ? error.name : typeof error);
+    } finally {
+      calendarSyncing = false;
+    }
+  };
+  const calendarTimer = Object.keys(calendars).length > 0 ? setInterval(() => void calendarSweep(), CALENDAR_SYNC_SWEEP_MS) : null;
+  calendarTimer?.unref();
+  void calendarSweep();
+
   // Sizes of Social images uploaded before sizes were read at upload (#668): a batch every 10 minutes, a round a day.
   const sizes = { after: null as string | null, pausedUntil: 0 };
   let sizing = false;
@@ -1922,6 +1956,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     if (reportTimer) clearInterval(reportTimer);
     if (feedTimer) clearInterval(feedTimer);
     if (refreshTimer) clearInterval(refreshTimer);
+    if (calendarTimer) clearInterval(calendarTimer);
     if (resealTimer) clearInterval(resealTimer);
     if (metricsTimer) clearInterval(metricsTimer);
     if (sizeTimer) clearInterval(sizeTimer);

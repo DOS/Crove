@@ -1,0 +1,429 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Outside calendars a member connects (issue #2123, part of #1374, plan docs/plan/calendar.md decision CAL-4): the busy
+// times of a connected Google calendar block booking slots.
+//
+// Who may do what:
+// - A member who edits (owner, admin, member) connects and disconnects their own calendar and lists their own
+//   connections; nobody sees another member's (the table's row policy). No query returns a credential.
+// - The connect command never sees a token: the OAuth callback seals it with the credential broker for the binding
+//   (org, calendar provider, account) and passes the envelope, which the calendar_credential_put definer stores.
+// - Only the worker reads a credential back (kernel.calendar.credential, system actor, calendar_credential_get granted
+//   to crove_worker alone), and only while the member is still in the org.
+// - The worker's sync replaces the connection's busy blocks as a set (kernel.calendar.busy_replace). A block holds a
+//   start and an end, never a title or an attendee.
+import { sql } from 'kysely';
+import { z } from 'zod';
+import { CALENDAR_PROVIDERS, zCalendarOAuthProvider, zId, type CalendarConnectionView } from '@crove/kernel-contract';
+import type { MemberRole } from '@crove/db';
+import { DomainError, defineCommand, defineQuery, type CommandContext } from '@crove/kernel-runtime';
+
+const EDITORS: readonly MemberRole[] = ['owner', 'admin', 'member'];
+
+const zKeyId = z.string().regex(/^[A-Za-z0-9_.-]{1,64}$/);
+// The sealed envelope as base64; its size is checked again by the column (64 KiB).
+const zEnvelope = z.string().regex(/^[A-Za-z0-9+/]+={0,2}$/).max(90_000);
+const zStateHash = z.string().regex(/^sha256:[0-9a-f]{64}$/);
+const zInstant = z.iso.datetime({ offset: true });
+// 10 minutes, the longest a member takes in a provider's dialog.
+const OAUTH_ATTEMPT_SECONDS = 600;
+// A block is at most this long (the table allows 31 days); a longer busy interval is cut into pieces.
+const PIECE_MS = 30 * 86_400_000;
+const MAX_BUSY = 20_000;
+
+function requireUser(ctx: CommandContext): string {
+  if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới kết nối được lịch');
+  return ctx.actor.userId;
+}
+
+// Errors the calendar_* definers raise, as domain errors. Anything else goes through the runtime's mapping.
+function calendarError(error: unknown): never {
+  const message = (error as { message?: unknown } | null)?.message;
+  switch (message) {
+    case 'CALENDAR_NOT_FOUND':
+      throw new DomainError('CALENDAR_NOT_FOUND', 404, 'Không tìm thấy lịch đã kết nối này');
+    case 'CALENDAR_NOT_ACTIVE':
+      throw new DomainError('CALENDAR_NOT_ACTIVE', 409, 'Lịch này không còn hoạt động, hãy kết nối lại');
+    case 'CALENDAR_OWNER_LEFT':
+      throw new DomainError('CALENDAR_OWNER_LEFT', 409, 'Chủ của lịch này không còn là thành viên của tổ chức');
+    case 'CALENDAR_FORBIDDEN':
+      throw new DomainError('FORBIDDEN', 403, 'Bạn chỉ quản lý được lịch của chính mình');
+    default:
+      throw error;
+  }
+}
+
+function oauthError(error: unknown): never {
+  const message = (error as { message?: unknown } | null)?.message;
+  switch (message) {
+    case 'OAUTH_FORBIDDEN':
+      throw new DomainError('FORBIDDEN', 403, 'Người xem không kết nối được lịch');
+    case 'OAUTH_TOO_MANY':
+      throw new DomainError('OAUTH_TOO_MANY', 429, 'Bạn đã mở quá nhiều lượt kết nối chưa hoàn tất, hãy thử lại sau ít phút');
+    case 'OAUTH_STATE_INVALID':
+      throw new DomainError('OAUTH_STATE_INVALID', 400, 'Lượt kết nối này không hợp lệ hoặc không phải của bạn, hãy bắt đầu lại');
+    case 'OAUTH_STATE_USED':
+      throw new DomainError('OAUTH_STATE_USED', 409, 'Lượt kết nối này đã được dùng, hãy bắt đầu lại');
+    case 'OAUTH_STATE_EXPIRED':
+      throw new DomainError('OAUTH_STATE_EXPIRED', 409, 'Lượt kết nối đã hết hạn, hãy bắt đầu lại');
+    default:
+      throw error;
+  }
+}
+
+export const calendarOAuthBegin = defineCommand({
+  name: 'kernel.calendar.oauth_begin',
+  input: z.strictObject({ provider: zCalendarOAuthProvider, stateHash: zStateHash, codeVerifier: z.string().regex(/^[A-Za-z0-9._~-]{43,128}$/).nullable() }),
+  risk: 'R1',
+  sideEffect: 'internal',
+  access: EDITORS,
+  handler: async (ctx, input) => {
+    requireUser(ctx);
+    const { rows } = await sql<{ id: string }>`
+      SELECT crove_kernel.calendar_oauth_begin(${input.provider}, ${input.stateHash}, ${input.codeVerifier}, ${OAUTH_ATTEMPT_SECONDS}::integer) AS id`
+      .execute(ctx.trx)
+      .catch(oauthError);
+    const attemptId = rows[0]?.id;
+    if (!attemptId) throw new DomainError('INTERNAL', 500, 'Lỗi hệ thống');
+    // The audit row names the attempt and provider only: never the hash or the verifier.
+    ctx.audit({ attempt_id: attemptId, provider: input.provider });
+    return { attemptId, expiresAt: new Date(ctx.now.getTime() + OAUTH_ATTEMPT_SECONDS * 1000).toISOString() };
+  },
+});
+
+export const calendarOAuthConsume = defineCommand({
+  name: 'kernel.calendar.oauth_consume',
+  input: z.strictObject({ provider: zCalendarOAuthProvider, stateHash: zStateHash }),
+  risk: 'R1',
+  sideEffect: 'internal',
+  access: EDITORS,
+  handler: async (ctx, input) => {
+    requireUser(ctx);
+    const { rows } = await sql<{ code_verifier: string | null }>`
+      SELECT code_verifier FROM crove_kernel.calendar_oauth_consume(${input.provider}, ${input.stateHash})`
+      .execute(ctx.trx)
+      .catch(oauthError);
+    if (rows.length !== 1) throw new DomainError('INTERNAL', 500, 'Lỗi hệ thống');
+    ctx.audit({ provider: input.provider });
+    return { codeVerifier: rows[0]?.code_verifier ?? null };
+  },
+});
+
+export const zCalendarConnect = z.strictObject({
+  provider: z.enum(CALENDAR_PROVIDERS),
+  externalAccount: z.string().trim().toLowerCase().min(1).max(200),
+  displayName: z.string().trim().min(1).max(200),
+  scopes: z.array(z.string().min(1).max(200)).max(20),
+  expiresAt: zInstant.nullable(),
+  credential: z.strictObject({ keyId: zKeyId, envelope: zEnvelope }),
+});
+
+export const calendarConnect = defineCommand({
+  name: 'kernel.calendar.connect',
+  input: zCalendarConnect,
+  risk: 'R2',
+  sideEffect: 'external',
+  access: EDITORS,
+  handler: async (ctx, input) => {
+    const userId = requireUser(ctx);
+    // Two connects of one account at once serialize here, so the second finds the first's row and reconnects
+    // instead of failing on the unique index.
+    await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`crove.calendar:${ctx.orgId}:${userId}:${input.provider}:${input.externalAccount}`}, 0))`.execute(ctx.trx);
+    const values = { display_name: input.displayName, scopes: input.scopes, expires_at: input.expiresAt, status: 'active' as const, status_reason: null, updated_at: ctx.now };
+    const existing = await ctx.trx
+      .selectFrom('crove_kernel.calendar_connection')
+      .select('id')
+      .where('org_id', '=', ctx.orgId)
+      .where('user_id', '=', userId)
+      .where('provider', '=', input.provider)
+      .where('external_account', '=', input.externalAccount)
+      .forUpdate()
+      .executeTakeFirst();
+    let id: string;
+    if (existing) {
+      await ctx.trx.updateTable('crove_kernel.calendar_connection').set(values).where('org_id', '=', ctx.orgId).where('id', '=', existing.id).execute();
+      id = existing.id;
+    } else {
+      const row = await ctx.trx
+        .insertInto('crove_kernel.calendar_connection')
+        .values({ org_id: ctx.orgId, user_id: userId, provider: input.provider, external_account: input.externalAccount, ...values })
+        .returning('id')
+        .executeTakeFirstOrThrow();
+      id = row.id;
+    }
+    await sql`SELECT crove_kernel.calendar_credential_put(${id}::uuid, ${input.credential.keyId}, decode(${input.credential.envelope}, 'base64'))`
+      .execute(ctx.trx)
+      .catch(calendarError);
+    ctx.audit({ connection_id: id, provider: input.provider, reconnected: Boolean(existing) });
+    return { connectionId: id, reconnected: Boolean(existing) };
+  },
+});
+
+export const calendarDisconnect = defineCommand({
+  name: 'kernel.calendar.disconnect',
+  input: z.strictObject({ connectionId: zId }),
+  risk: 'R2',
+  sideEffect: 'external',
+  // Every role, a viewer included: a member demoted after connecting can still take their own calendar away.
+  access: ['owner', 'admin', 'member', 'viewer'],
+  target: (input) => ({ type: 'kernel.calendar_connection', id: input.connectionId }),
+  handler: async (ctx, input) => {
+    const userId = requireUser(ctx);
+    // The row policy shows a member only their own, so another member's connection is not found.
+    const row = await ctx.trx
+      .selectFrom('crove_kernel.calendar_connection')
+      .select(['provider', 'user_id'])
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.connectionId)
+      .forUpdate()
+      .executeTakeFirst();
+    if (!row || row.user_id !== userId) throw new DomainError('CALENDAR_NOT_FOUND', 404, 'Không tìm thấy lịch đã kết nối này');
+    // The tokens first, then the row: its foreign keys delete the busy blocks it made.
+    await sql`SELECT crove_kernel.calendar_credential_drop(${input.connectionId}::uuid)`.execute(ctx.trx).catch(calendarError);
+    await ctx.trx.deleteFrom('crove_kernel.calendar_connection').where('org_id', '=', ctx.orgId).where('id', '=', input.connectionId).execute();
+    ctx.audit({ connection_id: input.connectionId, provider: row.provider });
+    return { connectionId: input.connectionId, disconnected: true as const };
+  },
+});
+
+// The worker's sync could not go on: the provider refused the token (expired: the member revoked the app and reconnects)
+// or failed in some other way (retry: the connection stays active, says why, and the next sweep tries again). An
+// expired connection loses its sealed token, which is dead anyway; its busy blocks stay until the member reconnects or
+// disconnects, so time that may still be busy is not offered meanwhile. ifVersion: the connection's updated_at the caller saw; a connection changed since
+// (reconnected with a new token) is left alone.
+export const calendarMarkFailed = defineCommand({
+  name: 'kernel.calendar.mark_failed',
+  input: z.strictObject({ connectionId: zId, status: z.enum(['expired', 'retry']), reason: z.string().min(1).max(200), ifVersion: zInstant.optional() }),
+  risk: 'R1',
+  sideEffect: 'internal',
+  access: 'system',
+  target: (input) => ({ type: 'kernel.calendar_connection', id: input.connectionId }),
+  handler: async (ctx, input) => {
+    if (ctx.actor.type !== 'system') throw new DomainError('FORBIDDEN', 403, 'Chỉ tiến trình hệ thống mới thực hiện được việc này');
+    const row = await ctx.trx
+      .selectFrom('crove_kernel.calendar_connection')
+      .select(['status', 'provider', 'updated_at'])
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.connectionId)
+      .forUpdate()
+      .executeTakeFirst();
+    if (!row) throw new DomainError('CALENDAR_NOT_FOUND', 404, 'Không tìm thấy lịch đã kết nối này');
+    if (input.ifVersion !== undefined && Math.floor(row.updated_at.getTime()) !== Date.parse(input.ifVersion)) return { connectionId: input.connectionId, marked: false };
+    await ctx.trx
+      .updateTable('crove_kernel.calendar_connection')
+      .set(input.status === 'expired' ? { status: 'expired', status_reason: input.reason, updated_at: ctx.now } : { status_reason: input.reason })
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.connectionId)
+      .execute();
+    if (input.status === 'expired') await sql`SELECT crove_kernel.calendar_credential_drop(${input.connectionId}::uuid)`.execute(ctx.trx).catch(calendarError);
+    ctx.audit({ connection_id: input.connectionId, provider: row.provider, status: input.status, reason: input.reason });
+    return { connectionId: input.connectionId, marked: true };
+  },
+});
+
+// A sync renewed a connection's access token: the new credential is sealed in and the expiry moves, in one transaction.
+// ifVersion is the connection's updated_at the refresh started from; a connection changed since is left alone, and the
+// answer says so: the caller then drops the new tokens.
+export const calendarRefresh = defineCommand({
+  name: 'kernel.calendar.refresh',
+  input: z.strictObject({ connectionId: zId, ifVersion: zInstant, expiresAt: zInstant.nullable(), credential: z.strictObject({ keyId: zKeyId, envelope: zEnvelope }) }),
+  risk: 'R1',
+  sideEffect: 'internal',
+  access: 'system',
+  target: (input) => ({ type: 'kernel.calendar_connection', id: input.connectionId }),
+  handler: async (ctx, input) => {
+    if (ctx.actor.type !== 'system') throw new DomainError('FORBIDDEN', 403, 'Chỉ tiến trình hệ thống mới thực hiện được việc này');
+    const row = await ctx.trx
+      .selectFrom('crove_kernel.calendar_connection')
+      .select(['status', 'provider', 'updated_at'])
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.connectionId)
+      .forUpdate()
+      .executeTakeFirst();
+    if (!row) throw new DomainError('CALENDAR_NOT_FOUND', 404, 'Không tìm thấy lịch đã kết nối này');
+    // Compared at millisecond precision, the precision the caller read it at.
+    if (row.status !== 'active' || Math.floor(row.updated_at.getTime()) !== Date.parse(input.ifVersion)) return { connectionId: input.connectionId, refreshed: false };
+    await sql`SELECT crove_kernel.calendar_credential_put(${input.connectionId}::uuid, ${input.credential.keyId}, decode(${input.credential.envelope}, 'base64'))`
+      .execute(ctx.trx)
+      .catch(calendarError);
+    await ctx.trx
+      .updateTable('crove_kernel.calendar_connection')
+      .set({ expires_at: input.expiresAt, updated_at: ctx.now })
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.connectionId)
+      .execute();
+    ctx.audit({ connection_id: input.connectionId, provider: row.provider });
+    return { connectionId: input.connectionId, refreshed: true, updatedAt: ctx.now.toISOString() };
+  },
+});
+
+export interface BusyPiece {
+  start: number;
+  end: number;
+}
+
+/**
+ * The busy intervals a provider answered as the blocks to keep: clipped to the window, empty ones dropped, overlapping
+ * or touching ones merged, and any longer than a block may be cut into pieces.
+ */
+export function busyPieces(busy: ReadonlyArray<{ start: number; end: number }>, from: number, to: number): BusyPiece[] {
+  const clipped = busy
+    .map((b) => ({ start: Math.max(b.start, from), end: Math.min(b.end, to) }))
+    .filter((b) => b.end > b.start)
+    .sort((a, b) => a.start - b.start || a.end - b.end);
+  const merged: BusyPiece[] = [];
+  for (const b of clipped) {
+    const last = merged[merged.length - 1];
+    if (last && b.start <= last.end) last.end = Math.max(last.end, b.end);
+    else merged.push({ ...b });
+  }
+  const out: BusyPiece[] = [];
+  for (const m of merged) for (let s = m.start; s < m.end; s += PIECE_MS) out.push({ start: s, end: Math.min(m.end, s + PIECE_MS) });
+  return out;
+}
+
+const pieceKey = (p: BusyPiece) => `${p.start}-${p.end}`;
+
+// The sync's answer: the connection's busy blocks over [from, to) become exactly these intervals. Blocks that are
+// not in the answer go, new ones come in, the rest stay; one transaction, so slot computation never sees half a sync.
+export const calendarBusyReplace = defineCommand({
+  name: 'kernel.calendar.busy_replace',
+  input: z.strictObject({
+    connectionId: zId,
+    from: zInstant,
+    to: zInstant,
+    busy: z.array(z.strictObject({ start: zInstant, end: zInstant })).max(MAX_BUSY),
+  }),
+  risk: 'R1',
+  sideEffect: 'internal',
+  access: 'system',
+  target: (input) => ({ type: 'kernel.calendar_connection', id: input.connectionId }),
+  handler: async (ctx, input) => {
+    if (ctx.actor.type !== 'system') throw new DomainError('FORBIDDEN', 403, 'Chỉ tiến trình hệ thống mới thực hiện được việc này');
+    const conn = await ctx.trx
+      .selectFrom('crove_kernel.calendar_connection')
+      .select(['status', 'provider', 'user_id'])
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.connectionId)
+      .forUpdate()
+      .executeTakeFirst();
+    if (!conn) throw new DomainError('CALENDAR_NOT_FOUND', 404, 'Không tìm thấy lịch đã kết nối này');
+    if (conn.status !== 'active') return { connectionId: input.connectionId, replaced: false, added: 0, removed: 0 };
+    const from = Date.parse(input.from);
+    const to = Date.parse(input.to);
+    const wanted = new Map(busyPieces(input.busy.map((b) => ({ start: Date.parse(b.start), end: Date.parse(b.end) })), from, to).map((p) => [pieceKey(p), p]));
+    const existing = await ctx.trx
+      .selectFrom('crove_kernel.calendar_event')
+      .select(['id', 'external_id'])
+      .where('org_id', '=', ctx.orgId)
+      .where('source_id', '=', input.connectionId)
+      .where('ends_at', '>', new Date(from))
+      .execute();
+    const have = new Set(existing.map((e) => e.external_id));
+    const stale = existing.filter((e) => e.external_id === null || !wanted.has(e.external_id)).map((e) => e.id);
+    if (stale.length > 0) await ctx.trx.deleteFrom('crove_kernel.calendar_event').where('org_id', '=', ctx.orgId).where('id', 'in', stale).execute();
+    // Blocks that ended before the window are history nobody reads: they go with the sync that moved past them.
+    await ctx.trx.deleteFrom('crove_kernel.calendar_event').where('org_id', '=', ctx.orgId).where('source_id', '=', input.connectionId).where('ends_at', '<=', new Date(from)).execute();
+    const fresh = [...wanted.entries()].filter(([key]) => !have.has(key));
+    for (let i = 0; i < fresh.length; i += 500) {
+      await ctx.trx
+        .insertInto('crove_kernel.calendar_event')
+        .values(
+          fresh.slice(i, i + 500).map(([key, p]) => ({
+            org_id: ctx.orgId,
+            user_id: conn.user_id,
+            starts_at: new Date(p.start),
+            ends_at: new Date(p.end),
+            time_zone: 'UTC',
+            title: null,
+            kind: conn.provider,
+            source_id: input.connectionId,
+            external_id: key,
+            created_by: conn.user_id,
+            created_at: ctx.now,
+          })),
+        )
+        .execute();
+    }
+    await ctx.trx
+      .updateTable('crove_kernel.calendar_connection')
+      .set({ last_synced_at: ctx.now, status_reason: null })
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.connectionId)
+      .execute();
+    // Counts only: never the intervals.
+    ctx.audit({ connection_id: input.connectionId, provider: conn.provider, added: fresh.length, removed: stale.length });
+    return { connectionId: input.connectionId, replaced: true, added: fresh.length, removed: stale.length };
+  },
+});
+
+export interface SealedCalendarCredential {
+  provider: string;
+  externalAccount: string;
+  keyId: string;
+  // base64
+  envelope: string;
+}
+
+// The sealed credential of an active connection, for the sync in the worker. The caller opens it with the credential
+// broker for the binding returned here and drops the plaintext after the call.
+export const calendarCredential = defineQuery({
+  name: 'kernel.calendar.credential',
+  input: z.strictObject({ connectionId: zId }),
+  access: 'system',
+  handler: async (ctx, input): Promise<SealedCalendarCredential> => {
+    const { rows } = await sql<{ key_id: string; envelope: Buffer; provider: string; external_account: string }>`
+      SELECT key_id, envelope, provider, external_account FROM crove_kernel.calendar_credential_get(${input.connectionId}::uuid)`
+      .execute(ctx.trx)
+      .catch(calendarError);
+    const row = rows[0];
+    if (!row) throw new DomainError('CALENDAR_NOT_FOUND', 404, 'Không tìm thấy lịch đã kết nối này');
+    return { provider: row.provider, externalAccount: row.external_account, keyId: row.key_id, envelope: row.envelope.toString('base64') };
+  },
+});
+
+// The connection as the sync sees it (its version for the guards above); null when it is gone.
+export const calendarConnectionState = defineQuery({
+  name: 'kernel.calendar.connection_state',
+  input: z.strictObject({ connectionId: zId }),
+  access: 'system',
+  handler: async (ctx, input) => {
+    const row = await ctx.trx
+      .selectFrom('crove_kernel.calendar_connection')
+      .select(['status', 'provider', 'expires_at', 'updated_at'])
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.connectionId)
+      .executeTakeFirst();
+    if (!row) return null;
+    return { status: row.status, provider: row.provider, expiresAt: row.expires_at ? row.expires_at.toISOString() : null, updatedAt: row.updated_at.toISOString() };
+  },
+});
+
+// The member's own connections (the row policy hides everyone else's).
+export const calendarConnections = defineQuery({
+  name: 'kernel.calendar.connections',
+  input: z.strictObject({}),
+  access: ['owner', 'admin', 'member', 'viewer'],
+  handler: async (ctx): Promise<CalendarConnectionView[]> => {
+    if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới xem được lịch đã kết nối');
+    const rows = await ctx.trx
+      .selectFrom('crove_kernel.calendar_connection')
+      .select(['id', 'provider', 'display_name', 'status', 'status_reason', 'last_synced_at', 'write_back', 'connected_at'])
+      .where('org_id', '=', ctx.orgId)
+      .where('user_id', '=', ctx.actor.userId)
+      .orderBy('connected_at')
+      .execute();
+    return rows.map((r) => ({
+      id: r.id,
+      provider: r.provider,
+      displayName: r.display_name,
+      status: r.status,
+      statusReason: r.status_reason,
+      lastSyncedAt: r.last_synced_at ? r.last_synced_at.toISOString() : null,
+      writeBack: r.write_back,
+      connectedAt: r.connected_at.toISOString(),
+    }));
+  },
+});
+
+export const calendarConnectionCommands = [calendarOAuthBegin, calendarOAuthConsume, calendarConnect, calendarDisconnect, calendarMarkFailed, calendarRefresh, calendarBusyReplace];
+export const calendarConnectionQueries = [calendarCredential, calendarConnectionState, calendarConnections];

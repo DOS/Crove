@@ -54,8 +54,6 @@ const MACHINERY = new Set([
 // until the table exists, neither its factory nor its MACHINERY entry is stale. Remove an entry once its table is on
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
-  'crove_kernel.calendar_connection',
-  'crove_kernel.calendar_credential',
   'crove_notes.link',
   'crove_notes.note',
 ]);
@@ -646,7 +644,6 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   'crove_kernel.budget_policy': {
     make: (o) => ({ row: { org_id: o.id, scope: 'agent', target: randomUUID(), monthly_limit: '100', updated_by: o.owner } }),
   },
-  // #1313: an event on a member's calendar; busy events of one member never overlap, so each row takes its own hour.
   // An outside calendar a member connected (#2123): a restrictive policy shows each member only their own, as for a
   // notification, and the factory's rows belong to the owner. Tenant roles update only the state columns (a column
   // grant), so the update probes assign the name to itself.
@@ -662,6 +659,7 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
       };
     },
   },
+  // #1313: an event on a member's calendar; busy events of one member never overlap, so each row takes its own hour.
   'crove_kernel.calendar_event': {
     make: (o) => {
       const start = new Date(Date.UTC(2030, 0, 1) + 3_600_000 * calendarHour++);

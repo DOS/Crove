@@ -14,7 +14,8 @@ const DAY_MS = 86_400_000;
 export const WEEKDAYS = [1, 2, 3, 4, 5, 6, 7] as const;
 export type Weekday = (typeof WEEKDAYS)[number];
 
-export const CALENDAR_EVENT_KINDS = ['manual', 'time_off', 'booking'] as const;
+// google, microsoft and caldav are the busy blocks of a connected outside calendar (start and end only, #2123).
+export const CALENDAR_EVENT_KINDS = ['manual', 'time_off', 'booking', 'google', 'microsoft', 'caldav'] as const;
 export type CalendarEventKind = (typeof CALENDAR_EVENT_KINDS)[number];
 
 // A calendar event is at most this long: a day off is one event per day range, not an open-ended block.
@@ -334,4 +335,32 @@ export function teamSlots(mode: 'any' | 'all', perHost: readonly (readonly Inter
     }
   }
   return [...seen.values()].sort((a, b) => a.start - b.start || a.end - b.end);
+}
+
+// Outside calendars a member connects (#1374, decision CAL-4). Busy times flow in; only start and end are kept.
+export const CALENDAR_PROVIDERS = ['google', 'microsoft', 'caldav'] as const;
+export type CalendarProvider = (typeof CALENDAR_PROVIDERS)[number];
+// The OAuth providers a connect dialog exists for; CalDAV has no dialog.
+export const CALENDAR_OAUTH_PROVIDERS = ['google_calendar', 'microsoft_calendar'] as const;
+export const zCalendarOAuthProvider = z.enum(CALENDAR_OAUTH_PROVIDERS);
+export type CalendarOAuthProvider = z.infer<typeof zCalendarOAuthProvider>;
+export const CALENDAR_CONNECTION_STATUSES = ['active', 'expired'] as const;
+// The farthest an event type books ahead (crm horizonDays, at most 365) plus a day: busy time is read that far.
+export const CALENDAR_SYNC_DAYS = 366;
+
+export const zCalendarConnectionView = z.strictObject({
+  id: zId,
+  provider: z.enum(CALENDAR_PROVIDERS),
+  displayName: z.string(),
+  status: z.enum(CALENDAR_CONNECTION_STATUSES),
+  statusReason: z.string().nullable(),
+  lastSyncedAt: zInstant.nullable(),
+  writeBack: z.boolean(),
+  connectedAt: zInstant,
+});
+export type CalendarConnectionView = z.infer<typeof zCalendarConnectionView>;
+
+/** The binding a connection's tokens are sealed for (org, provider, account): the OAuth callback seals, the sync opens. */
+export function calendarBinding(orgId: string, provider: CalendarProvider, externalAccount: string) {
+  return { orgId, provider: `calendar:${provider}`, externalAccountId: externalAccount };
 }
