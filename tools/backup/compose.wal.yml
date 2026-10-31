@@ -1,0 +1,51 @@
+# Continuous WAL archiving for the stack's database (issue #2120, docs/runbooks/backup-and-restore.md, "Point in time
+# recovery"). An override of docker-compose.yml: it swaps the `db` image for the same PostgreSQL plus pgBackRest
+# (tools/wal/Dockerfile) and gives it the settings to reach the backup bucket. List it in COMPOSE_FILE after the other
+# files:
+#
+#   COMPOSE_FILE=docker-compose.yml:compose.pilot.yml:docker-compose.override.yml:compose.host.yml:tools/backup/compose.wal.yml
+#
+# It changes nothing by itself: the database starts archiving when `tools/backup/wal.sh setup` has set archive_mode on it
+# (and restarted it once), and only then. Every finished WAL segment is then pushed to the bucket, encrypted, and
+# `wal.sh backup` takes the base backups a restore starts from; together they restore the database to any moment since the
+# oldest base backup kept, to the second.
+#
+# The bucket is the backup bucket (BACKUP_S3_*), under <BACKUP_S3_PREFIX>/wal, sealed by pgBackRest with
+# BACKUP_ENCRYPTION_KEY (aes-256-cbc, the key as passphrase), so the bucket alone does not expose the books. Keep that key
+# apart from the bucket, as for the nightly runs: without it neither a run nor a WAL segment opens.
+services:
+  db:
+    build:
+      # Relative to the project directory (the checkout, where docker-compose.yml is); WAL_BUILD_CONTEXT for any other.
+      context: ${WAL_BUILD_CONTEXT:-tools/wal}
+    image: crove-db:local
+    environment:
+      PGBACKREST_STANZA: crove
+      PGBACKREST_PG1_PATH: /var/lib/postgresql/data
+      PGBACKREST_REPO1_TYPE: s3
+      PGBACKREST_REPO1_S3_BUCKET: ${BACKUP_S3_BUCKET:?set BACKUP_S3_BUCKET to the bucket the WAL goes to}
+      # The host (and port) of BACKUP_S3_ENDPOINT, without https://: pgBackRest takes a host name.
+      PGBACKREST_REPO1_S3_ENDPOINT: ${WAL_S3_ENDPOINT:?set WAL_S3_ENDPOINT to the host of BACKUP_S3_ENDPOINT, without https://}
+      PGBACKREST_REPO1_STORAGE_PORT: ${WAL_S3_PORT:-443}
+      PGBACKREST_REPO1_S3_REGION: ${WAL_S3_REGION:-us-east-1}
+      # path for MinIO and most other S3-compatible stores that have no bucket host names; host for AWS S3.
+      PGBACKREST_REPO1_S3_URI_STYLE: ${WAL_S3_URI_STYLE:-host}
+      # n only for a bucket behind a certificate the image does not know (a test MinIO): the drill sets it.
+      PGBACKREST_REPO1_STORAGE_VERIFY_TLS: ${WAL_S3_VERIFY_TLS:-y}
+      PGBACKREST_REPO1_S3_KEY: ${BACKUP_S3_ACCESS_KEY_ID:?set BACKUP_S3_ACCESS_KEY_ID}
+      PGBACKREST_REPO1_S3_KEY_SECRET: ${BACKUP_S3_SECRET_ACCESS_KEY:?set BACKUP_S3_SECRET_ACCESS_KEY}
+      PGBACKREST_REPO1_PATH: /${BACKUP_S3_PREFIX:-crove}/wal
+      PGBACKREST_REPO1_CIPHER_TYPE: aes-256-cbc
+      PGBACKREST_REPO1_CIPHER_PASS: ${BACKUP_ENCRYPTION_KEY:?set BACKUP_ENCRYPTION_KEY, which the WAL is sealed with}
+      # Full and differential base backups kept; the WAL older than the oldest full one is expired with it.
+      PGBACKREST_REPO1_RETENTION_FULL: ${WAL_RETENTION_FULL:-4}
+      PGBACKREST_REPO1_RETENTION_DIFF: ${WAL_RETENTION_DIFF:-6}
+      # Restore, setup and check run in this container as the postgres user; its log stays out of the volume.
+      PGBACKREST_LOG_PATH: /tmp
+      PGBACKREST_LOG_LEVEL_CONSOLE: info
+      PGBACKREST_LOG_LEVEL_FILE: warn
+
+  # The prober reads the archiving's lag from the database itself; nothing else to give it.
+  prober:
+    environment:
+      PROBER_MAX_WAL_ARCHIVE_AGE_SECONDS: ${PROBER_MAX_WAL_ARCHIVE_AGE_SECONDS:-600}

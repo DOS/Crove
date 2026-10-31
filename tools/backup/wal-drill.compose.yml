@@ -1,0 +1,66 @@
+# The stack tools/backup/wal-drill.mjs runs wal.sh against (issue #2120): a database and a throwaway MinIO as the backup
+# bucket, behind a self-signed certificate (pgBackRest speaks https only). The real overlay, tools/backup/compose.wal.yml,
+# is listed after this file, so the drill exercises the same settings a deployment uses. Copied by the drill into its own
+# directory with a generated .env; never part of a deployment.
+name: ${DRILL_PROJECT:-crove-wal-drill}
+
+services:
+  db:
+    image: postgres:17@sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3
+    environment:
+      POSTGRES_PASSWORD: drill-postgres-password
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # The certificate MinIO serves, made once into the certs volume.
+  certs:
+    image: postgres:17@sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3
+    entrypoint: ['bash', '-c']
+    command:
+      - |
+        set -e
+        openssl req -x509 -newkey rsa:2048 -nodes -keyout /certs/private.key -out /certs/public.crt -subj /CN=minio -addext subjectAltName=DNS:minio -days 2
+        chmod 644 /certs/private.key /certs/public.crt
+    volumes:
+      - certs:/certs
+
+  minio:
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372
+    command: ['server', '/data']
+    environment:
+      MINIO_ROOT_USER: ${BACKUP_S3_ACCESS_KEY_ID}
+      MINIO_ROOT_PASSWORD: ${BACKUP_S3_SECRET_ACCESS_KEY}
+    volumes:
+      - certs:/root/.minio/certs:ro
+    depends_on:
+      certs:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ['CMD', 'curl', '--silent', '--fail', '--insecure', 'https://127.0.0.1:9000/minio/health/live']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  minio-init:
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372
+    entrypoint: ['sh', '-c']
+    command: ['mc --insecure mb --ignore-existing local/${BACKUP_S3_BUCKET}']
+    environment:
+      MC_HOST_local: https://${BACKUP_S3_ACCESS_KEY_ID}:${BACKUP_S3_SECRET_ACCESS_KEY}@minio:9000
+    depends_on:
+      minio:
+        condition: service_healthy
+
+  # The overlay gives the real stack's prober a setting; this one only has to exist (it never runs here).
+  prober:
+    image: postgres:17@sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3
+    profiles: ['never']
+
+volumes:
+  db-data:
+  certs:
