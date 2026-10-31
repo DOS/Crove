@@ -49,7 +49,7 @@ function useLine() {
       case 'finance.portal_attention':
         return n.detail.failed === 'true'
           ? t('text.portal_failed', { period: period(n.detail.period) })
-          : t('text.portal_attention', { period: period(n.detail.period), missing: Number(n.detail.missing ?? 0), mismatch: Number(n.detail.amountMismatch ?? 0) });
+          : t(n.detail.direction === 'sale' ? 'text.portal_attention_sale' : 'text.portal_attention', { period: period(n.detail.period), missing: Number(n.detail.missing ?? 0), mismatch: Number(n.detail.amountMismatch ?? 0) });
       case 'finance.period_closing':
         return t('text.period_closing', { period: period(n.detail.period), due: n.detail.dueDate ? f.date(n.detail.dueDate) : '' });
       case 'notes.todo_due':

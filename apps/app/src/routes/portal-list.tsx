@@ -2,7 +2,7 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import { useRef, useState } from 'react';
 import { useTranslations } from 'use-intl';
-import type { ReconcileOutcome } from '@crove/kernel-contract';
+import type { PortalListDirection, ReconcileOutcome } from '@crove/kernel-contract';
 import { Alert, AlertDescription, AlertTitle } from '@crove/ui/components/alert';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
@@ -33,13 +33,14 @@ import { defaultPeriod, periodChoiceOf, periodKey, periodSearch, switchKind, yea
 
 const SKIPPED_SHOWN = 20;
 
-function ItemRow({ item, slug }: { item: ReconcileItem; slug: string }) {
+function ItemRow({ item, slug, direction }: { item: ReconcileItem; slug: string; direction: PortalListDirection }) {
   const t = useTranslations('portalList');
   const f = useFormat();
   const invoice = item.portal ?? item.crove;
   if (!invoice) return null;
-  const sellerName = item.portal?.sellerName || item.crove?.sellerName || '';
-  const sellerTaxCode = item.portal?.sellerTaxCode ?? item.crove?.sellerTaxCode ?? null;
+  // A sale's other party is its customer; the seller is the company itself (#2141).
+  const partyName = direction === 'sale' ? (item.crove?.buyerName ?? '') : item.portal?.sellerName || item.crove?.sellerName || '';
+  const partyTaxCode = direction === 'sale' ? (item.portal?.buyerTaxCode ?? item.crove?.buyerTaxCode ?? null) : (item.portal?.sellerTaxCode ?? item.crove?.sellerTaxCode ?? null);
   const notes: string[] = [];
   // A declared_late item is outside the period by definition; its section says so, and the note gives its posting date.
   if (item.outsidePeriod && item.outcome !== 'declared_late') notes.push(t('notes.outsidePeriod'));
@@ -54,8 +55,8 @@ function ItemRow({ item, slug }: { item: ReconcileItem; slug: string }) {
       <TableCell className="px-4 py-3 text-muted-foreground">{f.date(invoice.issueDate)}</TableCell>
       <TableCell className="px-4 py-3 font-mono text-xs text-foreground">{invoiceLabel(invoice)}</TableCell>
       <TableCell className="px-4 py-3 text-foreground">
-        {sellerName}
-        {sellerTaxCode && <span className="block font-mono text-xs text-subtle-foreground">{sellerTaxCode}</span>}
+        {partyName}
+        {partyTaxCode && <span className="block font-mono text-xs text-subtle-foreground">{partyTaxCode}</span>}
       </TableCell>
       <TableCell className="px-4 py-3 text-right text-foreground tabular-nums">
         {item.portal?.total != null ? f.money(item.portal.total, item.portal.currency) : <span className="text-subtle-foreground">{t('noAmount')}</span>}
@@ -85,23 +86,25 @@ function ItemRow({ item, slug }: { item: ReconcileItem; slug: string }) {
   );
 }
 
-function Section({ outcome, items, total, folded, slug }: { outcome: ReconcileOutcome; items: ReconcileItem[]; total: number; folded: boolean; slug: string }) {
+function Section({ outcome, items, total, folded, slug, direction }: { outcome: ReconcileOutcome; items: ReconcileItem[]; total: number; folded: boolean; slug: string; direction: PortalListDirection }) {
   const t = useTranslations('portalList');
+  const sales = direction === 'sale';
+  const prefix = sales ? 'sale.sections' : 'sections';
   // The server lists the first items of a long section; the count and the summary still cover all of them.
   const truncated = total > items.length ? <p className="mt-2 text-sm text-muted-foreground">{t('truncatedSection', { shown: items.length, total })}</p> : null;
   const table = (
-    <DataTable numeric={[3, 4]} head={[t('columns.issueDate'), t('columns.invoice'), t('columns.seller'), t('columns.portalTotal'), t('columns.croveTotal'), t('columns.notes')]}>
+    <DataTable numeric={[3, 4]} head={[t('columns.issueDate'), t('columns.invoice'), sales ? t('sale.columns.buyer') : t('columns.seller'), t('columns.portalTotal'), t('columns.croveTotal'), t('columns.notes')]}>
       {items.map((item) => (
-        <ItemRow key={`${item.portal?.listId ?? 'crove'}-${item.portal?.rowNo ?? item.crove?.id}`} item={item} slug={slug} />
+        <ItemRow key={`${item.portal?.listId ?? 'crove'}-${item.portal?.rowNo ?? item.crove?.id}`} item={item} slug={slug} direction={direction} />
       ))}
     </DataTable>
   );
-  const title = t(`sections.${outcome}.title`, { count: String(total) });
+  const title = t(`${prefix}.${outcome}.title`, { count: String(total) });
   if (folded) {
     return (
       <details className="group">
         <summary className="cursor-pointer text-base font-semibold text-foreground">{title}</summary>
-        <p className="mt-1 mb-2 text-sm text-muted-foreground">{t(`sections.${outcome}.hint`)}</p>
+        <p className="mt-1 mb-2 text-sm text-muted-foreground">{t(`${prefix}.${outcome}.hint`)}</p>
         {table}
         {truncated}
       </details>
@@ -110,7 +113,7 @@ function Section({ outcome, items, total, folded, slug }: { outcome: ReconcileOu
   return (
     <section>
       <h2 className="text-base font-semibold text-foreground">{title}</h2>
-      <p className="mt-1 mb-2 text-sm text-muted-foreground">{t(`sections.${outcome}.hint`)}</p>
+      <p className="mt-1 mb-2 text-sm text-muted-foreground">{t(`${prefix}.${outcome}.hint`)}</p>
       {table}
       {truncated}
     </section>
@@ -240,8 +243,12 @@ export function PortalListPage() {
   const period = periodKey(choice);
   // The portal's list against the books of the entity chosen in the shell (#1280); an imported list is for it too.
   const entity = useChosenEntity();
+  // The purchase list ("mua vào") or the sales list ("bán ra", #2141); each is imported and compared on its own.
+  const [direction, setDirection] = useState<PortalListDirection>('purchase');
+  const sales = direction === 'sale';
+  const sx = sales ? 'sale.' : '';
   const report = useQuery({
-    ...orpc.portalList.reconcile.queryOptions({ input: { period, legalEntityId: entity.legalEntityId } }),
+    ...orpc.portalList.reconcile.queryOptions({ input: { period, legalEntityId: entity.legalEntityId, direction } }),
     enabled: entity.ready,
     refetchInterval: (q) => pollWhilePending(q.state.data),
   });
@@ -259,7 +266,7 @@ export function PortalListPage() {
       const uploaded = await uploadFiles([file], 'import');
       const fileId = uploaded.files[0]?.fileId;
       if (!fileId) throw new Error(t('uploadFailed'));
-      return client.portalList.import({ period, fileId, legalEntityId: entity.legalEntityId });
+      return client.portalList.import({ period, fileId, legalEntityId: entity.legalEntityId, direction });
     },
     onSettled: refresh,
   });
@@ -288,12 +295,12 @@ export function PortalListPage() {
   return (
     <>
       <PageHeader
-        title={t('title')}
-        subtitle={t('subtitle')}
+        title={t(`${sx}title`)}
+        subtitle={t(`${sx}subtitle`)}
         actions={
           editor ? (
             <>
-              {canSync && (
+              {canSync && !sales && (
                 <Button size="lg" variant="outline" onClick={() => setSyncOpen(true)} disabled={syncOpen}>
                   {t('sync.open')}
                 </Button>
@@ -307,6 +314,24 @@ export function PortalListPage() {
           ) : undefined
         }
       />
+      <div role="tablist" aria-label={t('title')} className="mb-4 flex gap-2">
+        {(['purchase', 'sale'] as const).map((d) => (
+          <Button
+            key={d}
+            role="tab"
+            aria-selected={direction === d}
+            variant={direction === d ? 'default' : 'outline'}
+            onClick={() => {
+              importList.reset();
+              setProblem(null);
+              setSyncOpen(false);
+              setDirection(d);
+            }}
+          >
+            {t(`tabs.${d}`)}
+          </Button>
+        ))}
+      </div>
       <div className="mb-4 flex flex-wrap items-end gap-3">
         <label className="text-xs">
           <span className="text-subtle-foreground">{tv('kind')}</span>
@@ -342,7 +367,7 @@ export function PortalListPage() {
         {data && <p className="pb-1.5 text-sm text-muted-foreground">{t('range', { from: f.date(data.period.from), to: f.date(data.period.to) })}</p>}
       </div>
 
-      {canSync && syncOpen && (
+      {canSync && !sales && syncOpen && (
         <div className="mb-6">
           <PortalSyncPanel key={period} period={period} periodLabel={formatPeriod(period)} onChanged={refresh} onClose={() => setSyncOpen(false)} />
         </div>
@@ -368,17 +393,17 @@ export function PortalListPage() {
           <Card className="block p-4">
             <h2 className="text-sm font-medium text-foreground">{t('howTitle')}</h2>
             <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm text-muted-foreground">
-              <li>{t('how.login')}</li>
-              <li>{t('how.search')}</li>
-              <li>{t('how.export')}</li>
-              <li>{t('how.upload')}</li>
+              <li>{t(`${sx}how.login`)}</li>
+              <li>{t(`${sx}how.search`)}</li>
+              <li>{t(`${sx}how.export`)}</li>
+              <li>{t(`${sx}how.upload`)}</li>
             </ol>
           </Card>
 
           <section>
             <h2 className="mb-2 text-base font-semibold text-foreground">{t('listsTitle', { count: String(data.lists.length) })}</h2>
             {data.lists.length === 0 ? (
-              <Empty title={t('noLists')} hint={t('noListsHint')} />
+              <Empty title={t('noLists')} hint={t(`${sx}noListsHint`)} />
             ) : (
               <DataTable head={[t('columns.file'), t('columns.importedAt'), t('columns.listRange'), t('columns.status'), '']}>
                 {data.lists.map((list) => (
@@ -395,8 +420,8 @@ export function PortalListPage() {
                         <div className="flex flex-wrap gap-1">
                           <Badge variant="success">{t('listStatus.done', { count: list.rowCount ?? 0 })}</Badge>
                           {list.skippedCount > 0 && <Badge variant="warning">{t('listStatus.skipped', { count: list.skippedCount })}</Badge>}
-                          {list.ownSalesCount > 0 && <Badge variant="outline">{t('listStatus.ownSales', { count: list.ownSalesCount })}</Badge>}
-                          {list.otherBuyerCount > 0 && <Badge variant="outline">{t('listStatus.otherBuyers', { count: list.otherBuyerCount })}</Badge>}
+                          {list.ownSalesCount > 0 && <Badge variant="outline">{t(`${sx}listStatus.ownSales`, { count: list.ownSalesCount })}</Badge>}
+                          {list.otherBuyerCount > 0 && <Badge variant="outline">{t(`${sx}listStatus.otherBuyers`, { count: list.otherBuyerCount })}</Badge>}
                         </div>
                       ) : (
                         <div className="space-y-1">
@@ -436,13 +461,13 @@ export function PortalListPage() {
               )}
               {droppedTotal > 0 && (
                 <Alert>
-                  <AlertTitle>{t('droppedTitle', { count: droppedTotal })}</AlertTitle>
+                  <AlertTitle>{t(`${sx}droppedTitle`, { count: droppedTotal })}</AlertTitle>
                   <AlertDescription>
-                    <p>{t('droppedHint')}</p>
+                    <p>{t(`${sx}droppedHint`)}</p>
                     <ul className="mt-1 list-disc pl-5">
                       {droppedLists.flatMap((l) => [
-                        ...(l.ownSalesCount > 0 ? [<li key={`${l.id}-own`}>{t('droppedOwnSales', { file: l.filename, count: l.ownSalesCount })}</li>] : []),
-                        ...(l.otherBuyerCount > 0 ? [<li key={`${l.id}-other`}>{t('droppedOtherBuyers', { file: l.filename, count: l.otherBuyerCount })}</li>] : []),
+                        ...(l.ownSalesCount > 0 ? [<li key={`${l.id}-own`}>{t(`${sx}droppedOwnSales`, { file: l.filename, count: l.ownSalesCount })}</li>] : []),
+                        ...(l.otherBuyerCount > 0 ? [<li key={`${l.id}-other`}>{t(`${sx}droppedOtherBuyers`, { file: l.filename, count: l.otherBuyerCount })}</li>] : []),
                       ])}
                     </ul>
                   </AlertDescription>
@@ -458,21 +483,23 @@ export function PortalListPage() {
                   ] as const
                 ).map(([outcome, count]) => (
                   <Card key={outcome} className="block p-4">
-                    <p className="text-xs text-subtle-foreground">{t(`tiles.${outcome}`)}</p>
+                    <p className="text-xs text-subtle-foreground">{t(`${sx}tiles.${outcome}`)}</p>
                     <p className={`mt-1 text-2xl font-semibold tabular-nums ${count > 0 ? 'text-warning' : 'text-foreground'}`}>{f.number(count)}</p>
                   </Card>
                 ))}
               </section>
               <p className="text-sm text-muted-foreground">
-                {t('summaryLine', { portal: data.summary.portalInvoices, matched: data.summary.matched, inbox: data.summary.inInbox })}
+                {t(`${sx}summaryLine`, { portal: data.summary.portalInvoices, matched: data.summary.matched, inbox: data.summary.inInbox })}
               </p>
-              <MissingInvoiceRequest key={`${period}:${entity.legalEntityId ?? ''}`} period={period} missing={data.summary.missing} editor={editor} canManage={org.data?.role === 'owner' || org.data?.role === 'admin'} slug={slug} />
+              {!sales && (
+                <MissingInvoiceRequest key={`${period}:${entity.legalEntityId ?? ''}`} period={period} missing={data.summary.missing} editor={editor} canManage={org.data?.role === 'owner' || org.data?.role === 'admin'} slug={slug} />
+              )}
               {SECTIONS.map(({ outcome, folded }) => {
                 const items = grouped.get(outcome) ?? [];
-                return items.length > 0 ? <Section key={outcome} outcome={outcome} items={items} total={outcomeTotal(data.summary, outcome)} folded={folded} slug={slug} /> : null;
+                return items.length > 0 ? <Section key={outcome} outcome={outcome} items={items} total={outcomeTotal(data.summary, outcome)} folded={folded} slug={slug} direction={direction} /> : null;
               })}
               {data.items.length > 0 && data.summary.missing + data.summary.amountMismatch + data.summary.voidInCrove + data.summary.notOnPortal === 0 && (
-                <Empty title={t('allClear')} hint={t('allClearHint')} />
+                <Empty title={t('allClear')} hint={t(`${sx}allClearHint`)} />
               )}
             </>
           )}

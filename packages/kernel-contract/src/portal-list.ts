@@ -8,6 +8,11 @@ import { zId, zLocalDate, zMoney, zVatPeriod } from './schemas.ts';
 export const PORTAL_INVOICE_STATUSES = ['original', 'replacement', 'adjustment', 'replaced', 'adjusted', 'cancelled', 'unknown'] as const;
 export type PortalInvoiceStatus = (typeof PORTAL_INVOICE_STATUSES)[number];
 
+// Which of the org's invoices a list is about: the purchases (the org is the buyer, the portal's "mua vào" export) or
+// its sales (the org is the seller, "bán ra", #2141). The same import and comparison serve both.
+export const PORTAL_LIST_DIRECTIONS = ['purchase', 'sale'] as const;
+export type PortalListDirection = (typeof PORTAL_LIST_DIRECTIONS)[number];
+
 export const PORTAL_LIST_STATUSES = ['pending', 'done', 'failed'] as const;
 export type PortalListStatus = (typeof PORTAL_LIST_STATUSES)[number];
 
@@ -30,6 +35,7 @@ export const MAX_PORTAL_LISTS_PER_PERIOD = 12;
 export const zPortalList = z.object({
   id: zId,
   period: zVatPeriod,
+  direction: z.enum(PORTAL_LIST_DIRECTIONS),
   fileId: zId,
   filename: z.string(),
   status: z.enum(PORTAL_LIST_STATUSES),
@@ -41,7 +47,9 @@ export const zPortalList = z.object({
   skippedCount: z.number().int().nonnegative(),
   skipped: z.array(z.object({ rowNo: z.number().int().positive(), reason: z.enum(PORTAL_LIST_SKIP_REASONS) })),
   // Rows left out because they are not the org's purchases: its own sales, and invoices naming another buyer (#506).
-  // Expected on a mixed export; a misread buyer code would hide an invoice, so the screen shows them.
+  // Expected on a mixed export; a misread buyer code would hide an invoice, so the screen shows them. On a sales list
+  // (#2141) the counts mean the other way round: ownSalesCount is rows naming the org as buyer (its purchases),
+  // otherBuyerCount rows of another seller.
   ownSalesCount: z.number().int().nonnegative(),
   otherBuyerCount: z.number().int().nonnegative(),
   createdAt: z.iso.datetime(),
@@ -53,6 +61,8 @@ export const zPortalRow = z.object({
   rowNo: z.number().int().positive(),
   sellerTaxCode: z.string(),
   sellerName: z.string(),
+  // The buyer's tax code on a sales list's row (null on a purchase row, and where the list has none).
+  buyerTaxCode: z.string().nullable(),
   template: z.string().nullable(),
   series: z.string(),
   number: z.string(),
@@ -70,6 +80,9 @@ export const zCroveInvoice = z.object({
   id: zId,
   sellerTaxCode: z.string().nullable(),
   sellerName: z.string(),
+  // The customer of a recorded sale (null on a purchase); on a sale sellerTaxCode and sellerName are the org's own.
+  buyerTaxCode: z.string().nullable(),
+  buyerName: z.string().nullable(),
   template: z.string().nullable(),
   series: z.string(),
   number: z.string(),
@@ -99,6 +112,7 @@ export const zReconcileItem = z.object({
 });
 
 export const zPortalReconciliation = z.object({
+  direction: z.enum(PORTAL_LIST_DIRECTIONS),
   period: z.object({ period: zVatPeriod, kind: z.enum(['month', 'quarter']), from: zLocalDate, to: zLocalDate }),
   lists: z.array(zPortalList),
   summary: z.object({

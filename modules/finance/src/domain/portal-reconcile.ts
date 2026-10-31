@@ -7,6 +7,12 @@
 // Crove invoice without a seller tax code matches on series and number when exactly one portal invoice has them.
 // The amount is a check, not part of the key: a match with a different total (or VAT, or currency) is reported.
 //
+// The same function compares the sales list (#2141, the portal's "bán ra" export) with the org's recorded sales: both
+// sides then name the org as the seller (the caller passes its tax code on every row and every sale, so a branch's
+// invoice and a document without a seller still meet), and the key is the org's series and number. "missing" is a sale
+// the tax authority has that the books lack (output VAT understated), "amount_mismatch" a sale booked with another
+// total or VAT. Nothing here writes to the books.
+//
 // Status on the portal (Trạng thái hóa đơn):
 // - original, replacement, adjustment, adjusted, unknown: the invoice counts; missing from Crove means "upload it".
 //   An adjusted invoice still counts (the adjustment is a separate invoice).
@@ -32,6 +38,8 @@ export interface PortalRow {
   rowNo: number;
   sellerTaxCode: string;
   sellerName: string;
+  // The buyer on a sales list's row (null on a purchase row).
+  buyerTaxCode: string | null;
   template: string | null;
   series: string;
   number: string;
@@ -50,6 +58,9 @@ export interface CroveInvoice {
   id: string;
   sellerTaxCode: string | null;
   sellerName: string;
+  // The customer of a recorded sale (null on a purchase).
+  buyerTaxCode: string | null;
+  buyerName: string | null;
   template: string | null;
   series: string;
   number: string;

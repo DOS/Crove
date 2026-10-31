@@ -201,6 +201,7 @@ export const en = {
       tasks_rerouted: '{count, plural, one {# task} other {# tasks}} moved to you',
       bank_attention: 'The statement of account {account} has {lines, plural, one {# line} other {# lines}} to look at',
       portal_attention: 'Tax portal check for {period}: {missing, plural, one {# invoice} other {# invoices}} not in {brand}, {mismatch, plural, other {#}} with a different amount',
+      portal_attention_sale: 'Tax portal sales check for {period}: {missing, plural, one {# sale} other {# sales}} not in {brand}, {mismatch, plural, other {#}} with a different amount',
       portal_failed: 'Could not read the tax portal list for {period}',
       period_closing: 'The VAT return for {period} is due on {due}, and the period is not locked',
       todo_due: 'You have 1 to-do due',
@@ -1412,6 +1413,73 @@ export const en = {
     },
     allClear: 'Nothing to do',
     allClearHint: 'Every invoice on the lists is in {brand} with the same amount.',
+    tabs: { purchase: 'Purchase invoices', sale: 'Sales invoices' },
+    sale: {
+      title: 'Sales invoices vs the tax portal',
+      subtitle:
+        'Upload the sales invoice list exported from hoadondientu.gdt.gov.vn to see which sales the tax authority has that {brand} lacks, or that are booked with a different amount or VAT, so output VAT is not understated. Nothing is booked from the list.',
+      how: {
+        login: 'Sign in to hoadondientu.gdt.gov.vn with the company account, open Tra cứu, Tra cứu hóa đơn, and choose Tra cứu hóa đơn điện tử bán ra (sales invoices).',
+        search: 'Set the invoice date from the start to the end of the period (the portal searches about one month at a time), then click Tìm kiếm.',
+        export:
+          'Click the Xuất hóa đơn icon to download the Excel file. On the Hóa đơn điện tử tab, export once for each Kết quả kiểm tra: Đã cấp mã hóa đơn and Cục Thuế đã nhận không mã; if the company issues cash register invoices, export that tab too.',
+        upload: 'Upload each file here for the right period. {brand} reads it and compares it with the booked sales and those waiting for approval.',
+      },
+      noListsHint: 'Export the sales invoice list from the tax portal, then click Upload a list.',
+      listStatus: {
+        ownSales: "{count, plural, one {# purchase row} other {# purchase rows}} left out",
+        otherBuyers: '{count, plural, one {# row} other {# rows}} of another seller left out',
+      },
+      droppedTitle: "{count, plural, one {# row was} other {# rows were}} left out as not the company's sales",
+      droppedHint:
+        "Usually the export mixed in purchase invoices or another company's invoices. But a row whose seller tax code is wrong hides a sale from the comparison, so check these rows in the file.",
+      droppedOwnSales: '{file}: {count, plural, one {# row names} other {# rows name}} the company as the buyer (its purchases)',
+      droppedOtherBuyers: '{file}: {count, plural, one {# row names} other {# rows name}} another company as the seller',
+      summaryLine:
+        'The tax portal lists {portal, plural, one {# sale} other {# sales}}: {matched, plural, one {# matches} other {# match}}, {inbox, plural, one {# is} other {# are}} waiting for approval.',
+      tiles: {
+        missing: 'Sales missing in {brand}',
+        amount_mismatch: 'Amount or VAT differs',
+        void_in_crove: 'Cancelled or replaced',
+        not_on_portal: 'Not on the portal',
+      },
+      sections: {
+        missing: {
+          title: 'On the tax portal, not in the books ({count})',
+          hint: 'These sales were issued but are not booked, so output VAT is understated. Book each one: upload its XML to the Inbox, or enter it as a sale.',
+        },
+        void_in_crove: {
+          title: 'Cancelled or replaced on the tax portal but still in {brand} ({count})',
+          hint: 'These sales are no longer valid, so output VAT is overstated while they stay. If booked, reverse the entry; if waiting, reject it.',
+        },
+        amount_mismatch: {
+          title: 'Amount or VAT differs ({count})',
+          hint: 'The total, the VAT or the currency on the tax portal differs from the sale booked in {brand}, so output VAT may be wrong. Check the invoice as issued.',
+        },
+        not_on_portal: {
+          title: 'In {brand}, not on the lists ({count})',
+          hint: 'Check that every sales list of the period is imported (with code, without code, cash register). If the portal really lacks it, the invoice may not have been issued on the portal.',
+        },
+        in_inbox: {
+          title: 'Waiting for approval in the Inbox ({count})',
+          hint: '{brand} has read these sales but not booked them yet. Approve them to book them.',
+        },
+        matched: {
+          title: 'Matched ({count})',
+          hint: 'On the tax portal and booked in {brand} with the same amount and VAT.',
+        },
+        declared_late: {
+          title: 'Sales of earlier periods declared in this one ({count})',
+          hint: 'These sales are booked in this period though their invoice date is earlier. The tax portal lists invoices by issue date.',
+        },
+        void: {
+          title: 'Cancelled or replaced, not in {brand} ({count})',
+          hint: 'As expected: these invoices are no longer valid, so nothing is booked.',
+        },
+      },
+      columns: { buyer: 'Customer' },
+      allClearHint: 'Every sale on the lists is in {brand} with the same amount and VAT.',
+    },
   },
   periodLock: {
     title: 'Period lock',

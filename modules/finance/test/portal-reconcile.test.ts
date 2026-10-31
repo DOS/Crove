@@ -17,6 +17,7 @@ const portal = (number: string, extra: Partial<PortalRow> = {}): PortalRow => ({
   rowNo: ++rowNo,
   sellerTaxCode: SELLER,
   sellerName: 'Nhà cung cấp',
+  buyerTaxCode: null,
   template: '1',
   series: 'C26TAA',
   number,
@@ -38,6 +39,8 @@ const crove = (number: string, extra: Partial<CroveInvoice> = {}): CroveInvoice 
     id: `00000000-0000-7000-8000-${String(++id).padStart(12, '0')}`,
     sellerTaxCode: SELLER,
     sellerName: 'Nhà cung cấp',
+    buyerTaxCode: null,
+    buyerName: null,
     template: '1',
     series: 'C26TAA',
     number,
@@ -340,5 +343,100 @@ describe('checkPortalList', () => {
     expect(mixed.ok && mixed.rows.map((r) => r.sellerTaxCode)).toEqual([SELLER]);
     // Without the org's tax code a list cannot be told apart from another company's: refused.
     expect(checkPortalList(list([{}]), null)).toEqual({ ok: false, error: expect.stringContaining('mã số thuế của công ty trong Cài đặt') });
+  });
+});
+
+// The sales list (#2141): the org (OTHER here) is the seller, the customer is on the row.
+describe('sales list', () => {
+  const sale = (number: string, extra: Partial<PortalRow> = {}): PortalRow => portal(number, { sellerTaxCode: OTHER, sellerName: 'Công ty', buyerTaxCode: SELLER, ...extra });
+  const sold = (number: string, extra: Partial<CroveInvoice> = {}): CroveInvoice =>
+    crove(number, { sellerTaxCode: OTHER, sellerName: '', buyerTaxCode: SELLER, buyerName: 'Khách hàng', ...extra });
+
+  it('flags a sale the books lack and a sale booked with another VAT or total', () => {
+    const result = reconcilePortalList(
+      [sale('1'), sale('2'), sale('3', { vatAmount: '150000' }), sale('4', { total: '1200000' })],
+      [sold('1'), sold('3'), sold('4'), sold('9')],
+      PERIOD,
+    );
+    const byNumber = Object.fromEntries(result.items.map((i) => [i.portal?.number ?? i.crove?.number, [i.outcome, i.differences]]));
+    expect(byNumber).toEqual({
+      '1': ['matched', []],
+      '2': ['missing', []],
+      '3': ['amount_mismatch', ['vat']],
+      '4': ['amount_mismatch', ['total']],
+      '9': ['not_on_portal', []],
+    });
+    expect(result.summary).toMatchObject({ portalInvoices: 4, matched: 1, missing: 1, amountMismatch: 2, notOnPortal: 1 });
+  });
+
+  it('flags nothing new when the same sale is on two lists of the period', () => {
+    const once = reconcilePortalList([sale('1'), sale('2')], [sold('1')], PERIOD);
+    const twice = reconcilePortalList([sale('1'), sale('2'), sale('2', { rowNo: 90 }), sale('1', { rowNo: 91 })], [sold('1')], PERIOD);
+    expect(twice.items.map((i) => [i.portal?.number, i.outcome])).toEqual(once.items.map((i) => [i.portal?.number, i.outcome]));
+    expect(twice.summary).toMatchObject({ missing: 1, matched: 1, duplicateRows: 2 });
+  });
+
+  it('keeps a cancelled sale that is still booked apart, and a cancelled one that is not booked', () => {
+    const result = reconcilePortalList([sale('1', { status: 'cancelled' }), sale('2', { status: 'replaced' })], [sold('1')], PERIOD);
+    expect(result.items.map((i) => [i.portal?.number, i.outcome])).toEqual([
+      ['1', 'void_in_crove'],
+      ['2', 'void'],
+    ]);
+  });
+});
+
+describe('checkPortalList for a sales list', () => {
+  const row = (extra: Partial<ExtractedPortalList['rows'][number]> = {}): ExtractedPortalList['rows'][number] => ({
+    rowNo: 4,
+    sellerTaxCode: OTHER,
+    sellerName: 'Công ty',
+    buyerTaxCode: SELLER,
+    template: '1',
+    series: 'C26TAA',
+    number: '1',
+    issueDate: '2026-09-10',
+    currency: 'VND',
+    subtotal: '1000000',
+    vatAmount: '100000',
+    total: '1100000',
+    statusLabel: 'Hóa đơn mới',
+    checkResult: null,
+    ...extra,
+  });
+  const list = (rows: ExtractedPortalList['rows'], extra: Partial<ExtractedPortalList> = {}): ExtractedPortalList => ({
+    sheetName: 'Sheet1',
+    headerRow: 3,
+    columns: [],
+    listFrom: '2026-09-01',
+    listTo: '2026-09-30',
+    buyerTaxCode: null,
+    skipped: [],
+    skippedCount: 0,
+    rows,
+    ...extra,
+  });
+
+  it('keeps the org as the seller with the customer on the row, and counts what it leaves out', () => {
+    const checked = checkPortalList(
+      list([row(), row({ rowNo: 5, buyerTaxCode: null }), row({ rowNo: 6, sellerTaxCode: SELLER, buyerTaxCode: OTHER }), row({ rowNo: 7, sellerTaxCode: SELLER, buyerTaxCode: '0100109107' })]),
+      OTHER,
+      'sale',
+    );
+    expect(checked).toMatchObject({ ok: true, ownSales: 1, otherBuyers: 1 });
+    expect(checked.ok && checked.rows.map((r) => [r.rowNo, r.sellerTaxCode, r.buyerTaxCode])).toEqual([
+      [4, OTHER, SELLER],
+      [5, OTHER, null],
+    ]);
+  });
+
+  it("accepts an invoice of the org's branch and refuses the other direction and another company's list", () => {
+    const branch = checkPortalList(list([row({ sellerTaxCode: `${OTHER}-001` })]), OTHER, 'sale');
+    expect(branch.ok && branch.rows[0]?.sellerTaxCode).toBe(`${OTHER}-001`);
+    expect(checkPortalList(list([row({ sellerTaxCode: SELLER, buyerTaxCode: OTHER })]), OTHER, 'sale')).toEqual({ ok: false, error: expect.stringContaining('hóa đơn mua vào') });
+    expect(checkPortalList(list([row({ sellerTaxCode: SELLER, buyerTaxCode: '0100109107' })]), OTHER, 'sale')).toEqual({ ok: false, error: expect.stringContaining(`mã số thuế ${SELLER}`) });
+    expect(checkPortalList(list([]), OTHER, 'sale')).toEqual({ ok: false, error: expect.stringContaining('bán ra') });
+    // A purchase list stays as it was, and a sales list is no longer told apart by the line above the header.
+    expect(checkPortalList(list([row()], { buyerTaxCode: SELLER }), OTHER, 'sale')).toMatchObject({ ok: true });
+    expect(checkPortalList(list([row()]), OTHER)).toEqual({ ok: false, error: expect.stringContaining('bán ra') });
   });
 });

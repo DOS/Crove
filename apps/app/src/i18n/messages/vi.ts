@@ -199,6 +199,7 @@ export const vi = {
       tasks_rerouted: '{count, plural, other {# việc}} chuyển đến bạn',
       bank_attention: 'Sao kê tài khoản {account} có {lines, plural, other {# dòng}} cần xem lại',
       portal_attention: 'Đối chiếu cổng thuế {period}: {missing, plural, other {# hóa đơn}} chưa có trong {brand}, {mismatch, plural, other {# hóa đơn}} lệch số tiền',
+      portal_attention_sale: 'Đối chiếu hóa đơn bán ra với cổng thuế {period}: {missing, plural, other {# hóa đơn}} chưa có trong {brand}, {mismatch, plural, other {# hóa đơn}} lệch số tiền',
       portal_failed: 'Không đọc được bảng kê hóa đơn của cổng thuế {period}',
       period_closing: 'Tờ khai GTGT {period} đến hạn nộp ngày {due} nhưng kỳ này chưa khóa sổ',
       todo_due: 'Bạn có 1 việc đến hạn',
@@ -1410,6 +1411,73 @@ export const vi = {
     },
     allClear: 'Không có gì cần xử lý',
     allClearHint: 'Mọi hóa đơn trên danh sách đều đã có trong {brand} với cùng số tiền.',
+    tabs: { purchase: 'Hóa đơn mua vào', sale: 'Hóa đơn bán ra' },
+    sale: {
+      title: 'Hóa đơn bán ra so với cổng thuế',
+      subtitle:
+        'Tải lên danh sách hóa đơn bán ra xuất từ hoadondientu.gdt.gov.vn để xem hóa đơn bán nào cơ quan thuế có mà {brand} chưa có, hoặc đã ghi sổ lệch số tiền hay tiền thuế, tránh kê thiếu thuế GTGT đầu ra. Danh sách này không tự ghi sổ gì cả.',
+      how: {
+        login: 'Đăng nhập hoadondientu.gdt.gov.vn bằng tài khoản của doanh nghiệp, vào Tra cứu, Tra cứu hóa đơn, chọn Tra cứu hóa đơn điện tử bán ra.',
+        search: 'Chọn ngày lập từ đầu đến cuối kỳ (cổng thuế tra tối đa khoảng một tháng mỗi lần), rồi bấm Tìm kiếm.',
+        export:
+          'Bấm biểu tượng Xuất hóa đơn để tải tệp Excel. Ở thẻ Hóa đơn điện tử, xuất riêng cho từng Kết quả kiểm tra: Đã cấp mã hóa đơn và Cục Thuế đã nhận không mã; nếu công ty có xuất hóa đơn từ máy tính tiền, xuất thêm ở thẻ đó.',
+        upload: 'Tải từng tệp lên đây cho đúng kỳ. {brand} đọc tệp, rồi đối chiếu với hóa đơn bán ra đã ghi sổ và đang chờ duyệt.',
+      },
+      noListsHint: 'Xuất danh sách hóa đơn bán ra từ cổng thuế rồi bấm Tải danh sách lên.',
+      listStatus: {
+        ownSales: '{count, plural, other {# dòng}} mua vào, đã bỏ qua',
+        otherBuyers: '{count, plural, other {# dòng}} của người bán khác, đã bỏ qua',
+      },
+      droppedTitle: 'Đã bỏ qua {count, plural, other {# dòng}} không phải hóa đơn bán ra của công ty',
+      droppedHint:
+        'Thường là do tệp xuất lẫn cả hóa đơn mua vào hoặc hóa đơn của doanh nghiệp khác. Nhưng nếu mã số thuế người bán trên một dòng bị ghi sai, hóa đơn bán ra đó sẽ bị sót khỏi đối chiếu, nên hãy rà lại các dòng này trong tệp.',
+      droppedOwnSales: '{file}: {count, plural, other {# dòng}} ghi người mua là chính công ty (hóa đơn mua vào)',
+      droppedOtherBuyers: '{file}: {count, plural, other {# dòng}} ghi người bán là doanh nghiệp khác',
+      summaryLine:
+        'Cổng thuế có {portal, plural, other {# hóa đơn bán ra}}: {matched, plural, other {# hóa đơn}} khớp, {inbox, plural, other {# hóa đơn}} đang chờ duyệt.',
+      tiles: {
+        missing: 'Hóa đơn bán {brand} chưa có',
+        amount_mismatch: 'Lệch số tiền hoặc thuế',
+        void_in_crove: 'Đã hủy hoặc thay thế',
+        not_on_portal: 'Không có trên cổng thuế',
+      },
+      sections: {
+        missing: {
+          title: 'Cơ quan thuế có, sổ sách chưa có ({count})',
+          hint: 'Các hóa đơn bán ra này đã phát hành nhưng chưa ghi sổ, nên thuế GTGT đầu ra đang bị kê thiếu. Hãy ghi sổ từng hóa đơn: tải tệp XML lên Hộp thư chứng từ, hoặc nhập như một hóa đơn bán ra.',
+        },
+        void_in_crove: {
+          title: 'Đã hủy hoặc bị thay thế trên cổng thuế nhưng {brand} vẫn giữ ({count})',
+          hint: 'Hóa đơn bán ra này không còn giá trị, nên thuế GTGT đầu ra đang bị kê thừa khi còn giữ nó. Nếu đã ghi sổ, hãy đảo bút toán; nếu đang chờ duyệt, hãy từ chối.',
+        },
+        amount_mismatch: {
+          title: 'Lệch số tiền hoặc tiền thuế ({count})',
+          hint: 'Tổng tiền, tiền thuế hoặc loại tiền trên cổng thuế khác với hóa đơn bán ra đã ghi trong {brand}, nên thuế GTGT đầu ra có thể sai. Hãy kiểm tra lại hóa đơn đã phát hành.',
+        },
+        not_on_portal: {
+          title: '{brand} có, danh sách không có ({count})',
+          hint: 'Kiểm tra đã xuất đủ các danh sách bán ra của kỳ chưa (có mã, không mã, máy tính tiền). Nếu cổng thuế thật sự không có, có thể hóa đơn chưa được phát hành trên cổng thuế.',
+        },
+        in_inbox: {
+          title: 'Đang chờ duyệt trong Hộp thư ({count})',
+          hint: '{brand} đã đọc các hóa đơn bán ra này nhưng chưa ghi sổ. Hãy duyệt để đưa vào sổ sách.',
+        },
+        matched: {
+          title: 'Khớp ({count})',
+          hint: 'Có trên cổng thuế và đã ghi sổ trong {brand} với cùng số tiền và tiền thuế.',
+        },
+        declared_late: {
+          title: 'Hóa đơn bán ra kỳ trước kê khai vào kỳ này ({count})',
+          hint: 'Các hóa đơn bán ra này ghi sổ trong kỳ này dù ngày lập sớm hơn. Cổng thuế xếp hóa đơn theo ngày lập.',
+        },
+        void: {
+          title: 'Đã hủy hoặc bị thay thế, {brand} không có ({count})',
+          hint: 'Đúng như mong đợi: hóa đơn không còn giá trị nên không cần ghi sổ.',
+        },
+      },
+      columns: { buyer: 'Khách hàng' },
+      allClearHint: 'Mọi hóa đơn bán ra trên danh sách đều đã có trong {brand} với cùng số tiền và tiền thuế.',
+    },
   },
   periodLock: {
     title: 'Khóa sổ',
