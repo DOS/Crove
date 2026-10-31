@@ -116,7 +116,6 @@ export const zCalendarConnect = z.strictObject({
   expiresAt: zInstant.nullable(),
   credential: z.strictObject({ keyId: zKeyId, envelope: zEnvelope }),
 });
-export type CalendarConnectInput = z.infer<typeof zCalendarConnect>;
 
 export const calendarConnect = defineCommand({
   name: 'kernel.calendar.connect',
