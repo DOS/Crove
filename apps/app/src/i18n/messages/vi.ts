@@ -843,7 +843,7 @@ export const vi = {
     nameNeeded: 'Nhập tên cho kết nối này.',
     connect: 'Kết nối nguồn thử',
     noConnections: 'Chưa kết nối nguồn giao dịch nào.',
-    status: { active: 'Đang kết nối', expired: 'Đã hết hạn', revoked: 'Đã ngắt', error: 'Có sự cố' },
+    status: { active: 'Đã kết nối', expired: 'Đã hết hạn', revoked: 'Đã ngắt', error: 'Có sự cố' },
     expiredHint: 'Kết nối này không còn dùng được. Hãy kết nối lại bên dưới, rồi gắn lại các tài khoản.',
     errorHint: 'Kết nối này báo có sự cố. Hãy kết nối lại bên dưới.',
     waiting: 'Đang chờ lần đồng bộ đầu tiên. Các tài khoản ngân hàng cung cấp sẽ hiện ở đây sau ít phút.',
@@ -862,7 +862,7 @@ export const vi = {
     mappedTo: 'Đưa vào tài khoản ngân hàng {account}',
     syncedAt: 'Đồng bộ lần cuối {when}',
     neverSynced: 'Chưa đồng bộ',
-    gone: 'Ngân hàng không còn liệt kê tài khoản này. Các giao dịch đã lưu vẫn giữ; gỡ liên kết để bỏ liên kết.',
+    gone: 'Ngân hàng không còn liệt kê tài khoản này. Các giao dịch đã lưu vẫn giữ; hãy gỡ liên kết nếu không cần nữa.',
   },
   memberRoles: {
     roles: {

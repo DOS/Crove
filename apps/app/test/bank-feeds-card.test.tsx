@@ -165,7 +165,9 @@ describe('BankFeedsCard for a member or viewer', () => {
   it.each<Role>(['member', 'viewer'])('as %s: only reads which accounts are mapped, with nothing to change', (role) => {
     const html = card(role, { mapped: [account('m1', 'SBX-001', { lastSyncedAt: '2026-10-30T08:00:00.000Z' })] });
     expect(html).toContain(en.bankFeeds.readOnlyIntro);
-    expect(html).toContain('SBX-001');
+    expect(html).toContain('Ngân hàng thử');
+    // The provider's account number is for those who map it.
+    expect(html).not.toContain('SBX-001');
     expect(html).toContain('Goes to bank account 1121');
     expect(html).not.toContain('<form');
     expect(html).not.toContain('<button');

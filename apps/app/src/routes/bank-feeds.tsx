@@ -223,7 +223,8 @@ function ConnectionItem({
   // The accounts the worker listed: none right after connecting, until the first sync, so ask again while it is empty.
   const listed = useQuery({
     ...orpc.bankFeeds.listed.queryOptions({ input: { connectionId: connection.id } }),
-    refetchInterval: (query) => (connection.status === 'active' && query.state.data?.length === 0 ? 5000 : false),
+    // Every 5 seconds for two minutes: a listing that stays empty is the provider's answer, not a sync still to come.
+    refetchInterval: (query) => (connection.status === 'active' && query.state.data?.length === 0 && query.state.dataUpdateCount < 24 ? 5000 : false),
   });
   const rows = feedAccountRows(listed.data ?? null, mapped);
   return (
@@ -242,10 +243,9 @@ function ConnectionItem({
           {t('errorHint')}
         </p>
       )}
+      {listed.error && <ErrorText>{errorMessage(listed.error)}</ErrorText>}
       {listed.isLoading ? (
         <RowsSkeleton />
-      ) : listed.error ? (
-        <ErrorText>{errorMessage(listed.error)}</ErrorText>
       ) : rows.length === 0 ? (
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <p className="text-xs text-subtle-foreground">{t('waiting')}</p>
@@ -276,7 +276,7 @@ function ReadOnlyList({ accounts }: { accounts: readonly BankFeedAccountView[] }
         {accounts.map((a) => (
           <li key={a.id} className="py-2 text-sm">
             <p className="text-foreground">
-              {a.connectionName} · <span className="font-mono">{a.externalAccountId}</span>
+              {a.connectionName}
             </p>
             <p className="text-xs text-subtle-foreground">
               {t('mappedTo', { account: a.bankAccount })} · <LastSynced account={a} />
@@ -300,8 +300,9 @@ export function BankFeedsCard({ role }: { role: Role }) {
     // Nothing to change and nothing mapped: nothing to show.
     return accounts.data && accounts.data.length > 0 ? <ReadOnlyList accounts={accounts.data} /> : null;
   }
-  const loading = connections.isLoading || accounts.isLoading;
-  const failure = connections.error ?? accounts.error;
+  // The rows start their forms from the chart and the entities, so wait for both.
+  const loading = connections.isLoading || accounts.isLoading || chart.isLoading || entities.isLoading;
+  const failure = connections.error ?? accounts.error ?? chart.error ?? entities.error;
   return (
     <Card className="block p-4" aria-label={t('title')}>
       <p className="text-sm font-medium text-muted-foreground">{t('title')}</p>
