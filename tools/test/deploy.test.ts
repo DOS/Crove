@@ -201,6 +201,18 @@ describe.skipIf(!runHere)('deploy.sh', { timeout: 300_000 }, () => {
     expect(res.status, res.out).toBe(2);
     expect(res.out).toContain('lists compose.pilot.yml but this release does not carry it');
     expect(calls().some((l) => l.startsWith('pull '))).toBe(false);
+    // Any way a dotenv file may spell the assignment counts, and a name inside a comment does not.
+    const layout = 'docker-compose.yml:compose.pilot.yml:docker-compose.override.yml';
+    for (const line of [`COMPOSE_FILE = ${layout}`, `export COMPOSE_FILE=${layout}`, `  COMPOSE_FILE="${layout}" # pilot`, `COMPOSE_FILE=${layout}\r`]) {
+      writeFileSync(`${dir}/.env`, `POSTGRES_PASSWORD=x\n${line}\n`);
+      expect(deploy('v1.0.0', 'a').status, line).toBe(2);
+    }
+    for (const line of ['COMPOSE_FILE=docker-compose.yml:docker-compose.override.yml # not compose.pilot.yml', `# COMPOSE_FILE=${layout}`]) {
+      writeFileSync(`${dir}/.env`, `POSTGRES_PASSWORD=x\n${line}\n`);
+      expect(deploy('v1.0.0', 'a').status, line).toBe(0);
+    }
+    writeFileSync(`${dir}/.env`, PILOT_ENV);
+    rmSync(`${log}.files`, { force: true });
     // A copy the host already has is enough for a release that does not ship one (an older release).
     writeFileSync(`${dir}/compose.pilot.yml`, 'services: {}\n');
     expect(deploy('v1.0.0', 'a', { STUB_SERVICES: SPLIT }).status).toBe(0);

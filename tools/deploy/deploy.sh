@@ -378,7 +378,10 @@ EOF
 # line `pnpm pilot:check` reads). Read each time, so taking the file out of COMPOSE_FILE is all it takes to go back to one
 # container (#2133).
 pilot_layout() {
-  sed -n 's/^COMPOSE_FILE=//p' "$ENV_FILE" | tail -n 1 | grep -q 'compose\.pilot\.yml'
+  # The last assignment wins, as in a dotenv file: `export` and spaces around `=` are allowed, a trailing ` # comment` is not
+  # part of the value, and a commented-out line is not an assignment.
+  sed -n -E 's/\r$//; s/^[[:space:]]*(export[[:space:]]+)?COMPOSE_FILE[[:space:]]*=[[:space:]]*//p' "$ENV_FILE" \
+    | tail -n 1 | sed -E 's/[[:space:]]+#.*$//' | grep -q 'compose\.pilot\.yml'
 }
 
 # In the pilot layout, the same image pins for `api` and `worker`, so a plain `docker compose` in the stack directory
