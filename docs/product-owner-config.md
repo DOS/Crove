@@ -134,8 +134,10 @@ The DOS organization ids are the same in every DOS repository.
   once, across every line; owner decision 2026-10-31)
 - sub_sessions_max: 2
 
-Each PO starts a fresh session each morning, from a handoff it wrote the day
-before (owner decision 2026-10-31).
+A PO keeps its context small at natural breaks. With a warm cache, it uses
+`/compact` with a focus. After a long idle, such as overnight, it starts a
+fresh session from a handoff file instead. Its loop wakes at most 30 minutes
+apart, inside the one-hour prompt cache (owner decision 2026-10-31).
 - check_in_minutes: 30
 
 JOY's standing instructions (work without stopping; the coordinator merges every PR that meets the merge bar) are
