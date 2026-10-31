@@ -81,7 +81,7 @@ export interface InvoiceLookup {
 }
 
 // The check a duplicate invoice carries: from the lookup before the record, or from the record's own (#2137).
-const DUPLICATE_CHECK: InvoiceCheck = { id: 'duplicate', status: 'fail', code: 'duplicate.found', message: 'Hóa đơn này đã có trong Inbox hoặc đã ghi sổ' };
+const DUPLICATE_CHECK: Readonly<InvoiceCheck> = Object.freeze({ id: 'duplicate', status: 'fail', code: 'duplicate.found', message: 'Hóa đơn này đã có trong Inbox hoặc đã ghi sổ' });
 
 export const purchaseLookup = defineQuery({
   name: 'finance.extraction.lookup',
