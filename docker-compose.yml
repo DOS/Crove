@@ -205,6 +205,8 @@ services:
       AI_PRICE_INPUT_PER_MTOK: ${AI_PRICE_INPUT_PER_MTOK:-0}
       AI_PRICE_OUTPUT_PER_MTOK: ${AI_PRICE_OUTPUT_PER_MTOK:-0}
       API_RATE_LIMIT_PER_MINUTE: ${API_RATE_LIMIT_PER_MINUTE:-600}
+      # The all-in-one role on a public PUBLIC_URL starts only with true (the pilot runs api and worker apart, #2118).
+      CROVE_ALLOW_ALL_IN_ONE: ${CROVE_ALLOW_ALL_IN_ONE:-}
       # Realtime invalidation over SSE (/api/stream): one LISTEN connection per API process (see .env.example).
       STREAM_MAX_CONNECTIONS: ${STREAM_MAX_CONNECTIONS:-500}
       STREAM_MAX_PER_USER: ${STREAM_MAX_PER_USER:-5}

@@ -110,7 +110,8 @@ The first deploy creates `releases/`, `.deploy/` and the active compose files. A
 
 1. Copy the file next to the release's `docker-compose.yml` on the host: `cp /opt/crove-src/tools/deploy/compose.pilot.yml /opt/crove/` (the checkout of [provision-pilot.md](provision-pilot.md), section 8). Like `compose.host.yml`, it is the host's: a release never overwrites it.
 2. In the env file set `CROVE_MODULES=finance` and list it right after `docker-compose.yml`, before the pins: `COMPOSE_FILE=docker-compose.yml:compose.pilot.yml:docker-compose.override.yml:compose.host.yml`. `deploy.sh` passes the files in that order when `compose.pilot.yml` is there (it extends the release's `crove`, so the release's image pins must come after it). It sees `api` and `worker` and so rolls the worker first, then the API, and runs the smoke test on the API's port.
-3. Never put `all-in-one` or `*` in `COMPOSE_PROFILES`: that starts `crove` beside them, and `pnpm pilot:check` fails it.
+   `deploy.sh` stops with exit 2 when `COMPOSE_FILE` in the env file names `compose.pilot.yml` but the file is not in the stack directory; without that check a missing file would silently roll the all-in-one `crove`. As a second guard, the kernel itself refuses to start the `all` role on a public `PUBLIC_URL` unless `CROVE_ALLOW_ALL_IN_ONE=true` (a deliberate opt-in for a self-hoster who accepts it; `pnpm pilot:check` fails it, and the laptop on `localhost` needs none).
+3. Never put `all-in-one` or `*` in `COMPOSE_PROFILES`: that starts `crove` beside them, and `pnpm pilot:check` fails it (the kernel refuses it on a public `PUBLIC_URL` too, without the opt-in above).
 4. On a host that already ran the all-in-one `crove` container, `deploy.sh` removes that container (`docker compose rm --stop --force crove`) before it rolls the worker and the API: left running, it would keep `127.0.0.1:${PORT}` so the new `api` could not bind it, and run the worker's jobs beside the new worker. The database volume is untouched. Do the same by hand (in `/opt/crove`) if you start the layout with plain `docker compose`.
 5. While `compose.pilot.yml` is on the host, `deploy.sh` pins the release's image for `api` and `worker` in the generated `docker-compose.override.yml`, as it does for `crove`, so a plain `docker compose` in `/opt/crove` (a manual `up`, `exec`, `logs`, the restore script) runs the deployed digest. Copy the file before the next deploy: a release staged without it is pinned when it is activated.
 6. Check, once, after the first deploy:
@@ -122,6 +123,8 @@ The first deploy creates `releases/`, `.deploy/` and the active compose files. A
    ```
 
 A deployment without docker compose (Kubernetes, systemd) runs the same two roles from the one image (`api` and `worker` as the container command) and gives the worker, and only the worker, `WORKER_DATABASE_URL`, `EXTRACT_URL` and the archive settings. It names the roles in `CROVE_ROLES=api,worker` so `pilot:check` can tell.
+
+The nightly backup and a restore name `crove` by default; on this layout set `BACKUP_FILES_SERVICE=worker`, `BACKUP_NODE_SERVICE=worker` and `RESTORE_FILES_SERVICE=worker` ([backup-and-restore.md](backup-and-restore.md), "Set up").
 
 What this layout does not do yet: the API container still receives the other settings of `docker-compose.yml`, the secrets that only the worker uses among them (the S3 secret key, the archive settings, the channel app secrets), and mounts the same volumes. Trimming them per role is a follow-up (#2130, P3, Icebox); this change takes away the worker's all-org database login, the parsing sandbox and every module but finance.
 

@@ -217,6 +217,9 @@ describe('pilot-check settings', () => {
       }
       expect(failing({ ...READY, COMPOSE_PROFILES: 'prober,all-in-one' })).toEqual([expect.stringMatching(/^Roles: COMPOSE_PROFILES includes all-in-one/)]);
       expect(failing({ ...READY, COMPOSE_PROFILES: 'all-in-one' })).toEqual([expect.stringMatching(/^Roles: COMPOSE_PROFILES includes all-in-one/)]);
+      // The kernel's own opt-in is the same statement the other way round.
+      for (const allow of ['true', 'TRUE']) expect(failing({ ...READY, CROVE_ALLOW_ALL_IN_ONE: allow }), allow).toEqual([expect.stringMatching(/^Roles: CROVE_ALLOW_ALL_IN_ONE is set: /)]);
+      expect(failing({ ...READY, CROVE_ALLOW_ALL_IN_ONE: 'false' })).toEqual([]);
       // `*` starts every profile.
       for (const profiles of ['*', 'prober,*']) expect(failing({ ...READY, COMPOSE_PROFILES: profiles }), profiles).toEqual([expect.stringMatching(/^Roles: COMPOSE_PROFILES includes all-in-one \(or \*\)/)]);
     });

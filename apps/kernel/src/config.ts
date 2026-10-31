@@ -410,6 +410,9 @@ const schema = z.object({
   // base64url (the `vapid-keys` role prints a new pair), and the contact push services may write to about it (a mailto:
   // address or an https: URL). All three or none: unset, the app offers no push and nothing is sent. Changing the pair
   // ends every subscription; members turn push on again.
+  // The all-in-one role puts the HTTP edge on the worker's all-org database login and every secret, so on a public
+  // PUBLIC_URL the kernel starts it only with this opt-in (assertSplitRoles); the pilot runs api and worker apart.
+  CROVE_ALLOW_ALL_IN_ONE: optional.pipe(z.enum(['true', 'false']).optional()),
   VAPID_PUBLIC_KEY: optional.pipe(z.string().regex(/^[A-Za-z0-9_-]{87}$/, 'VAPID_PUBLIC_KEY is the base64url public key the vapid-keys role prints').optional()),
   VAPID_PRIVATE_KEY: optional.pipe(z.string().regex(/^[A-Za-z0-9_-]{43}$/, 'VAPID_PRIVATE_KEY is the base64url private key the vapid-keys role prints').optional()),
   VAPID_SUBJECT: optional.pipe(z.string().max(200).optional()),
@@ -708,6 +711,19 @@ export function isHostedSupabase(url: string): boolean {
 export function assertExportKey(config: Pick<Config, 'PUBLIC_URL' | 'EXPORT_ENCRYPTION_KEY'>): void {
   if (!isLocalUrl(config.PUBLIC_URL) && !config.EXPORT_ENCRYPTION_KEY) {
     throw new Error('set EXPORT_ENCRYPTION_KEY (32 random bytes, openssl rand -base64 32): org exports hold the whole org and are sealed at rest');
+  }
+}
+
+// The all role refuses to start on a public PUBLIC_URL unless CROVE_ALLOW_ALL_IN_ONE=true (#2118): the API would run on
+// the worker's database login, which enters the system context of every org, and on every secret. A missing
+// compose.pilot.yml, or a stray profile, would otherwise do that silently. Run api and worker as two processes
+// (docs/runbooks/deploy.md, "The pilot layout"). Checked when a role starts, like the export key above.
+export function assertSplitRoles(config: Pick<Config, 'PUBLIC_URL' | 'CROVE_ALLOW_ALL_IN_ONE'>, role: 'api' | 'worker' | 'all'): void {
+  if (role === 'all' && !isLocalUrl(config.PUBLIC_URL) && config.CROVE_ALLOW_ALL_IN_ONE !== 'true') {
+    throw new Error(
+      'the all role runs the API on the worker database login and every secret; on a public PUBLIC_URL run api and worker as separate processes ' +
+        '(docs/runbooks/deploy.md, "The pilot layout"), or set CROVE_ALLOW_ALL_IN_ONE=true to accept that',
+    );
   }
 }
 

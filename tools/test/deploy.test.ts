@@ -133,6 +133,23 @@ describe.skipIf(!runHere)('deploy.sh', { timeout: 300_000 }, () => {
     expect(c.some((l) => l === 'compose port api 8080')).toBe(true);
   });
 
+  it('refuses to deploy when COMPOSE_FILE names compose.pilot.yml and the file is missing, rather than roll the all-in-one crove (#2118)', () => {
+    writeFileSync(`${dir}/.env`, 'POSTGRES_PASSWORD=x\nCOMPOSE_FILE=docker-compose.yml:compose.pilot.yml:docker-compose.override.yml:compose.host.yml\n');
+    const res = deploy('v1.0.0', 'a', { STUB_SERVICES: 'db migrate auth auth-grants crove-extract mailpit crove' });
+    expect(res.status, res.out).toBe(2);
+    expect(res.out).toContain('lists compose.pilot.yml but');
+    expect(calls().some((l) => l.startsWith('pull '))).toBe(false);
+    writeFileSync(`${dir}/compose.pilot.yml`, 'services: {}\n');
+    expect(deploy('v1.0.0', 'a', { STUB_SERVICES: 'db migrate auth auth-grants crove-extract mailpit api worker' }).status).toBe(0);
+  });
+
+  it('says so when it cannot remove the old crove container, and goes on', () => {
+    writeFileSync(`${dir}/compose.pilot.yml`, 'services: {}\n');
+    const res = deploy('v1.0.0', 'a', { STUB_SERVICES: 'db migrate auth auth-grants crove-extract mailpit api worker', STUB_RM_FAIL: '1' });
+    expect(res.status, res.out).toBe(0);
+    expect(res.out).toContain('could not remove the old crove container (the deploy goes on): rm: stub failure');
+  });
+
   // #892: with --build, /version must report the build being deployed, so an old container that still answers fails.
   describe('build check', () => {
     const build = (c: string) => digest(c).slice(0, 12);
@@ -204,7 +221,7 @@ describe.skipIf(!runHere)('deploy.sh', { timeout: 300_000 }, () => {
     expect(ps).toBeGreaterThan(worker);
     expect(api).toBeGreaterThan(ps);
     expect(indexOf(c, 'compose port api 8080')).toBeGreaterThan(api);
-    expect(c.some((l) => / crove$/.test(l))).toBe(false);
+    expect(c.some((l) => / crove$/.test(l) && !l.startsWith('compose rm '))).toBe(false);
   });
 
   // #1965 (plan §3.5): toward an older release the API goes first, so the worker that runs is never older than the API

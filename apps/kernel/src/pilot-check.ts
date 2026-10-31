@@ -133,6 +133,10 @@ function list(raw: string | undefined, separator: RegExp): string[] {
 // (COMPOSE_FILE lists compose.pilot.yml, COMPOSE_PROFILES does not start the all-in-one service); a deployment without
 // docker compose names its roles in CROVE_ROLES. Names settings only, never a value.
 function rolesProblem(env: Env): string | null {
+  // The kernel's own opt-in to run the all role on a public URL (config.ts assertSplitRoles).
+  if (value(env, 'CROVE_ALLOW_ALL_IN_ONE')?.toLowerCase() === 'true') {
+    return 'CROVE_ALLOW_ALL_IN_ONE is set: the kernel then accepts the all-in-one role (the API on the worker database login and every secret) on a public PUBLIC_URL; unset it and run api and worker apart (docs/runbooks/deploy.md)';
+  }
   // `*` is every profile, the all-in-one service among them.
   const profiles = list(value(env, 'COMPOSE_PROFILES'), /,/);
   if (profiles.includes('all-in-one') || profiles.includes('*')) {

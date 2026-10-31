@@ -514,7 +514,8 @@ roll_services() {
   if has_service worker && has_service api; then
     # The first deploy of the pilot layout on a host that ran the all-in-one `crove`: that container would keep the API's
     # port and run the worker's jobs beside the new one (#2118). Nothing to remove on a later deploy.
-    dc rm --stop --force crove >/dev/null 2>&1 || true
+    local removed
+    if ! removed="$(dc rm --stop --force crove 2>&1)"; then log "could not remove the old crove container (the deploy goes on): ${removed:0:300}"; fi
     if [ "$direction" = back ]; then
       log 'rolling the API (toward an older build: the API before the worker)'
       up api || return 1
@@ -576,6 +577,11 @@ preflight() {
   [ -n "$ENV_FILE" ] || ENV_FILE="$DEPLOY_DIR/.env"
   valid_path "$ENV_FILE" || die "$EXIT_USAGE" "--env-file must be an absolute path without spaces: $ENV_FILE"
   [ -f "$ENV_FILE" ] || die "$EXIT_USAGE" "env file $ENV_FILE not found (copy .env.example there and change every secret)"
+  # The env file lists compose.pilot.yml in COMPOSE_FILE but the file is not here: dc() would silently drop it and the
+  # deploy would roll the all-in-one `crove` (API on the worker's database login) instead of api and worker (#2118).
+  if sed -n 's/^COMPOSE_FILE=//p' "$ENV_FILE" | tail -n 1 | grep -q 'compose\.pilot\.yml' && [ ! -f "$DEPLOY_DIR/compose.pilot.yml" ]; then
+    die "$EXIT_USAGE" "COMPOSE_FILE in $ENV_FILE lists compose.pilot.yml but $DEPLOY_DIR/compose.pilot.yml does not exist: copy tools/deploy/compose.pilot.yml there (docs/runbooks/deploy.md, \"The pilot layout\")"
+  fi
   command -v docker >/dev/null || die "$EXIT_USAGE" 'docker is not installed'
   command -v curl >/dev/null || die "$EXIT_USAGE" 'curl is not installed'
   compose_version_ok || die "$EXIT_USAGE" 'docker compose v2.24 or newer is required'
