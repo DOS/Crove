@@ -4,8 +4,10 @@
 // - no Crove role reads crove_kernel.calendar_credential directly; only the worker opens a credential, in the system
 //   context of its org, and for an active connection only while the member who owns it is still in the org and not
 //   disabled. One deliberate exception (#2144): the credential of a DISCONNECTING connection is handed to the worker
-//   whatever became of its member, because the revoke at the provider is the only use it has there; the worker and
-//   the system context only, as for any credential, and an expired connection has none;
+//   whatever became of its member, because the revoke at the provider is the only use it has there; as for any
+//   credential only the worker login holds EXECUTE on the definer and no tenant role reads the table (the grants are
+//   what this file proves; the definer's own system-context guard is kept for those rows too), and an expired
+//   connection has none;
 // - the API login cannot open a credential, whatever actor its runtime claims to be;
 // - only the member who owns a connection seals into it or drops its credential, also when calling the definers
 //   directly, and never across orgs;
@@ -229,20 +231,23 @@ suite('calendar credentials on PostgreSQL (#2123)', () => {
   });
 
   it('hands the credential of a disconnecting connection to the worker alone, whatever became of its member, and never to the API login or a tenant role', async () => {
-    const { orgId, others } = await orgWith(['member', 'member', 'member', 'member']);
-    const [left, demoted, expired, active] = others as [string, string, string, string];
+    const { orgId, others } = await orgWith(['member', 'member', 'member', 'member', 'member']);
+    const [left, demoted, expired, active, disabled] = others as [string, string, string, string, string];
     const a = await connect(orgId, left);
     const b = await connect(orgId, demoted);
     const c = await connect(orgId, expired);
     const d = await connect(orgId, active);
+    const e = await connect(orgId, disabled);
     const disconnect = (user: string, connectionId: string) => api.execute('kernel.calendar.disconnect', { connectionId }, { actor: asUser(user), orgId });
     await disconnect(left, a.connectionId);
     await disconnect(demoted, b.connectionId);
+    await disconnect(disabled, e.connectionId);
+    await admin((cl) => cl.query('UPDATE crove_kernel.user_account SET disabled_at = now() WHERE id = $1', [disabled]));
     await worker.execute('kernel.calendar.mark_failed', { connectionId: c.connectionId, status: 'expired', reason: 'refused (invalid_grant)' }, { actor: system, orgId });
     await admin((cl) => cl.query('DELETE FROM crove_kernel.tenant_member WHERE org_id = $1 AND user_id = ANY ($2::uuid[])', [orgId, [left, active]]));
     await admin((cl) => cl.query("UPDATE crove_kernel.tenant_member SET role = 'viewer' WHERE org_id = $1 AND user_id = $2", [orgId, demoted]));
-    // The exception: both still open for the worker, and they open under their own binding only.
-    for (const c2 of [a, b]) {
+    // The exception: all three (left, demoted to viewer, disabled) still open for the worker, under their own binding only.
+    for (const c2 of [a, b, e]) {
       const sealed = await sealedOf(orgId, c2.connectionId);
       expect(JSON.parse(vault.open({ keyId: sealed.keyId, envelope: Buffer.from(sealed.envelope, 'base64') }, { orgId, provider: 'calendar:google', externalAccountId: c2.account }))).toMatchObject({ refreshToken: '1//calendar-refresh-secret' });
     }
