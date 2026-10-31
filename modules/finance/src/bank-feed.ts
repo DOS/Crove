@@ -159,7 +159,7 @@ export const bankFeedConnections = defineQuery({
       .where('provider', 'like', 'bank\\_%')
       .where('status', '<>', 'revoked')
       .orderBy('connected_at', 'desc')
-      .limit(100)
+      .limit(500)
       .execute();
     return rows
       .filter((r) => isBankFeedProviderId(r.provider))

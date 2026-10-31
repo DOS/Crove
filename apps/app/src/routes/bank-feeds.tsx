@@ -224,7 +224,7 @@ function ConnectionItem({
   const listed = useQuery({
     ...orpc.bankFeeds.listed.queryOptions({ input: { connectionId: connection.id } }),
     // Every 5 seconds for two minutes: a listing that stays empty is the provider's answer, not a sync still to come.
-    refetchInterval: (query) => (connection.status === 'active' && query.state.data?.length === 0 && query.state.dataUpdateCount < 24 ? 5000 : false),
+    refetchInterval: (query) => (connection.status === 'active' && query.state.data?.length === 0 && query.state.dataUpdateCount + query.state.errorUpdateCount < 24 ? 5000 : false),
   });
   const rows = feedAccountRows(listed.data ?? null, mapped);
   return (
@@ -296,14 +296,22 @@ export function BankFeedsCard({ role }: { role: Role }) {
   // been synced yet; later changes show on the next visit or when the window is focused again.
   const accounts = useQuery({
     ...orpc.bankFeeds.accounts.queryOptions(),
-    refetchInterval: (query) => (query.state.data?.some((a) => a.lastSyncedAt === null && a.connectionStatus === 'active') && query.state.dataUpdateCount < 24 ? 5000 : false),
+    refetchInterval: (query) => (query.state.data?.some((a) => a.lastSyncedAt === null && a.connectionStatus === 'active') && query.state.dataUpdateCount + query.state.errorUpdateCount < 24
+        ? 5000
+        : false),
   });
   const connections = useQuery({ ...orpc.bankFeeds.connections.queryOptions(), enabled: canManage });
   const chart = useQuery({ ...orpc.accounts.list.queryOptions(), enabled: canManage });
   const entities = useQuery({ ...orpc.legalEntities.list.queryOptions(), enabled: canManage });
   if (!canManage) {
-    // Nothing to change and nothing mapped: nothing to show.
-    return accounts.data && accounts.data.length > 0 ? <ReadOnlyList accounts={accounts.data} /> : null;
+    // Nothing to change and nothing mapped: nothing to show. A read that failed is not "nothing mapped": say so.
+    if (accounts.data) return accounts.data.length > 0 ? <ReadOnlyList accounts={accounts.data} /> : null;
+    return accounts.error ? (
+      <Card className="block p-4" aria-label={t('title')}>
+        <p className="text-sm font-medium text-muted-foreground">{t('title')}</p>
+        <ErrorText>{errorMessage(accounts.error)}</ErrorText>
+      </Card>
+    ) : null;
   }
   // The rows start their forms from the chart and the entities, so wait for both.
   const loading = connections.isLoading || accounts.isLoading || chart.isLoading || entities.isLoading;
@@ -327,9 +335,10 @@ export function BankFeedsCard({ role }: { role: Role }) {
               ))}
             </ul>
           )}
-          <ConnectForm />
         </>
       )}
+      {/* It needs only the connect call, so it stays when a read above failed. */}
+      {!loading && <ConnectForm />}
     </Card>
   );
 }
