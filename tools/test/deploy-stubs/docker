@@ -71,7 +71,7 @@ case "$sub" in
       for s in ${STUB_RUNNING:-worker}; do echo "$s"; done
     fi
     ;;
-  up | logs) ;;
+  up | logs | rm) ;;
   *)
     echo "stub docker compose: unexpected $sub" >&2
     exit 99

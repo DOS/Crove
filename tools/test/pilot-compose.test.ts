@@ -39,7 +39,13 @@ describe.skipIf(!hasCompose)('compose.pilot.yml', { timeout: 60_000 }, () => {
     copyFileSync(join(repo, 'docker-compose.yml'), join(dir, 'docker-compose.yml'));
     copyFileSync(join(repo, 'tools/deploy/compose.pilot.yml'), join(dir, 'compose.pilot.yml'));
     // The release pins the images in a generated override, as deploy.sh writes it.
-    writeFileSync(join(dir, 'docker-compose.override.yml'), "services:\n  crove: { image: 'registry.example/ludy@sha256:aa', build: !reset null }\n");
+    writeFileSync(join(dir, 'docker-compose.override.yml'), [
+        'services:',
+        "  crove: { image: 'registry.example/ludy@sha256:aa', build: !reset null }",
+        "  api: { image: 'registry.example/ludy@sha256:aa', build: !reset null }",
+        "  worker: { image: 'registry.example/ludy@sha256:aa', build: !reset null }",
+        '',
+      ].join('\n'));
     writeFileSync(join(dir, '.env'), '');
   });
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -55,16 +61,20 @@ describe.skipIf(!hasCompose)('compose.pilot.yml', { timeout: 60_000 }, () => {
   });
 
   it('starts api and worker apart and not the all-in-one service', () => {
-    const files = ['docker-compose.yml', 'docker-compose.override.yml', 'compose.pilot.yml'];
-    const services = config(files, { CROVE_IMAGE: 'registry.example/ludy@sha256:bb' });
+    const files = ['docker-compose.yml', 'compose.pilot.yml', 'docker-compose.override.yml'];
+    const services = config(files);
     expect(services['crove']).toBeUndefined();
     expect(services['api']?.command).toEqual(['api']);
     expect(services['worker']?.command).toEqual(['worker']);
-    // The release's digest, which deploy.sh exports as CROVE_IMAGE.
-    expect(services['api']?.image).toBe('registry.example/ludy@sha256:bb');
-    expect(services['worker']?.image).toBe('registry.example/ludy@sha256:bb');
+    // The release's digest, which deploy.sh pins for both while compose.pilot.yml is on the host.
+    expect(services['api']?.image).toBe('registry.example/ludy@sha256:aa');
+    expect(services['worker']?.image).toBe('registry.example/ludy@sha256:aa');
+    // Without the pins (a stack built from a checkout) they run what `crove` runs.
+    const unpinned = config(['docker-compose.yml', 'compose.pilot.yml']);
+    expect(unpinned['api']?.image).toBe('crove:local');
+    expect(unpinned['worker']?.image).toBe('crove:local');
     // The all-in-one service is one profile away, for a laptop.
-    expect(config(files, { CROVE_IMAGE: 'x' }, ['all-in-one'])['crove']?.profiles).toEqual(['all-in-one']);
+    expect(config(files, {}, ['all-in-one'])['crove']?.profiles).toEqual(['all-in-one']);
   });
 
   it('keeps the worker database login and the sandbox away from the API', () => {

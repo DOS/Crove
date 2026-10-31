@@ -110,7 +110,7 @@ describe.skipIf(!runHere)('deploy.sh', { timeout: 300_000 }, () => {
   });
 
   // #2118: the pilot's split API and worker are an optional host file, passed last when it is there.
-  it('passes compose.host.yml and compose.pilot.yml to every compose call, in that order, only when they exist', () => {
+  it('passes compose.pilot.yml after the release file and before the pins, and compose.host.yml last, only when they exist', () => {
     const filesOf = () => readFileSync(`${log}.files`, 'utf8').split('\n').filter(Boolean);
     expect(deploy('v1.0.0', 'a').status).toBe(0);
     for (const files of filesOf()) expect(files).toBe(`${dir}/docker-compose.yml ${dir}/docker-compose.override.yml`);
@@ -120,9 +120,15 @@ describe.skipIf(!runHere)('deploy.sh', { timeout: 300_000 }, () => {
     const res = deploy('v1.1.0', 'b', { STUB_SERVICES: 'db migrate auth auth-grants crove-extract mailpit api worker' });
     expect(res.status, res.out).toBe(0);
     expect(filesOf().length).toBeGreaterThan(5);
-    for (const files of filesOf()) expect(files).toBe(`${dir}/docker-compose.yml ${dir}/docker-compose.override.yml ${dir}/compose.host.yml ${dir}/compose.pilot.yml`);
+    for (const files of filesOf()) expect(files).toBe(`${dir}/docker-compose.yml ${dir}/compose.pilot.yml ${dir}/docker-compose.override.yml ${dir}/compose.host.yml`);
     // The split roles roll worker first, then the API, and the smoke test finds the API's port.
     const c = calls();
+    // The all-in-one container of an earlier layout goes first, so it keeps neither the API's port nor the worker's jobs.
+    expect(indexOf(c, 'compose rm --stop --force crove')).toBeGreaterThanOrEqual(0);
+    expect(indexOf(c, 'compose rm --stop --force crove')).toBeLessThan(indexOf(c, 'compose up --detach --no-build --no-deps worker'));
+    // The pins of the release reach api and worker too, for a plain docker compose on the host.
+    expect(running()).toContain(`api: { image: '${image('b')}', build: !reset null }`);
+    expect(running()).toContain(`worker: { image: '${image('b')}', build: !reset null }`);
     expect(indexOf(c, 'compose up --detach --no-build --no-deps worker')).toBeLessThan(indexOf(c, 'compose up --detach --no-build --no-deps --wait --wait-timeout 600 api'));
     expect(c.some((l) => l === 'compose port api 8080')).toBe(true);
   });

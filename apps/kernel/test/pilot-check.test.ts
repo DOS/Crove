@@ -28,7 +28,7 @@ const READY: Env = {
   ALERT_WEBHOOK_URL: `https://alerts.example.com/hook/${fake('hook')}`,
   PROBER_HEARTBEAT_URL: `https://hc.example.com/ping/${fake('check')}`,
   COMPOSE_PROFILES: 'prober',
-  COMPOSE_FILE: 'docker-compose.yml:docker-compose.override.yml:compose.host.yml:compose.pilot.yml',
+  COMPOSE_FILE: 'docker-compose.yml:compose.pilot.yml:docker-compose.override.yml:compose.host.yml',
   CROVE_MODULES: 'finance',
   BACKUP_S3_ENDPOINT: 'https://backups.storage.example',
   BACKUP_S3_BUCKET: 'crove-backups',

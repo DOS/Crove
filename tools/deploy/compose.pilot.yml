@@ -4,14 +4,15 @@
 # every secret, and every module is on, Social's public routes included. That is right for `docker compose up` on a
 # laptop and wrong for a deployment other people reach.
 #
-# Copy this file next to the release's docker-compose.yml on the host (/opt/crove) and list it last in COMPOSE_FILE:
+# Copy this file next to the release's docker-compose.yml on the host (/opt/crove) and list it right after it in COMPOSE_FILE,
+# before the pins that extend it (the order deploy.sh uses):
 #
-#   COMPOSE_FILE=docker-compose.yml:docker-compose.override.yml:compose.host.yml:compose.pilot.yml
+#   COMPOSE_FILE=docker-compose.yml:compose.pilot.yml:docker-compose.override.yml:compose.host.yml
 #
-# tools/deploy/deploy.sh passes it on after compose.host.yml when it is there, and rolls the worker before the API. It
+# tools/deploy/deploy.sh passes it on in that order when it is there, and rolls the worker before the API. It
 # extends the release's `crove` service, so every setting of docker-compose.yml reaches both and stays in step. Images:
-# ${CROVE_IMAGE}, which the deploy exports (the release's digest); a stack built from a checkout falls back to the
-# locally built crove:local.
+# the release's digest, which deploy.sh pins for api and worker in docker-compose.override.yml when this file is on the
+# host; a stack built from a checkout runs the locally built crove:local, as `crove` does.
 services:
   # Not started unless COMPOSE_PROFILES lists all-in-one; `pnpm pilot:check` fails a public deployment that does.
   crove:
@@ -23,7 +24,6 @@ services:
     extends:
       file: docker-compose.yml
       service: crove
-    image: ${CROVE_IMAGE:-crove:local}
     command: ['api']
     environment:
       CROVE_MODULES: ${CROVE_MODULES:-finance}
@@ -38,7 +38,6 @@ services:
     extends:
       file: docker-compose.yml
       service: crove
-    image: ${CROVE_IMAGE:-crove:local}
     command: ['worker']
     healthcheck:
       disable: true

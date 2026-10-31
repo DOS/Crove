@@ -160,7 +160,7 @@ Write `/opt/crove/.env` (owner the deploy user, mode 600) from `.env.example`. G
 | `PUBLIC_URL` | `https://<your domain>` |
 | `CROVE_DOMAIN` | `<your domain>` (the reverse proxy's certificate) |
 | `TRUSTED_PROXY_HOPS` | `1` (the reverse proxy below) |
-| `COMPOSE_FILE` | `docker-compose.yml:docker-compose.override.yml:compose.host.yml:compose.pilot.yml` (the split API and worker, [deploy.md](deploy.md), "The pilot layout") |
+| `COMPOSE_FILE` | `docker-compose.yml:compose.pilot.yml:docker-compose.override.yml:compose.host.yml` (the split API and worker, [deploy.md](deploy.md), "The pilot layout") |
 | `CROVE_MODULES` | `finance` (the pilot runs one module; empty would run every module, Social's public routes among them) |
 | `COMPOSE_PROFILES` | `prober` |
 | Every `*_PASSWORD`, `AUTH_JWT_SECRET`, `EXPORT_ENCRYPTION_KEY` (`openssl rand -base64 32`) | generated, never a sample value |
