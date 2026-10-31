@@ -6,7 +6,7 @@ import { z } from 'zod';
 import type { ExtractClient, ExtractFailure } from '@crove/extract-contract';
 import type { UsageMetric } from '@crove/db';
 import { zId, zLocalDate, zPurchaseProposal, zRelatedInvoiceRef, type DocumentDirection, type PurchaseProposal, type RelatedInvoiceRef } from '@crove/kernel-contract';
-import { defineQuery, readVerified, type BlobStore, type Runtime } from '@crove/kernel-runtime';
+import { defineQuery, readVerified, sha256Hex, type BlobStore, type Runtime } from '@crove/kernel-runtime';
 import { AiNotConfiguredError, AmountFormatError, type AiUsage, type InvoiceReader } from '@crove/agent';
 import { journalMemo } from './memo.ts';
 import { BOOK_CURRENCY, convertInvoice, type ForeignAmounts } from './domain/foreign-currency.ts';
@@ -79,6 +79,9 @@ export interface InvoiceLookup {
   // The document in force of the invoice a replacement or an adjustment corrects (#916), or null.
   relatedDocumentId: string | null;
 }
+
+// The check a duplicate invoice carries: from the lookup before the record, or from the record's own (#2137).
+const DUPLICATE_CHECK: Readonly<InvoiceCheck> = Object.freeze({ id: 'duplicate', status: 'fail', code: 'duplicate.found', message: 'Hóa đơn này đã có trong Inbox hoặc đã ghi sổ' });
 
 export const purchaseLookup = defineQuery({
   name: 'finance.extraction.lookup',
@@ -466,26 +469,20 @@ export async function extractAndPropose(
   if (!invoice) return fail(error ?? 'Không đọc được chứng từ');
 
   const sellerTaxCode = parseTaxCode(invoice.seller.taxCode)?.normalized ?? null;
-  const lookup = await deps.runtime.query<InvoiceLookup>(
-    'finance.extraction.lookup',
-    {
-      fileId,
-      sellerTaxCode,
-      sellerName: invoice.seller.name,
-      series: invoice.series,
-      number: invoice.number,
-      related: invoice.related ? { series: invoice.related.series, number: invoice.related.number } : null,
-    },
-    { actor, orgId },
-  );
+  const lookupInput = {
+    sellerTaxCode,
+    sellerName: invoice.seller.name,
+    series: invoice.series,
+    number: invoice.number,
+    related: invoice.related ? { series: invoice.related.series, number: invoice.related.number } : null,
+  };
+  const lookup = await deps.runtime.query<InvoiceLookup>('finance.extraction.lookup', { fileId, ...lookupInput }, { actor, orgId });
 
   const checks = checkInvoice(invoice, deps.today?.());
   // A foreign-currency e-invoice with its own rate is proposed in VND (#918); the checks above read it as issued.
   const converted = bookedInVnd(invoice);
   const booked = converted?.invoice ?? invoice;
-  if (lookup.duplicateDocumentId || lookup.duplicateProposalId) {
-    checks.unshift({ id: 'duplicate', status: 'fail', code: 'duplicate.found', message: 'Hóa đơn này đã có trong Inbox hoặc đã ghi sổ' });
-  }
+  if (lookup.duplicateDocumentId || lookup.duplicateProposalId) checks.unshift(DUPLICATE_CHECK);
   const related = relatedRef(invoice, lookup.relatedDocumentId);
   if (related) checks.push(relatedCheck(related));
   // A sale (issue #313) books every line to revenue; a purchase proposes an expense or asset account per line.
@@ -556,6 +553,14 @@ export async function extractAndPropose(
         title: `${memo}`.slice(0, 300),
         payload,
         duplicateOf: lookup.duplicateProposalId,
+        // Documents are read at the same time: the record asks the lookup again under a lock on this invoice, so two
+        // copies in one batch cannot both pass (#2137). The key is the identity the lookup matches on.
+        duplicateGuard: {
+          // Hashed: a seller name can be 500 characters, and the key is only a name for the lock.
+          key: sha256Hex(new TextEncoder().encode(JSON.stringify([lookup.direction === 'sale' ? 'sale' : 'purchase', lookup.direction === 'sale' ? '' : (sellerTaxCode ?? invoice.seller.name), invoice.series, invoice.number]))),
+          lookup: lookupInput,
+          check: DUPLICATE_CHECK,
+        },
       },
     },
     { actor, orgId },

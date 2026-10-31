@@ -40,9 +40,9 @@ Lower `AI_MAX_RETRIES` to 0 when you would rather have the job retry later, afte
 
 ## What parallel reading changes
 
-Documents are read at the same time, so two checks that look at the other documents first and write after can both pass for documents in the same batch (#2119):
+Documents are read at the same time, so a check that looks at the other documents first and writes after can pass for two documents of the same batch (#2119):
 
-- **A duplicate invoice inside one batch.** Two copies of the same invoice read at the same moment (in one ZIP, say) can both miss the other, so the Inbox shows no `duplicate.found` warning on either. A duplicate already in the Inbox or the books is still found, and posting the second one is refused by the ledger's own uniqueness check, so nothing is booked twice.
+- **A duplicate invoice inside one batch** is still flagged (#2137). The reader looks for a copy before it records, which two readers of the same invoice can both do before either has recorded; so `kernel.extraction.record` takes a lock on the invoice (the org, the seller and the series and number), asks the lookup again inside its own transaction and flags the proposal when it now finds an earlier one. Of two copies read at once with no earlier copy in the Inbox or the books, exactly one carries `duplicate.found` (the one that records second), and posting it is refused by the ledger's own uniqueness check as before. If an earlier copy exists, both new copies carry `duplicate.found`.
 - **The org's daily limits** (`ORG_LIMIT_EXTRACTION_PAGES_PER_DAY`, `ORG_LIMIT_AI_COST_PER_DAY`) are checked before a document is read and counted after, so an org can pass a limit by up to `EXTRACT_WORKER_CONCURRENCY - 1` documents; the next ones wait for the window as before.
 
 ## Change it
