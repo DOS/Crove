@@ -62,6 +62,8 @@ export const QUEUES = {
   notesRemind: 'notes-reminders',
   // Created by the bank feed sync migration (20261108100000): a bank feed connection's sync (ADR-0039, #2044).
   bankFeedSync: 'finance-bank-feed-sync',
+  // Created by the calendar write-back queue migration (20261112090000): a booking's event made to match the member's connected calendar (#2124).
+  calendarWriteback: 'kernel-calendar-writeback',
   // Created by the dead letter migration (20261103150000): every other queue's dead letters (#1720, dead-letter.ts).
   deadLetter: 'kernel-job.dlq',
 } as const;
@@ -133,6 +135,8 @@ const QUEUE_EGRESS: { readonly [Q in QueueName]: JobEgress } = {
   // The bank feed adapters (channels.bankFeeds): the offline sandbox reaches nothing. A real adapter (#2045) adds its
   // provider here, and to DEPS_REACH first.
   [QUEUES.bankFeedSync]: 'none',
+  // The calendar adapters (channels.calendars): the provider's events are written through them.
+  [QUEUES.calendarWriteback]: ['provider:channel'],
   [QUEUES.deadLetter]: 'none',
 };
 

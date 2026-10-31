@@ -531,6 +531,29 @@ suite('outside calendars on PostgreSQL (#2123)', () => {
     expect(reset.rows[0]?.attempts).toBe(0);
   });
 
+  it('lists for the booking-event job only the org\'s active connections that write back and carry the scope, for the system alone', async () => {
+    const o = await org();
+    const elsewhere = await org();
+    const on = await connectWriter(o, o.member);
+    await o.exec(o.member, 'kernel.calendar.write_back.set', { connectionId: on.connectionId, enabled: true });
+    await connectWriter(o, o.other);
+    await connect(o, o.owner);
+    const theirs = await connectWriter(elsewhere, elsewhere.member);
+    await elsewhere.exec(elsewhere.member, 'kernel.calendar.write_back.set', { connectionId: theirs.connectionId, enabled: true });
+    expect(await o.sysQuery<string[]>('kernel.calendar.writeback_connections', {})).toEqual([on.connectionId]);
+    await expect(o.query(o.member, 'kernel.calendar.writeback_connections', {})).rejects.toMatchObject({ status: 403 });
+    // Expired, or a grant that lost the events scope while the switch stayed on, takes it out; so does off.
+    await admin((cl) => cl.query("UPDATE crove_kernel.calendar_connection SET status = 'expired' WHERE org_id = $1 AND id = $2", [o.orgId, on.connectionId]));
+    expect(await o.sysQuery<string[]>('kernel.calendar.writeback_connections', {})).toEqual([]);
+    await admin((cl) => cl.query("UPDATE crove_kernel.calendar_connection SET status = 'active' WHERE org_id = $1 AND id = $2", [o.orgId, on.connectionId]));
+    expect(await o.sysQuery<string[]>('kernel.calendar.writeback_connections', {})).toEqual([on.connectionId]);
+    await admin((cl) => cl.query("UPDATE crove_kernel.calendar_connection SET scopes = ARRAY['https://www.googleapis.com/auth/calendar.freebusy'] WHERE org_id = $1 AND id = $2", [o.orgId, on.connectionId]));
+    expect(await o.sysQuery<string[]>('kernel.calendar.writeback_connections', {})).toEqual([]);
+    await admin((cl) => cl.query('UPDATE crove_kernel.calendar_connection SET scopes = $3 WHERE org_id = $1 AND id = $2', [o.orgId, on.connectionId, ['https://www.googleapis.com/auth/calendar.freebusy', GOOGLE_CALENDAR_EVENTS_SCOPE]]));
+    await o.exec(o.member, 'kernel.calendar.write_back.set', { connectionId: on.connectionId, enabled: false });
+    expect(await o.sysQuery<string[]>('kernel.calendar.writeback_connections', {})).toEqual([]);
+  });
+
   it('counts failed attempts per piece of work: a booking that changed starts again after six failures, and so does a delete after a write', async () => {
     const o = await org();
     const day = nextWorkday();

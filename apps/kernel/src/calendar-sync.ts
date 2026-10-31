@@ -31,12 +31,23 @@ export interface CalendarSyncJob {
   connectionId: string;
 }
 
+// Runs a function while no other worker process or job holds the connection's write-back (a session advisory lock on the worker's
+// database, taken in worker.ts); { ran: false } when another one does.
+export type ConnectionLock = <T>(connectionId: string, run: () => Promise<T>) => Promise<{ ran: true; value: T } | { ran: false }>;
+
 export interface CalendarSyncDeps {
   runtime: Runtime;
   broker: CredentialBroker;
+  // Serializes the write-back of one connection between the sweep and the booking-event job (and two jobs); none in tests.
+  lockConnection?: ConnectionLock;
   // The adapters this deployment offers, by OAuth provider id.
   adapters: Readonly<Partial<Record<string, CalendarAdapter>>>;
   now?: () => Date;
+}
+
+// A booking's event handed over by the outbox relay: the write-back of the org's connections (runCalendarWriteBack).
+export interface CalendarWriteBackJob {
+  orgId: string;
 }
 
 export type CalendarSyncOutcome = { outcome: 'synced'; added: number; removed: number } | { outcome: 'skipped' | 'expired' | 'retry'; reason: string };
@@ -52,6 +63,8 @@ export async function calendarSyncDue(
     SELECT org_id, connection_id, provider FROM crove_kernel.calendar_sync_due(${after?.orgId ?? null}::uuid, ${after?.connectionId ?? null}::uuid, ${CALENDAR_SYNC_PAGE}::int)`.execute(workerDb);
   return rows.map((r) => ({ orgId: r.org_id, connectionId: r.connection_id, provider: r.provider }));
 }
+
+const withConnectionLock = <T>(deps: CalendarSyncDeps, connectionId: string, run: () => Promise<T>) => (deps.lockConnection ? deps.lockConnection(connectionId, run) : run().then((value) => ({ ran: true as const, value })));
 
 const adapterFor = (adapters: CalendarSyncDeps['adapters'], provider: string): CalendarAdapter | undefined => Object.values(adapters).find((a) => a?.provider === provider);
 
@@ -206,50 +219,19 @@ export async function runCalendarSync(deps: CalendarSyncDeps, job: CalendarSyncJ
     renewed = true;
     return null;
   };
-  // Makes the provider's events match the bookings: what is new or changed is written, what was cancelled is deleted.
-  // The kernel plans it from the connection's links (kernel.calendar.writeback_plan), each call is idempotent by the event's
-  // id, and each outcome is recorded as it happens, so a crash between a call and its record only repeats a call.
-  const writeBackStep = async (): Promise<CalendarSyncOutcome | null> => {
-    const plan = await deps.runtime.query<{ actions: WriteBackAction[] }>('kernel.calendar.writeback_plan', { connectionId: job.connectionId }, options);
-    const call = (a: WriteBackAction) =>
-      a.kind === 'delete' || a.summary === null || a.startsAt === null || a.endsAt === null
-        ? adapter.removeEvent(secret, a.externalId)
-        : adapter.writeEvent(secret, { externalId: a.externalId, summary: a.summary, startsAt: a.startsAt, endsAt: a.endsAt });
-    let first = true;
-    for (const a of plan.actions) {
-      // The plan is a few moments old after the first call: a member who switched write-back off, or disconnected, in the
-      // meantime has no more of their bookings sent.
-      if (!first) {
-        const current = await deps.runtime.query<{ status: string; writeBack: boolean } | null>('kernel.calendar.connection_state', { connectionId: job.connectionId }, options);
-        if (!current || current.status !== 'active' || !current.writeBack) return null;
-      }
-      first = false;
-      let result = await call(a);
-      // A refused token is renewed once and the call repeated; refused again, the grant is gone.
-      if ('refused' in result && !renewed) {
-        const stopped = await renew();
-        if (stopped) return stopped;
-        result = await call(a);
-      }
-      if ('refused' in result) return expire(result.refused);
-      // The grant lacks the events permission (the member unticked it): nothing more can be written until they connect again.
-      // (The busy read that follows clears a connection's failure note, so none is written; the next sweep tries again.)
-      if ('scope' in result) return null;
-      // An outage or a limit says nothing about this event and would hit every one behind it: no record, no attempt counted,
-      // and the rest of the batch (each call may wait 30 seconds, and the sweep holds one lock) is left for the next sweep.
-      if ('failed' in result && result.transient) return null;
-      const written = 'ok' in result || 'gone' in result;
-      // gone: the member deleted the event by hand (an upsert) or it was not there (a delete): either way it stays gone
-      // until its booking changes.
-      const recorded = written ? (a.kind === 'delete' || 'gone' in result ? 'removed' : 'written') : 'error';
-      await deps.runtime.execute(
-        'kernel.calendar.link.record',
-        { connectionId: job.connectionId, eventId: a.eventId, externalId: a.externalId, state: recorded, syncedHash: a.hash, ...(recorded === 'error' ? { error: String('failed' in result ? result.failed : 'failed').slice(0, 100) || 'failed' } : {}) },
-        options,
-      );
-    }
-    return null;
-  };
+  // Write-back's batch (below), with a refused token renewed once here: refused again, the grant is gone.
+  const writeBackStep = (): Promise<CalendarSyncOutcome | null> =>
+    writeBackBatch({
+      runtime: deps.runtime,
+      options,
+      connectionId: job.connectionId,
+      adapter,
+      secret: () => secret,
+      onRefused: async (reason) => {
+        if (renewed) return expire(reason);
+        return (await renew()) ?? secret;
+      },
+    });
   if (state.expiresAt === null || Date.parse(state.expiresAt) - now().getTime() < REFRESH_AHEAD_MS) {
     const stopped = await renew();
     if (stopped) return stopped;
@@ -259,7 +241,9 @@ export async function runCalendarSync(deps: CalendarSyncDeps, job: CalendarSyncJ
   if (state.writeBack) {
     let stopped: CalendarSyncOutcome | null = null;
     try {
-      stopped = await writeBackStep();
+      // Held by a booking-event job: it does the reconcile, and the sweep's next pass is the backstop.
+      const held = await withConnectionLock(deps, job.connectionId, writeBackStep);
+      stopped = held.ran ? held.value : null;
     } catch (error) {
       // A plan or a record that fails (a disconnect finishing meanwhile, a database blip) must not cost the member their busy times.
       console.error(`[calendar-sync] connection ${job.connectionId.slice(0, 8)} write-back failed: ${error instanceof Error ? error.name : 'error'}`);
@@ -300,11 +284,105 @@ export async function runCalendarSync(deps: CalendarSyncDeps, job: CalendarSyncJ
   return done.replaced ? { outcome: 'synced', added: done.added, removed: done.removed } : { outcome: 'skipped', reason: 'not_active' };
 }
 
+interface WriteBackBatch {
+  runtime: Runtime;
+  options: { actor: SystemActor; orgId: string };
+  connectionId: string;
+  adapter: CalendarAdapter;
+  // The access token as it is now (a renewal replaces it).
+  secret: () => string;
+  // A call the provider refused for its token: the new token to repeat the call with, or the outcome to stop with.
+  onRefused: (reason: string) => Promise<string | CalendarSyncOutcome>;
+}
+
+// Makes the provider's events match the bookings: what is new or changed is written, what was cancelled is deleted. The
+// kernel plans it from the connection's links (kernel.calendar.writeback_plan), each call is idempotent by the event's id,
+// and each outcome is recorded as it happens, so a crash between a call and its record only repeats a call. Null when the
+// batch ended (done, or left for the next sweep), an outcome when the connection must stop there.
+async function writeBackBatch(b: WriteBackBatch): Promise<CalendarSyncOutcome | null> {
+  const plan = await b.runtime.query<{ actions: WriteBackAction[] }>('kernel.calendar.writeback_plan', { connectionId: b.connectionId }, b.options);
+  const call = (a: WriteBackAction, secret: string) =>
+    a.kind === 'delete' || a.summary === null || a.startsAt === null || a.endsAt === null
+      ? b.adapter.removeEvent(secret, a.externalId)
+      : b.adapter.writeEvent(secret, { externalId: a.externalId, summary: a.summary, startsAt: a.startsAt, endsAt: a.endsAt });
+  let first = true;
+  for (const a of plan.actions) {
+    // The plan is a few moments old after the first call: a member who switched write-back off, or disconnected, in the
+    // meantime has no more of their bookings sent.
+    if (!first) {
+      const current = await b.runtime.query<{ status: string; writeBack: boolean } | null>('kernel.calendar.connection_state', { connectionId: b.connectionId }, b.options);
+      if (!current || current.status !== 'active' || !current.writeBack) return null;
+    }
+    first = false;
+    let result = await call(a, b.secret());
+    if ('refused' in result) {
+      const next = await b.onRefused(result.refused);
+      if (typeof next !== 'string') return next;
+      result = await call(a, next);
+      if ('refused' in result) {
+        const stopped = await b.onRefused(result.refused);
+        return typeof stopped === 'string' ? { outcome: 'retry', reason: result.refused } : stopped;
+      }
+    }
+    // The grant lacks the events permission (the member unticked it): nothing more can be written until they connect again.
+    // (The busy read that follows clears a connection's failure note, so none is written; the next sweep tries again.)
+    if ('scope' in result) return null;
+    // An outage or a limit says nothing about this event and would hit every one behind it: no record, no attempt counted,
+    // and the rest of the batch (each call may wait 30 seconds, and the sweep holds one lock) is left for the next sweep.
+    if ('failed' in result && result.transient) return null;
+    const written = 'ok' in result || 'gone' in result;
+    // gone: the member deleted the event by hand (an upsert) or it was not there (a delete): either way it stays gone
+    // until its booking changes.
+    const recorded = written ? (a.kind === 'delete' || 'gone' in result ? 'removed' : 'written') : 'error';
+    await b.runtime.execute(
+      'kernel.calendar.link.record',
+      { connectionId: b.connectionId, eventId: a.eventId, externalId: a.externalId, state: recorded, syncedHash: a.hash, ...(recorded === 'error' ? { error: String('failed' in result ? result.failed : 'failed').slice(0, 100) || 'failed' } : {}) },
+      b.options,
+    );
+  }
+  return null;
+}
+
+// A booking confirmed, moved or cancelled (#2124): the events of every write-back connection of its org are made to match
+// at once, from a job the outbox relay queues, instead of waiting for the next sweep. It never renews a token or expires a
+// connection: a token that is about to run out, or that the provider refuses, is left to the sweep, which does both.
+export async function runCalendarWriteBack(deps: CalendarSyncDeps, job: CalendarWriteBackJob): Promise<{ connections: number; ran: number; busy: number }> {
+  const options = { actor: ACTOR, orgId: job.orgId };
+  const now = deps.now ?? (() => new Date());
+  const ids = await deps.runtime.query<string[]>('kernel.calendar.writeback_connections', {}, options);
+  let ran = 0;
+  let busy = 0;
+  for (const connectionId of ids) {
+    try {
+      const state = await deps.runtime.query<{ status: string; provider: string; expiresAt: string | null; updatedAt: string; writeBack?: boolean } | null>('kernel.calendar.connection_state', { connectionId }, options);
+      if (!state || state.status !== 'active' || !state.writeBack) continue;
+      const adapter = adapterFor(deps.adapters, state.provider);
+      // A token that would run out during the batch is renewed by the sweep, which comes within 15 minutes.
+      if (!adapter || state.expiresAt === null || Date.parse(state.expiresAt) - now().getTime() < REFRESH_AHEAD_MS) continue;
+      const sealed = await deps.runtime.query<SealedCalendarCredential>('kernel.calendar.credential', { connectionId }, options);
+      const again = await deps.runtime.query<{ status: string; updatedAt: string } | null>('kernel.calendar.connection_state', { connectionId }, options);
+      if (!again || again.status !== 'active' || again.updatedAt !== state.updatedAt) continue;
+      const secret = deps.broker.open({ keyId: sealed.keyId, envelope: Buffer.from(sealed.envelope, 'base64') }, calendarBinding(job.orgId, sealed.provider as CalendarProvider, sealed.externalAccount));
+      const held = await withConnectionLock(deps, connectionId, () => writeBackBatch({ runtime: deps.runtime, options, connectionId, adapter, secret: () => secret, onRefused: async (reason) => ({ outcome: 'skipped', reason }) }));
+      if (held.ran) ran += 1;
+      else busy += 1;
+    } catch (error) {
+      // One connection's trouble (a key that is gone, a database blip) leaves the others and the next sweep alone. A member who
+      // left or a connection that went (a refusal by the kernel) is not worth a line on every booking event.
+      if (error instanceof DomainError) continue;
+      console.error(`[calendar-writeback] connection ${connectionId.slice(0, 8)}: ${error instanceof Error ? error.name : 'error'}`);
+    }
+  }
+  // busy: connections the sweep or another job was working on; the caller retries the job, so a booking that committed after
+  // their plan was read is still written.
+  return { connections: ids.length, ran, busy };
+}
 export interface CalendarSweepDeps {
   runtime: Runtime;
   broker: CredentialBroker;
   workerDb: Db;
   adapters: CalendarSyncDeps['adapters'];
+  lockConnection?: ConnectionLock;
   // Runs the sweep while no other worker process does (the worker holds the connection the lock lives on); { ran: false }
   // when another one has it.
   exclusive: <T>(run: () => Promise<T>) => Promise<{ ran: true; value: T } | { ran: false }>;

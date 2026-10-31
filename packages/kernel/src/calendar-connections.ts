@@ -799,5 +799,26 @@ export const calendarLinkRecord = defineCommand({
   },
 });
 
+// The active connections of the org in the context that write bookings to the provider, for the job a booking's event
+// queues (kernel.calendar.writeback_plan then plans each). The worker's, as the system.
+export const calendarWriteBackConnections = defineQuery({
+  name: 'kernel.calendar.writeback_connections',
+  input: z.strictObject({}),
+  access: 'system',
+  handler: async (ctx): Promise<string[]> => {
+    const rows = await ctx.trx
+      .selectFrom('crove_kernel.calendar_connection')
+      .select('id')
+      .where('org_id', '=', ctx.orgId)
+      .where('status', '=', 'active')
+      .where('write_back', '=', true)
+      .where(sql<boolean>`scopes @> ARRAY[${GOOGLE_CALENDAR_EVENTS_SCOPE}]::text[]`)
+      .orderBy('id')
+      // Far more than an org has; a connection beyond it is covered by the 15 minute sweep alone.
+      .limit(200)
+      .execute();
+    return rows.map((r) => r.id);
+  },
+});
 export const calendarConnectionCommands = [calendarOAuthBegin, calendarOAuthConsume, calendarConnect, calendarDisconnect, calendarFinishDisconnect, calendarWriteBackSet, calendarLinkRecord, calendarMarkFailed, calendarRefresh, calendarBusyReplace];
-export const calendarConnectionQueries = [calendarCredential, calendarConnectionState, calendarConnections, calendarWriteBackPlan];
+export const calendarConnectionQueries = [calendarCredential, calendarConnectionState, calendarConnections, calendarWriteBackPlan, calendarWriteBackConnections];

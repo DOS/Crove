@@ -6203,6 +6203,7 @@ export const vi = {
           set: 'Bật hoặc tắt ghi lịch hẹn vào lịch ngoài',
         },
         writeback_plan: 'Xem việc cần ghi vào lịch ngoài',
+        writeback_connections: 'Xem các lịch ngoài được ghi lịch hẹn vào',
         link: {
           record: 'Ghi nhận kết quả ghi lịch hẹn vào lịch ngoài',
         },
