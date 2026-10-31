@@ -1839,6 +1839,7 @@ export function createRpcHandler(
     // accounts the login reaches (part 2b), so the API never uses a credential. The commands check the role again.
     bankFeeds: {
       accounts: os.bankFeeds.accounts.handler(({ context }) => inFinance(context, (orgId, actor) => runtime.query('finance.bank_feed.accounts', {}, { actor, orgId }))),
+      connections: os.bankFeeds.connections.handler(({ context }) => inFinance(context, (orgId, actor) => runtime.query('finance.bank_feed.connections', {}, { actor, orgId }))),
       listed: os.bankFeeds.listed.handler(({ context, input }) => inFinance(context, (orgId, actor) => runtime.query('finance.bank_feed.listed', input, { actor, orgId }))),
       connectSandbox: os.bankFeeds.connectSandbox.handler(({ context, input }) =>
         inFinance(context, async (orgId, actor) => {
