@@ -13,9 +13,12 @@ import { useTranslations } from 'use-intl';
 import { brandName } from '../i18n/brand.ts';
 import { takeOrgLeftNotice } from '../lib/api.ts';
 import { useScrollRoom } from '../lib/scroll-room.ts';
+import { useScreenTitle } from '../lib/screen-title.ts';
 
 // titleId: the title can take the focus by this id (a page that moves the focus there when it opens, #1230).
+// The title is also the screen's name: the tab's title and what the shell announces on a navigation (#2115).
 export function PageHeader({ title, subtitle, actions, titleId }: { title: string; subtitle?: string | undefined; actions?: ReactNode; titleId?: string }) {
+  useScreenTitle(title);
   return (
     <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
       <div>
@@ -27,6 +30,12 @@ export function PageHeader({ title, subtitle, actions, titleId }: { title: strin
       {actions && <div className="flex flex-wrap gap-2">{actions}</div>}
     </div>
   );
+}
+
+/** Names the screen where the page has no PageHeader (sign-in, an invite, not found): its tab title and announcement. */
+export function ScreenTitle({ name }: { name: string }) {
+  useScreenTitle(name);
+  return null;
 }
 
 export function Empty({ title, hint, action }: { title: string; hint?: string | undefined; action?: ReactNode }) {

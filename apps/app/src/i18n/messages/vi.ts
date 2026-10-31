@@ -111,6 +111,7 @@ export const vi = {
     settings: 'Cài đặt',
     menu: 'Menu chính',
     openMenu: 'Mở menu',
+    skipToContent: 'Bỏ qua tới nội dung',
     closeMenu: 'Đóng menu',
     account: 'Tài khoản',
     alertsShort: 'Thông báo',

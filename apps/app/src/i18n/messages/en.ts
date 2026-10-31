@@ -113,6 +113,7 @@ export const en = {
     settings: 'Settings',
     menu: 'Main menu',
     openMenu: 'Open the menu',
+    skipToContent: 'Skip to content',
     closeMenu: 'Close the menu',
     account: 'Account',
     alertsShort: 'Notifications',
