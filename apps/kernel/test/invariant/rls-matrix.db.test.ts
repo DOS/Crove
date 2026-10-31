@@ -40,6 +40,7 @@ const RUNTIME_ROLES = ['crove_app', 'crove_worker', 'crove_tenant', 'crove_defin
 // added) and must be listed here, so a new table cannot quietly become one.
 const MACHINERY = new Set([
   'crove_kernel.auth_session_org',
+  'crove_kernel.calendar_credential',
   'crove_kernel.credential',
   'crove_kernel.oauth_state',
   'crove_kernel.inbound_drop',
@@ -53,6 +54,8 @@ const MACHINERY = new Set([
 // until the table exists, neither its factory nor its MACHINERY entry is stale. Remove an entry once its table is on
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
+  'crove_kernel.calendar_connection',
+  'crove_kernel.calendar_credential',
   'crove_notes.link',
   'crove_notes.note',
 ]);
@@ -156,6 +159,16 @@ const agentRow = (o: { id: string; owner: string }) => ({
   template_key: 'finance.chief_accountant',
   display_name: 'RLS matrix agent',
   created_by: o.owner,
+});
+// A member's connected outside calendar (#2123, part of #1374). One per (org, member, provider, account), so every row
+// gets its own account; the rows belong to the owner, the user every member-context actor enters as.
+const calendarConnectionRow = (o: { id: string; owner: string }) => ({
+  org_id: o.id,
+  id: randomUUID(),
+  user_id: o.owner,
+  provider: 'google',
+  external_account: `rls-${tag()}@calendar.test`,
+  display_name: 'RLS matrix calendar',
 });
 // A connected channel account (ADR-0025). One live connection per (org, provider, account), so every row gets its
 // own account id.
@@ -634,6 +647,21 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
     make: (o) => ({ row: { org_id: o.id, scope: 'agent', target: randomUUID(), monthly_limit: '100', updated_by: o.owner } }),
   },
   // #1313: an event on a member's calendar; busy events of one member never overlap, so each row takes its own hour.
+  // An outside calendar a member connected (#2123): a restrictive policy shows each member only their own, as for a
+  // notification, and the factory's rows belong to the owner. Tenant roles update only the state columns (a column
+  // grant), so the update probes assign the name to itself.
+  'crove_kernel.calendar_connection': { update: { set: 'display_name = display_name' }, make: (o) => ({ row: calendarConnectionRow(o) }) },
+  // Definer-only machinery: the sealed tokens of a calendar connection, keyed by the connection's id. The envelope is
+  // opaque bytes here; only the vault in the worker opens a real one.
+  'crove_kernel.calendar_credential': {
+    make: (o) => {
+      const connection = calendarConnectionRow(o);
+      return {
+        setup: [{ table: 'crove_kernel.calendar_connection', values: connection }],
+        row: { org_id: o.id, id: connection.id, key_id: 'rls-matrix', envelope: '\\x00' },
+      };
+    },
+  },
   'crove_kernel.calendar_event': {
     make: (o) => {
       const start = new Date(Date.UTC(2030, 0, 1) + 3_600_000 * calendarHour++);

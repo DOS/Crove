@@ -415,6 +415,9 @@ const schema = z.object({
   // base64url (the `vapid-keys` role prints a new pair), and the contact push services may write to about it (a mailto:
   // address or an https: URL). All three or none: unset, the app offers no push and nothing is sent. Changing the pair
   // ends every subscription; members turn push on again.
+  // The all-in-one role puts the HTTP edge on the worker's all-org database login and every secret, so on a public
+  // PUBLIC_URL the kernel starts it only with this opt-in (assertSplitRoles); the pilot runs api and worker apart.
+  CROVE_ALLOW_ALL_IN_ONE: optional.pipe(z.enum(['true', 'false']).optional()),
   VAPID_PUBLIC_KEY: optional.pipe(z.string().regex(/^[A-Za-z0-9_-]{87}$/, 'VAPID_PUBLIC_KEY is the base64url public key the vapid-keys role prints').optional()),
   VAPID_PRIVATE_KEY: optional.pipe(z.string().regex(/^[A-Za-z0-9_-]{43}$/, 'VAPID_PRIVATE_KEY is the base64url private key the vapid-keys role prints').optional()),
   VAPID_SUBJECT: optional.pipe(z.string().max(200).optional()),
@@ -585,6 +588,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     if (config.AUTH_JWT_SECRET && SAMPLE_SECRETS.has(config.AUTH_JWT_SECRET)) {
       throw new Error('AUTH_JWT_SECRET is a sample value; generate a random secret before exposing Crove');
     }
+    // docker-compose.yml falls back to these passwords when a variable is unset, so a deployment that forgot one would
+    // otherwise run its database logins on a value this public repository publishes. Only the setting is named.
+    for (const name of ['DATABASE_URL', 'WORKER_DATABASE_URL', 'ADMIN_DATABASE_URL', 'DATABASE_LISTEN_URL'] as const) {
+      if (hasSampleDbPassword(config[name])) {
+        throw new Error(`${name} carries a database password shipped in .env.example or docker-compose.yml; set a random one (openssl rand -base64 24) before exposing Crove`);
+      }
+    }
     if ([config.TURNSTILE_SITE_KEY, config.TURNSTILE_SECRET].some((key) => key !== undefined && TURNSTILE_TEST_KEY.test(key))) {
       throw new Error("TURNSTILE_SITE_KEY or TURNSTILE_SECRET is one of Cloudflare's test keys; use the widget's real keys before exposing Crove");
     }
@@ -639,6 +649,42 @@ export const EMAIL_BUDGET_MIN_CLIENTS = 10;
 
 // Values shipped in docker-compose.yml and .env.example. Fine on localhost, never on a public URL.
 const SAMPLE_SECRETS = new Set(['local-only-jwt-secret-change-me-0123456789', 'change-me-to-a-long-random-string-0123456789']);
+// Database passwords shipped in docker-compose.yml (the fallbacks) and .env.example. The rule is checked on a public
+// PUBLIC_URL when the kernel loads its settings; pilot-check keeps its own list in step (KNOWN_DEFAULTS).
+export const SAMPLE_DB_PASSWORDS: ReadonlySet<string> = new Set([
+  'local-postgres-password',
+  'local-app-password',
+  'local-worker-password',
+  'local-prober-password',
+  'local-reporter-password',
+  'local-auth-password',
+  'change-me-postgres',
+  'change-me-app',
+  'change-me-worker',
+  'change-me-prober',
+  'change-me-reporter',
+  'change-me-auth',
+]);
+
+// Whether a database URL carries one of those passwords, or any `change-me` placeholder (broader than the shipped
+// values on purpose: it is a sample whatever its tail). The password may sit in the userinfo or in a `?password=` query
+// parameter, which node-postgres reads too. A value that is not a URL has no password to read here (the connection
+// itself fails later). The prober's and the reporter's URLs are read by their own roles; pilot-check fails their
+// sample *_PASSWORD settings.
+export function hasSampleDbPassword(url: string | undefined): boolean {
+  if (url === undefined || !URL.canParse(url)) return false;
+  const parsed = new URL(url);
+  return [parsed.password, parsed.searchParams.get('password') ?? ''].some((raw) => {
+    let password = raw;
+    try {
+      password = decodeURIComponent(raw);
+    } catch {
+      // Keep the raw spelling.
+    }
+    return SAMPLE_DB_PASSWORDS.has(password) || /change-?me/i.test(password);
+  });
+}
+
 // The context token key the test suites use (vitest.config.ts, vitest.invariant.config.ts): public, so never a
 // deployment's.
 const SAMPLE_CONTEXT_TOKEN_KEYS = [Buffer.from('test-only-context-token-key-0123456789')];
@@ -672,6 +718,19 @@ export function isHostedSupabase(url: string): boolean {
 export function assertExportKey(config: Pick<Config, 'PUBLIC_URL' | 'EXPORT_ENCRYPTION_KEY'>): void {
   if (!isLocalUrl(config.PUBLIC_URL) && !config.EXPORT_ENCRYPTION_KEY) {
     throw new Error('set EXPORT_ENCRYPTION_KEY (32 random bytes, openssl rand -base64 32): org exports hold the whole org and are sealed at rest');
+  }
+}
+
+// The all role refuses to start on a public PUBLIC_URL unless CROVE_ALLOW_ALL_IN_ONE=true (#2118): the API would run on
+// the worker's database login, which enters the system context of every org, and on every secret. A missing
+// compose.pilot.yml, or a stray profile, would otherwise do that silently. Run api and worker as two processes
+// (docs/runbooks/deploy.md, "The pilot layout"). Checked when a role starts, like the export key above.
+export function assertSplitRoles(config: Pick<Config, 'PUBLIC_URL' | 'CROVE_ALLOW_ALL_IN_ONE'>, role: 'api' | 'worker' | 'all'): void {
+  if (role === 'all' && !isLocalUrl(config.PUBLIC_URL) && config.CROVE_ALLOW_ALL_IN_ONE !== 'true') {
+    throw new Error(
+      'the all role runs the API on the worker database login and every secret; on a public PUBLIC_URL run api and worker as separate processes ' +
+        '(docs/runbooks/deploy.md, "The pilot layout"), or set CROVE_ALLOW_ALL_IN_ONE=true to accept that',
+    );
   }
 }
 

@@ -50,6 +50,8 @@ sub="$1"
 shift
 args="$*"
 printf 'compose %s %s\n' "$sub" "$args" >>"$STUB_LOG"
+# The compose files of each call, apart from the log so the order checks stay as they are.
+printf '%s\n' "${files[*]}" >>"$STUB_LOG.files"
 
 case "$sub" in
   config)
@@ -70,6 +72,7 @@ case "$sub" in
     fi
     ;;
   up | logs) ;;
+  rm) [ -z "${STUB_RM_FAIL:-}" ] || { echo 'rm: stub failure' >&2; exit 1; } ;;
   *)
     echo "stub docker compose: unexpected $sub" >&2
     exit 99

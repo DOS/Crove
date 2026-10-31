@@ -121,16 +121,23 @@ The DOS organization ids are the same in every DOS repository.
   a fresh-context subagent given the diff and the issue; docs-only PRs skip
   both and need `pnpm docs:check`. A protected-path PR also gets the
   coordinator's independent security review before merge.
-- agent_effort: every sub-session runs on Sonnet 5.5 (`claude-sonnet-5-5`)
-  at effort xhigh, protected-path tasks included; the coordinator's security
-  review of a protected-path PR runs on Opus; Codex reviews at effort high
-  (AGENTS.md, owner decisions 2026-10-27 and 2026-10-30).
+- agent_effort: high. PO sessions run on Opus at effort high. Every sub-session
+  runs on Sonnet 5.5 (`claude-sonnet-5-5`) at effort high, and at xhigh only
+  for hard work (a protected-path security change, a migration, a root-cause
+  hunt). The coordinator's security review of a protected-path PR runs on
+  Opus; Codex reviews at effort high (AGENTS.md, owner decisions 2026-10-27,
+  2026-10-30 and 2026-10-31).
 
 ## Sessions
 
-- sub_sessions_normal: 1 (JOY caps the repository at about 5 working
-  sessions in all, the POs included)
+- sub_sessions_normal: 1 (JOY caps the repository at 3 sub-sessions at
+  once, across every line; owner decision 2026-10-31)
 - sub_sessions_max: 2
+
+A PO keeps its context small at natural breaks. With a warm cache, it uses
+`/compact` with a focus. After a long idle, such as overnight, it starts a
+fresh session from a handoff file instead. Its loop wakes at most 30 minutes
+apart, inside the one-hour prompt cache (owner decision 2026-10-31).
 - check_in_minutes: 30
 
 JOY's standing instructions (work without stopping; the coordinator merges every PR that meets the merge bar) are

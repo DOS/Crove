@@ -61,7 +61,7 @@ Roles:
 | :--- | :--- |
 | `background`, `card`, `popover` | Page canvas, raised panels, overlays. Three surface levels at most per screen. |
 | `foreground`, `muted-foreground`, `subtle-foreground` | Primary text, secondary text, captions. `subtle-foreground` only for text that may be skipped, and only where it still reaches 4.5:1. |
-| `border`, `input`, `ring` | Hairlines, field borders, focus ring. |
+| `border`, `input`, `field-border`, `ring` | Hairlines of cards and dividers, field fills, the border of fields and checkboxes, focus ring. `field-border` reaches 3:1 against `background`, `card` and `popover` in both themes (WCAG 1.4.11); `border` stays a hairline and is never a field boundary. |
 | `scrollbar` | The thumb of every scrollbar: thin, on a transparent track, in both themes (never the platform's light default). |
 | `primary` | The one accent: the primary action, focus, current selection. Never decoration. |
 | `brand`, `brand-spark` | The logo mark only: its tiles and its spark (1.2). |

@@ -281,6 +281,7 @@ smoke() {
 # State on the host, under $DEPLOY_DIR:
 #   .env                         the instance's settings and secrets (owner managed; or --env-file)
 #   compose.host.yml             optional owner managed override (reverse proxy, split roles, profiles)
+#   compose.pilot.yml            optional: the split API and worker with the finance module only (tools/deploy/compose.pilot.yml)
 #   docker-compose.yml           the running release's compose file
 #   docker-compose.override.yml  the running release's image pins (generated), so plain `docker compose` in this
 #                                directory (and tools/backup) sees the same stack
@@ -342,7 +343,11 @@ guard_run() {
 # docker compose for the active files in $DEPLOY_DIR. The project name comes from the compose file (`crove`) or
 # COMPOSE_PROJECT_NAME in the env file, so volumes stay the same from release to release.
 dc() {
-  local args=(compose --project-directory "$DEPLOY_DIR" --env-file "$ENV_FILE" -f "$DEPLOY_DIR/docker-compose.yml" -f "$DEPLOY_DIR/docker-compose.override.yml")
+  local args=(compose --project-directory "$DEPLOY_DIR" --env-file "$ENV_FILE" -f "$DEPLOY_DIR/docker-compose.yml")
+  # The pilot's split API and worker (tools/deploy/compose.pilot.yml, #2118) right after the release's file: they extend its
+  # `crove` service, whose image the release's pins (next) must then replace.
+  if [ -f "$DEPLOY_DIR/compose.pilot.yml" ]; then args+=(-f "$DEPLOY_DIR/compose.pilot.yml"); fi
+  args+=(-f "$DEPLOY_DIR/docker-compose.override.yml")
   if [ -f "$DEPLOY_DIR/compose.host.yml" ]; then args+=(-f "$DEPLOY_DIR/compose.host.yml"); fi
   docker "${args[@]}" "$@"
 }
@@ -362,6 +367,15 @@ services:
   usage: { image: '$image', build: !reset null }
   crove-extract: { image: '$extract', build: !reset null }
 EOF
+  pilot_pins "$image"
+}
+
+# With the pilot's compose.pilot.yml (the split `api` and `worker`, #2118) on the host, the same pins for those two, so
+# a plain `docker compose` in the stack directory (tools/backup/restore.sh, a manual `up`) runs the release's digest, not
+# crove:local. Nothing without the file: an `api` service defined by a pin alone would run the all-in-one role.
+pilot_pins() {
+  [ -f "$DEPLOY_DIR/compose.pilot.yml" ] || return 0
+  printf "  api: { image: '%s', build: !reset null }\n  worker: { image: '%s', build: !reset null }\n" "$1" "$1"
 }
 
 # Makes a release directory the active files and exports its images.
@@ -371,10 +385,12 @@ activate() {
   [ -f "$rel/release.env" ] || die "$EXIT_USAGE" "release directory $rel is incomplete"
   cp -f "$rel/docker-compose.yml" "$DEPLOY_DIR/docker-compose.yml.tmp"
   cp -f "$rel/docker-compose.override.yml" "$DEPLOY_DIR/docker-compose.override.yml.tmp"
-  mv -f "$DEPLOY_DIR/docker-compose.yml.tmp" "$DEPLOY_DIR/docker-compose.yml"
-  mv -f "$DEPLOY_DIR/docker-compose.override.yml.tmp" "$DEPLOY_DIR/docker-compose.override.yml"
   CROVE_IMAGE="$(release_field "$1" IMAGE)"
   CROVE_EXTRACT_IMAGE="$(release_field "$1" EXTRACT_IMAGE)"
+  # A release staged before compose.pilot.yml came to the host has no pins for its services: add them.
+  if ! grep -q '^  api:' "$DEPLOY_DIR/docker-compose.override.yml.tmp"; then pilot_pins "$CROVE_IMAGE" >>"$DEPLOY_DIR/docker-compose.override.yml.tmp"; fi
+  mv -f "$DEPLOY_DIR/docker-compose.yml.tmp" "$DEPLOY_DIR/docker-compose.yml"
+  mv -f "$DEPLOY_DIR/docker-compose.override.yml.tmp" "$DEPLOY_DIR/docker-compose.override.yml"
   export CROVE_IMAGE CROVE_EXTRACT_IMAGE
   # The build the release's image reports on /version; empty for a release deployed without --build.
   ACTIVE_BUILD="$(release_field "$1" BUILD)"
@@ -496,6 +512,10 @@ roll_services() {
     up "${rest[@]}" || return 1
   fi
   if has_service worker && has_service api; then
+    # The first deploy of the pilot layout on a host that ran the all-in-one `crove`: that container would keep the API's
+    # port and run the worker's jobs beside the new one (#2118). Nothing to remove on a later deploy.
+    local removed
+    if ! removed="$(dc rm --stop --force crove 2>&1)"; then log "could not remove the old crove container (the deploy goes on): ${removed:0:300}"; fi
     if [ "$direction" = back ]; then
       log 'rolling the API (toward an older build: the API before the worker)'
       up api || return 1
@@ -557,6 +577,11 @@ preflight() {
   [ -n "$ENV_FILE" ] || ENV_FILE="$DEPLOY_DIR/.env"
   valid_path "$ENV_FILE" || die "$EXIT_USAGE" "--env-file must be an absolute path without spaces: $ENV_FILE"
   [ -f "$ENV_FILE" ] || die "$EXIT_USAGE" "env file $ENV_FILE not found (copy .env.example there and change every secret)"
+  # The env file lists compose.pilot.yml in COMPOSE_FILE but the file is not here: dc() would silently drop it and the
+  # deploy would roll the all-in-one `crove` (API on the worker's database login) instead of api and worker (#2118).
+  if sed -n 's/^COMPOSE_FILE=//p' "$ENV_FILE" | tail -n 1 | grep -q 'compose\.pilot\.yml' && [ ! -f "$DEPLOY_DIR/compose.pilot.yml" ]; then
+    die "$EXIT_USAGE" "COMPOSE_FILE in $ENV_FILE lists compose.pilot.yml but $DEPLOY_DIR/compose.pilot.yml does not exist: copy tools/deploy/compose.pilot.yml there (docs/runbooks/deploy.md, \"The pilot layout\")"
+  fi
   command -v docker >/dev/null || die "$EXIT_USAGE" 'docker is not installed'
   command -v curl >/dev/null || die "$EXIT_USAGE" 'curl is not installed'
   compose_version_ok || die "$EXIT_USAGE" 'docker compose v2.24 or newer is required'
