@@ -1,7 +1,7 @@
 // Finance's in-app notifications (#671), written through the kernel's notifyMembers() (packages/kernel/src/notifications.ts):
 // - finance.bank_attention: a bank statement import left lines that need a look (ambiguous ones: the bank's file could
 //   not tell them apart from lines already there). The owners and admins, never the person who imported it.
-// - finance.portal_attention: the tax portal's purchase list of a period was read, and the period has invoices the
+// - finance.portal_attention: the tax portal's purchase (or, with detail.direction 'sale', sales, #2141) list of a period was read, and the period has invoices the
 //   portal lists and Crove does not, or whose amounts differ; or the list could not be read. The member who imported
 //   it, and the owners and admins.
 // - finance.period_closing: the VAT return of a period is due within PERIOD_CLOSING_DAYS days and the period is not
@@ -49,20 +49,24 @@ export const notificationDispatch = defineCommand({
         if (!e.success) return { sent: 0 };
         const list = await ctx.trx
           .selectFrom('crove_finance.portal_invoice_list')
-          .select(['id', 'period', 'status', 'created_by', 'removed_at', 'legal_entity_id'])
+          .select(['id', 'period', 'status', 'created_by', 'removed_at', 'legal_entity_id', 'direction'])
           .where('org_id', '=', ctx.orgId)
           .where('id', '=', e.data.listId)
           .executeTakeFirst();
         if (!list || list.removed_at !== null || list.status === 'pending') return { sent: 0 };
-        let detail: Record<string, string> = { period: list.period, failed: 'true' };
+        let detail: Record<string, string> = { period: list.period, failed: 'true', ...(list.direction === 'sale' ? { direction: 'sale' } : {}) };
         if (list.status === 'done') {
           // The reconciliation of the list's legal entity (#1280).
-          const found = await ctx.query<PortalReconciliation>('finance.portal_list.reconcile', { period: list.period, legalEntityId: list.legal_entity_id });
+          const found = await ctx.query<PortalReconciliation>('finance.portal_list.reconcile', {
+            period: list.period,
+            legalEntityId: list.legal_entity_id,
+            direction: list.direction,
+          });
           if (found.status !== 'ok') return { sent: 0 };
           const { missing, amountMismatch } = found.value.summary;
           // Everything on the portal is in Crove: nothing to look at.
           if (missing + amountMismatch === 0) return { sent: 0 };
-          detail = { period: list.period, missing: String(missing), amountMismatch: String(amountMismatch) };
+          detail = { period: list.period, missing: String(missing), amountMismatch: String(amountMismatch), ...(list.direction === 'sale' ? { direction: 'sale' } : {}) };
         }
         const sent = await notifyMembers(ctx, {
           kind: PORTAL_ATTENTION,

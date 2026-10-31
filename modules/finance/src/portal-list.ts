@@ -1,6 +1,9 @@
-// The tax portal's purchase-invoice list (issue #465). The accountant exports the month's purchase invoices from
+// The tax portal's invoice list (issue #465). The accountant exports the month's purchase invoices from
 // hoadondientu.gdt.gov.vn ("Tra cứu hóa đơn", "Hóa đơn điện tử mua vào", "Xuất Excel") and uploads the .xlsx here,
-// for one client (the org) and one VAT period:
+// for one client (the org) and one VAT period. The sales export ("Hóa đơn điện tử bán ra", same columns) goes through
+// the same commands with direction 'sale' (#2141): the org is then the seller, and the comparison flags a sale the
+// tax authority has that the books lack, or that is booked with another amount or VAT (flags only, nothing is written
+// to the books):
 // - finance.portal_list.import (owners, admins, members; R1) files an uploaded spreadsheet as a pending list of the
 //   period and asks the worker to read it.
 // - The worker reads the file in crove-extract (kind portal_invoice_list, External-tenant gate T12: nothing is parsed
@@ -10,7 +13,7 @@
 //   export); it is kept, never deleted.
 // - finance.portal_list.reconcile (every role) compares the rows of the period's lists with the purchase documents
 //   Crove recorded and the purchase proposals waiting in the Inbox (domain/portal-reconcile.ts).
-// Only purchases: sales invoices (#313) are the org's own and are not on this list.
+// A period's lists of the two directions never mix: each has its own list limit, row limit and reconciliation.
 import { sql } from 'kysely';
 import { z } from 'zod';
 import {
@@ -23,11 +26,13 @@ import {
 import {
   MAX_IMPORT_BYTES,
   MAX_PORTAL_LISTS_PER_PERIOD,
+  PORTAL_LIST_DIRECTIONS,
   PORTAL_LIST_SKIP_REASONS,
   XLSX_CONTENT_TYPE,
   zId,
   zLocalDate,
   zVatPeriod,
+  type PortalListDirection,
   type PortalListView,
   type PortalReconciliation,
 } from '@crove/kernel-contract';
@@ -39,6 +44,7 @@ import { PORTAL_SYNC_CONTENT_TYPE, readSyncedList } from './domain/portal-api.ts
 import { reconcilePortalList, type CroveInvoice, type PortalRow, type Reconciliation } from './domain/portal-reconcile.ts';
 import { vatPeriod, type VatPeriod } from './domain/vat-return.ts';
 import { defaultLegalEntityId, resolveLegalEntity } from './legal-entity.ts';
+import { isOwnTaxCode } from './own-tax-code.ts';
 import { latestRevision } from './source-entry.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
@@ -62,12 +68,14 @@ export const portalPeriodLock = (orgId: string, legalEntityId: string, period: s
 export const portalListImport = defineCommand({
   name: 'finance.portal_list.import',
   // The list of one legal entity's period (#1280): legalEntityId as in zLegalEntityChoice.
-  input: z.object({ period: zVatPeriod, fileId: zId, legalEntityId: zId.optional() }),
+  // direction: 'purchase' (the default) for the "mua vào" export, 'sale' for the "bán ra" export (#2141).
+  input: z.object({ period: zVatPeriod, fileId: zId, legalEntityId: zId.optional(), direction: z.enum(PORTAL_LIST_DIRECTIONS).optional() }),
   risk: 'R1',
   sideEffect: 'internal',
   access: EDITORS,
   handler: async (ctx, input) => {
     vatPeriod(input.period);
+    const direction: PortalListDirection = input.direction ?? 'purchase';
     const file = await ctx.trx
       .selectFrom('crove_kernel.file')
       .select(['id', 'filename', 'content_type', 'size_bytes', 'source'])
@@ -91,7 +99,7 @@ export const portalListImport = defineCommand({
     await portalPeriodLock(ctx.orgId, legalEntityId, input.period).execute(ctx.trx);
     const active = await ctx.trx
       .selectFrom('crove_finance.portal_invoice_list')
-      .select(['id', 'file_id', 'legal_entity_id'])
+      .select(['id', 'file_id', 'legal_entity_id', 'direction'])
       .where('org_id', '=', ctx.orgId)
       .where('period', '=', input.period)
       .where('removed_at', 'is', null)
@@ -100,7 +108,7 @@ export const portalListImport = defineCommand({
     if (active.some((l) => l.file_id === input.fileId)) {
       throw new DomainError('PORTAL_LIST_EXISTS', 409, `Tệp này đã được nhập cho kỳ ${input.period}`);
     }
-    if (active.filter((l) => l.legal_entity_id === legalEntityId).length >= MAX_PORTAL_LISTS_PER_PERIOD) {
+    if (active.filter((l) => l.legal_entity_id === legalEntityId && l.direction === direction).length >= MAX_PORTAL_LISTS_PER_PERIOD) {
       throw new DomainError('PORTAL_LIST_LIMIT', 409, `Mỗi kỳ nhập tối đa ${MAX_PORTAL_LISTS_PER_PERIOD} danh sách; hãy gỡ bớt danh sách cũ`);
     }
     const list = await ctx.trx
@@ -109,14 +117,20 @@ export const portalListImport = defineCommand({
         org_id: ctx.orgId,
         legal_entity_id: legalEntityId,
         period: input.period,
+        direction,
         file_id: file.id,
         filename: file.filename.slice(0, 255),
         created_by: ctx.actor.type === 'user' ? ctx.actor.userId : null,
       })
       .returning('id')
       .executeTakeFirstOrThrow();
-    ctx.audit({ period: input.period, file_id: file.id, legal_entity_id: legalEntityId });
-    await ctx.activity('finance.portal_invoice_list', list.id, 'portal_list.imported', `Nhập danh sách hóa đơn mua vào từ cổng thuế, kỳ ${input.period}`);
+    ctx.audit({ period: input.period, file_id: file.id, legal_entity_id: legalEntityId, direction });
+    await ctx.activity(
+      'finance.portal_invoice_list',
+      list.id,
+      'portal_list.imported',
+      `Nhập danh sách hóa đơn ${direction === 'sale' ? 'bán ra' : 'mua vào'} từ cổng thuế, kỳ ${input.period}`,
+    );
     await ctx.emit('finance.portal_list.import_requested', { listId: list.id });
     return { listId: list.id };
   },
@@ -155,7 +169,7 @@ export const portalListSource = defineQuery({
       .selectFrom('crove_finance.portal_invoice_list as l')
       .innerJoin('crove_kernel.file as f', (join) => join.onRef('f.org_id', '=', 'l.org_id').onRef('f.id', '=', 'l.file_id'))
       .innerJoin('crove_kernel.tenant as t', 't.org_id', 'l.org_id')
-      .select(['l.id', 'l.status', 'l.period', 'f.storage_key', 'f.generation', 'f.sha256', 'f.content_type', 't.tax_code'])
+      .select(['l.id', 'l.status', 'l.period', 'l.direction', 'f.storage_key', 'f.generation', 'f.sha256', 'f.content_type', 't.tax_code'])
       .where('l.org_id', '=', ctx.orgId)
       .where('l.id', '=', input.listId)
       .executeTakeFirst();
@@ -164,6 +178,7 @@ export const portalListSource = defineQuery({
       id: row.id,
       pending: row.status === 'pending',
       period: row.period,
+      direction: row.direction,
       orgTaxCode: row.tax_code,
       file: { key: row.storage_key, generation: row.generation, sha256: row.sha256 },
       // An uploaded workbook, or the portal answer a sync stored (#325).
@@ -176,6 +191,8 @@ const zRecordRow = z.object({
   rowNo: z.number().int().min(1).max(1_048_576),
   sellerTaxCode: z.string().regex(/^[0-9]{10}(-[0-9]{3})?$|^[0-9]{12}$/),
   sellerName: z.string().max(500),
+  // The buyer on a sales list's row; null on a purchase row.
+  buyerTaxCode: z.string().regex(/^[0-9]{10}(-[0-9]{3})?$|^[0-9]{12}$/).nullable().default(null),
   template: z.string().regex(/^[0-9A-Z]{1,11}$/).nullable(),
   series: z.string().min(1).max(20),
   number: z.string().min(1).max(20),
@@ -215,7 +232,7 @@ export const portalListRecord = defineCommand({
   handler: async (ctx, input) => {
     const list = await ctx.trx
       .selectFrom('crove_finance.portal_invoice_list')
-      .select(['id', 'status', 'period', 'legal_entity_id'])
+      .select(['id', 'status', 'period', 'legal_entity_id', 'direction'])
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', input.listId)
       .forUpdate()
@@ -248,6 +265,7 @@ export const portalListRecord = defineCommand({
       .where('org_id', '=', ctx.orgId)
       .where('legal_entity_id', '=', list.legal_entity_id)
       .where('period', '=', list.period)
+      .where('direction', '=', list.direction)
       .where('status', '=', 'done')
       .where('removed_at', 'is', null)
       .executeTakeFirstOrThrow();
@@ -266,6 +284,7 @@ export const portalListRecord = defineCommand({
             row_no: r.rowNo,
             seller_tax_code: r.sellerTaxCode,
             seller_name: r.sellerName,
+            buyer_tax_code: r.buyerTaxCode,
             template: r.template,
             series: r.series,
             number: r.number,
@@ -299,20 +318,26 @@ export const portalListRecord = defineCommand({
       .where('id', '=', list.id)
       .execute();
     ctx.audit({ status: 'done', rows: input.rows.length, skipped: input.skippedCount, own_sales: input.ownSalesCount, other_buyers: input.otherBuyerCount });
-    await ctx.activity('finance.portal_invoice_list', list.id, 'portal_list.read', `Đọc ${input.rows.length} hóa đơn từ danh sách của cổng thuế, kỳ ${list.period}`);
+    await ctx.activity(
+      'finance.portal_invoice_list',
+      list.id,
+      'portal_list.read',
+      `Đọc ${input.rows.length} hóa đơn ${list.direction === 'sale' ? 'bán ra' : 'mua vào'} từ danh sách của cổng thuế, kỳ ${list.period}`,
+    );
     // Missing or different invoices are told to the importer and the owners and admins (#671).
     await ctx.emit('finance.portal_list.recorded', { listId: list.id });
     return { listId: list.id, recorded: true };
   },
 });
 
-async function periodLists(ctx: QueryContext, period: string, legalEntityId: string): Promise<PortalListView[]> {
+async function periodLists(ctx: QueryContext, period: string, legalEntityId: string, direction: PortalListDirection): Promise<PortalListView[]> {
   const lists = await ctx.trx
     .selectFrom('crove_finance.portal_invoice_list')
-    .select(['id', 'period', 'file_id', 'filename', 'status', 'error', 'row_count', 'list_from', 'list_to', 'skipped_count', 'skipped', 'own_sales_count', 'other_buyer_count', 'created_at'])
+    .select(['id', 'period', 'direction', 'file_id', 'filename', 'status', 'error', 'row_count', 'list_from', 'list_to', 'skipped_count', 'skipped', 'own_sales_count', 'other_buyer_count', 'created_at'])
     .where('org_id', '=', ctx.orgId)
     .where('legal_entity_id', '=', legalEntityId)
     .where('period', '=', period)
+    .where('direction', '=', direction)
     .where('removed_at', 'is', null)
     .orderBy('created_at')
     .orderBy('id')
@@ -320,6 +345,7 @@ async function periodLists(ctx: QueryContext, period: string, legalEntityId: str
   return lists.map((l) => ({
     id: l.id,
     period: l.period,
+    direction: l.direction,
     fileId: l.file_id,
     filename: l.filename,
     status: l.status,
@@ -355,7 +381,20 @@ function addDays(date: string, days: number): string {
 // the period of their posting date, so the reconciliation reports them there (declared_late, #560). Each document
 // carries its posting date, the date of its own journal entry (every document has one: purchase_document_entry). All of
 // one legal entity (#1280): its documents, and the proposals that name it (or name none, for the default entity).
-async function croveInvoices(ctx: QueryContext, from: string, to: string, period: { from: string; to: string }, legalEntityId: string): Promise<CroveInvoice[]> {
+// direction 'sale' (#2141): the recorded sales instead of the purchases. A sale's party is its buyer; the seller is the
+// org itself, and a recorded sale does not say which branch issued it, so its seller tax code is left empty and it meets
+// the portal row on series and number alone (reconcilePortalList does that only when exactly one portal invoice has
+// them, so two branches' invoices of the same series and number are flagged, never merged). The buyer is carried for
+// the screen.
+async function croveInvoices(
+  ctx: QueryContext,
+  from: string,
+  to: string,
+  period: { from: string; to: string },
+  legalEntityId: string,
+  direction: PortalListDirection,
+): Promise<CroveInvoice[]> {
+  const sale = direction === 'sale';
   const documents = await ctx.trx
     .selectFrom('crove_finance.purchase_document as d')
     .innerJoin('crove_kernel.party as p', (join) => join.onRef('p.org_id', '=', 'd.org_id').onRef('p.id', '=', 'd.party_id'))
@@ -379,7 +418,7 @@ async function croveInvoices(ctx: QueryContext, from: string, to: string, period
     ])
     .where('d.org_id', '=', ctx.orgId)
     .where('d.legal_entity_id', '=', legalEntityId)
-    .where('d.direction', '=', 'purchase')
+    .where('d.direction', '=', direction)
     .where((eb) =>
       eb.or([
         eb.and([eb('d.invoice_date', '>=', from), eb('d.invoice_date', '<=', to)]),
@@ -399,19 +438,21 @@ async function croveInvoices(ctx: QueryContext, from: string, to: string, period
     .where(isDefault ? sql<boolean>`coalesce(payload ->> 'legalEntityId', ${legalEntityId}) = ${legalEntityId}` : sql<boolean>`payload ->> 'legalEntityId' = ${legalEntityId}`)
     .where('kind', '=', 'finance.purchase')
     .where('status', '=', 'pending')
-    .where(sql`coalesce(payload ->> 'direction', 'purchase')`, '=', 'purchase')
+    .where(sql`coalesce(payload ->> 'direction', 'purchase')`, '=', direction)
     .where(sql`payload #>> '{invoice,issueDate}'`, '>=', from)
     .where(sql`payload #>> '{invoice,issueDate}'`, '<=', to)
     .limit(PORTAL_RECONCILE_LIMIT + 1)
     .execute();
   if (documents.length + proposals.length > PORTAL_RECONCILE_LIMIT) {
-    throw new DomainError('PERIOD_TOO_LARGE', 422, `Kỳ này có hơn ${PORTAL_RECONCILE_LIMIT} hóa đơn mua vào; hệ thống chưa đối chiếu được khối lượng này`);
+    throw new DomainError('PERIOD_TOO_LARGE', 422, `Kỳ này có hơn ${PORTAL_RECONCILE_LIMIT} hóa đơn ${sale ? 'bán ra' : 'mua vào'}; hệ thống chưa đối chiếu được khối lượng này`);
   }
   const out: CroveInvoice[] = documents.map((d) => ({
     kind: 'document',
     id: d.id,
-    sellerTaxCode: d.tax_code,
-    sellerName: d.name,
+    sellerTaxCode: sale ? null : d.tax_code,
+    sellerName: sale ? '' : d.name,
+    buyerTaxCode: sale ? d.tax_code : null,
+    buyerName: sale ? d.name : null,
     template: d.template,
     series: d.invoice_series,
     number: d.invoice_number,
@@ -424,15 +465,18 @@ async function croveInvoices(ctx: QueryContext, from: string, to: string, period
   }));
   for (const p of proposals) {
     // A pending proposal's payload passed zPurchaseProposal when it was stored; it is read defensively all the same.
-    const payload = p.payload as { seller?: { taxCode?: unknown; name?: unknown }; invoice?: Record<string, unknown> } | null;
+    const payload = p.payload as { seller?: { taxCode?: unknown; name?: unknown }; buyer?: { taxCode?: unknown; name?: unknown }; invoice?: Record<string, unknown> } | null;
     const invoice = payload?.invoice;
     if (!invoice || typeof invoice.series !== 'string' || typeof invoice.number !== 'string' || typeof invoice.issueDate !== 'string') continue;
     const taxCode = typeof payload?.seller?.taxCode === 'string' ? (parseTaxCode(payload.seller.taxCode)?.normalized ?? null) : null;
+    const buyerTaxCode = typeof payload?.buyer?.taxCode === 'string' ? (parseTaxCode(payload.buyer.taxCode)?.normalized ?? null) : null;
     out.push({
       kind: 'proposal',
       id: p.id,
-      sellerTaxCode: taxCode,
-      sellerName: typeof payload?.seller?.name === 'string' ? payload.seller.name : '',
+      sellerTaxCode: sale ? null : taxCode,
+      sellerName: sale ? '' : typeof payload?.seller?.name === 'string' ? payload.seller.name : '',
+      buyerTaxCode: sale ? buyerTaxCode : null,
+      buyerName: sale ? (typeof payload?.buyer?.name === 'string' ? payload.buyer.name : '') : null,
       template: typeof invoice.template === 'string' ? invoice.template : null,
       series: invoice.series,
       number: invoice.number,
@@ -459,13 +503,16 @@ export function firstPerOutcome<T extends { outcome: string }>(items: readonly T
 
 // The full reconciliation of one VAT period: the period, its lists and every item (uncut). The reconcile query cuts
 // the items per outcome; the missing-invoice request (#669) reads the 'missing' ones. Of one legal entity (#1280).
+// direction 'sale' (#2141) reconciles the period's sales lists with the recorded sales instead; the default is the purchase
+// side every caller before it meant. Of one legal entity (#1280).
 export async function reconcilePeriod(
   ctx: QueryContext,
   periodKey: string,
   legalEntityId: string,
+  direction: PortalListDirection = 'purchase',
 ): Promise<{ period: VatPeriod; lists: PortalListView[]; reconciliation: Reconciliation }> {
   const period = vatPeriod(periodKey);
-  const lists = await periodLists(ctx, periodKey, legalEntityId);
+  const lists = await periodLists(ctx, periodKey, legalEntityId, direction);
   const done = lists.filter((l) => l.status === 'done').map((l) => l.id);
   const rows: PortalRow[] =
     done.length === 0
@@ -473,7 +520,7 @@ export async function reconcilePeriod(
       : (
           await ctx.trx
             .selectFrom('crove_finance.portal_invoice_row')
-            .select(['list_id', 'row_no', 'seller_tax_code', 'seller_name', 'template', 'series', 'number', 'issue_date', 'currency', 'subtotal', 'vat_amount', 'total', 'status', 'status_label'])
+            .select(['list_id', 'row_no', 'seller_tax_code', 'seller_name', 'buyer_tax_code', 'template', 'series', 'number', 'issue_date', 'currency', 'subtotal', 'vat_amount', 'total', 'status', 'status_label'])
             .where('org_id', '=', ctx.orgId)
             .where('list_id', 'in', done)
             .orderBy('list_id')
@@ -484,6 +531,7 @@ export async function reconcilePeriod(
           rowNo: r.row_no,
           sellerTaxCode: r.seller_tax_code,
           sellerName: r.seller_name,
+          buyerTaxCode: r.buyer_tax_code,
           template: r.template,
           series: r.series,
           number: r.number,
@@ -501,18 +549,19 @@ export async function reconcilePeriod(
   const from = addDays([period.from, dates[0] ?? period.from].sort()[0] ?? period.from, -31);
   const to = addDays([period.to, dates.at(-1) ?? period.to].sort().at(-1) ?? period.to, 31);
   // Without a list there is nothing to compare: Crove's invoices are not all reported as "not on the portal".
-  const reconciliation = done.length === 0 ? reconcilePortalList([], [], period) : reconcilePortalList(rows, await croveInvoices(ctx, from, to, period, legalEntityId), period);
+  const reconciliation = done.length === 0 ? reconcilePortalList([], [], period) : reconcilePortalList(rows, await croveInvoices(ctx, from, to, period, legalEntityId, direction), period);
   return { period, lists, reconciliation };
 }
 
 export const portalListReconcile = defineQuery({
   name: 'finance.portal_list.reconcile',
-  input: z.object({ period: zVatPeriod, legalEntityId: zId.optional() }),
+  input: z.object({ period: zVatPeriod, legalEntityId: zId.optional(), direction: z.enum(PORTAL_LIST_DIRECTIONS).optional() }),
   access: ALL,
   handler: async (ctx, input): Promise<PortalReconciliation> => {
-    const { period, lists, reconciliation } = await reconcilePeriod(ctx, input.period, await resolveLegalEntity(ctx, input.legalEntityId));
+    const direction = input.direction ?? 'purchase';
+    const { period, lists, reconciliation } = await reconcilePeriod(ctx, input.period, await resolveLegalEntity(ctx, input.legalEntityId), direction);
     const items = firstPerOutcome(reconciliation.items, PORTAL_RECONCILE_ITEMS_PER_OUTCOME);
-    return { period, lists, summary: reconciliation.summary, items, truncated: items.length < reconciliation.items.length };
+    return { direction, period, lists, summary: reconciliation.summary, items, truncated: items.length < reconciliation.items.length };
   },
 });
 
@@ -526,6 +575,7 @@ interface ListSource {
   id: string;
   pending: boolean;
   period: string;
+  direction: PortalListDirection;
   orgTaxCode: string | null;
   file: { key: string; generation: string | null; sha256: string };
   contentType: string;
@@ -561,19 +611,27 @@ export interface CheckedPortalList {
   rows: z.infer<typeof zRecordRow>[];
   listFrom: string | null;
   listTo: string | null;
-  // Rows dropped as not the org's purchases: the org is the seller, or another buyer is named.
+  // Rows dropped as not the org's purchases: the org is the seller, or another buyer is named. On a sales list: rows
+  // naming the org as the buyer, and rows of another seller.
   ownSales: number;
   otherBuyers: number;
 }
 
-export function checkPortalList(list: ExtractedPortalList, orgTaxCode: string | null): CheckedPortalList | { ok: false; error: string } {
+export function checkPortalList(
+  list: ExtractedPortalList,
+  orgTaxCode: string | null,
+  direction: PortalListDirection = 'purchase',
+): CheckedPortalList | { ok: false; error: string } {
   const own = parseTaxCode(orgTaxCode)?.normalized ?? null;
-  // Without the org's tax code any company's list, or the sales list, would pass as the org's purchases.
+  const sale = direction === 'sale';
+  // Without the org's tax code any company's list, or the other direction's list, would pass as the org's.
   if (!own) return { ok: false, error: 'Hãy nhập mã số thuế của công ty trong Cài đặt rồi nhập lại danh sách' };
   const preamble = parseTaxCode(list.buyerTaxCode)?.normalized ?? null;
   const otherCompany = (code: string) =>
     `Danh sách này của mã số thuế ${code}, không phải của công ty này (${own}); hãy kiểm tra đã chọn đúng khách hàng chưa`;
-  if (own && preamble && own !== preamble) return { ok: false, error: otherCompany(preamble) };
+  // The line above the header names the buyer (the purchase list's owner); a sales list has the org as seller, which
+  // the rows below tell.
+  if (!sale && own && preamble && own !== preamble) return { ok: false, error: otherCompany(preamble) };
   for (const date of [list.listFrom, list.listTo]) {
     if (date !== null && !isCalendarDate(date)) return { ok: false, error: `Khoảng ngày tra cứu trong tệp có ngày không hợp lệ (${date}); hãy xuất lại danh sách từ cổng thuế` };
   }
@@ -590,27 +648,42 @@ export function checkPortalList(list: ExtractedPortalList, orgTaxCode: string | 
     return { ok: false, error: `Không đọc được hóa đơn nào trong danh sách (${list.skippedCount} dòng lỗi, ví dụ dòng ${list.skipped[0]?.rowNo ?? '?'}); hãy kiểm tra tệp` };
   }
   if (list.rows.length === 0) {
-    return { ok: false, error: 'Danh sách không có hóa đơn nào; hãy kiểm tra đã tra cứu đúng kỳ ở mục "Hóa đơn điện tử mua vào"' };
+    return {
+      ok: false,
+      error: `Danh sách không có hóa đơn nào; hãy kiểm tra đã tra cứu đúng kỳ ở mục "Hóa đơn điện tử ${sale ? 'bán ra' : 'mua vào'}"`,
+    };
   }
   const rows: z.infer<typeof zRecordRow>[] = [];
-  let ownSales = 0;
-  const foreignBuyers = new Map<string, number>();
+  // Rows of the other direction (a purchase list: the org is the seller; a sales list: the org is the buyer) and rows of
+  // other companies, counted apart.
+  let otherDirection = 0;
+  const foreignParties = new Map<string, number>();
+  const amount = (value: string | null) => (value === null ? null : toMoney(money(value)));
   for (const r of list.rows) {
     const seller = parseTaxCode(r.sellerTaxCode)?.normalized;
     if (!seller) return { ok: false, error: `Dòng ${r.rowNo}: mã số thuế người bán không hợp lệ` };
     const buyer = parseTaxCode(r.buyerTaxCode)?.normalized ?? null;
-    if (own && seller === own) {
-      ownSales += 1;
-      continue;
+    if (sale) {
+      // A sale is the org's own invoice: the seller is the org or one of its branches (#686).
+      if (!isOwnTaxCode(seller, own)) {
+        if (buyer === own) otherDirection += 1;
+        else foreignParties.set(seller, (foreignParties.get(seller) ?? 0) + 1);
+        continue;
+      }
+    } else {
+      if (seller === own) {
+        otherDirection += 1;
+        continue;
+      }
+      if (buyer && buyer !== own) {
+        foreignParties.set(buyer, (foreignParties.get(buyer) ?? 0) + 1);
+        continue;
+      }
     }
-    if (own && buyer && buyer !== own) {
-      foreignBuyers.set(buyer, (foreignBuyers.get(buyer) ?? 0) + 1);
-      continue;
-    }
-    const amount = (value: string | null) => (value === null ? null : toMoney(money(value)));
     rows.push({
       rowNo: r.rowNo,
       sellerName: r.sellerName,
+      buyerTaxCode: sale ? buyer : null,
       template: r.template,
       series: r.series,
       number: r.number,
@@ -618,19 +691,27 @@ export function checkPortalList(list: ExtractedPortalList, orgTaxCode: string | 
       currency: r.currency,
       statusLabel: r.statusLabel,
       checkResult: r.checkResult,
-      sellerTaxCode: seller, subtotal: amount(r.subtotal), vatAmount: amount(r.vatAmount), total: amount(r.total),
+      sellerTaxCode: seller,
+      subtotal: amount(r.subtotal),
+      vatAmount: amount(r.vatAmount),
+      total: amount(r.total),
       status: portalStatus(r.statusLabel),
     });
   }
-  const otherBuyers = [...foreignBuyers.values()].reduce((sum, n) => sum + n, 0);
+  const others = [...foreignParties.values()].reduce((sum, n) => sum + n, 0);
   if (rows.length === 0) {
-    if (ownSales > 0 && ownSales >= otherBuyers) {
-      return { ok: false, error: 'Đây là danh sách hóa đơn bán ra; hãy tra cứu ở mục "Hóa đơn điện tử mua vào" rồi xuất lại' };
+    if (otherDirection > 0 && otherDirection >= others) {
+      return {
+        ok: false,
+        error: sale
+          ? 'Đây là danh sách hóa đơn mua vào; hãy tra cứu ở mục "Hóa đơn điện tử bán ra" rồi xuất lại'
+          : 'Đây là danh sách hóa đơn bán ra; hãy tra cứu ở mục "Hóa đơn điện tử mua vào" rồi xuất lại',
+      };
     }
-    const [mostCommon] = [...foreignBuyers].sort((a, b) => b[1] - a[1]);
+    const [mostCommon] = [...foreignParties].sort((a, b) => b[1] - a[1]);
     if (mostCommon) return { ok: false, error: otherCompany(mostCommon[0]) };
   }
-  return { ok: true, rows, listFrom: list.listFrom, listTo: list.listTo, ownSales, otherBuyers };
+  return { ok: true, rows, listFrom: list.listFrom, listTo: list.listTo, ownSales: otherDirection, otherBuyers: others };
 }
 
 // Reads one imported list and records the outcome. `attempt` is the job's retry count. A sandbox that cannot answer
@@ -661,7 +742,7 @@ export async function importPortalList(deps: PortalListDeps, orgId: string, list
     }
     list = result.list;
   }
-  const checked = checkPortalList(list, source.orgTaxCode);
+  const checked = checkPortalList(list, source.orgTaxCode, source.direction);
   if (!checked.ok) {
     await recordPortalListFailure(deps.runtime, orgId, listId, checked.error);
     return null;
