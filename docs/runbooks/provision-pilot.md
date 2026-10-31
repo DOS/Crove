@@ -182,10 +182,10 @@ The kernel refuses to start on a public `PUBLIC_URL` with unsafe settings: a sam
 
 ```bash
 git clone --depth 1 --branch main https://github.com/DOS/Ludy.git /opt/crove-src   # or the release tag you deploy
-cp /opt/crove-src/tools/deploy/caddy/compose.host.yml /opt/crove-src/tools/deploy/caddy/Caddyfile /opt/crove-src/tools/deploy/compose.pilot.yml /opt/crove/
+cp /opt/crove-src/tools/deploy/caddy/compose.host.yml /opt/crove-src/tools/deploy/caddy/Caddyfile /opt/crove/
 ```
 
-Or copy the three files from your own checkout with `scp`. `compose.pilot.yml` is not the proxy's: it runs the API and the worker as two containers and only the finance module ([deploy.md](deploy.md), "The pilot layout").
+Or copy the two files from your own checkout with `scp`. The split API and worker (`compose.pilot.yml`, [deploy.md](deploy.md), "The pilot layout") need no copy: every release ships the file, and listing it in `COMPOSE_FILE` chooses the layout.
 
 - Caddy gets and renews a Let's Encrypt certificate for `CROVE_DOMAIN` and redirects plain http to https. The certificates live in the `caddy-data` volume; keep it, or every restart asks Let's Encrypt again (which rate-limits repeated requests for the same name).
 - It runs on the host's network so it sees each client's real address, and it replaces any `X-Forwarded-For` a client sends with that address. With `TRUSTED_PROXY_HOPS=1` the kernel's per-client limits (sign-in, sign-up, recovery, email) then count each client separately. Behind a published port instead, Docker shows the proxy its bridge address for IPv6 clients, and every one of them would share one budget.

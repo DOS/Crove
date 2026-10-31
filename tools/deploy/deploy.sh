@@ -11,6 +11,10 @@
 #   deploy.sh status   [--dir <dir>]
 #   deploy.sh smoke <base url> [build id]
 #
+# compose.pilot.yml (the pilot's split API and worker, #2133) is taken from the directory of the --compose file and
+# staged with the release; the host chooses the layout by listing it in COMPOSE_FILE of the env file. A --compose file
+# with no sibling falls back to the copy on the host, or stops before pulling when there is none.
+#
 # Smoke: the checks a user needs to sign in (health, readiness, config, Supabase Auth, the sign-in page), and, with
 # SMOKE_EMAIL, SMOKE_PASSWORD and SMOKE_ORG set, an account step that signs in and uploads one synthetic e-invoice
 # (see smoke_account). Without them it says the account step is skipped. With a build id (#892: the git SHA the image
@@ -281,7 +285,8 @@ smoke() {
 # State on the host, under $DEPLOY_DIR:
 #   .env                         the instance's settings and secrets (owner managed; or --env-file)
 #   compose.host.yml             optional owner managed override (reverse proxy, split roles, profiles)
-#   compose.pilot.yml            optional: the split API and worker with the finance module only (tools/deploy/compose.pilot.yml)
+#   compose.pilot.yml            the split API and worker with the finance module only (tools/deploy/compose.pilot.yml), copied
+#                                from the active release when the env file's COMPOSE_FILE lists it; unused otherwise
 #   docker-compose.yml           the running release's compose file
 #   docker-compose.override.yml  the running release's image pins (generated), so plain `docker compose` in this
 #                                directory (and tools/backup) sees the same stack
@@ -345,8 +350,9 @@ guard_run() {
 dc() {
   local args=(compose --project-directory "$DEPLOY_DIR" --env-file "$ENV_FILE" -f "$DEPLOY_DIR/docker-compose.yml")
   # The pilot's split API and worker (tools/deploy/compose.pilot.yml, #2118) right after the release's file: they extend its
-  # `crove` service, whose image the release's pins (next) must then replace.
-  if [ -f "$DEPLOY_DIR/compose.pilot.yml" ]; then args+=(-f "$DEPLOY_DIR/compose.pilot.yml"); fi
+  # `crove` service, whose image the release's pins (next) must then replace. The host chooses the layout by listing the file
+  # in COMPOSE_FILE (#2133); the file itself comes with each release (activate), so it stays in step with docker-compose.yml.
+  if pilot_layout && [ -f "$DEPLOY_DIR/compose.pilot.yml" ]; then args+=(-f "$DEPLOY_DIR/compose.pilot.yml"); fi
   args+=(-f "$DEPLOY_DIR/docker-compose.override.yml")
   # The database image with pgBackRest and the bucket's settings (tools/backup/compose.wal.yml, #2120). The image
   # (crove-db:local, built from tools/wal) is on the host, never pulled: a deploy starts `db` with --no-build.
@@ -370,14 +376,23 @@ services:
   usage: { image: '$image', build: !reset null }
   crove-extract: { image: '$extract', build: !reset null }
 EOF
-  pilot_pins "$image"
 }
 
-# With the pilot's compose.pilot.yml (the split `api` and `worker`, #2118) on the host, the same pins for those two, so
-# a plain `docker compose` in the stack directory (tools/backup/restore.sh, a manual `up`) runs the release's digest, not
-# crove:local. Nothing without the file: an `api` service defined by a pin alone would run the all-in-one role.
+# Whether the host runs the pilot's split API and worker: its env file lists compose.pilot.yml in COMPOSE_FILE (the same
+# line `pnpm pilot:check` reads). Read each time, so taking the file out of COMPOSE_FILE is all it takes to go back to one
+# container (#2133).
+pilot_layout() {
+  # The last assignment wins, as in a dotenv file: `export` and spaces around `=` are allowed, a trailing ` # comment` is not
+  # part of the value, and a commented-out line is not an assignment.
+  sed -n -E 's/\r$//; s/^[[:space:]]*(export[[:space:]]+)?COMPOSE_FILE[[:space:]]*=[[:space:]]*//p' "$ENV_FILE" \
+    | tail -n 1 | sed -E 's/[[:space:]]+#.*$//' | grep -q 'compose\.pilot\.yml'
+}
+
+# In the pilot layout, the same image pins for `api` and `worker`, so a plain `docker compose` in the stack directory
+# (tools/backup/restore.sh, a manual `up`) runs the release's digest, not crove:local. Only in that layout: an `api` service
+# defined by a pin alone would run the all-in-one role with no settings, and `has_service` would roll it.
 pilot_pins() {
-  [ -f "$DEPLOY_DIR/compose.pilot.yml" ] || return 0
+  pilot_layout || return 0
   printf "  api: { image: '%s', build: !reset null }\n  worker: { image: '%s', build: !reset null }\n" "$1" "$1"
 }
 
@@ -386,12 +401,27 @@ ACTIVE_BUILD=''
 activate() {
   local rel="$DEPLOY_DIR/releases/$1"
   [ -f "$rel/release.env" ] || die "$EXIT_USAGE" "release directory $rel is incomplete"
+  rm -f "$DEPLOY_DIR/compose.pilot.yml.tmp"
   cp -f "$rel/docker-compose.yml" "$DEPLOY_DIR/docker-compose.yml.tmp"
   cp -f "$rel/docker-compose.override.yml" "$DEPLOY_DIR/docker-compose.override.yml.tmp"
   CROVE_IMAGE="$(release_field "$1" IMAGE)"
   CROVE_EXTRACT_IMAGE="$(release_field "$1" EXTRACT_IMAGE)"
-  # A release staged before compose.pilot.yml came to the host has no pins for its services: add them.
-  if ! grep -q '^  api:' "$DEPLOY_DIR/docker-compose.override.yml.tmp"; then pilot_pins "$CROVE_IMAGE" >>"$DEPLOY_DIR/docker-compose.override.yml.tmp"; fi
+  # The pins of `api` and `worker` follow the layout of now, whatever the release was staged under: taken out of a release
+  # staged in the pilot layout when the host has gone back to one container (they would define bare services), put in
+  # one staged before (#2133).
+  { grep -v -E "^  (api|worker): \{ image:" "$DEPLOY_DIR/docker-compose.override.yml.tmp" || true; } >"$DEPLOY_DIR/docker-compose.override.yml.pins"
+  mv -f "$DEPLOY_DIR/docker-compose.override.yml.pins" "$DEPLOY_DIR/docker-compose.override.yml.tmp"
+  pilot_pins "$CROVE_IMAGE" >>"$DEPLOY_DIR/docker-compose.override.yml.tmp"
+  # The pilot file ships with the release. A release staged before that (a rollback to it) keeps the host's copy.
+  if pilot_layout; then
+    if [ -f "$rel/compose.pilot.yml" ]; then
+      cp -f "$rel/compose.pilot.yml" "$DEPLOY_DIR/compose.pilot.yml.tmp"
+    elif [ ! -f "$DEPLOY_DIR/compose.pilot.yml" ]; then
+      die "$EXIT_USAGE" "COMPOSE_FILE in $ENV_FILE lists compose.pilot.yml but release $1 does not carry it and $DEPLOY_DIR has none (docs/runbooks/deploy.md, \"The pilot layout\")"
+    fi
+  fi
+  # The three files are moved in a row, so a plain `docker compose` (the backup cron) sees them together as nearly as it can.
+  if [ -f "$DEPLOY_DIR/compose.pilot.yml.tmp" ]; then mv -f "$DEPLOY_DIR/compose.pilot.yml.tmp" "$DEPLOY_DIR/compose.pilot.yml"; fi
   mv -f "$DEPLOY_DIR/docker-compose.yml.tmp" "$DEPLOY_DIR/docker-compose.yml"
   mv -f "$DEPLOY_DIR/docker-compose.override.yml.tmp" "$DEPLOY_DIR/docker-compose.override.yml"
   export CROVE_IMAGE CROVE_EXTRACT_IMAGE
@@ -580,12 +610,7 @@ preflight() {
   [ -n "$ENV_FILE" ] || ENV_FILE="$DEPLOY_DIR/.env"
   valid_path "$ENV_FILE" || die "$EXIT_USAGE" "--env-file must be an absolute path without spaces: $ENV_FILE"
   [ -f "$ENV_FILE" ] || die "$EXIT_USAGE" "env file $ENV_FILE not found (copy .env.example there and change every secret)"
-  # The env file lists compose.pilot.yml in COMPOSE_FILE but the file is not here: dc() would silently drop it and the
-  # deploy would roll the all-in-one `crove` (API on the worker's database login) instead of api and worker (#2118).
-  if sed -n 's/^COMPOSE_FILE=//p' "$ENV_FILE" | tail -n 1 | grep -q 'compose\.pilot\.yml' && [ ! -f "$DEPLOY_DIR/compose.pilot.yml" ]; then
-    die "$EXIT_USAGE" "COMPOSE_FILE in $ENV_FILE lists compose.pilot.yml but $DEPLOY_DIR/compose.pilot.yml does not exist: copy tools/deploy/compose.pilot.yml there (docs/runbooks/deploy.md, \"The pilot layout\")"
-  fi
-  # The same for the WAL archiving overlay (#2120): without it the deploy would recreate `db` on the plain PostgreSQL image,
+  # The WAL archiving overlay (#2120) stays the host's own file: without it the deploy would recreate `db` on the plain PostgreSQL image,
   # while the volume still tells PostgreSQL to push every WAL segment with a command that image does not have.
   if sed -n 's/^COMPOSE_FILE=//p' "$ENV_FILE" | tail -n 1 | grep -q 'compose\.wal\.yml' && [ ! -f "$DEPLOY_DIR/compose.wal.yml" ]; then
     die "$EXIT_USAGE" "COMPOSE_FILE in $ENV_FILE lists compose.wal.yml but $DEPLOY_DIR/compose.wal.yml does not exist: copy tools/backup/compose.wal.yml there (docs/runbooks/backup-and-restore.md, \"Point in time recovery\")"
@@ -702,7 +727,13 @@ do_deploy() {
   # Stage the release (before anything changes, so a failure here leaves the running stack alone).
   mkdir -p "$dir"
   cp -f "$compose" "$dir/docker-compose.yml"
+  # The pilot's compose file travels with the release, from the directory of its compose file.
+  if [ -f "$(dirname "$compose")/compose.pilot.yml" ]; then cp -f "$(dirname "$compose")/compose.pilot.yml" "$dir/compose.pilot.yml"; fi
   write_override "$image" "$extract" >"$dir/docker-compose.override.yml"
+  # In the pilot layout the release, or at least the host, must have the file: found out now, before anything is pulled or changed.
+  if pilot_layout && [ ! -f "$dir/compose.pilot.yml" ] && [ ! -f "$DEPLOY_DIR/compose.pilot.yml" ]; then
+    die "$EXIT_USAGE" "COMPOSE_FILE in $ENV_FILE lists compose.pilot.yml but this release does not carry it (it ships tools/deploy/compose.pilot.yml next to its compose file) and $DEPLOY_DIR has none"
+  fi
   printf 'RELEASE=%s\nIMAGE=%s\nEXTRACT_IMAGE=%s\nBUILD=%s\nSTAGED_AT=%s\n' "$release" "$image" "$extract" "$build" "$(date -u +%Y%m%dT%H%M%S.%NZ)" >"$dir/release.env"
 
   if ! pull_images "$image" "$extract" "$REGISTRY" "$REGISTRY_USER" "$REGISTRY_PASSWORD"; then

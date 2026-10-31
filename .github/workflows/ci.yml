@@ -498,6 +498,16 @@ jobs:
       - name: Upload and inbound email through the API, filed by the worker, blobs in MinIO
         run: node tools/e2e/split-stack.mjs
 
+      # The pilot layout (#2133): docker-compose.yml with tools/deploy/compose.pilot.yml, laid out as on a deploy host and
+      # started from the images built above (the same Dockerfiles, tagged as the base file names them). The split stack
+      # goes first, so the two are never up together.
+      - name: Boot the pilot layout (compose.pilot.yml), check its topology, read an upload through it
+        run: |
+          $COMPOSE down -v
+          docker tag crove:split crove:local
+          docker tag crove-extract:split crove-extract:local
+          node tools/e2e/pilot-stack.mjs
+
       - name: Stack logs
         if: failure()
         run: $COMPOSE logs --no-color

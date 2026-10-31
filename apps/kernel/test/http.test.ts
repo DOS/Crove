@@ -109,6 +109,23 @@ describe('configuration guards', () => {
     expect(() => loadConfig({ ...base, CROVE_ALLOW_ALL_IN_ONE: 'yes' })).toThrow(/CROVE_ALLOW_ALL_IN_ONE/);
   });
 
+  // #2133: keeping the worker's all-org login out of the API does not rest on how the container was composed.
+  it('refuses the api role on a public PUBLIC_URL when it holds WORKER_DATABASE_URL, and only then', () => {
+    const worker = { WORKER_DATABASE_URL: 'postgres://crove_worker:worker-ref@db:5432/postgres' };
+    const publicConfig = (extra: Record<string, string> = {}) => loadConfig({ ...base, PUBLIC_URL: 'https://books.example.com', PUBLIC_AUTH_URL: 'https://auth.example.com/auth/v1', ...extra });
+    expect(() => assertSplitRoles(publicConfig(worker), 'api')).toThrow(/api role must not hold WORKER_DATABASE_URL/);
+    // The message names the setting and never its value.
+    expect(() => assertSplitRoles(publicConfig(worker), 'api')).not.toThrow(/worker-ref/);
+    // Without it, and for the worker (which needs it), nothing is refused; an empty value (a compose `${VAR:-}`) is unset.
+    expect(() => assertSplitRoles(publicConfig(), 'api')).not.toThrow();
+    expect(() => assertSplitRoles(publicConfig({ WORKER_DATABASE_URL: '' }), 'api')).not.toThrow();
+    expect(() => assertSplitRoles(publicConfig(worker), 'worker')).not.toThrow();
+    // The all role has it by design (the opt-in above governs it); a laptop's api may hold it.
+    expect(() => assertSplitRoles(publicConfig({ ...worker, CROVE_ALLOW_ALL_IN_ONE: 'true' }), 'all')).not.toThrow();
+    expect(() => assertSplitRoles(loadConfig({ ...base, ...worker }), 'api')).not.toThrow();
+    expect(() => assertSplitRoles(loadConfig({ ...base, ...worker, PUBLIC_URL: 'http://127.0.0.1:8080' }), 'api')).not.toThrow();
+  });
+
   // #2119: how many extract jobs the worker runs at once, and how often an AI call is sent again.
   it('runs up to 4 extract jobs at once, never more than the sandbox has slots, and bounds the AI retries', () => {
     const sandbox = { EXTRACT_URL: 'http://crove-extract:8090' };

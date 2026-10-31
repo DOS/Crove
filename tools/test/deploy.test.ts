@@ -109,28 +109,76 @@ describe.skipIf(!runHere)('deploy.sh', { timeout: 300_000 }, () => {
     expect(existsSync(`${dir}/.deploy/lock`)).toBe(false);
   });
 
-  // #2118: the pilot's split API and worker are an optional host file, passed last when it is there.
-  it('passes compose.pilot.yml after the release file and before the pins, and compose.host.yml last, only when they exist', () => {
-    const filesOf = () => readFileSync(`${log}.files`, 'utf8').split('\n').filter(Boolean);
-    expect(deploy('v1.0.0', 'a').status).toBe(0);
-    for (const files of filesOf()) expect(files).toBe(`${dir}/docker-compose.yml ${dir}/docker-compose.override.yml`);
+  // #2118, #2133: the pilot's split API and worker. compose.pilot.yml ships with each release, next to its compose file;
+  // the host chooses the layout by listing it in COMPOSE_FILE, and the pins of api and worker follow that choice.
+  const SPLIT = 'db migrate auth auth-grants crove-extract mailpit api worker';
+  const PILOT_ENV = 'POSTGRES_PASSWORD=x\nCOMPOSE_FILE=docker-compose.yml:compose.pilot.yml:docker-compose.override.yml:compose.host.yml\n';
+  const NOT_PILOT_ENV = 'POSTGRES_PASSWORD=x\nCOMPOSE_FILE=docker-compose.yml:docker-compose.override.yml:compose.host.yml\n';
+  const filesOf = () => readFileSync(`${log}.files`, 'utf8').split('\n').filter(Boolean);
+  const pins = (c: string) => [`api: { image: '${image(c)}', build: !reset null }`, `worker: { image: '${image(c)}', build: !reset null }`];
+
+  it('uses the release\'s compose.pilot.yml only when COMPOSE_FILE lists it: after the release file, before the pins, host file last', () => {
     writeFileSync(`${dir}/compose.host.yml`, 'services: {}\n');
-    writeFileSync(`${dir}/compose.pilot.yml`, 'services: {}\n');
+    // The release carries the file, but the host has not chosen the layout: not passed, not copied, no pins for api and worker.
+    writeFileSync(`${root}/compose.pilot.yml`, '# release a\nservices: {}\n');
+    expect(deploy('v1.0.0', 'a').status).toBe(0);
+    for (const files of filesOf()) expect(files).toBe(`${dir}/docker-compose.yml ${dir}/docker-compose.override.yml ${dir}/compose.host.yml`);
+    expect(existsSync(`${dir}/compose.pilot.yml`)).toBe(false);
+    expect(existsSync(`${dir}/releases/${releaseDir('v1.0.0', 'a')}/compose.pilot.yml`)).toBe(true);
+    expect(running()).not.toContain('api: {');
+
+    // Listed: the release's copy becomes the host's, in the order the plain docker compose of COMPOSE_FILE uses.
+    writeFileSync(`${dir}/.env`, PILOT_ENV);
+    writeFileSync(`${root}/compose.pilot.yml`, '# release b\nservices: {}\n');
     rmSync(`${log}.files`);
-    const res = deploy('v1.1.0', 'b', { STUB_SERVICES: 'db migrate auth auth-grants crove-extract mailpit api worker' });
+    const res = deploy('v1.1.0', 'b', { STUB_SERVICES: SPLIT });
     expect(res.status, res.out).toBe(0);
     expect(filesOf().length).toBeGreaterThan(5);
     for (const files of filesOf()) expect(files).toBe(`${dir}/docker-compose.yml ${dir}/compose.pilot.yml ${dir}/docker-compose.override.yml ${dir}/compose.host.yml`);
+    expect(readFileSync(`${dir}/compose.pilot.yml`, 'utf8')).toContain('# release b');
+    // The pins of the release reach api and worker, for a plain docker compose on the host.
+    for (const pin of pins('b')) expect(running()).toContain(pin);
     // The split roles roll worker first, then the API, and the smoke test finds the API's port.
     const c = calls();
     // The all-in-one container of an earlier layout goes first, so it keeps neither the API's port nor the worker's jobs.
     expect(indexOf(c, 'compose rm --stop --force crove')).toBeGreaterThanOrEqual(0);
     expect(indexOf(c, 'compose rm --stop --force crove')).toBeLessThan(indexOf(c, 'compose up --detach --no-build --no-deps worker'));
-    // The pins of the release reach api and worker too, for a plain docker compose on the host.
-    expect(running()).toContain(`api: { image: '${image('b')}', build: !reset null }`);
-    expect(running()).toContain(`worker: { image: '${image('b')}', build: !reset null }`);
     expect(indexOf(c, 'compose up --detach --no-build --no-deps worker')).toBeLessThan(indexOf(c, 'compose up --detach --no-build --no-deps --wait --wait-timeout 600 api'));
     expect(c.some((l) => l === 'compose port api 8080')).toBe(true);
+
+    // The next release brings its own copy, so the host's stays in step with its docker-compose.yml.
+    writeFileSync(`${root}/compose.pilot.yml`, '# release c\nservices: {}\n');
+    expect(deploy('v1.2.0', 'c', { STUB_SERVICES: SPLIT }).status).toBe(0);
+    expect(readFileSync(`${dir}/compose.pilot.yml`, 'utf8')).toContain('# release c');
+  });
+
+  it('takes the pins of api and worker out when the host goes back to one container, and from a release staged with them (#2133)', () => {
+    writeFileSync(`${dir}/.env`, PILOT_ENV);
+    writeFileSync(`${root}/compose.pilot.yml`, '# pilot\nservices: {}\n');
+    expect(deploy('v1.0.0', 'a', { STUB_SERVICES: SPLIT }).status).toBe(0);
+    expect(deploy('v1.1.0', 'b', { STUB_SERVICES: SPLIT }).status).toBe(0);
+    for (const pin of pins('b')) expect(running()).toContain(pin);
+    // A release staged by an earlier deploy.sh carries the pins in its own override file. It is release b, the one the
+    // rollback below goes back to, so the pins really are activated again.
+    const staged = `${dir}/releases/${releaseDir('v1.1.0', 'b')}/docker-compose.override.yml`;
+    writeFileSync(staged, `${readFileSync(staged, 'utf8')}${pins('b').map((l) => `  ${l}\n`).join('')}`);
+
+    // Back to one container: only COMPOSE_FILE changes. The file stays on the host, unused; no bare api or worker is defined.
+    writeFileSync(`${dir}/.env`, NOT_PILOT_ENV);
+    rmSync(`${log}.files`);
+    expect(deploy('v1.2.0', 'c').status).toBe(0);
+    for (const files of filesOf()) expect(files).toBe(`${dir}/docker-compose.yml ${dir}/docker-compose.override.yml`);
+    expect(running()).not.toContain('api: {');
+    expect(running()).not.toContain('worker: {');
+    // A rollback to the release with the old pins: stripped on activation, so the active override has none either.
+    expect(run(['rollback']).status).toBe(0);
+    expect(running()).not.toContain('api: {');
+    expect(running()).not.toContain('worker: {');
+    expect(running()).toContain(`crove: { image: '${image('b')}', build: !reset null }`);
+    // And forward again into the pilot layout: the pins come back with the layout.
+    writeFileSync(`${dir}/.env`, PILOT_ENV);
+    expect(deploy('v1.3.0', 'd', { STUB_SERVICES: SPLIT }).status).toBe(0);
+    for (const pin of pins('d')) expect(running()).toContain(pin);
   });
 
   // #2120: the database image with WAL archiving is the host's file too; a deploy that dropped it would recreate `db`
@@ -148,18 +196,33 @@ describe.skipIf(!runHere)('deploy.sh', { timeout: 300_000 }, () => {
     expect(res.out).toContain('lists compose.wal.yml but');
   });
 
-  it('refuses to deploy when COMPOSE_FILE names compose.pilot.yml and the file is missing, rather than roll the all-in-one crove (#2118)', () => {
-    writeFileSync(`${dir}/.env`, 'POSTGRES_PASSWORD=x\nCOMPOSE_FILE=docker-compose.yml:compose.pilot.yml:docker-compose.override.yml:compose.host.yml\n');
+  it('stops before pulling when COMPOSE_FILE lists compose.pilot.yml and neither the release nor the host has the file, rather than roll the all-in-one crove (#2118, #2133)', () => {
+    writeFileSync(`${dir}/.env`, PILOT_ENV);
     const res = deploy('v1.0.0', 'a', { STUB_SERVICES: 'db migrate auth auth-grants crove-extract mailpit crove' });
     expect(res.status, res.out).toBe(2);
-    expect(res.out).toContain('lists compose.pilot.yml but');
+    expect(res.out).toContain('lists compose.pilot.yml but this release does not carry it');
     expect(calls().some((l) => l.startsWith('pull '))).toBe(false);
+    // Any way a dotenv file may spell the assignment counts, and a name inside a comment does not.
+    const layout = 'docker-compose.yml:compose.pilot.yml:docker-compose.override.yml';
+    for (const line of [`COMPOSE_FILE = ${layout}`, `export COMPOSE_FILE=${layout}`, `  COMPOSE_FILE="${layout}" # pilot`, `COMPOSE_FILE=${layout}\r`]) {
+      writeFileSync(`${dir}/.env`, `POSTGRES_PASSWORD=x\n${line}\n`);
+      expect(deploy('v1.0.0', 'a').status, line).toBe(2);
+    }
+    for (const line of ['COMPOSE_FILE=docker-compose.yml:docker-compose.override.yml # not compose.pilot.yml', `# COMPOSE_FILE=${layout}`]) {
+      writeFileSync(`${dir}/.env`, `POSTGRES_PASSWORD=x\n${line}\n`);
+      expect(deploy('v1.0.0', 'a').status, line).toBe(0);
+    }
+    writeFileSync(`${dir}/.env`, PILOT_ENV);
+    rmSync(`${log}.files`, { force: true });
+    // A copy the host already has is enough for a release that does not ship one (an older release).
     writeFileSync(`${dir}/compose.pilot.yml`, 'services: {}\n');
-    expect(deploy('v1.0.0', 'a', { STUB_SERVICES: 'db migrate auth auth-grants crove-extract mailpit api worker' }).status).toBe(0);
+    expect(deploy('v1.0.0', 'a', { STUB_SERVICES: SPLIT }).status).toBe(0);
+    for (const files of filesOf()) expect(files).toBe(`${dir}/docker-compose.yml ${dir}/compose.pilot.yml ${dir}/docker-compose.override.yml`);
   });
 
   it('says so when it cannot remove the old crove container, and goes on', () => {
-    writeFileSync(`${dir}/compose.pilot.yml`, 'services: {}\n');
+    writeFileSync(`${dir}/.env`, PILOT_ENV);
+    writeFileSync(`${root}/compose.pilot.yml`, 'services: {}\n');
     const res = deploy('v1.0.0', 'a', { STUB_SERVICES: 'db migrate auth auth-grants crove-extract mailpit api worker', STUB_RM_FAIL: '1' });
     expect(res.status, res.out).toBe(0);
     expect(res.out).toContain('could not remove the old crove container (the deploy goes on): rm: stub failure');
