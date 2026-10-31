@@ -17,8 +17,10 @@ import {
   probeOnce,
   proberArchiveStore,
   runProber,
+  walSegmentsPending,
   type HealthSnapshot,
   type ProberConfig,
+  type WalArchive,
 } from '../src/prober.ts';
 import type { AlertGate } from '../src/alert-gate.ts';
 import { archiveKey, type ArchiveS3Sender, type ArchiveStore } from '../src/worm.ts';
@@ -146,6 +148,83 @@ describe('health thresholds', () => {
       thresholds: { notifyQueuePercent: 50, extractionFailures: 2, deadLetters: 0, extractionWindowSeconds: 3600 },
       repeatSeconds: 3600,
       authMisses: 2,
+    });
+  });
+
+  // #2120: the database's own WAL archiving. A finished segment waiting, or archive_command failing, for longer than the
+  // limit is a finding; an idle database (the segment being written is the only one after the last push) is not.
+  describe('WAL archiving lag (#2120)', () => {
+    const wal = (patch: Partial<WalArchive> = {}): WalArchive => ({
+      last_archived_wal: '000000010000000000000010',
+      current_wal: '000000010000000000000011',
+      since_archived_seconds: 30,
+      failing: false,
+      ...patch,
+    });
+    const walLimits = { ...limits, walArchiveAgeSeconds: 600 };
+    const checks = (w: WalArchive | undefined, t = walLimits) => evaluateHealth(w ? { ...healthy, wal_archive: w } : healthy, t, 300);
+
+    it('counts the finished segments not yet archived', () => {
+      expect(walSegmentsPending(wal())).toBe(0);
+      expect(walSegmentsPending(wal({ current_wal: '000000010000000000000014' }))).toBe(3);
+      // Across a log boundary (256 segments of 16 MB), and a new timeline after a promotion.
+      expect(walSegmentsPending(wal({ last_archived_wal: '0000000100000001000000FF', current_wal: '000000010000000200000001' }))).toBe(1);
+      expect(walSegmentsPending(wal({ last_archived_wal: '000000010000000000000010', current_wal: '000000020000000000000013' }))).toBe(2);
+      // Nothing archived yet: every segment before the one being written waits. A standby has no WAL of its own to push.
+      expect(walSegmentsPending(wal({ last_archived_wal: null, current_wal: '000000010000000000000003' }))).toBe(3);
+      expect(walSegmentsPending(wal({ current_wal: null }))).toBe(0);
+      expect(walSegmentsPending(wal({ last_archived_wal: 'not a segment' }))).toBe(0x11);
+    });
+
+    it('reports archiving that has pushed nothing for longer than the limit while segments wait', () => {
+      const behind = wal({ current_wal: '000000010000000000000014', since_archived_seconds: 900 });
+      expect(checks(behind)).toEqual([
+        {
+          check: 'wal_archive',
+          value: 900,
+          threshold: 600,
+          message:
+            'WAL archiving has not pushed a segment for 900 s (limit 600 s; 3 finished segment(s) waiting): point-in-time recovery stops at the last archived segment, and the database keeps every unarchived segment on its disk (docs/runbooks/backup-and-restore.md, "Point in time recovery")',
+        },
+      ]);
+      expect(checks({ ...behind, failing: true })[0]?.message).toContain('3 finished segment(s) waiting, the last attempt failed');
+    });
+
+    it('reports failing archiving even when only the open segment is left, once past the limit', () => {
+      expect(checks(wal({ failing: true, since_archived_seconds: 900 })).map((f) => f.check)).toEqual(['wal_archive']);
+    });
+
+    it('stays quiet while archiving keeps up, when the database is idle, within the limit, when off, and without archiving', () => {
+      expect(checks(wal())).toEqual([]);
+      // Idle: a long time since the last push, but nothing waiting and nothing failing.
+      expect(checks(wal({ since_archived_seconds: 86_400 }))).toEqual([]);
+      // Waiting, but not for long: a slow upload and a retry fit in the limit.
+      expect(checks(wal({ current_wal: '000000010000000000000014', since_archived_seconds: 600 }))).toEqual([]);
+      expect(checks(wal({ failing: true, since_archived_seconds: 60 }))).toEqual([]);
+      // 0 and a limit left out turn the check off; a database without archive_mode has no snapshot.
+      const behind = wal({ current_wal: '000000010000000000000014', since_archived_seconds: 9000 });
+      expect(checks(behind, { ...limits, walArchiveAgeSeconds: 0 })).toEqual([]);
+      expect(checks(behind, limits)).toEqual([]);
+      expect(checks(undefined)).toEqual([]);
+    });
+
+    it('reads PROBER_MAX_WAL_ARCHIVE_AGE_SECONDS, 600 by default, 0 for off', () => {
+      expect(loadProberConfig({}).thresholds.walArchiveAgeSeconds).toBe(600);
+      expect(loadProberConfig({ PROBER_MAX_WAL_ARCHIVE_AGE_SECONDS: '120' }).thresholds.walArchiveAgeSeconds).toBe(120);
+      expect(loadProberConfig({ PROBER_MAX_WAL_ARCHIVE_AGE_SECONDS: '0' }).thresholds.walArchiveAgeSeconds).toBe(0);
+    });
+
+    it('alerts once through the prober like every other check, and sends a recovery once archiving is caught up', async () => {
+      const io = capture();
+      const hook = webhook();
+      const cfg = config({ thresholds: walLimits });
+      const behind = { ...healthy, wal_archive: wal({ current_wal: '000000010000000000000014', since_archived_seconds: 900 }) };
+      expect(await probeOnce(cfg, { ...io, fetch: hook.fetch, readHealth: async () => behind })).toBe(EXIT.unhealthy);
+      expect(await probeOnce(cfg, { ...io, fetch: hook.fetch, readHealth: async () => behind })).toBe(EXIT.unhealthy);
+      expect(hook.calls).toHaveLength(1);
+      expect(hook.body(0).crove.findings).toEqual([expect.objectContaining({ check: 'wal_archive', value: 900, threshold: 600 })]);
+      expect(await probeOnce(cfg, { ...io, fetch: hook.fetch, readHealth: async () => ({ ...healthy, wal_archive: wal() }) })).toBe(EXIT.ok);
+      expect(hook.body(1).crove).toMatchObject({ kind: 'resolved', previous: ['wal_archive'] });
     });
   });
 

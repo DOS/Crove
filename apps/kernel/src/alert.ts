@@ -24,7 +24,8 @@ export interface Finding {
   // Supabase Auth did not answer its health check (issue #1994). archive_verify, archive_lag: the WORM archive's nightly
   // verification stopped, or the archive fell behind (issue #1997). archive_marker: the newest verification marker in the
   // WORM store is old or cannot be trusted, read from the store alone (issue #2082). extraction: document readings kept
-  // failing at the reading service (issue #1998).
+  // failing at the reading service (issue #1998). wal_archive: the database's WAL archiving (issue #2120) is stuck or
+  // behind, so the point-in-time recovery window is not growing.
   check:
     | 'outbox'
     | 'inbound'
@@ -39,7 +40,8 @@ export interface Finding {
     | 'archive_verify'
     | 'archive_lag'
     | 'archive_marker'
-    | 'extraction';
+    | 'extraction'
+    | 'wal_archive';
   message: string;
   value: number | null;
   threshold: number | null;

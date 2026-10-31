@@ -79,6 +79,12 @@ const schema = z.object({
   PROBER_MAX_ARCHIVE_VERIFY_AGE_SECONDS: seconds(93_600),
   PROBER_MAX_ARCHIVE_LAG_SECONDS: optional.pipe(z.coerce.number<string | undefined>().int().min(0).max(604_800).optional()),
   ARCHIVE_LAG_SECONDS: optional.pipe(z.coerce.number<string | undefined>().int().min(60).max(86_400).optional()),
+  // The database's own WAL archiving (#2120, docs/runbooks/backup-and-restore.md, "Point in time recovery"): when it is on
+  // (archive_mode) and a finished WAL segment has waited longer than this to be archived, or archiving keeps failing for as
+  // long, the recovery point objective is no longer met. WAL switches at least every archive_timeout (60 s) while there are
+  // writes, so the default of 10 minutes allows for a slow upload and a retry. 0 turns the check off; a database without
+  // archiving is never checked.
+  PROBER_MAX_WAL_ARCHIVE_AGE_SECONDS: seconds(600),
   // AI document extraction (#1998): more than this many readings in PROBER_EXTRACTION_WINDOW_SECONDS whose every
   // attempt failed (the AI provider refused or did not answer, the parser sandbox was down) alert; a document that
   // cannot be read never does. 0 turns the check off.
@@ -189,6 +195,8 @@ export interface Thresholds {
   // The WORM archive (#1997); 0: not checked. Left out of thresholds built by hand: not checked.
   archiveVerifyAgeSeconds?: number;
   archiveLagSeconds?: number;
+  // The database's WAL archiving (#2120); 0 or left out: not checked.
+  walArchiveAgeSeconds?: number;
   // AI document extraction (#1998): failed readings of the reading service in the window; 0 or left out: not checked.
   extractionFailures?: number;
   extractionWindowSeconds?: number;
@@ -217,6 +225,7 @@ export function loadProberConfig(env: NodeJS.ProcessEnv = process.env, everySeco
       notifyQueuePercent: raw.PROBER_MAX_NOTIFY_QUEUE_PERCENT,
       archiveVerifyAgeSeconds: raw.PROBER_MAX_ARCHIVE_VERIFY_AGE_SECONDS,
       archiveLagSeconds: raw.PROBER_MAX_ARCHIVE_LAG_SECONDS ?? Math.max(3600, (raw.ARCHIVE_LAG_SECONDS ?? 600) + 900),
+      walArchiveAgeSeconds: raw.PROBER_MAX_WAL_ARCHIVE_AGE_SECONDS,
       extractionFailures: raw.PROBER_MAX_EXTRACTION_FAILURES,
       extractionWindowSeconds: raw.PROBER_EXTRACTION_WINDOW_SECONDS,
     },
@@ -400,6 +409,38 @@ export interface HealthSnapshot {
   // document could not be read.
   extraction_service_failures: number;
   extraction_document_failures: number;
+  // The database's WAL archiving (#2120), present only when archive_mode is on or always.
+  wal_archive?: WalArchive;
+}
+
+// What pg_stat_archiver and the WAL position say, read by any login (nothing here needs a privilege).
+export interface WalArchive {
+  // The newest segment pushed to the archive; null when none has been since the statistics were reset.
+  last_archived_wal: string | null;
+  // The segment being written; null on a standby, which archives nothing of its own.
+  current_wal: string | null;
+  // Since the last push, or since the statistics reset or the server start when there has been none.
+  since_archived_seconds: number;
+  // The last attempt failed (archive_command exited non-zero) and no push has succeeded since.
+  failing: boolean;
+}
+
+// The index of a WAL segment file name (24 hex digits: timeline, log, segment), for the default 16 MB segments. Only the
+// difference of two indexes is used, and a timeline change leaves it alone.
+function walSegmentIndex(name: string): number | null {
+  const match = /^[0-9A-F]{8}([0-9A-F]{8})([0-9A-F]{8})$/i.exec(name);
+  return match ? parseInt(match[1] as string, 16) * 256 + parseInt(match[2] as string, 16) : null;
+}
+
+/**
+ * Finished WAL segments that are not in the archive yet: the segments between the last archived one and the one being
+ * written. 0 when archiving keeps up (the segment being written is not archived until it is switched).
+ */
+export function walSegmentsPending(w: Pick<WalArchive, 'last_archived_wal' | 'current_wal'>): number {
+  const current = w.current_wal === null ? null : walSegmentIndex(w.current_wal);
+  if (current === null) return 0;
+  const last = w.last_archived_wal === null ? null : walSegmentIndex(w.last_archived_wal);
+  return Math.max(0, current - (last === null ? 0 : last + 1));
 }
 
 const s = (n: number) => `${Math.round(n)} s`;
@@ -472,6 +513,19 @@ export function evaluateHealth(h: HealthSnapshot, t: Thresholds, deadLetterWindo
       message: `the oldest audit event not yet in the WORM archive is ${s(h.archive_lag_seconds)} old (limit ${s(lagLimit)}): the archiver is behind or stopped (docs/runbooks/worm-archive.md)`,
     });
   }
+  const walLimit = t.walArchiveAgeSeconds ?? 0;
+  if (walLimit > 0 && h.wal_archive !== undefined && h.wal_archive.since_archived_seconds > walLimit) {
+    // Idle is not behind: with no write since the last push the segment being written stays open and nothing is waiting.
+    const pending = walSegmentsPending(h.wal_archive);
+    if (pending > 0 || h.wal_archive.failing) {
+      findings.push({
+        check: 'wal_archive',
+        value: h.wal_archive.since_archived_seconds,
+        threshold: walLimit,
+        message: `WAL archiving has not pushed a segment for ${s(h.wal_archive.since_archived_seconds)} (limit ${s(walLimit)}; ${pending} finished segment(s) waiting${h.wal_archive.failing ? ', the last attempt failed' : ''}): point-in-time recovery stops at the last archived segment, and the database keeps every unarchived segment on its disk (docs/runbooks/backup-and-restore.md, "Point in time recovery")`,
+      });
+    }
+  }
   const extractionLimit = t.extractionFailures ?? 0;
   if (extractionLimit > 0 && h.extraction_service_failures > extractionLimit) {
     findings.push({
@@ -537,9 +591,23 @@ export async function readHealth(databaseUrl: string, deadLetterWindowSeconds: n
       [extractionWindowSeconds],
     );
     const { rows: queue } = await client.query<{ usage: number }>('SELECT pg_catalog.pg_notification_queue_usage() AS usage');
+    // The WAL archiving of the database itself (#2120), when it is on: pg_stat_archiver and the WAL position are readable
+    // by any login.
+    const { rows: wal } = await client.query<WalArchive & { mode: string }>(
+      `SELECT pg_catalog.current_setting('archive_mode') AS mode,
+              a.last_archived_wal,
+              CASE WHEN pg_catalog.pg_is_in_recovery() THEN NULL ELSE pg_catalog.pg_walfile_name(pg_catalog.pg_current_wal_lsn()) END AS current_wal,
+              extract(epoch FROM pg_catalog.now() - coalesce(a.last_archived_time, a.stats_reset, pg_catalog.pg_postmaster_start_time()))::float8 AS since_archived_seconds,
+              (a.last_failed_time IS NOT NULL AND (a.last_archived_time IS NULL OR a.last_failed_time > a.last_archived_time)) AS failing
+       FROM pg_catalog.pg_stat_archiver a`,
+    );
     await client.query('COMMIT');
+    const archiving = wal[0] !== undefined && (wal[0].mode === 'on' || wal[0].mode === 'always');
     return {
       ...row,
+      ...(archiving && wal[0]
+        ? { wal_archive: { last_archived_wal: wal[0].last_archived_wal, current_wal: wal[0].current_wal, since_archived_seconds: Number(wal[0].since_archived_seconds), failing: wal[0].failing } }
+        : {}),
       notify_queue_usage: Number(queue[0]?.usage ?? 0),
       archive_verify_age_seconds: archive[0]?.archive_verify_age_seconds ?? null,
       archive_lag_seconds: archive[0]?.archive_lag_seconds ?? null,
