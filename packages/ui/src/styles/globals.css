@@ -34,6 +34,7 @@
   --color-chart-1: var(--chart-1);
   --color-ring: var(--ring);
   --color-input: var(--input);
+  --color-field-border: var(--field-border);
   --color-border: var(--border);
   --color-destructive: var(--destructive);
   --color-accent-foreground: var(--accent-foreground);
@@ -104,6 +105,7 @@
   --brand-spark: oklch(0.655 0.12 174.8);
   --border: oklch(0.915 0.007 290);
   --input: oklch(0.88 0.008 290);
+  --field-border: oklch(0.62 0.01 290);
   --ring: oklch(0.55 0.2 290);
   --chart-1: oklch(0.811 0.101 293.6);
   --chart-2: oklch(0.606 0.219 292.7);
@@ -157,6 +159,7 @@
   --brand-spark: oklch(0.774 0.13 174.6);
   --border: oklch(0.285 0.012 285);
   --input: oklch(0.32 0.014 285);
+  --field-border: oklch(0.54 0.014 285);
   --ring: oklch(0.75 0.13 293);
   --chart-1: oklch(0.811 0.101 293.6);
   --chart-2: oklch(0.606 0.219 292.7);

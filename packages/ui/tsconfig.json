@@ -8,5 +8,5 @@
     "types": [],
     "paths": { "@crove/ui/*": ["./src/*"] }
   },
-  "include": ["src"]
+  "include": ["src", "test"]
 }
