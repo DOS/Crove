@@ -10,6 +10,7 @@ With no app configured the connect button is hidden and nothing else changes: `d
 - A Google Cloud project with the **Google Calendar API** enabled.
 - An **OAuth client of type "Web application"** in that project.
 - An OAuth consent screen with the scopes `openid`, `email` and `https://www.googleapis.com/auth/calendar.freebusy`. The free/busy scope is a sensitive scope: Google verifies the app before more than 100 users outside the project's organization can connect (until then the project is "in testing" and each member must be listed as a test user; a test-mode grant also expires after 7 days).
+- Optional, for write-back of bookings (a member's confirmed bookings become events in their Google calendar): also the scope `https://www.googleapis.com/auth/calendar.events` on the consent screen. It is a sensitive scope too. Without it members can still connect for free/busy; the write-back switch then asks them to connect again once the scope is on the screen.
 - The server's `PUBLIC_URL` is `https`, and `CREDENTIAL_KEY` is set (`credential-key.md`): without a key a token could never be sealed, and the connect is refused before the member leaves the app.
 
 The client is its own: do not reuse the YouTube or Business Profile client (`CHANNEL_GOOGLE_*`), whose consent screen and scopes differ.
@@ -30,6 +31,10 @@ Each step has a check and a rollback. Never write a secret, a project id or an i
 4. **Connect a test account.** As a member (not a viewer), press the button, accept the consent screen, and come back to Settings.
    - Check: the account is listed with "Chưa đồng bộ"; within 15 minutes it reads "Đồng bộ lần cuối ..." and an event in that calendar takes its slot off the member's booking page.
    - Rollback: "Ngắt kết nối" deletes the account's busy blocks and hides the account at once; within 15 minutes the worker revokes the grant at Google (https://oauth2.googleapis.com/revoke, with the refresh token), then drops the sealed token and the row. If Google cannot be reached for 3 days, or the token can no longer be opened (the member left, the key is gone), the connection is removed anyway and the audit row says `revoked: false` with the reason: remove the app's access on the Google account's security page in that case.
+
+## Writing bookings to the member's calendar (write-back)
+
+A member who turns on "Ghi lịch hẹn vào lịch này" under a connected Google calendar (it asks them to connect again when the grant lacks the events scope) gets each confirmed booking as an event in their primary calendar, titled with the event type and the visitor's name: the visitor's name is the only personal data that leaves for Google, into the member's own calendar; no email, phone or attendee. The sweep writes it (at most 15 minutes after the booking), moves it when the booking moves and deletes it when the booking is cancelled; each call is idempotent by an event id the kernel derives, so a retry never makes a second event. An event the member deletes by hand stays deleted until its booking changes. Disconnecting a calendar cannot call Google for its events (the token goes), so events already written stay in the member's calendar. Check: turn it on for a test account, make a booking, and within 15 minutes the event is there; cancel the booking and it goes. Rollback: the member turns the switch off (writes stop at once), or the operator removes the events scope from the consent screen.
 
 ## When something goes wrong
 

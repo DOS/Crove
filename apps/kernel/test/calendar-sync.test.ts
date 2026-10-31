@@ -3,7 +3,7 @@
 // kernel, and how it ends a connection the provider refused. No database, no network.
 import { randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import type { CalendarAdapter } from '@crove/channel';
+import type { CalendarAdapter, CalendarWriteResult } from '@crove/channel';
 import { busyPieces } from '@crove/kernel';
 import { calendarBinding } from '@crove/kernel-contract';
 import { CredentialVault, DomainError, parseVaultKey, type Runtime } from '@crove/kernel-runtime';
@@ -26,12 +26,13 @@ interface Call {
   input: Record<string, unknown>;
 }
 
-function fakeRuntime(state: { status: string; provider: string; expiresAt: string | null; updatedAt: string } | null, credential: unknown) {
+function fakeRuntime(state: { status: string; provider: string; expiresAt: string | null; updatedAt: string; writeBack?: boolean } | null, credential: unknown, plan: { actions: unknown[] } = { actions: [] }) {
   const calls: Call[] = [];
   const runtime = {
     query: async (name: string, input: Record<string, unknown>) => {
       calls.push({ kind: 'query', name, input });
       if (name === 'kernel.calendar.connection_state') return state;
+      if (name === 'kernel.calendar.writeback_plan') return plan;
       if (name === 'kernel.calendar.credential') {
         if (credential instanceof Error) throw credential;
         return credential;
@@ -49,8 +50,9 @@ function fakeRuntime(state: { status: string; provider: string; expiresAt: strin
   return { runtime, calls };
 }
 
-function adapter(over: Partial<CalendarAdapter> = {}): CalendarAdapter & { busyCalls: Array<{ secret: string; from: Date; to: Date }> } {
+function adapter(over: Partial<CalendarAdapter> = {}): CalendarAdapter & { busyCalls: Array<{ secret: string; from: Date; to: Date }>; writes: string[] } {
   const busyCalls: Array<{ secret: string; from: Date; to: Date }> = [];
+  const writes: string[] = [];
   return {
     provider: 'google',
     oauthProvider: 'google_calendar',
@@ -66,6 +68,9 @@ function adapter(over: Partial<CalendarAdapter> = {}): CalendarAdapter & { busyC
       return { busy: busyCalls.length === 1 ? [{ start: '2026-11-04T02:00:00.000Z', end: '2026-11-04T03:00:00.000Z' }] : [] };
     },
     busyCalls,
+    writes,
+    writeEvent: async (_secret, event): Promise<CalendarWriteResult> => (writes.push(`write ${event.externalId} ${event.summary} ${event.startsAt}`), { ok: true }),
+    removeEvent: async (_secret, externalId): Promise<CalendarWriteResult> => (writes.push(`remove ${externalId}`), { ok: true }),
     revoke: async (): Promise<{ revoked: true } | { revoked: false; reason: string } | { failed: string }> => ({ revoked: true }),
     ...over,
   };
@@ -256,6 +261,67 @@ describe('runCalendarSync', () => {
     const { runtime, calls } = fakeRuntime(fresh, wrong);
     expect(await run(runtime, adapter())).toEqual({ outcome: 'expired', reason: 'credential_unreadable' });
     expect(calls.at(-1)).toMatchObject({ name: 'kernel.calendar.mark_failed', input: { status: 'expired', reason: 'credential_unreadable' } });
+  });
+});
+
+describe('write-back in the sweep', () => {
+  const on = { ...fresh, writeBack: true };
+  const upsert = { eventId: 'e1', externalId: 'ext1ext1ext1', kind: 'upsert', summary: 'Tư vấn: Lan', startsAt: '2026-11-04T02:00:00.000Z', endsAt: '2026-11-04T03:00:00.000Z', hash: 'sha256:aaa' };
+  const remove = { eventId: 'e2', externalId: 'ext2ext2ext2', kind: 'delete', summary: null, startsAt: null, endsAt: null, hash: 'deleted' };
+  const records = (calls: Call[]) => calls.filter((c) => c.name === 'kernel.calendar.link.record').map((c) => ({ eventId: c.input.eventId, state: c.input.state, hash: c.input.syncedHash, error: c.input.error }));
+
+  it('writes what is new or changed and deletes what was cancelled, records each, then reads the busy times', async () => {
+    const { runtime, calls } = fakeRuntime(on, seal(SECRET), { actions: [upsert, remove] });
+    const a = adapter();
+    expect(await run(runtime, a)).toMatchObject({ outcome: 'synced' });
+    expect(a.writes).toEqual(['write ext1ext1ext1 Tư vấn: Lan 2026-11-04T02:00:00.000Z', 'remove ext2ext2ext2']);
+    expect(records(calls)).toEqual([
+      { eventId: 'e1', state: 'written', hash: 'sha256:aaa', error: undefined },
+      { eventId: 'e2', state: 'removed', hash: 'deleted', error: undefined },
+    ]);
+    // The writes and their records come before the busy read: a sweep never reads busy times holding an event it deletes.
+    const names = calls.map((c) => c.name);
+    expect(names.lastIndexOf('kernel.calendar.link.record')).toBeLessThan(names.indexOf('kernel.calendar.busy_replace'));
+  });
+
+  it('asks nothing when write-back is off', async () => {
+    const { runtime, calls } = fakeRuntime(fresh, seal(SECRET), { actions: [upsert] });
+    const a = adapter();
+    expect(await run(runtime, a)).toMatchObject({ outcome: 'synced' });
+    expect(a.writes).toEqual([]);
+    expect(calls.some((c) => c.name === 'kernel.calendar.writeback_plan')).toBe(false);
+  });
+
+  it('records an event the member deleted by hand as removed, and a failure as an error, and still reads the busy times', async () => {
+    const { runtime, calls } = fakeRuntime(on, seal(SECRET), { actions: [upsert, { ...upsert, eventId: 'e3', externalId: 'ext3ext3ext3' }] });
+    let n = 0;
+    const a = adapter({ writeEvent: async () => (++n === 1 ? { gone: true } : { failed: 'rateLimitExceeded' }) });
+    expect(await run(runtime, a)).toMatchObject({ outcome: 'synced' });
+    expect(records(calls)).toEqual([
+      { eventId: 'e1', state: 'removed', hash: 'sha256:aaa', error: undefined },
+      { eventId: 'e3', state: 'error', hash: 'sha256:aaa', error: 'rateLimitExceeded' },
+    ]);
+    expect(calls.some((c) => c.name === 'kernel.calendar.busy_replace')).toBe(true);
+  });
+
+  it('renews a refused token once and repeats the write; refused again, the connection expires', async () => {
+    const first = fakeRuntime(on, seal(SECRET), { actions: [upsert] });
+    let refusals = 1;
+    const a = adapter({ writeEvent: async () => (refusals-- > 0 ? { refused: 'invalid_token' } : { ok: true }) });
+    expect(await run(first.runtime, a)).toMatchObject({ outcome: 'synced' });
+    expect(first.calls.filter((c) => c.name === 'kernel.calendar.refresh')).toHaveLength(1);
+    expect(records(first.calls)).toEqual([{ eventId: 'e1', state: 'written', hash: 'sha256:aaa', error: undefined }]);
+    const second = fakeRuntime(on, seal(SECRET), { actions: [upsert] });
+    expect(await run(second.runtime, adapter({ writeEvent: async () => ({ refused: 'invalid_token' }) }))).toEqual({ outcome: 'expired', reason: 'invalid_token' });
+    expect(second.calls.some((c) => c.name === 'kernel.calendar.busy_replace')).toBe(false);
+  });
+
+  it('stops writing when the grant lacks the events permission, and the busy read goes on', async () => {
+    const { runtime, calls } = fakeRuntime(on, seal(SECRET), { actions: [upsert, remove] });
+    const a = adapter({ writeEvent: async () => ({ scope: true }) });
+    expect(await run(runtime, a)).toMatchObject({ outcome: 'synced' });
+    expect(a.writes).toEqual([]);
+    expect(records(calls)).toEqual([]);
   });
 });
 

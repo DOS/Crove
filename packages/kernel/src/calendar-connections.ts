@@ -13,7 +13,8 @@
 //   start and an end, never a title or an attendee.
 import { sql } from 'kysely';
 import { z } from 'zod';
-import { CALENDAR_PROVIDERS, zCalendarOAuthProvider, zId, type CalendarConnectionView } from '@crove/kernel-contract';
+import { createHash } from 'node:crypto';
+import { CALENDAR_LINK_MAX_ATTEMPTS, CALENDAR_PROVIDERS, GOOGLE_CALENDAR_EVENTS_SCOPE, zCalendarOAuthProvider, zId, type CalendarConnectionView } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext } from '@crove/kernel-runtime';
 
@@ -458,12 +459,19 @@ export const calendarConnectionState = defineQuery({
   handler: async (ctx, input) => {
     const row = await ctx.trx
       .selectFrom('crove_kernel.calendar_connection')
-      .select(['status', 'provider', 'expires_at', 'updated_at'])
+      .select(['status', 'provider', 'expires_at', 'updated_at', 'write_back', 'scopes'])
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', input.connectionId)
       .executeTakeFirst();
     if (!row) return null;
-    return { status: row.status, provider: row.provider, expiresAt: row.expires_at ? row.expires_at.toISOString() : null, updatedAt: row.updated_at.toISOString() };
+    return {
+      status: row.status,
+      provider: row.provider,
+      expiresAt: row.expires_at ? row.expires_at.toISOString() : null,
+      updatedAt: row.updated_at.toISOString(),
+      // Bookings are written to this calendar: the member turned it on and the grant carries the events scope.
+      writeBack: row.write_back && row.scopes.includes(GOOGLE_CALENDAR_EVENTS_SCOPE),
+    };
   },
 });
 
@@ -476,7 +484,7 @@ export const calendarConnections = defineQuery({
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới xem được lịch đã kết nối');
     const rows = await ctx.trx
       .selectFrom('crove_kernel.calendar_connection')
-      .select(['id', 'provider', 'display_name', 'status', 'status_reason', 'last_synced_at', 'write_back', 'connected_at'])
+      .select(['id', 'provider', 'display_name', 'status', 'status_reason', 'last_synced_at', 'write_back', 'scopes', 'connected_at'])
       .where('org_id', '=', ctx.orgId)
       .where('user_id', '=', ctx.actor.userId)
       // One on its way out (the worker has yet to revoke its grant) is already gone for the member.
@@ -491,10 +499,217 @@ export const calendarConnections = defineQuery({
       statusReason: r.status_reason,
       lastSyncedAt: r.last_synced_at ? r.last_synced_at.toISOString() : null,
       writeBack: r.write_back,
+      canWriteBack: r.scopes.includes(GOOGLE_CALENDAR_EVENTS_SCOPE),
       connectedAt: r.connected_at.toISOString(),
     }));
   },
 });
 
-export const calendarConnectionCommands = [calendarOAuthBegin, calendarOAuthConsume, calendarConnect, calendarDisconnect, calendarFinishDisconnect, calendarMarkFailed, calendarRefresh, calendarBusyReplace];
-export const calendarConnectionQueries = [calendarCredential, calendarConnectionState, calendarConnections];
+// ---------------------------------------------------------------------------------------------------------------------
+// Write-back of bookings to the connected calendar (#2124). The booking's own calendar event (kind booking, its title
+// already "<event type>: <visitor name>") is what is written; the kernel reads nothing of the crm module.
+// ---------------------------------------------------------------------------------------------------------------------
+
+const base32hex = (bytes: Buffer): string => {
+  const alphabet = '0123456789abcdefghijklmnopqrstuv';
+  let out = '';
+  let acc = 0;
+  let bits = 0;
+  for (const b of bytes) {
+    acc = (acc << 8) | b;
+    bits += 8;
+    while (bits >= 5) {
+      out += alphabet[(acc >>> (bits - 5)) & 31];
+      bits -= 5;
+    }
+    acc &= (1 << bits) - 1;
+  }
+  if (bits > 0) out += alphabet[(acc << (5 - bits)) & 31];
+  return out;
+};
+
+/** The provider's event id for a booking event on a connection: the same every time, so a retry cannot make a second event (Google's ids are base32hex, 5 to 1024 characters). */
+export function writeBackEventId(orgId: string, eventId: string, connectionId: string): string {
+  return base32hex(createHash('sha256').update(`${orgId}:${eventId}:${connectionId}`).digest());
+}
+
+/** A fingerprint of what is written for a booking event: the link keeps it, so an unchanged booking costs no call. */
+export function writeBackHash(startsAt: Date, endsAt: Date, title: string | null): string {
+  return `sha256:${createHash('sha256').update(`${startsAt.getTime()}|${endsAt.getTime()}|${title ?? ''}`).digest('hex')}`;
+}
+const DELETED_HASH = 'deleted';
+// How far back a booking still matters (a day), and the most actions one plan holds.
+const WRITE_BACK_BACK_MS = 86_400_000;
+const PLAN_LIMIT = 100;
+
+export const calendarWriteBackSet = defineCommand({
+  name: 'kernel.calendar.write_back.set',
+  input: z.strictObject({ connectionId: zId, enabled: z.boolean() }),
+  risk: 'R2',
+  sideEffect: 'external',
+  access: EDITORS,
+  target: (input) => ({ type: 'kernel.calendar_connection', id: input.connectionId }),
+  handler: async (ctx, input) => {
+    const userId = requireUser(ctx);
+    const row = await ctx.trx
+      .selectFrom('crove_kernel.calendar_connection')
+      .select(['user_id', 'status', 'scopes', 'provider'])
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.connectionId)
+      .forUpdate()
+      .executeTakeFirst();
+    if (!row || row.user_id !== userId) throw new DomainError('CALENDAR_NOT_FOUND', 404, 'Không tìm thấy lịch đã kết nối này');
+    if (input.enabled) {
+      if (row.status !== 'active') throw new DomainError('CALENDAR_NOT_ACTIVE', 409, 'Lịch này không còn hoạt động, hãy kết nối lại');
+      // The grant must carry the events scope: the member connects again, asking for it.
+      if (!row.scopes.includes(GOOGLE_CALENDAR_EVENTS_SCOPE)) throw new DomainError('CALENDAR_SCOPE_MISSING', 409, 'Hãy kết nối lại lịch này và cho phép ghi lịch hẹn');
+    }
+    await ctx.trx.updateTable('crove_kernel.calendar_connection').set({ write_back: input.enabled }).where('org_id', '=', ctx.orgId).where('id', '=', input.connectionId).execute();
+    ctx.audit({ connection_id: input.connectionId, provider: row.provider, write_back: input.enabled });
+    return { connectionId: input.connectionId, writeBack: input.enabled };
+  },
+});
+
+export interface WriteBackAction {
+  eventId: string;
+  externalId: string;
+  kind: 'upsert' | 'delete';
+  // For an upsert: what to write.
+  summary: string | null;
+  startsAt: string | null;
+  endsAt: string | null;
+  // The fingerprint the link keeps after the call (a delete keeps 'deleted').
+  hash: string;
+}
+
+// What the worker has to make true at the provider for a connection with write-back on: the member's booking events
+// that are new or changed since they were written (insert or patch), and the links whose booking was cancelled
+// (delete). An unchanged booking, a link in error that used up its attempts and has not changed, and an event the
+// member deleted by hand and that has not changed since, produce nothing.
+export const calendarWriteBackPlan = defineQuery({
+  name: 'kernel.calendar.writeback_plan',
+  input: z.strictObject({ connectionId: zId }),
+  access: 'system',
+  handler: async (ctx, input): Promise<{ actions: WriteBackAction[] }> => {
+    const conn = await ctx.trx
+      .selectFrom('crove_kernel.calendar_connection')
+      .select(['user_id', 'status', 'write_back', 'scopes'])
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.connectionId)
+      .executeTakeFirst();
+    if (!conn || conn.status !== 'active' || !conn.write_back || !conn.scopes.includes(GOOGLE_CALENDAR_EVENTS_SCOPE)) return { actions: [] };
+    const since = new Date(Date.now() - WRITE_BACK_BACK_MS);
+    const events = await ctx.trx
+      .selectFrom('crove_kernel.calendar_event')
+      .select(['id', 'starts_at', 'ends_at', 'title', 'status'])
+      .where('org_id', '=', ctx.orgId)
+      .where('user_id', '=', conn.user_id)
+      .where('kind', '=', 'booking')
+      .where('ends_at', '>', since)
+      .orderBy('starts_at')
+      .limit(1000)
+      .execute();
+    const links = await ctx.trx
+      .selectFrom('crove_kernel.calendar_event_link')
+      .select(['event_id', 'external_id', 'state', 'synced_hash', 'attempts'])
+      .where('org_id', '=', ctx.orgId)
+      .where('connection_id', '=', input.connectionId)
+      .where('event_id', 'in', events.length > 0 ? events.map((e) => e.id) : ['00000000-0000-0000-0000-000000000000'])
+      .execute();
+    const byEvent = new Map(links.map((l) => [l.event_id, l]));
+    const actions: WriteBackAction[] = [];
+    for (const e of events) {
+      const link = byEvent.get(e.id);
+      const externalId = link?.external_id ?? writeBackEventId(ctx.orgId, e.id, input.connectionId);
+      if (e.status === 'cancelled') {
+        // A booking that was cancelled: its event goes, once, unless it never was written or already is gone.
+        if (link && (link.state === 'written' || (link.state === 'error' && link.attempts < CALENDAR_LINK_MAX_ATTEMPTS && link.synced_hash === DELETED_HASH) || (link.state === 'error' && link.synced_hash !== DELETED_HASH))) {
+          actions.push({ eventId: e.id, externalId, kind: 'delete', summary: null, startsAt: null, endsAt: null, hash: DELETED_HASH });
+        }
+        continue;
+      }
+      const hash = writeBackHash(new Date(e.starts_at), new Date(e.ends_at), e.title);
+      const unchanged = link !== undefined && link.synced_hash === hash;
+      if (unchanged && (link.state === 'written' || link.state === 'removed' || link.attempts >= CALENDAR_LINK_MAX_ATTEMPTS)) continue;
+      actions.push({ eventId: e.id, externalId, kind: 'upsert', summary: e.title ?? 'Lịch hẹn', startsAt: new Date(e.starts_at).toISOString(), endsAt: new Date(e.ends_at).toISOString(), hash });
+    }
+    return { actions: actions.slice(0, PLAN_LIMIT) };
+  },
+});
+
+// What the worker did for one booking event on one connection: the link row, its state, the fingerprint it now matches,
+// the attempts and a short error code. Audits ids and the state only.
+export const calendarLinkRecord = defineCommand({
+  name: 'kernel.calendar.link.record',
+  input: z.strictObject({
+    connectionId: zId,
+    eventId: zId,
+    externalId: z.string().min(5).max(1024),
+    state: z.enum(['written', 'removed', 'error']),
+    syncedHash: z.string().min(1).max(100),
+    error: z.string().min(1).max(100).optional(),
+  }),
+  risk: 'R1',
+  sideEffect: 'internal',
+  access: 'system',
+  target: (input) => ({ type: 'kernel.calendar_connection', id: input.connectionId }),
+  handler: async (ctx, input) => {
+    if (ctx.actor.type !== 'system') throw new DomainError('FORBIDDEN', 403, 'Chỉ tiến trình hệ thống mới thực hiện được việc này');
+    const conn = await ctx.trx
+      .selectFrom('crove_kernel.calendar_connection')
+      .select(['user_id', 'status'])
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.connectionId)
+      .forUpdate()
+      .executeTakeFirst();
+    if (!conn) throw new DomainError('CALENDAR_NOT_FOUND', 404, 'Không tìm thấy lịch đã kết nối này');
+    // Only a booking event of the connection's own member is linked.
+    const event = await ctx.trx
+      .selectFrom('crove_kernel.calendar_event')
+      .select('id')
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.eventId)
+      .where('user_id', '=', conn.user_id)
+      .where('kind', '=', 'booking')
+      .executeTakeFirst();
+    if (!event) throw new DomainError('CALENDAR_EVENT_NOT_FOUND', 404, 'Không tìm thấy sự kiện này trên lịch của bạn');
+    const existing = await ctx.trx
+      .selectFrom('crove_kernel.calendar_event_link')
+      .select(['id', 'attempts'])
+      .where('org_id', '=', ctx.orgId)
+      .where('connection_id', '=', input.connectionId)
+      .where('event_id', '=', input.eventId)
+      .forUpdate()
+      .executeTakeFirst();
+    const error = input.state === 'error' ? (input.error ?? 'failed') : null;
+    if (existing) {
+      await ctx.trx
+        .updateTable('crove_kernel.calendar_event_link')
+        .set({ state: input.state, synced_hash: input.syncedHash, attempts: input.state === 'error' ? Math.min(existing.attempts + 1, 1000) : 0, last_error: error, updated_at: ctx.now })
+        .where('org_id', '=', ctx.orgId)
+        .where('id', '=', existing.id)
+        .execute();
+    } else {
+      await ctx.trx
+        .insertInto('crove_kernel.calendar_event_link')
+        .values({
+          org_id: ctx.orgId,
+          connection_id: input.connectionId,
+          event_id: input.eventId,
+          user_id: conn.user_id,
+          external_id: input.externalId,
+          state: input.state,
+          synced_hash: input.syncedHash,
+          attempts: input.state === 'error' ? 1 : 0,
+          last_error: error,
+          updated_at: ctx.now,
+        })
+        .execute();
+    }
+    ctx.audit({ connection_id: input.connectionId, event_id: input.eventId, state: input.state, ...(error ? { error } : {}) });
+    return { connectionId: input.connectionId, eventId: input.eventId, state: input.state };
+  },
+});
+
+export const calendarConnectionCommands = [calendarOAuthBegin, calendarOAuthConsume, calendarConnect, calendarDisconnect, calendarFinishDisconnect, calendarWriteBackSet, calendarLinkRecord, calendarMarkFailed, calendarRefresh, calendarBusyReplace];
+export const calendarConnectionQueries = [calendarCredential, calendarConnectionState, calendarConnections, calendarWriteBackPlan];

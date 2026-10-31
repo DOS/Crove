@@ -12,7 +12,7 @@ import type { CalendarAdapter } from '@crove/channel';
 import { sql } from 'kysely';
 import type { Db } from '@crove/db';
 import { CredentialError, DomainError, type CredentialBroker, type Runtime, type SystemActor } from '@crove/kernel-runtime';
-import { busyPieces, type SealedCalendarCredential } from '@crove/kernel';
+import { busyPieces, type SealedCalendarCredential, type WriteBackAction } from '@crove/kernel';
 
 const ACTOR: SystemActor = { type: 'system', component: 'kernel.calendar.sync' };
 export const CALENDAR_SYNC_SWEEP_MS = 15 * 60_000;
@@ -122,7 +122,7 @@ async function disconnectSeen(deps: CalendarSyncDeps, job: CalendarSyncJob, stat
 export async function runCalendarSync(deps: CalendarSyncDeps, job: CalendarSyncJob): Promise<CalendarSyncOutcome> {
   const options = { actor: ACTOR, orgId: job.orgId };
   const now = deps.now ?? (() => new Date());
-  const state = await deps.runtime.query<{ status: string; provider: string; expiresAt: string | null; updatedAt: string } | null>('kernel.calendar.connection_state', { connectionId: job.connectionId }, options);
+  const state = await deps.runtime.query<{ status: string; provider: string; expiresAt: string | null; updatedAt: string; writeBack?: boolean } | null>('kernel.calendar.connection_state', { connectionId: job.connectionId }, options);
   if (!state || state.status !== 'active') return { outcome: 'skipped', reason: 'not_active' };
   // An adapter switched off (the app credentials removed) syncs nothing; the connection and its blocks stay.
   const adapter = adapterFor(deps.adapters, state.provider);
@@ -206,8 +206,47 @@ export async function runCalendarSync(deps: CalendarSyncDeps, job: CalendarSyncJ
     renewed = true;
     return null;
   };
+  // Makes the provider's events match the bookings: what is new or changed is written, what was cancelled is deleted.
+  // The kernel plans it from the connection's links (kernel.calendar.writeback_plan), each call is idempotent by the event's
+  // id, and each outcome is recorded as it happens, so a crash between a call and its record only repeats a call.
+  const writeBackStep = async (): Promise<CalendarSyncOutcome | null> => {
+    const plan = await deps.runtime.query<{ actions: WriteBackAction[] }>('kernel.calendar.writeback_plan', { connectionId: job.connectionId }, options);
+    const call = (a: WriteBackAction) =>
+      a.kind === 'delete' || a.summary === null || a.startsAt === null || a.endsAt === null
+        ? adapter.removeEvent(secret, a.externalId)
+        : adapter.writeEvent(secret, { externalId: a.externalId, summary: a.summary, startsAt: a.startsAt, endsAt: a.endsAt });
+    for (const a of plan.actions) {
+      let result = await call(a);
+      // A refused token is renewed once and the call repeated; refused again, the grant is gone.
+      if ('refused' in result && !renewed) {
+        const stopped = await renew();
+        if (stopped) return stopped;
+        result = await call(a);
+      }
+      if ('refused' in result) return expire(result.refused);
+      // The grant lacks the events permission (the member unticked it): nothing more can be written until they connect again.
+      // (The busy read that follows clears a connection's failure note, so none is written; the next sweep tries again.)
+      if ('scope' in result) return null;
+      const written = 'ok' in result || 'gone' in result;
+      // gone: the member deleted the event by hand (an upsert) or it was not there (a delete): either way it stays gone
+      // until its booking changes.
+      const recorded = written ? (a.kind === 'delete' || 'gone' in result ? 'removed' : 'written') : 'error';
+      await deps.runtime.execute(
+        'kernel.calendar.link.record',
+        { connectionId: job.connectionId, eventId: a.eventId, externalId: a.externalId, state: recorded, syncedHash: a.hash, ...(recorded === 'error' ? { error: String('failed' in result ? result.failed : 'failed').slice(0, 100) } : {}) },
+        options,
+      );
+    }
+    return null;
+  };
   if (state.expiresAt === null || Date.parse(state.expiresAt) - now().getTime() < REFRESH_AHEAD_MS) {
     const stopped = await renew();
+    if (stopped) return stopped;
+  }
+  // Write-back (#2124): make the member's calendar match their bookings before the busy times are read, so a sweep never
+  // reads busy times that still hold an event it is about to delete. A write that fails never stops the busy read.
+  if (state.writeBack) {
+    const stopped = await writeBackStep();
     if (stopped) return stopped;
   }
   // From the start of the hour, so a busy interval that began earlier keeps one stable key from sync to sync.
