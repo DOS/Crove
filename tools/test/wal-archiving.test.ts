@@ -105,7 +105,8 @@ describe.skipIf(!hasCompose)('compose.wal.yml', { timeout: 60_000 }, () => {
     // With no WAL pair set, the nightly pair is no fallback: the stack does not load.
     const missing = config({ ...settings, ...nightly, WAL_S3_ACCESS_KEY_ID: '', WAL_S3_SECRET_ACCESS_KEY: '' });
     expect(missing.status).not.toBe(0);
-    expect(missing.stderr).toContain('set WAL_S3_ACCESS_KEY_ID');
+    // Compose names whichever missing variable it meets first, and that order is not fixed.
+    expect(missing.stderr).toMatch(/set WAL_S3_ACCESS_KEY_ID|set WAL_S3_SECRET_ACCESS_KEY/);
   });
 
   it('follows the prefix and the TLS and style settings', () => {
