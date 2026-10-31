@@ -59,6 +59,10 @@ describe('field border contrast (WCAG 1.4.11)', () => {
     }
   }
 
+  it('the Tailwind theme maps the token, so border-field-border emits a rule', () => {
+    expect(css).toContain('--color-field-border: var(--field-border);');
+  });
+
   it('the field components draw their border with the token', () => {
     for (const file of ['input', 'textarea', 'native-select', 'checkbox']) {
       const source = readFileSync(fileURLToPath(new URL(`../src/components/${file}.tsx`, import.meta.url)), 'utf8');
