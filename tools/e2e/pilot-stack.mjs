@@ -12,15 +12,18 @@
 //
 //   docker tag crove:split crove:local && docker tag crove-extract:split crove-extract:local   (or build them as :local)
 //   node tools/e2e/pilot-stack.mjs
-// Environment: PILOT_PROJECT (compose project, default crove-pilot; must contain "pilot"), PILOT_PORT (default 18090).
+// Environment: PILOT_PROJECT (compose project, default crove-pilot-<random>; must contain "pilot" and have no containers or
+// volumes yet), PILOT_PORT (default 18090). Inherited COMPOSE_* and CROVE_* variables are not passed on.
 import { execFileSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url)).replaceAll('\\', '/');
-const PROJECT = process.env.PILOT_PROJECT ?? 'crove-pilot';
+// A fresh name per run, so the run only ever removes what it created. A name given in PILOT_PROJECT must not exist yet.
+const PROJECT = process.env.PILOT_PROJECT ?? `crove-pilot-${randomBytes(3).toString('hex')}`;
 // The project is torn down with its volumes at the end: its name must be one nobody gives a real stack.
 if (!/^[a-z][a-z0-9-]{0,30}$/.test(PROJECT) || !PROJECT.includes('pilot')) throw new Error('PILOT_PROJECT is lower-case letters, digits and -, and contains "pilot"');
 const PORT = process.env.PILOT_PORT ?? '18090';
@@ -38,7 +41,9 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 function assert(condition, message) {
   if (!condition) throw new Error(`assertion failed: ${message}`);
 }
-const docker = (args) => execFileSync('docker', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PORT, PUBLIC_URL: `http://localhost:${PORT}` } });
+// An exported CROVE_MODULES, COMPOSE_PROFILES or COMPOSE_FILE would override the empty .env and change the stack under test.
+const inherited = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(COMPOSE_|CROVE_)/.test(name)));
+const docker = (args) => execFileSync('docker', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...inherited, PORT, PUBLIC_URL: `http://localhost:${PORT}` } });
 const compose = (args) => docker([...COMPOSE, ...args]);
 
 async function waitFor(what, timeoutMs, probe) {
@@ -102,18 +107,19 @@ function checkTopology() {
   assert(volume(api) !== undefined && volume(api) === volume(worker), 'api and worker share the files volume');
 }
 
+// Set once the project is known to be new: only then does the teardown at the end remove it.
+let owned = false;
+
 async function main() {
   copyFileSync(`${ROOT}docker-compose.yml`, `${DIR}/docker-compose.yml`);
   copyFileSync(`${ROOT}tools/deploy/compose.pilot.yml`, `${DIR}/compose.pilot.yml`);
   writeFileSync(`${DIR}/.env`, '');
   log(`starting ${PROJECT} from ${DIR}`);
   // The images are the ones built before (crove:local and crove-extract:local): the layout is started, not built.
-  try {
-    // A run killed before its cleanup leaves the project and its volumes behind.
-    compose(['down', '-v', '--remove-orphans']);
-  } catch {
-    // nothing to remove
-  }
+  // Never take over, and later remove, a project this run did not create.
+  const existing = [compose(['ps', '-aq']), docker(['volume', 'ls', '-q', '--filter', `label=com.docker.compose.project=${PROJECT}`])].join('').trim();
+  assert(existing === '', `the compose project ${PROJECT} already has containers or volumes: pick another PILOT_PROJECT`);
+  owned = true;
   compose(['up', '-d', '--no-build']);
 
   await waitFor('the api to be ready (migrations applied, auth grants in place)', 240_000, async () => {
@@ -170,10 +176,12 @@ try {
   }
   process.exitCode = 1;
 } finally {
-  try {
-    compose(['down', '-v', '--remove-orphans']);
-  } catch {
-    // already gone
+  if (owned) {
+    try {
+      compose(['down', '-v', '--remove-orphans']);
+    } catch {
+      // already gone
+    }
   }
   rmSync(DIR, { recursive: true, force: true });
 }
