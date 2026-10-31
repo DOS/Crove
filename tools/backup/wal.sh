@@ -46,7 +46,7 @@ report_failure() {
   return 0
 }
 trap 'status=$?; [ "$BASH_SUBSHELL" -gt 0 ] && exit "$status"; report_failure "$STEP failed (exit $status, wal.sh line $LINENO)"; exit 1' ERR
-trap 'status=$?; [ "$BASH_SUBSHELL" -gt 0 ] && return; if [ "$status" -ne 0 ] && [ "$REPORTED" -eq 0 ]; then report_failure "wal.sh stopped with exit $status during: $STEP"; fi' EXIT
+trap 'status=$?; [ "$BASH_SUBSHELL" -gt 0 ] && return; if [ "$status" -ne 0 ] && [ "$status" -ne 2 ] && [ "$REPORTED" -eq 0 ]; then report_failure "wal.sh stopped with exit $status during: $STEP"; fi' EXIT
 
 COMMAND="${1:-}"
 [ -n "$COMMAND" ] || {
@@ -76,6 +76,21 @@ wait_ready() {
   return 1
 }
 
+# The timeline of the newest base backup in the bucket (from the first WAL segment it needs), or nothing when there is none.
+newest_backup_timeline() {
+  local start
+  start="$(pgbr info --output=json | grep -o '"archive":{"start":"[0-9A-F]\{24\}"' | tail -n 1 | sed 's/.*"start":"\([0-9A-F]\{8\}\).*/\1/')"
+  if [ -n "$start" ]; then echo "$((16#$start))"; fi
+}
+
+# True when there is no base backup, or the newest one is on another timeline than the database runs on now.
+full_backup_needed() {
+  local newest current
+  newest="$(newest_backup_timeline)"
+  current="$(db_psql -At -c 'SELECT timeline_id FROM pg_control_checkpoint()')"
+  [ -z "$newest" ] || [ "$newest" != "$current" ]
+}
+
 # The archiving settings, written to postgresql.auto.conf (they survive a restart and need no change to the image).
 # The archive command is the one place the database hands a finished segment over: it fails (and PostgreSQL retries,
 # keeping the segment) until the segment is in the bucket.
@@ -102,8 +117,11 @@ setup() {
   fi
   STEP='checking that a WAL segment reaches the bucket'
   pgbr check
-  if ! pgbr info --output=json | grep -q '"backup":\[{'; then
-    STEP='the first full base backup'
+  # A full base backup when there is none, and after a restore: the database then runs on a new timeline, and a
+  # `restore --latest` must start from a backup of the timeline that carries the data (the older ones belong to the
+  # branch the restore left).
+  if full_backup_needed; then
+    STEP='a full base backup'
     pgbr backup --type=full
   fi
   log "WAL archiving is on: segments are pushed at least every ${WAL_ARCHIVE_TIMEOUT} s while there are writes"
@@ -121,15 +139,15 @@ backup() {
   STEP='checking the archive'
   pgbr check
   # A differential or incremental backup needs a full one under it: the first run, or a lost one, takes a full one.
-  if [ "${type:-diff}" != full ] && ! pgbr info --output=json | grep -q '"type":"full"'; then
-    log 'no full base backup yet: taking one'
+  if [ "${type:-diff}" != full ] && full_backup_needed; then
+    log 'no full base backup on the current timeline yet: taking one'
     type=full
   fi
   STEP="the ${type:-diff} base backup"
   pgbr backup --type="${type:-diff}"
   STEP='expiring old backups'
   pgbr expire
-  log "base backup done: $(pgbr info --output=text | grep -c 'backup/' || true) listed; wal.sh info shows the window"
+  log "base backup done: $(pgbr info --output=text | grep -Ec '(full|diff|incr) backup:' || true) base backup(s) in the bucket; wal.sh info shows the window"
 }
 
 restore() {
@@ -155,6 +173,11 @@ restore() {
     echo '[wal] --to is a timestamp with its time zone, for example "2026-10-31 08:40:00+00"' >&2
     exit 2
   fi
+  STEP='checking that the database volume is empty'
+  if ! dc run --rm --no-deps -T -u root --entrypoint sh db -c 'test -z "$(ls -A /var/lib/postgresql/data)"' </dev/null; then
+    echo '[wal] the db volume of this stack is not empty (or cannot be read): restore into an empty one, on a new server or after copying what is there away and removing the volume; nothing was stopped' >&2
+    exit 1
+  fi
   STEP='stopping the database'
   dc stop db
   local mode_args=() recovery=() until='to its end'
@@ -172,7 +195,7 @@ restore() {
     chown postgres:postgres /var/lib/postgresql/data
     chmod 700 /var/lib/postgresql/data
     exec runuser -u postgres -- pgbackrest restore "$@"
-  ' restore "${mode_args[@]}" "${recovery[@]}"
+  ' restore ${mode_args[@]+"${mode_args[@]}"} ${recovery[@]+"${recovery[@]}"}
   log "restored: start the database with \`docker compose up -d db\`; it replays the WAL $until and opens"
 }
 

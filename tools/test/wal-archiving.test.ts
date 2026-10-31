@@ -74,6 +74,7 @@ describe.skipIf(!hasCompose)('compose.wal.yml', { timeout: 60_000 }, () => {
   it('gives db the bucket, the encryption and the retention, and builds the image from tools/wal', () => {
     const db = services(settings)['db'];
     expect(db?.image).toBe('crove-db:local');
+    expect(services({ ...settings, WAL_DB_IMAGE: 'crove-db:other' })['db']?.image).toBe('crove-db:other');
     expect(db?.build?.context?.replaceAll('\\', '/')).toMatch(/\/tools\/wal$/);
     expect(db?.environment).toMatchObject({
       PGBACKREST_STANZA: 'crove',
@@ -89,6 +90,7 @@ describe.skipIf(!hasCompose)('compose.wal.yml', { timeout: 60_000 }, () => {
       PGBACKREST_REPO1_RETENTION_FULL: '4',
     });
     expect(services(settings)['prober']?.environment?.['PROBER_MAX_WAL_ARCHIVE_AGE_SECONDS']).toBe('600');
+    expect(services(settings)['prober']?.environment?.['PROBER_MAX_WAL_PENDING_SEGMENTS']).toBe('20');
   });
 
   it('follows the prefix and the TLS and style settings', () => {

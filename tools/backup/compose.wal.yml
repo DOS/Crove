@@ -19,7 +19,7 @@ services:
     build:
       # Relative to the project directory (the checkout, where docker-compose.yml is); WAL_BUILD_CONTEXT for any other.
       context: ${WAL_BUILD_CONTEXT:-tools/wal}
-    image: crove-db:local
+    image: ${WAL_DB_IMAGE:-crove-db:local}
     environment:
       PGBACKREST_STANZA: crove
       PGBACKREST_PG1_PATH: /var/lib/postgresql/data
@@ -50,3 +50,4 @@ services:
   prober:
     environment:
       PROBER_MAX_WAL_ARCHIVE_AGE_SECONDS: ${PROBER_MAX_WAL_ARCHIVE_AGE_SECONDS:-600}
+      PROBER_MAX_WAL_PENDING_SEGMENTS: ${PROBER_MAX_WAL_PENDING_SEGMENTS:-20}

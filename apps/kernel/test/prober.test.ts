@@ -174,7 +174,13 @@ describe('health thresholds', () => {
       // Nothing archived yet: every segment before the one being written waits. A standby has no WAL of its own to push.
       expect(walSegmentsPending(wal({ last_archived_wal: null, current_wal: '000000010000000000000003' }))).toBe(3);
       expect(walSegmentsPending(wal({ current_wal: null }))).toBe(0);
-      expect(walSegmentsPending(wal({ last_archived_wal: 'not a segment' }))).toBe(0x11);
+      // What archive_command pushed last can be a base backup's label (`<segment>.<offset>.backup`: the segment's own
+      // position) or a timeline history file (no position: the check cannot tell, and the age and failing flag still speak).
+      expect(walSegmentsPending(wal({ last_archived_wal: '000000010000000000000010.00000028.backup', current_wal: '000000010000000000000013' }))).toBe(2);
+      expect(walSegmentsPending(wal({ last_archived_wal: '00000002.history' }))).toBe(0);
+      expect(walSegmentsPending(wal({ last_archived_wal: 'not a segment' }))).toBe(0);
+      // Segments of another size: 64 MiB segments are 64 to a log file.
+      expect(walSegmentsPending(wal({ segment_bytes: 67_108_864, last_archived_wal: '00000001000000000000003F', current_wal: '000000010000000100000001' }))).toBe(1);
     });
 
     it('reports archiving that has pushed nothing for longer than the limit while segments wait', () => {
@@ -207,6 +213,31 @@ describe('health thresholds', () => {
       expect(checks(behind, { ...limits, walArchiveAgeSeconds: 0 })).toEqual([]);
       expect(checks(behind, limits)).toEqual([]);
       expect(checks(undefined)).toEqual([]);
+    });
+
+    it('reports a backlog of finished segments even while pushes keep coming (slower than the database writes)', () => {
+      const slow = wal({ last_archived_wal: '000000010000000000000010', current_wal: '000000010000000000000030', since_archived_seconds: 30 });
+      // 31 segments wait; the last push was 30 s ago, so the age check is quiet.
+      expect(checks(slow, { ...limits, walArchiveAgeSeconds: 600 })).toEqual([]);
+      expect(checks(slow, { ...limits, walArchiveAgeSeconds: 600, walArchivePendingSegments: 20 })).toEqual([
+        {
+          check: 'wal_archive',
+          value: 31,
+          threshold: 20,
+          message:
+            '31 finished WAL segment(s) are waiting to be archived (limit 20): archiving is slower than the database writes, so the recovery point drifts away and unarchived segments pile up on its disk (docs/runbooks/backup-and-restore.md, "Point in time recovery")',
+        },
+      ]);
+      // Below the limit, and with the limit off: quiet. The age finding wins when both hold.
+      expect(checks(wal({ current_wal: '000000010000000000000020' }), { ...limits, walArchivePendingSegments: 20 })).toEqual([]);
+      expect(checks(slow, { ...limits, walArchivePendingSegments: 0 })).toEqual([]);
+      expect(checks({ ...slow, since_archived_seconds: 900 }, { ...limits, walArchiveAgeSeconds: 600, walArchivePendingSegments: 20 }).map((f) => f.threshold)).toEqual([600]);
+    });
+
+    it('reads PROBER_MAX_WAL_PENDING_SEGMENTS, 20 by default, 0 for off', () => {
+      expect(loadProberConfig({}).thresholds.walArchivePendingSegments).toBe(20);
+      expect(loadProberConfig({ PROBER_MAX_WAL_PENDING_SEGMENTS: '5' }).thresholds.walArchivePendingSegments).toBe(5);
+      expect(loadProberConfig({ PROBER_MAX_WAL_PENDING_SEGMENTS: '0' }).thresholds.walArchivePendingSegments).toBe(0);
     });
 
     it('reads PROBER_MAX_WAL_ARCHIVE_AGE_SECONDS, 600 by default, 0 for off', () => {

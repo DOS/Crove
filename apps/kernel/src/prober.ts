@@ -85,6 +85,9 @@ const schema = z.object({
   // writes, so the default of 10 minutes allows for a slow upload and a retry. 0 turns the check off; a database without
   // archiving is never checked.
   PROBER_MAX_WAL_ARCHIVE_AGE_SECONDS: seconds(600),
+  // Finished segments waiting at once: archiving that pushes, but slower than the database writes, never trips the age above, so
+  // the backlog is limited too (16 MB each; 20 is a third of an hour at one segment a minute). 0 turns it off.
+  PROBER_MAX_WAL_PENDING_SEGMENTS: z.coerce.number().int().min(0).max(100_000).default(20),
   // AI document extraction (#1998): more than this many readings in PROBER_EXTRACTION_WINDOW_SECONDS whose every
   // attempt failed (the AI provider refused or did not answer, the parser sandbox was down) alert; a document that
   // cannot be read never does. 0 turns the check off.
@@ -197,6 +200,8 @@ export interface Thresholds {
   archiveLagSeconds?: number;
   // The database's WAL archiving (#2120); 0 or left out: not checked.
   walArchiveAgeSeconds?: number;
+  // Finished WAL segments waiting to be archived at once (#2120); 0 or left out: not checked.
+  walArchivePendingSegments?: number;
   // AI document extraction (#1998): failed readings of the reading service in the window; 0 or left out: not checked.
   extractionFailures?: number;
   extractionWindowSeconds?: number;
@@ -226,6 +231,7 @@ export function loadProberConfig(env: NodeJS.ProcessEnv = process.env, everySeco
       archiveVerifyAgeSeconds: raw.PROBER_MAX_ARCHIVE_VERIFY_AGE_SECONDS,
       archiveLagSeconds: raw.PROBER_MAX_ARCHIVE_LAG_SECONDS ?? Math.max(3600, (raw.ARCHIVE_LAG_SECONDS ?? 600) + 900),
       walArchiveAgeSeconds: raw.PROBER_MAX_WAL_ARCHIVE_AGE_SECONDS,
+      walArchivePendingSegments: raw.PROBER_MAX_WAL_PENDING_SEGMENTS,
       extractionFailures: raw.PROBER_MAX_EXTRACTION_FAILURES,
       extractionWindowSeconds: raw.PROBER_EXTRACTION_WINDOW_SECONDS,
     },
@@ -423,24 +429,31 @@ export interface WalArchive {
   since_archived_seconds: number;
   // The last attempt failed (archive_command exited non-zero) and no push has succeeded since.
   failing: boolean;
+  // wal_segment_size in bytes (16 MiB unless the cluster was made with another); left out: 16 MiB.
+  segment_bytes?: number;
 }
 
-// The index of a WAL segment file name (24 hex digits: timeline, log, segment), for the default 16 MB segments. Only the
-// difference of two indexes is used, and a timeline change leaves it alone.
-function walSegmentIndex(name: string): number | null {
-  const match = /^[0-9A-F]{8}([0-9A-F]{8})([0-9A-F]{8})$/i.exec(name);
-  return match ? parseInt(match[1] as string, 16) * 256 + parseInt(match[2] as string, 16) : null;
+// The index of a WAL segment file name (24 hex digits: timeline, log, segment; a `.backup` or `.partial` suffix is the same
+// segment's), with `perLog` segments to a log file (4 GiB over the segment size). Only the difference of two indexes is
+// used, and a timeline change leaves it alone. A timeline history file (`00000002.history`) is no segment: null.
+function walSegmentIndex(name: string, perLog: number): number | null {
+  const match = /^[0-9A-F]{8}([0-9A-F]{8})([0-9A-F]{8})(?:\.|$)/i.exec(name);
+  return match ? parseInt(match[1] as string, 16) * perLog + parseInt(match[2] as string, 16) : null;
 }
 
 /**
  * Finished WAL segments that are not in the archive yet: the segments between the last archived one and the one being
  * written. 0 when archiving keeps up (the segment being written is not archived until it is switched).
  */
-export function walSegmentsPending(w: Pick<WalArchive, 'last_archived_wal' | 'current_wal'>): number {
-  const current = w.current_wal === null ? null : walSegmentIndex(w.current_wal);
+export function walSegmentsPending(w: Pick<WalArchive, 'last_archived_wal' | 'current_wal' | 'segment_bytes'>): number {
+  const perLog = Math.max(1, Math.round(4_294_967_296 / (w.segment_bytes ?? 16_777_216)));
+  const current = w.current_wal === null ? null : walSegmentIndex(w.current_wal, perLog);
   if (current === null) return 0;
-  const last = w.last_archived_wal === null ? null : walSegmentIndex(w.last_archived_wal);
-  return Math.max(0, current - (last === null ? 0 : last + 1));
+  if (w.last_archived_wal === null) return current;
+  // Something archived that is no segment (a history file after a promotion): the position cannot be told, and the age and
+  // the failing flag still speak.
+  const last = walSegmentIndex(w.last_archived_wal, perLog);
+  return last === null ? 0 : Math.max(0, current - (last + 1));
 }
 
 const s = (n: number) => `${Math.round(n)} s`;
@@ -514,15 +527,21 @@ export function evaluateHealth(h: HealthSnapshot, t: Thresholds, deadLetterWindo
     });
   }
   const walLimit = t.walArchiveAgeSeconds ?? 0;
-  if (walLimit > 0 && h.wal_archive !== undefined && h.wal_archive.since_archived_seconds > walLimit) {
+  const walPendingLimit = t.walArchivePendingSegments ?? 0;
+  if (h.wal_archive !== undefined) {
     // Idle is not behind: with no write since the last push the segment being written stays open and nothing is waiting.
     const pending = walSegmentsPending(h.wal_archive);
-    if (pending > 0 || h.wal_archive.failing) {
+    const stalled = walLimit > 0 && h.wal_archive.since_archived_seconds > walLimit && (pending > 0 || h.wal_archive.failing);
+    // Pushing, but slower than the database writes: each push is recent, so the age never trips, while the backlog grows.
+    const backlog = walPendingLimit > 0 && pending >= walPendingLimit;
+    if (stalled || backlog) {
       findings.push({
         check: 'wal_archive',
-        value: h.wal_archive.since_archived_seconds,
-        threshold: walLimit,
-        message: `WAL archiving has not pushed a segment for ${s(h.wal_archive.since_archived_seconds)} (limit ${s(walLimit)}; ${pending} finished segment(s) waiting${h.wal_archive.failing ? ', the last attempt failed' : ''}): point-in-time recovery stops at the last archived segment, and the database keeps every unarchived segment on its disk (docs/runbooks/backup-and-restore.md, "Point in time recovery")`,
+        value: stalled ? h.wal_archive.since_archived_seconds : pending,
+        threshold: stalled ? walLimit : walPendingLimit,
+        message: stalled
+          ? `WAL archiving has not pushed a segment for ${s(h.wal_archive.since_archived_seconds)} (limit ${s(walLimit)}; ${pending} finished segment(s) waiting${h.wal_archive.failing ? ', the last attempt failed' : ''}): point-in-time recovery stops at the last archived segment, and the database keeps every unarchived segment on its disk (docs/runbooks/backup-and-restore.md, "Point in time recovery")`
+          : `${pending} finished WAL segment(s) are waiting to be archived (limit ${walPendingLimit}): archiving is slower than the database writes, so the recovery point drifts away and unarchived segments pile up on its disk (docs/runbooks/backup-and-restore.md, "Point in time recovery")`,
       });
     }
   }
@@ -593,20 +612,32 @@ export async function readHealth(databaseUrl: string, deadLetterWindowSeconds: n
     const { rows: queue } = await client.query<{ usage: number }>('SELECT pg_catalog.pg_notification_queue_usage() AS usage');
     // The WAL archiving of the database itself (#2120), when it is on: pg_stat_archiver and the WAL position are readable
     // by any login.
-    const { rows: wal } = await client.query<WalArchive & { mode: string }>(
-      `SELECT pg_catalog.current_setting('archive_mode') AS mode,
-              a.last_archived_wal,
-              CASE WHEN pg_catalog.pg_is_in_recovery() THEN NULL ELSE pg_catalog.pg_walfile_name(pg_catalog.pg_current_wal_lsn()) END AS current_wal,
-              extract(epoch FROM pg_catalog.now() - coalesce(a.last_archived_time, a.stats_reset, pg_catalog.pg_postmaster_start_time()))::float8 AS since_archived_seconds,
-              (a.last_failed_time IS NOT NULL AND (a.last_archived_time IS NULL OR a.last_failed_time > a.last_archived_time)) AS failing
-       FROM pg_catalog.pg_stat_archiver a`,
-    );
+    // Asked only while archiving is on: a database without it is not asked about WAL positions at all.
+    const { rows: mode } = await client.query<{ mode: string }>(`SELECT pg_catalog.current_setting('archive_mode') AS mode`);
+    const archiving = mode[0]?.mode === 'on' || mode[0]?.mode === 'always';
+    const { rows: wal } = archiving
+      ? await client.query<WalArchive & { segment_bytes: number | string }>(
+          `SELECT a.last_archived_wal,
+                  CASE WHEN pg_catalog.pg_is_in_recovery() THEN NULL ELSE pg_catalog.pg_walfile_name(pg_catalog.pg_current_wal_lsn()) END AS current_wal,
+                  extract(epoch FROM pg_catalog.now() - coalesce(a.last_archived_time, a.stats_reset, pg_catalog.pg_postmaster_start_time()))::float8 AS since_archived_seconds,
+                  (a.last_failed_time IS NOT NULL AND (a.last_archived_time IS NULL OR a.last_failed_time > a.last_archived_time)) AS failing,
+                  pg_catalog.pg_size_bytes(pg_catalog.current_setting('wal_segment_size'))::float8 AS segment_bytes
+           FROM pg_catalog.pg_stat_archiver a`,
+        )
+      : { rows: [] };
     await client.query('COMMIT');
-    const archiving = wal[0] !== undefined && (wal[0].mode === 'on' || wal[0].mode === 'always');
     return {
       ...row,
-      ...(archiving && wal[0]
-        ? { wal_archive: { last_archived_wal: wal[0].last_archived_wal, current_wal: wal[0].current_wal, since_archived_seconds: Number(wal[0].since_archived_seconds), failing: wal[0].failing } }
+      ...(wal[0]
+        ? {
+            wal_archive: {
+              last_archived_wal: wal[0].last_archived_wal,
+              current_wal: wal[0].current_wal,
+              since_archived_seconds: Number(wal[0].since_archived_seconds),
+              failing: wal[0].failing,
+              segment_bytes: Number(wal[0].segment_bytes),
+            },
+          }
         : {}),
       notify_queue_usage: Number(queue[0]?.usage ?? 0),
       archive_verify_age_seconds: archive[0]?.archive_verify_age_seconds ?? null,

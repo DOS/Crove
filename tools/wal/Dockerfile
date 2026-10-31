@@ -5,7 +5,7 @@
 #
 # Its settings arrive as PGBACKREST_* environment variables (compose.wal.yml); there is no configuration file. The base
 # image is pinned by digest, as every image is (AGENTS.md, "Updating pinned images"); keep it equal to the `db` image of
-# docker-compose.yml (tools/test/wal-image.test.ts checks).
+# docker-compose.yml (tools/test/wal-archiving.test.ts checks).
 FROM postgres:17@sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3
 
 # The 2.60 series: a rebuild takes its bug fixes, never a new minor version unseen.

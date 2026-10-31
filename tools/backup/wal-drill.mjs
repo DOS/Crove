@@ -44,6 +44,8 @@ const settings = {
   BACKUP_ALERT: 'off',
   CROVE_DIR: DIR,
   WAL_BUILD_CONTEXT: `${ROOT}tools/wal`,
+  // The drill's own image tag: it never builds over, or removes, the crove-db:local of a stack on the same machine.
+  WAL_DB_IMAGE: `crove-db:${PREFIX}`,
 };
 const env = {
   ...process.env,
@@ -112,9 +114,9 @@ function teardown() {
     console.error('wal-drill: teardown of the project failed', error instanceof Error ? error.message : error);
   }
   try {
-    execFileSync('docker', ['image', 'rm', '-f', 'crove-db:local'], { stdio: 'ignore' });
+    execFileSync('docker', ['image', 'rm', `crove-db:${PREFIX}`], { stdio: 'ignore' });
   } catch {
-    // another project may still use it
+    // already gone
   }
   rmSync(DIR, { recursive: true, force: true });
 }
@@ -141,10 +143,24 @@ async function main() {
   psql("INSERT INTO pitr (note) VALUES ('second')");
   // The segment holding both writes is closed and must reach the archive before the database is thrown away.
   const closed = psql('SELECT pg_walfile_name(pg_switch_wal())');
-  await waitFor('the archive to hold the closed WAL segment', 90_000, () => psql('SELECT last_archived_wal FROM pg_stat_archiver') >= closed);
+  await waitFor('the archive to hold the closed WAL segment', 180_000, () => psql('SELECT last_archived_wal FROM pg_stat_archiver') >= closed);
   log(`archive holds ${closed}; the restore target is ${between}`);
   const info = wal(['info']);
   assert(/full backup/.test(info) && /wal archive min\/max/.test(info), 'wal.sh info does not show a base backup and a WAL range');
+  // The cron path (a differential backup on top of the full one), pgBackRest's own check, and that what sits in the bucket is
+  // sealed, not only configured to be.
+  wal(['check']);
+  const nightly = wal(['backup', '--type', 'diff']);
+  assert(/base backup done: 2 base backup/.test(nightly), `wal.sh backup did not leave two base backups (${nightly.split('\n').slice(-3).join(' | ')})`);
+  assert(/"cipher":"aes-256-cbc"/.test(compose(['exec', '-T', '-u', 'postgres', 'db', 'pgbackrest', 'info', '--output=json'])), 'the repository is not sealed (no aes-256-cbc cipher in pgbackrest info)');
+
+  // To the end of the archive first: it opens on a new timeline without archiving (the archive keeps timeline 1 alone).
+  log('restoring to the end of the archive');
+  wipeDatabase();
+  wal(['restore', '--latest']);
+  await startRestored();
+  assert(psql("SELECT string_agg(note, ',' ORDER BY note) FROM pitr") === 'first,second', 'a restore to the end of the archive does not hold both rows');
+  log('ok: a restore to the end of the archive holds both rows');
 
   log('restoring to the time between the two writes');
   wipeDatabase();
@@ -155,12 +171,20 @@ async function main() {
   assert(psql('SHOW archive_mode') === 'off', 'the restored cluster archives (it would push into the bucket it came from)');
   log('ok: the first write is there, the second is not, and the restored cluster does not archive');
 
-  log('restoring to the end of the archive');
-  wipeDatabase();
-  wal(['restore', '--latest']);
-  await startRestored();
-  assert(psql('SELECT string_agg(note, \',\' ORDER BY note) FROM pitr') === 'first,second', 'a restore to the end of the archive does not hold both rows');
-  log('ok: a restore to the end of the archive holds both rows');
+  // The real thing after a restore: archiving starts again on the new timeline, with a full base backup of it, so that a
+  // later `restore --latest` starts from the data that is live, not from a backup of the branch the restore left.
+  log('wal.sh setup on the restored cluster');
+  wal(['setup']);
+  assert(psql('SHOW archive_mode') === 'on', 'archive_mode is not on after setup on the restored cluster');
+  const timeline = psql('SELECT timeline_id FROM pg_control_checkpoint()');
+  assert(timeline === '2', `the restored cluster is on timeline 2 (got ${timeline})`);
+  const starts = [...compose(['exec', '-T', '-u', 'postgres', 'db', 'pgbackrest', 'info', '--output=json']).matchAll(/"archive":\{"start":"([0-9A-F]{8})/g)].map((m) => m[1]);
+  assert(starts.at(-1) === '00000002', `the newest base backup is on timeline 2 (starts: ${starts.join(', ')})`);
+  psql("INSERT INTO pitr (note) VALUES ('third')");
+  const closedAgain = psql('SELECT pg_walfile_name(pg_switch_wal())');
+  assert(closedAgain.startsWith('00000002'), `the new WAL is on timeline 2 (${closedAgain})`);
+  await waitFor('the archive to hold the new timeline segment', 180_000, () => psql('SELECT last_archived_wal FROM pg_stat_archiver') >= closedAgain);
+  log('ok: archiving runs again on timeline 2, with a full base backup of it');
 }
 
 try {

@@ -133,6 +133,21 @@ describe.skipIf(!runHere)('deploy.sh', { timeout: 300_000 }, () => {
     expect(c.some((l) => l === 'compose port api 8080')).toBe(true);
   });
 
+  // #2120: the database image with WAL archiving is the host's file too; a deploy that dropped it would recreate `db`
+  // without pgBackRest while the volume keeps pushing WAL with it.
+  it('passes compose.wal.yml after the pins and before compose.host.yml, and refuses a COMPOSE_FILE that names it when it is missing (#2120)', () => {
+    const filesOf = () => readFileSync(`${log}.files`, 'utf8').split('\n').filter(Boolean);
+    writeFileSync(`${dir}/compose.wal.yml`, 'services: {}\n');
+    writeFileSync(`${dir}/compose.host.yml`, 'services: {}\n');
+    expect(deploy('v1.0.0', 'a').status).toBe(0);
+    for (const files of filesOf()) expect(files).toBe(`${dir}/docker-compose.yml ${dir}/docker-compose.override.yml ${dir}/compose.wal.yml ${dir}/compose.host.yml`);
+    rmSync(`${dir}/compose.wal.yml`);
+    writeFileSync(`${dir}/.env`, 'POSTGRES_PASSWORD=x\nCOMPOSE_FILE=docker-compose.yml:docker-compose.override.yml:compose.wal.yml\n');
+    const res = deploy('v1.1.0', 'b');
+    expect(res.status, res.out).toBe(2);
+    expect(res.out).toContain('lists compose.wal.yml but');
+  });
+
   it('refuses to deploy when COMPOSE_FILE names compose.pilot.yml and the file is missing, rather than roll the all-in-one crove (#2118)', () => {
     writeFileSync(`${dir}/.env`, 'POSTGRES_PASSWORD=x\nCOMPOSE_FILE=docker-compose.yml:compose.pilot.yml:docker-compose.override.yml:compose.host.yml\n');
     const res = deploy('v1.0.0', 'a', { STUB_SERVICES: 'db migrate auth auth-grants crove-extract mailpit crove' });
