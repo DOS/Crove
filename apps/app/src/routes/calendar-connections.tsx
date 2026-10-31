@@ -7,6 +7,7 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { useTranslations } from 'use-intl';
 import type { CalendarConnectionView, CalendarOAuthProvider } from '@crove/kernel-contract';
 import { Button } from '@crove/ui/components/button';
+import { Checkbox } from '@crove/ui/components/checkbox';
 import { ErrorText, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, getCurrentOrg, orpc, queryClient } from '../lib/api.ts';
@@ -14,10 +15,13 @@ import { rememberOAuthAttempt } from '../lib/oauth.ts';
 
 const refresh = () => queryClient.invalidateQueries({ queryKey: orpc.calendar.connections.key() });
 
-function ConnectionRow({ connection }: { connection: CalendarConnectionView }) {
+function ConnectionRow({ connection, canEdit, onAllowWriteBack }: { connection: CalendarConnectionView; canEdit: boolean; onAllowWriteBack: () => void }) {
   const t = useTranslations('workingHours');
   const f = useFormat();
   const disconnect = useMutation(orpc.calendar.disconnect.mutationOptions({ onSuccess: refresh }));
+  const writeBack = useMutation(orpc.calendar.setWriteBack.mutationOptions({ onSuccess: refresh }));
+  // Writing appointments is Google's for now, for a member who edits, on a connection that works.
+  const offerWriteBack = canEdit && connection.provider === 'google' && connection.status === 'active';
   const note =
     connection.status === 'expired'
       ? t('externalExpired')
@@ -27,7 +31,8 @@ function ConnectionRow({ connection }: { connection: CalendarConnectionView }) {
           ? t('externalSynced', { time: f.dateTime(connection.lastSyncedAt) })
           : t('externalNeverSynced');
   return (
-    <li className="flex items-center justify-between gap-3 py-2 text-sm">
+    <li className="py-2 text-sm">
+      <div className="flex items-center justify-between gap-3">
       <span className="min-w-0">
         <span className="block truncate font-medium">
           {t(`externalProviders.${connection.provider}`)}: {connection.displayName}
@@ -37,6 +42,25 @@ function ConnectionRow({ connection }: { connection: CalendarConnectionView }) {
       <Button type="button" variant="ghost" size="sm" disabled={disconnect.isPending} onClick={() => disconnect.mutate({ connectionId: connection.id })} aria-label={t('externalDisconnectOf', { name: connection.displayName })}>
         {t('externalDisconnect')}
       </Button>
+      </div>
+      {offerWriteBack &&
+        (connection.canWriteBack ? (
+          <label className="mt-1 flex items-start gap-2 text-xs text-muted-foreground">
+            <Checkbox checked={connection.writeBack} disabled={writeBack.isPending} onCheckedChange={(on) => writeBack.mutate({ connectionId: connection.id, enabled: on === true })} />
+            <span>
+              <span className="font-medium text-foreground">{t('externalWriteBack')}</span>
+              <span className="block">{t('externalWriteBackHint')}</span>
+            </span>
+          </label>
+        ) : (
+          <div className="mt-1 text-xs text-muted-foreground">
+            <p>{t('externalWriteBackHint')}</p>
+            <Button type="button" variant="outline" size="sm" className="mt-1" onClick={onAllowWriteBack}>
+              {t('externalAllowWriteBack')}
+            </Button>
+          </div>
+        ))}
+      {writeBack.error && <ErrorText>{errorMessage(writeBack.error)}</ErrorText>}
     </li>
   );
 }
@@ -46,7 +70,7 @@ export function ExternalCalendars({ canEdit }: { canEdit: boolean }) {
   const providers = useQuery(orpc.calendar.providers.queryOptions());
   const connections = useQuery(orpc.calendar.connections.queryOptions());
   const start = useMutation({
-    mutationFn: (provider: CalendarOAuthProvider) => client.calendar.connectStart({ provider }),
+    mutationFn: (v: { provider: CalendarOAuthProvider; writeBack?: boolean }) => client.calendar.connectStart(v.writeBack ? { provider: v.provider, writeBack: true } : { provider: v.provider }),
     onSuccess: (attempt) => {
       // The org the screen is showing: the provider sends the browser back to one address for every org.
       const slug = getCurrentOrg();
@@ -67,15 +91,15 @@ export function ExternalCalendars({ canEdit }: { canEdit: boolean }) {
       ) : (
         <ul className="mt-2 divide-y">
           {rows.map((c) => (
-            <ConnectionRow key={c.id} connection={c} />
+            <ConnectionRow key={c.id} connection={c} canEdit={canEdit} onAllowWriteBack={() => start.mutate({ provider: 'google_calendar', writeBack: true })} />
           ))}
         </ul>
       )}
       {canEdit && offered.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-2">
           {offered.map((p) => (
-            <Button key={p} type="button" variant="outline" size="sm" disabled={start.isPending} onClick={() => start.mutate(p)}>
-              {start.isPending && start.variables === p ? <Spinner className="text-current" /> : null}
+            <Button key={p} type="button" variant="outline" size="sm" disabled={start.isPending} onClick={() => start.mutate({ provider: p })}>
+              {start.isPending && start.variables?.provider === p ? <Spinner className="text-current" /> : null}
               {t('externalConnect', { provider: t(`externalProviders.${p}`) })}
             </Button>
           ))}

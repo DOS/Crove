@@ -60,6 +60,7 @@ export interface CroveKernelSchema {
   'crove_kernel.budget_policy': KernelBudgetPolicyTable;
   'crove_kernel.calendar_connection': KernelCalendarConnectionTable;
   'crove_kernel.calendar_event': KernelCalendarEventTable;
+  'crove_kernel.calendar_event_link': KernelCalendarEventLinkTable;
   'crove_kernel.channel_connection': KernelChannelConnectionTable;
   'crove_kernel.currency': KernelCurrencyTable;
   'crove_kernel.external_call': KernelExternalCallTable;
@@ -769,6 +770,21 @@ export interface KernelCalendarConnectionTable {
   last_synced_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   write_back: Generated<boolean>;
   connected_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
+/** crove_kernel.calendar_event_link */
+export interface KernelCalendarEventLinkTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  connection_id: ColumnType<string, string, NotGranted>;
+  event_id: ColumnType<string, string, NotGranted>;
+  user_id: ColumnType<string, string, NotGranted>;
+  external_id: ColumnType<string, string, NotGranted>;
+  state: string;
+  synced_hash: string;
+  attempts: Generated<number>;
+  last_error: string | null;
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
 }
 

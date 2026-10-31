@@ -355,12 +355,14 @@ export const contract = {
     providers: oc.output(z.array(zCalendarOAuthProvider)),
     connections: oc.output(z.array(zCalendarConnectionView)),
     connectStart: oc
-      .input(z.strictObject({ provider: zCalendarOAuthProvider }))
+      .input(z.strictObject({ provider: zCalendarOAuthProvider, writeBack: z.boolean().optional() }))
       .output(z.strictObject({ authorizeUrl: z.url({ protocol: /^https$/ }), state: zOAuthState, expiresAt: z.iso.datetime({ offset: true }) })),
     connectFinish: oc
       .input(z.strictObject({ provider: zCalendarOAuthProvider, state: zOAuthState, code: z.string().min(1).max(2048) }))
       .output(z.strictObject({ connectionId: zId, displayName: z.string(), reconnected: z.boolean() })),
     disconnect: oc.input(z.strictObject({ connectionId: zId })).output(z.strictObject({ connectionId: zId, disconnected: z.literal(true) })),
+    // Whether bookings are written to this connection's calendar (#2124); on only for a grant with the events scope.
+    setWriteBack: oc.input(z.strictObject({ connectionId: zId, enabled: z.boolean() })).output(z.strictObject({ connectionId: zId, writeBack: z.boolean() })),
   },
   taxRegistry: {
     lookup: oc.input(z.object({ taxCode: z.string().trim().max(20) })).output(zTaxRegistryEntry),

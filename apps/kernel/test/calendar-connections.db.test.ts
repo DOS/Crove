@@ -8,8 +8,8 @@ import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
-import { createOrg, kernelCommands, kernelQueries, upsertIdentity, type SealedCalendarCredential } from '@crove/kernel';
-import { calendarBinding, isVietnamHoliday, weekdayOf, zonedDate, zonedInstant } from '@crove/kernel-contract';
+import { createOrg, kernelCommands, kernelQueries, upsertIdentity, writeBackEventId, writeBackHash, type SealedCalendarCredential, type WriteBackAction } from '@crove/kernel';
+import { GOOGLE_CALENDAR_EVENTS_SCOPE, calendarBinding, isVietnamHoliday, weekdayOf, zonedDate, zonedInstant } from '@crove/kernel-contract';
 import { CredentialVault, Runtime, parseVaultKey } from '@crove/kernel-runtime';
 import { TEST_MANIFESTS } from './manifests.ts';
 
@@ -70,13 +70,13 @@ suite('outside calendars on PostgreSQL (#2123)', () => {
 
   type Org = Awaited<ReturnType<typeof org>>;
 
-  async function connect(o: Org, user: string, account = `${randomUUID().slice(0, 8)}@gmail.test`, secret = JSON.stringify({ accessToken: 'access-1', refreshToken: 'refresh-1' })) {
+  async function connect(o: Org, user: string, account = `${randomUUID().slice(0, 8)}@gmail.test`, secret = JSON.stringify({ accessToken: 'access-1', refreshToken: 'refresh-1' }), scopes = ['https://www.googleapis.com/auth/calendar.freebusy']) {
     const sealed = vault.seal(secret, calendarBinding(o.orgId, 'google', account));
     const done = await o.exec<{ connectionId: string; reconnected: boolean }>(user, 'kernel.calendar.connect', {
       provider: 'google',
       externalAccount: account,
       displayName: account,
-      scopes: ['https://www.googleapis.com/auth/calendar.freebusy'],
+      scopes,
       expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
       credential: { keyId: sealed.keyId, envelope: sealed.envelope.toString('base64') },
     });
@@ -84,6 +84,21 @@ suite('outside calendars on PostgreSQL (#2123)', () => {
   }
 
   const busy = (day: string, from: number, to: number) => ({ start: at(day, from), end: at(day, to) });
+  // A connection that may write: the grant carries the events scope as well.
+  const connectWriter = (o: Org, user: string) => connect(o, user, undefined, undefined, ['https://www.googleapis.com/auth/calendar.freebusy', GOOGLE_CALENDAR_EVENTS_SCOPE]);
+  // A confirmed booking's calendar event on a member's calendar, as the crm booking command writes it.
+  async function bookingEvent(o: Org, user: string, day: string, from: number, to: number, title = 'Tư vấn: Lan') {
+    const r = await admin((cl) =>
+      cl.query<{ id: string }>(
+        "INSERT INTO crove_kernel.calendar_event (org_id, user_id, starts_at, ends_at, time_zone, title, kind, created_by) VALUES ($1, $2, $3, $4, 'Asia/Ho_Chi_Minh', $5, 'booking', $2) RETURNING id",
+        [o.orgId, user, at(day, from), at(day, to), title],
+      ),
+    );
+    return (r.rows[0] as { id: string }).id;
+  }
+  const plan = async (o: Org, connectionId: string) => (await o.sysQuery<{ actions: WriteBackAction[] }>('kernel.calendar.writeback_plan', { connectionId })).actions;
+  const record = (o: Org, connectionId: string, a: WriteBackAction, state: 'written' | 'removed' | 'error', error?: string) =>
+    o.sys('kernel.calendar.link.record', { connectionId, eventId: a.eventId, externalId: a.externalId, state, syncedHash: a.hash, ...(error ? { error } : {}) });
 
   beforeAll(async () => {
     const root = new pg.Client({ connectionString: ADMIN });
@@ -429,6 +444,228 @@ suite('outside calendars on PostgreSQL (#2123)', () => {
     const c = await connect(o, o.member);
     await admin((cl) => cl.query("UPDATE crove_kernel.tenant_member SET role = 'viewer' WHERE org_id = $1 AND user_id = $2", [o.orgId, o.member]));
     expect(await o.exec(o.member, 'kernel.calendar.disconnect', { connectionId: c.connectionId })).toEqual({ connectionId: c.connectionId, disconnected: true });
+  });
+
+  it('turns write-back on only for the owner of a connection whose grant carries the events scope', async () => {
+    const o = await org();
+    const plain = await connect(o, o.member);
+    const writer = await connectWriter(o, o.member);
+    await expect(o.exec(o.member, 'kernel.calendar.write_back.set', { connectionId: plain.connectionId, enabled: true })).rejects.toMatchObject({ code: 'CALENDAR_SCOPE_MISSING' });
+    await expect(o.exec(o.other, 'kernel.calendar.write_back.set', { connectionId: writer.connectionId, enabled: true })).rejects.toMatchObject({ code: 'CALENDAR_NOT_FOUND' });
+    expect(await o.exec(o.member, 'kernel.calendar.write_back.set', { connectionId: writer.connectionId, enabled: true })).toEqual({ connectionId: writer.connectionId, writeBack: true });
+    const list = await o.query<{ id: string; writeBack: boolean; canWriteBack: boolean }[]>(o.member, 'kernel.calendar.connections', {});
+    expect(Object.fromEntries(list.map((c) => [c.id, [c.writeBack, c.canWriteBack]]))).toEqual({ [plain.connectionId]: [false, false], [writer.connectionId]: [true, true] });
+    // Off is always allowed; an expired connection cannot be turned on.
+    expect(await o.exec(o.member, 'kernel.calendar.write_back.set', { connectionId: writer.connectionId, enabled: false })).toMatchObject({ writeBack: false });
+    await o.sys('kernel.calendar.mark_failed', { connectionId: writer.connectionId, status: 'expired', reason: 'refused (invalid_grant)' });
+    await expect(o.exec(o.member, 'kernel.calendar.write_back.set', { connectionId: writer.connectionId, enabled: true })).rejects.toMatchObject({ code: 'CALENDAR_NOT_ACTIVE' });
+    // Viewers have no calendar to write to.
+    await expect(o.exec(o.viewer, 'kernel.calendar.write_back.set', { connectionId: writer.connectionId, enabled: true })).rejects.toMatchObject({ status: 403 });
+  });
+
+  it('plans a write for a new or moved booking and a delete for a cancelled one, and nothing for what is already as written', async () => {
+    const o = await org();
+    const day = nextWorkday();
+    const c = await connectWriter(o, o.member);
+    const e = await bookingEvent(o, o.member, day, 540, 570);
+    // Off: nothing. On: the booking, with its title, its instants and the id the kernel derives.
+    expect(await plan(o, c.connectionId)).toEqual([]);
+    await o.exec(o.member, 'kernel.calendar.write_back.set', { connectionId: c.connectionId, enabled: true });
+    const [first] = await plan(o, c.connectionId);
+    expect(first).toMatchObject({ eventId: e, kind: 'upsert', summary: 'Tư vấn: Lan', startsAt: at(day, 540), endsAt: at(day, 570), externalId: writeBackEventId(o.orgId, e, c.connectionId) });
+    expect(first?.hash).toBe(writeBackHash(new Date(at(day, 540)), new Date(at(day, 570)), 'Tư vấn: Lan'));
+    expect(first?.externalId).toMatch(/^[0-9a-v]{52}$/);
+    await record(o, c.connectionId, first as WriteBackAction, 'written');
+    expect(await plan(o, c.connectionId)).toEqual([]);
+    // A move changes what is written, so it is written again.
+    await admin((cl) => cl.query('UPDATE crove_kernel.calendar_event SET starts_at = $3, ends_at = $4 WHERE org_id = $1 AND id = $2', [o.orgId, e, at(day, 600), at(day, 630)]));
+    const [moved] = await plan(o, c.connectionId);
+    expect(moved).toMatchObject({ kind: 'upsert', startsAt: at(day, 600) });
+    await record(o, c.connectionId, moved as WriteBackAction, 'written');
+    // A cancel deletes it, once.
+    await admin((cl) => cl.query("UPDATE crove_kernel.calendar_event SET status = 'cancelled', cancelled_at = now() WHERE org_id = $1 AND id = $2", [o.orgId, e]));
+    const [gone] = await plan(o, c.connectionId);
+    expect(gone).toMatchObject({ eventId: e, kind: 'delete', hash: 'deleted', externalId: first?.externalId });
+    await record(o, c.connectionId, gone as WriteBackAction, 'removed');
+    expect(await plan(o, c.connectionId)).toEqual([]);
+  });
+
+  it('writes only the connection\'s member bookings, never a manual event or another member\'s booking', async () => {
+    const o = await org();
+    const day = nextWorkday();
+    const c = await connectWriter(o, o.member);
+    await o.exec(o.member, 'kernel.calendar.write_back.set', { connectionId: c.connectionId, enabled: true });
+    await bookingEvent(o, o.other, day, 540, 570);
+    await o.exec(o.member, 'kernel.calendar.event.add', { startsAt: at(day, 600), endsAt: at(day, 630), timeZone: VN, kind: 'manual', title: 'Họp nội bộ' });
+    expect(await plan(o, c.connectionId)).toEqual([]);
+    const mine = await bookingEvent(o, o.member, day, 700, 730);
+    expect((await plan(o, c.connectionId)).map((a) => a.eventId)).toEqual([mine]);
+  });
+
+  it('leaves an event the member deleted by hand alone until its booking changes, and stops retrying after six failed sweeps', async () => {
+    const o = await org();
+    const day = nextWorkday();
+    const c = await connectWriter(o, o.member);
+    await o.exec(o.member, 'kernel.calendar.write_back.set', { connectionId: c.connectionId, enabled: true });
+    const e = await bookingEvent(o, o.member, day, 540, 570);
+    const [a] = (await plan(o, c.connectionId)) as [WriteBackAction];
+    await record(o, c.connectionId, a, 'removed');
+    expect(await plan(o, c.connectionId)).toEqual([]);
+    await admin((cl) => cl.query('UPDATE crove_kernel.calendar_event SET ends_at = $3 WHERE org_id = $1 AND id = $2', [o.orgId, e, at(day, 600)]));
+    const [changed] = (await plan(o, c.connectionId)) as [WriteBackAction];
+    expect(changed.kind).toBe('upsert');
+    // Failures are retried until the sixth in a row; then it waits for a change.
+    for (let i = 1; i <= 5; i++) {
+      await record(o, c.connectionId, changed, 'error', 'rateLimitExceeded');
+      expect(await plan(o, c.connectionId)).toHaveLength(1);
+    }
+    await record(o, c.connectionId, changed, 'error', 'rateLimitExceeded');
+    expect(await plan(o, c.connectionId)).toEqual([]);
+    const row = await admin((cl) => cl.query<{ attempts: number; last_error: string }>('SELECT attempts, last_error FROM crove_kernel.calendar_event_link WHERE org_id = $1 AND event_id = $2', [o.orgId, e]));
+    expect(row.rows[0]).toEqual({ attempts: 6, last_error: 'rateLimitExceeded' });
+    // A write that succeeds resets the count.
+    await admin((cl) => cl.query('UPDATE crove_kernel.calendar_event SET ends_at = $3 WHERE org_id = $1 AND id = $2', [o.orgId, e, at(day, 630)]));
+    const [again] = (await plan(o, c.connectionId)) as [WriteBackAction];
+    await record(o, c.connectionId, again, 'written');
+    const reset = await admin((cl) => cl.query<{ attempts: number }>('SELECT attempts FROM crove_kernel.calendar_event_link WHERE org_id = $1 AND event_id = $2', [o.orgId, e]));
+    expect(reset.rows[0]?.attempts).toBe(0);
+  });
+
+  it('counts failed attempts per piece of work: a booking that changed starts again after six failures, and so does a delete after a write', async () => {
+    const o = await org();
+    const day = nextWorkday();
+    const c = await connectWriter(o, o.member);
+    await o.exec(o.member, 'kernel.calendar.write_back.set', { connectionId: c.connectionId, enabled: true });
+    const e = await bookingEvent(o, o.member, day, 540, 570);
+    const attempts = async () => (await admin((cl) => cl.query<{ attempts: number }>('SELECT attempts FROM crove_kernel.calendar_event_link WHERE org_id = $1 AND event_id = $2', [o.orgId, e]))).rows[0]?.attempts;
+    const [first] = (await plan(o, c.connectionId)) as [WriteBackAction];
+    for (let i = 0; i < 6; i++) await record(o, c.connectionId, first, 'error', 'rateLimitExceeded');
+    expect(await plan(o, c.connectionId)).toEqual([]);
+    // The booking moves: its first failure is the first of a new count, so it is planned again.
+    await admin((cl) => cl.query('UPDATE crove_kernel.calendar_event SET ends_at = $3 WHERE org_id = $1 AND id = $2', [o.orgId, e, at(day, 600)]));
+    const [moved] = (await plan(o, c.connectionId)) as [WriteBackAction];
+    await record(o, c.connectionId, moved, 'error', 'rateLimitExceeded');
+    expect(await attempts()).toBe(1);
+    expect(await plan(o, c.connectionId)).toHaveLength(1);
+    // Cancelled after the sixth failure of the write: the delete is a new piece of work.
+    for (let i = 0; i < 5; i++) await record(o, c.connectionId, moved, 'error', 'rateLimitExceeded');
+    expect(await plan(o, c.connectionId)).toEqual([]);
+    await admin((cl) => cl.query("UPDATE crove_kernel.calendar_event SET status = 'cancelled', cancelled_at = now() WHERE org_id = $1 AND id = $2", [o.orgId, e]));
+    const [gone] = (await plan(o, c.connectionId)) as [WriteBackAction];
+    expect(gone.kind).toBe('delete');
+    await record(o, c.connectionId, gone, 'error', 'rateLimitExceeded');
+    expect(await attempts()).toBe(1);
+    expect(await plan(o, c.connectionId)).toHaveLength(1);
+  });
+
+  it('deletes by the derived id a booking cancelled before its link was stored, once, and records that nothing was there', async () => {
+    const o = await org();
+    const day = nextWorkday();
+    const c = await connectWriter(o, o.member);
+    await o.exec(o.member, 'kernel.calendar.write_back.set', { connectionId: c.connectionId, enabled: true });
+    const e = await bookingEvent(o, o.member, day, 540, 570);
+    // The write reached the provider but its record did not (a crash between the two): there is no link, then the booking is cancelled.
+    await admin((cl) => cl.query("UPDATE crove_kernel.calendar_event SET status = 'cancelled', cancelled_at = now() WHERE org_id = $1 AND id = $2", [o.orgId, e]));
+    const [gone] = (await plan(o, c.connectionId)) as [WriteBackAction];
+    expect(gone).toMatchObject({ eventId: e, kind: 'delete', externalId: writeBackEventId(o.orgId, e, c.connectionId) });
+    await record(o, c.connectionId, gone, 'removed');
+    expect(await plan(o, c.connectionId)).toEqual([]);
+  });
+
+  it('still owes the delete of a written event whose booking was cancelled and ended days ago', async () => {
+    const o = await org();
+    const day = nextWorkday();
+    const c = await connectWriter(o, o.member);
+    await o.exec(o.member, 'kernel.calendar.write_back.set', { connectionId: c.connectionId, enabled: true });
+    const e = await bookingEvent(o, o.member, day, 540, 570);
+    const [written] = (await plan(o, c.connectionId)) as [WriteBackAction];
+    await record(o, c.connectionId, written, 'written');
+    // The sweep did not run for days: the booking is cancelled and long over.
+    await admin((cl) =>
+      cl.query("UPDATE crove_kernel.calendar_event SET status = 'cancelled', cancelled_at = now(), starts_at = now() - interval '4 days 1 hour', ends_at = now() - interval '4 days' WHERE org_id = $1 AND id = $2", [o.orgId, e]),
+    );
+    const [gone] = (await plan(o, c.connectionId)) as [WriteBackAction];
+    expect(gone).toMatchObject({ eventId: e, kind: 'delete', externalId: written.externalId });
+    await record(o, c.connectionId, gone, 'removed');
+    expect(await plan(o, c.connectionId)).toEqual([]);
+    // A cancelled booking long over that never had an event owes nothing.
+    const never = await bookingEvent(o, o.member, day, 700, 730);
+    await admin((cl) =>
+      cl.query("UPDATE crove_kernel.calendar_event SET status = 'cancelled', cancelled_at = now(), starts_at = now() - interval '5 days 1 hour', ends_at = now() - interval '5 days' WHERE org_id = $1 AND id = $2", [o.orgId, never]),
+    );
+    expect(await plan(o, c.connectionId)).toEqual([]);
+  });
+
+  it('reaches a booking behind a thousand that need nothing', async () => {
+    const o = await org();
+    const day = nextWorkday();
+    const c = await connectWriter(o, o.member);
+    await o.exec(o.member, 'kernel.calendar.write_back.set', { connectionId: c.connectionId, enabled: true });
+    const base = Date.parse(at(day, 0));
+    const starts: string[] = [];
+    const ends: string[] = [];
+    for (let i = 0; i < 1000; i++) {
+      starts.push(new Date(base + i * 60_000).toISOString());
+      ends.push(new Date(base + i * 60_000 + 30_000).toISOString());
+    }
+    await admin(async (cl) => {
+      const made = await cl.query<{ id: string; starts_at: Date; ends_at: Date }>(
+        "INSERT INTO crove_kernel.calendar_event (org_id, user_id, starts_at, ends_at, time_zone, title, kind, created_by) SELECT $1, $2, x.s, x.e, 'UTC', 'Tư vấn: Lan', 'booking', $2 FROM unnest($3::timestamptz[], $4::timestamptz[]) AS x(s, e) RETURNING id, starts_at, ends_at",
+        [o.orgId, o.member, starts, ends],
+      );
+      const ids = made.rows.map((r) => r.id);
+      const hs = made.rows.map((r) => writeBackHash(new Date(r.starts_at), new Date(r.ends_at), 'Tư vấn: Lan'));
+      await cl.query(
+        "INSERT INTO crove_kernel.calendar_event_link (org_id, connection_id, event_id, user_id, external_id, state, synced_hash) SELECT $1, $2, x.id, $3, 'ext' || x.id::text, 'written', x.h FROM unnest($4::uuid[], $5::text[]) AS x(id, h)",
+        [o.orgId, c.connectionId, o.member, ids, hs],
+      );
+    });
+    expect(await plan(o, c.connectionId)).toEqual([]);
+    const late = await bookingEvent(o, o.member, day, 1300, 1330);
+    expect((await plan(o, c.connectionId)).map((a) => a.eventId)).toEqual([late]);
+  });
+
+  it('drops the provider\'s copy of a written booking from the busy blocks, and keeps a block that is more than that copy', async () => {
+    const o = await org();
+    const day = nextWorkday();
+    const c = await connectWriter(o, o.member);
+    await o.exec(o.member, 'kernel.calendar.write_back.set', { connectionId: c.connectionId, enabled: true });
+    await bookingEvent(o, o.member, day, 540, 570);
+    const [a] = (await plan(o, c.connectionId)) as [WriteBackAction];
+    await record(o, c.connectionId, a, 'written');
+    const window = { from: at(day, 0), to: new Date(Date.parse(at(day, 0)) + 60 * DAY).toISOString() };
+    const stored = async () => (await admin((cl) => cl.query<{ starts_at: Date; ends_at: Date }>('SELECT starts_at, ends_at FROM crove_kernel.calendar_event WHERE source_id = $1 ORDER BY starts_at', [c.connectionId]))).rows;
+    // The answer holds the copy of the booking and an unrelated meeting: only the meeting is stored.
+    expect(await o.sys('kernel.calendar.busy_replace', { connectionId: c.connectionId, ...window, busy: [busy(day, 540, 570), busy(day, 700, 730)] })).toMatchObject({ added: 1, removed: 0 });
+    expect((await stored()).map((r) => r.starts_at.toISOString())).toEqual([at(day, 700)]);
+    // A genuine event that overlaps the booking keeps the part outside it.
+    expect(await o.sys('kernel.calendar.busy_replace', { connectionId: c.connectionId, ...window, busy: [busy(day, 540, 600)] })).toMatchObject({ added: 1, removed: 1 });
+    expect((await stored()).map((r) => [r.starts_at.toISOString(), r.ends_at.toISOString()])).toEqual([[at(day, 570), at(day, 600)]]);
+    // A second booking right after the first: both copies come back as one block, and both are cut out of it.
+    await bookingEvent(o, o.member, day, 570, 600);
+    const [b] = (await plan(o, c.connectionId)) as [WriteBackAction];
+    await record(o, c.connectionId, b, 'written');
+    expect(await o.sys('kernel.calendar.busy_replace', { connectionId: c.connectionId, ...window, busy: [busy(day, 540, 600)] })).toMatchObject({ added: 0, removed: 1 });
+    expect(await stored()).toEqual([]);
+  });
+
+  it('records a link only for a booking event of the connection\'s member, only for the system, and drops it with the connection', async () => {
+    const o = await org();
+    const day = nextWorkday();
+    const c = await connectWriter(o, o.member);
+    const theirs = await bookingEvent(o, o.other, day, 540, 570);
+    const mine = await bookingEvent(o, o.member, day, 600, 630);
+    const action = (eventId: string): WriteBackAction => ({ eventId, externalId: writeBackEventId(o.orgId, eventId, c.connectionId), kind: 'upsert', summary: 'x', startsAt: null, endsAt: null, hash: 'sha256:aaa' });
+    await expect(record(o, c.connectionId, action(theirs), 'written')).rejects.toMatchObject({ code: 'CALENDAR_EVENT_NOT_FOUND' });
+    await expect(o.exec(o.member, 'kernel.calendar.link.record', { connectionId: c.connectionId, eventId: mine, externalId: 'abcdefgh', state: 'written', syncedHash: 'x' })).rejects.toMatchObject({ status: 403 });
+    await record(o, c.connectionId, action(mine), 'written');
+    // The plan is for the worker alone.
+    await expect(o.query(o.member, 'kernel.calendar.writeback_plan', { connectionId: c.connectionId })).rejects.toMatchObject({ status: 403 });
+    // Disconnecting and finishing takes the links with the connection.
+    await o.exec(o.member, 'kernel.calendar.disconnect', { connectionId: c.connectionId });
+    await o.sys('kernel.calendar.finish_disconnect', { connectionId: c.connectionId, revoked: true });
+    const left = await admin((cl) => cl.query('SELECT 1 FROM crove_kernel.calendar_event_link WHERE org_id = $1', [o.orgId]));
+    expect(left.rowCount).toBe(0);
   });
 
   it('lists for the sync only active connections of members who are still in the org', async () => {

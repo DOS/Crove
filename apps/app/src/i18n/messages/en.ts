@@ -957,6 +957,9 @@ export const en = {
     externalNeverSynced: 'Not synced yet, the first result comes within 15 minutes',
     externalExpired: 'Access was revoked or expired, connect again',
     externalFailed: 'The last sync failed, it is tried again in 15 minutes',
+    externalWriteBack: 'Write appointments to this calendar',
+    externalWriteBackHint: 'Each confirmed appointment becomes an event in your Google calendar, the visitor name in its title (no email, phone or attendees). A cancelled appointment removes the event.',
+    externalAllowWriteBack: 'Allow writing appointments (connect again)',
     externalReconnect: 'Connect again',
     oauthTitle: 'Connect a calendar',
     oauthFinishing: 'Finishing the connection…',
@@ -5524,6 +5527,7 @@ export const en = {
       CALENDAR_EVENT_IS_EXTERNAL: 'This is busy time from an outside calendar; disconnect that calendar if you do not want it used',
       CALENDAR_NOT_ACTIVE: 'This calendar is no longer active, connect it again',
       CALENDAR_NOT_FOUND: 'This connected calendar was not found',
+      CALENDAR_SCOPE_MISSING: 'Connect this calendar again and allow writing appointments',
       CALENDAR_OWNER_LEFT: 'The owner of this calendar is no longer a member of the organization',
       CALENDAR_PROVIDER_DISABLED: 'This kind of calendar is not configured on this server',
       EVENT_TYPE_NOT_FOUND: 'This event type was not found.',
@@ -6195,6 +6199,13 @@ export const en = {
         oauth_begin: 'Start connecting an outside calendar',
         oauth_consume: 'Finish connecting an outside calendar',
         refresh: 'Renew access to an outside calendar',
+        write_back: {
+          set: 'Turn writing appointments to an outside calendar on or off',
+        },
+        writeback_plan: 'Read what has to be written to an outside calendar',
+        link: {
+          record: 'Record the result of writing an appointment to an outside calendar',
+        },
         event: {
           add: 'Add a calendar event',
           cancel: 'Cancel a calendar event',

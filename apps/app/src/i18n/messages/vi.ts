@@ -955,6 +955,9 @@ export const vi = {
     externalNeverSynced: 'Chưa đồng bộ, tối đa 15 phút nữa sẽ có kết quả đầu tiên',
     externalExpired: 'Quyền truy cập đã bị thu hồi hoặc hết hạn, hãy kết nối lại',
     externalFailed: 'Lần đồng bộ gần nhất gặp lỗi, hệ thống sẽ thử lại sau 15 phút',
+    externalWriteBack: 'Ghi lịch hẹn vào lịch này',
+    externalWriteBackHint: 'Mỗi lịch hẹn đã xác nhận sẽ thành một sự kiện trong lịch Google của bạn, tên khách nằm trong tiêu đề sự kiện (không kèm email, số điện thoại hay người tham dự). Lịch hẹn bị hủy thì sự kiện bị xóa.',
+    externalAllowWriteBack: 'Cho phép ghi lịch hẹn (kết nối lại)',
     externalReconnect: 'Kết nối lại',
     oauthTitle: 'Kết nối lịch',
     oauthFinishing: 'Đang hoàn tất kết nối…',
@@ -5524,6 +5527,7 @@ export const vi = {
       CALENDAR_EVENT_IS_EXTERNAL: 'Đây là giờ bận từ lịch bên ngoài; hãy ngắt kết nối lịch đó nếu không muốn dùng',
       CALENDAR_NOT_ACTIVE: 'Lịch này không còn hoạt động, hãy kết nối lại',
       CALENDAR_NOT_FOUND: 'Không tìm thấy lịch đã kết nối này',
+      CALENDAR_SCOPE_MISSING: 'Hãy kết nối lại lịch này và cho phép ghi lịch hẹn',
       CALENDAR_OWNER_LEFT: 'Chủ của lịch này không còn là thành viên của tổ chức',
       CALENDAR_PROVIDER_DISABLED: 'Loại lịch này chưa được cấu hình trên máy chủ',
       EVENT_TYPE_NOT_FOUND: 'Không tìm thấy loại lịch hẹn này',
@@ -6195,6 +6199,13 @@ export const vi = {
         oauth_begin: 'Bắt đầu kết nối lịch ngoài',
         oauth_consume: 'Hoàn tất kết nối lịch ngoài',
         refresh: 'Gia hạn quyền truy cập lịch ngoài',
+        write_back: {
+          set: 'Bật hoặc tắt ghi lịch hẹn vào lịch ngoài',
+        },
+        writeback_plan: 'Xem việc cần ghi vào lịch ngoài',
+        link: {
+          record: 'Ghi nhận kết quả ghi lịch hẹn vào lịch ngoài',
+        },
         event: {
           add: 'Thêm sự kiện vào lịch',
           cancel: 'Hủy sự kiện trên lịch',

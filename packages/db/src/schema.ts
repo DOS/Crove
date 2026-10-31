@@ -119,6 +119,7 @@ export type NumberSeriesPolicyTable = Refine<G.KernelNumberSeriesPolicyTable, { 
 export const CALENDAR_EVENT_KINDS = ['manual', 'time_off', 'booking', 'google', 'microsoft', 'caldav'] as const;
 export const CALENDAR_CONNECTION_STATUSES = ['active', 'expired', 'disconnecting'] as const;
 export const CALENDAR_PROVIDERS = ['google', 'microsoft', 'caldav'] as const;
+export const CALENDAR_LINK_STATES = ['written', 'removed', 'error'] as const;
 export const CALENDAR_EVENT_STATUSES = ['active', 'cancelled'] as const;
 export type CalendarEventTable = Refine<
   G.KernelCalendarEventTable,
@@ -128,6 +129,7 @@ export type CalendarEventTable = Refine<
   }
 >;
 
+export type CalendarEventLinkTable = Refine<G.KernelCalendarEventLinkTable, { state: (typeof CALENDAR_LINK_STATES)[number] }>;
 export type CalendarConnectionTable = Refine<
   G.KernelCalendarConnectionTable,
   {
@@ -735,6 +737,7 @@ type Refined = Tables<{
   'crove_notes.todo': NotesTodoTable;
   'crove_kernel.calendar_connection': CalendarConnectionTable;
   'crove_kernel.calendar_event': CalendarEventTable;
+  'crove_kernel.calendar_event_link': CalendarEventLinkTable;
   'crove_kernel.legal_entity': LegalEntityTable;
   'crove_kernel.number_series_policy': NumberSeriesPolicyTable;
   'crove_kernel.role': RoleTable;

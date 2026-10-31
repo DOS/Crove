@@ -2,9 +2,9 @@
 // The calendar sync (#2123) against a fake runtime and a fake adapter: when it renews a token, what it hands to the
 // kernel, and how it ends a connection the provider refused. No database, no network.
 import { randomBytes } from 'node:crypto';
-import { describe, expect, it } from 'vitest';
-import type { CalendarAdapter } from '@crove/channel';
-import { busyPieces } from '@crove/kernel';
+import { describe, expect, it, vi } from 'vitest';
+import type { CalendarAdapter, CalendarWriteResult } from '@crove/channel';
+import { busyPieces, cutOut } from '@crove/kernel';
 import { calendarBinding } from '@crove/kernel-contract';
 import { CredentialVault, DomainError, parseVaultKey, type Runtime } from '@crove/kernel-runtime';
 import { runCalendarDisconnect, runCalendarSync, syncCalendars } from '../src/calendar-sync.ts';
@@ -26,12 +26,13 @@ interface Call {
   input: Record<string, unknown>;
 }
 
-function fakeRuntime(state: { status: string; provider: string; expiresAt: string | null; updatedAt: string } | null, credential: unknown) {
+function fakeRuntime(state: { status: string; provider: string; expiresAt: string | null; updatedAt: string; writeBack?: boolean } | null, credential: unknown, plan: { actions: unknown[] } = { actions: [] }) {
   const calls: Call[] = [];
   const runtime = {
     query: async (name: string, input: Record<string, unknown>) => {
       calls.push({ kind: 'query', name, input });
       if (name === 'kernel.calendar.connection_state') return state;
+      if (name === 'kernel.calendar.writeback_plan') return plan;
       if (name === 'kernel.calendar.credential') {
         if (credential instanceof Error) throw credential;
         return credential;
@@ -49,8 +50,9 @@ function fakeRuntime(state: { status: string; provider: string; expiresAt: strin
   return { runtime, calls };
 }
 
-function adapter(over: Partial<CalendarAdapter> = {}): CalendarAdapter & { busyCalls: Array<{ secret: string; from: Date; to: Date }> } {
+function adapter(over: Partial<CalendarAdapter> = {}): CalendarAdapter & { busyCalls: Array<{ secret: string; from: Date; to: Date }>; writes: string[] } {
   const busyCalls: Array<{ secret: string; from: Date; to: Date }> = [];
+  const writes: string[] = [];
   return {
     provider: 'google',
     oauthProvider: 'google_calendar',
@@ -66,6 +68,9 @@ function adapter(over: Partial<CalendarAdapter> = {}): CalendarAdapter & { busyC
       return { busy: busyCalls.length === 1 ? [{ start: '2026-11-04T02:00:00.000Z', end: '2026-11-04T03:00:00.000Z' }] : [] };
     },
     busyCalls,
+    writes,
+    writeEvent: async (_secret, event): Promise<CalendarWriteResult> => (writes.push(`write ${event.externalId} ${event.summary} ${event.startsAt}`), { ok: true }),
+    removeEvent: async (_secret, externalId): Promise<CalendarWriteResult> => (writes.push(`remove ${externalId}`), { ok: true }),
     revoke: async (): Promise<{ revoked: true } | { revoked: false; reason: string } | { failed: string }> => ({ revoked: true }),
     ...over,
   };
@@ -259,6 +264,115 @@ describe('runCalendarSync', () => {
   });
 });
 
+describe('write-back in the sweep', () => {
+  const on = { ...fresh, writeBack: true };
+  const upsert = { eventId: 'e1', externalId: 'ext1ext1ext1', kind: 'upsert', summary: 'Tư vấn: Lan', startsAt: '2026-11-04T02:00:00.000Z', endsAt: '2026-11-04T03:00:00.000Z', hash: 'sha256:aaa' };
+  const remove = { eventId: 'e2', externalId: 'ext2ext2ext2', kind: 'delete', summary: null, startsAt: null, endsAt: null, hash: 'deleted' };
+  const records = (calls: Call[]) => calls.filter((c) => c.name === 'kernel.calendar.link.record').map((c) => ({ eventId: c.input.eventId, state: c.input.state, hash: c.input.syncedHash, error: c.input.error }));
+
+  it('writes what is new or changed and deletes what was cancelled, records each, then reads the busy times', async () => {
+    const { runtime, calls } = fakeRuntime(on, seal(SECRET), { actions: [upsert, remove] });
+    const a = adapter();
+    expect(await run(runtime, a)).toMatchObject({ outcome: 'synced' });
+    expect(a.writes).toEqual(['write ext1ext1ext1 Tư vấn: Lan 2026-11-04T02:00:00.000Z', 'remove ext2ext2ext2']);
+    expect(records(calls)).toEqual([
+      { eventId: 'e1', state: 'written', hash: 'sha256:aaa', error: undefined },
+      { eventId: 'e2', state: 'removed', hash: 'deleted', error: undefined },
+    ]);
+    // The writes and their records come before the busy read: a sweep never reads busy times holding an event it deletes.
+    const names = calls.map((c) => c.name);
+    expect(names.lastIndexOf('kernel.calendar.link.record')).toBeLessThan(names.indexOf('kernel.calendar.busy_replace'));
+  });
+
+  it('asks nothing when write-back is off', async () => {
+    const { runtime, calls } = fakeRuntime(fresh, seal(SECRET), { actions: [upsert] });
+    const a = adapter();
+    expect(await run(runtime, a)).toMatchObject({ outcome: 'synced' });
+    expect(a.writes).toEqual([]);
+    expect(calls.some((c) => c.name === 'kernel.calendar.writeback_plan')).toBe(false);
+  });
+
+  it('records an event the member deleted by hand as removed, and a failure as an error, and still reads the busy times', async () => {
+    const { runtime, calls } = fakeRuntime(on, seal(SECRET), { actions: [upsert, { ...upsert, eventId: 'e3', externalId: 'ext3ext3ext3' }] });
+    let n = 0;
+    const a = adapter({ writeEvent: async () => (++n === 1 ? { gone: true } : { failed: 'rateLimitExceeded' }) });
+    expect(await run(runtime, a)).toMatchObject({ outcome: 'synced' });
+    expect(records(calls)).toEqual([
+      { eventId: 'e1', state: 'removed', hash: 'sha256:aaa', error: undefined },
+      { eventId: 'e3', state: 'error', hash: 'sha256:aaa', error: 'rateLimitExceeded' },
+    ]);
+    expect(calls.some((c) => c.name === 'kernel.calendar.busy_replace')).toBe(true);
+  });
+
+  it('renews a refused token once and repeats the write; refused again, the connection expires', async () => {
+    const first = fakeRuntime(on, seal(SECRET), { actions: [upsert] });
+    let refusals = 1;
+    const a = adapter({ writeEvent: async () => (refusals-- > 0 ? { refused: 'invalid_token' } : { ok: true }) });
+    expect(await run(first.runtime, a)).toMatchObject({ outcome: 'synced' });
+    expect(first.calls.filter((c) => c.name === 'kernel.calendar.refresh')).toHaveLength(1);
+    expect(records(first.calls)).toEqual([{ eventId: 'e1', state: 'written', hash: 'sha256:aaa', error: undefined }]);
+    const second = fakeRuntime(on, seal(SECRET), { actions: [upsert] });
+    expect(await run(second.runtime, adapter({ writeEvent: async () => ({ refused: 'invalid_token' }) }))).toEqual({ outcome: 'expired', reason: 'invalid_token' });
+    expect(second.calls.some((c) => c.name === 'kernel.calendar.busy_replace')).toBe(false);
+  });
+
+  it('stops sending the rest of the plan when the member switches write-back off, or disconnects, while it runs', async () => {
+    for (const change of [{ writeBack: false }, { status: 'disconnecting' }]) {
+      const live = { ...on };
+      const { runtime, calls } = fakeRuntime(live, seal(SECRET), { actions: [upsert, { ...upsert, eventId: 'e3', externalId: 'ext3ext3ext3' }, remove] });
+      const a = adapter({
+        writeEvent: async (_secret, event) => {
+          Object.assign(live, change);
+          a.writes.push(`write ${event.externalId}`);
+          return { ok: true };
+        },
+      });
+      await run(runtime, a);
+      // The first call was already out; the second and third never leave.
+      expect(a.writes).toEqual(['write ext1ext1ext1']);
+      expect(records(calls)).toEqual([{ eventId: 'e1', state: 'written', hash: 'sha256:aaa', error: undefined }]);
+    }
+  });
+
+  it('leaves the rest of the batch for the next sweep on an outage or a limit, counting nothing, and still reads the busy times', async () => {
+    const { runtime, calls } = fakeRuntime(on, seal(SECRET), { actions: [upsert, { ...upsert, eventId: 'e3', externalId: 'ext3ext3ext3' }, remove] });
+    const a = adapter({
+      writeEvent: async (_secret, event) => {
+        a.writes.push(`write ${event.externalId}`);
+        return { failed: 'UNAVAILABLE', transient: true };
+      },
+    });
+    expect(await run(runtime, a)).toMatchObject({ outcome: 'synced' });
+    expect(a.writes).toEqual(['write ext1ext1ext1']);
+    expect(records(calls)).toEqual([]);
+    expect(calls.some((c) => c.name === 'kernel.calendar.busy_replace')).toBe(true);
+  });
+
+  it('reads the busy times even when the write-back step itself throws', async () => {
+    const { runtime, calls } = fakeRuntime(on, seal(SECRET), { actions: [upsert] });
+    const failing = {
+      ...runtime,
+      query: async (name: string, input: Record<string, unknown>) => {
+        if (name === 'kernel.calendar.writeback_plan') throw new Error('database blip');
+        return (runtime as unknown as { query: (n: string, i: Record<string, unknown>) => Promise<unknown> }).query(name, input);
+      },
+    } as unknown as Runtime;
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    expect(await run(failing, adapter())).toMatchObject({ outcome: 'synced' });
+    expect(calls.some((c) => c.name === 'kernel.calendar.busy_replace')).toBe(true);
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining('write-back failed'));
+    spy.mockRestore();
+  });
+
+  it('stops writing when the grant lacks the events permission, and the busy read goes on', async () => {
+    const { runtime, calls } = fakeRuntime(on, seal(SECRET), { actions: [upsert, remove] });
+    const a = adapter({ writeEvent: async () => ({ scope: true }) });
+    expect(await run(runtime, a)).toMatchObject({ outcome: 'synced' });
+    expect(a.writes).toEqual([]);
+    expect(records(calls)).toEqual([]);
+  });
+});
+
 describe('runCalendarDisconnect', () => {
   const going = { status: 'disconnecting', provider: 'google', expiresAt: null, updatedAt: '2026-11-03T05:00:00.000Z' };
   const disconnect = (rt: Runtime, a: CalendarAdapter | null, now = NOW) =>
@@ -330,6 +444,17 @@ describe('runCalendarDisconnect', () => {
     expect(await disconnect(active.runtime, adapter())).toEqual({ outcome: 'skipped', reason: 'not_disconnecting' });
     expect(active.calls.some((c) => c.kind === 'execute')).toBe(false);
     expect(await disconnect(fakeRuntime(null, seal(SECRET)).runtime, adapter())).toEqual({ outcome: 'skipped', reason: 'not_disconnecting' });
+  });
+});
+
+describe('cutOut', () => {
+  it('takes the time of written bookings out of the busy answer, also for bookings back to back, and keeps what lies outside them', () => {
+    // Two bookings back to back come back from the provider as one block: both cuts remove it.
+    expect(cutOut([{ start: 900, end: 1000 }], [{ start: 900, end: 930 }, { start: 930, end: 1000 }])).toEqual([]);
+    // A genuine event under part of a booking keeps the part outside it, on either side.
+    expect(cutOut([{ start: 885, end: 915 }, { start: 920, end: 960 }], [{ start: 900, end: 930 }])).toEqual([{ start: 885, end: 900 }, { start: 930, end: 960 }]);
+    // A cut away from the answer changes nothing; touching is not overlapping.
+    expect(cutOut([{ start: 100, end: 200 }], [{ start: 200, end: 300 }, { start: 0, end: 100 }])).toEqual([{ start: 100, end: 200 }]);
   });
 });
 
