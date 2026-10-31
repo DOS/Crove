@@ -244,6 +244,17 @@ export const zBankFeedAccountView = z.object({
 });
 export type BankFeedAccountView = z.infer<typeof zBankFeedAccountView>;
 
+// A bank feed connection as the owner's screen lists it, mapped accounts or not (#2099): `bankFeeds.accounts` shows only
+// what is mapped, so a connection just made, or one that expired with nothing mapped, would never show.
+export const zBankFeedConnectionView = z.object({
+  id: zId,
+  provider: z.string(),
+  displayName: z.string(),
+  status: z.enum(['active', 'expired', 'revoked', 'error']),
+  connectedAt: z.string(),
+});
+export type BankFeedConnectionView = z.infer<typeof zBankFeedConnectionView>;
+
 // The accounts a bank feed connection reaches, as the worker listed them with its credential (#2044 part 2b).
 export const BANK_FEED_MAX_ACCOUNTS = 50;
 export const zBankFeedListedAccount = z.object({ externalAccountId: z.string().trim().min(1).max(200), displayName: z.string().trim().min(1).max(200) });

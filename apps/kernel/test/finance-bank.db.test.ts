@@ -452,6 +452,12 @@ suite('bank statement import (#326)', () => {
     const connectionId = String(connected.body.connectionId);
     // The API sealed the login and listed nothing: the worker's sync opens it and records the accounts it reaches.
     expect((await feed('listed', owner, { connectionId })).body).toEqual([]);
+    // The connection shows in the owners' list at once, with nothing mapped yet (#2099); a member or viewer has no list
+    // of connections, and another org's owner sees none of this org's.
+    expect((await feed('connections', owner)).body).toContainEqual(expect.objectContaining({ id: connectionId, provider: 'bank_sandbox', displayName: 'Ngân hàng thử', status: 'active' }));
+    expect((await feed('connections', member)).status).toBe(403);
+    expect((await feed('connections', viewer)).status).toBe(403);
+    expect((await rpc('bankFeeds/connections', await tokenFor(outsider), {}, otherSlug, feedApp)).body.map((c: { id: string }) => c.id)).not.toContain(connectionId);
     expect(await sync(connectionId)).toMatchObject({ accounts: 2, pages: 0 });
     expect((await feed('listed', owner, { connectionId })).body.map((a: { externalAccountId: string }) => a.externalAccountId)).toEqual(['SBX-001', 'SBX-002']);
     expect((await feed('listed', viewer, { connectionId })).status).toBe(403);

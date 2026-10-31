@@ -15,6 +15,7 @@ import { ChartOfAccountsCard } from './accounts.tsx';
 import { MisaGoodsCodesCard } from './misa-goods-codes.tsx';
 import { AccountRulesCard } from './account-rules.tsx';
 import { ApprovalPresetCard, MEMBERS_CARD_ID } from './approval-preset.tsx';
+import { BankFeedsCard } from './bank-feeds.tsx';
 import { LegalEntitiesCard } from './legal-entities.tsx';
 import { MemberRolesRow } from './member-roles.tsx';
 import { WorkingHoursCard } from './working-hours.tsx';
@@ -23,6 +24,7 @@ import { MemberPrivateNotes, usePrivateNotes } from '../components/notes-panel.t
 import { CardSkeleton, ErrorText, FieldError, fieldControl, fieldHintId, focusFirstInvalid, isEmailAddress, PageHeader, PageSkeleton, RowsSkeleton, Spinner, useFieldErrors } from '../components/ui.tsx';
 import { apiFetch, errorMessage, isStepUpRequired, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
+import { showsBankFeeds } from '../lib/bank-feeds.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { ROLES, roleChangeConfirmation, roleChangeKind, type Role, type RoleChangeKind } from '../lib/members.ts';
 import { exportFileName, exportPhase, formatBytes, offboardErrorMessage, slugConfirmed } from '../lib/offboarding.ts';
@@ -1062,6 +1064,7 @@ export function SettingsPage() {
           )
         }
       />
+      {/* Sibling cards keyed by the org carry a key of their own: with one key shared, React loses a card when a slot before it renders nothing, and the old one stays in the page next to its new copy. */}
       <div className="grid gap-6 lg:grid-cols-2">
         <Card className="block p-4">
           <p className="text-sm font-medium text-muted-foreground">{t('org')}</p>
@@ -1076,15 +1079,15 @@ export function SettingsPage() {
             </div>
             {/* Keyed by org too: a value typed in one org must not stay in the form when the page shows another. */}
             {getConfig().modules.includes('finance') && (
-              <TaxCodeField key={`${org.data?.slug}:${org.data?.taxCode ?? ''}`} taxCode={org.data?.taxCode ?? null} canManage={canManage} />
+              <TaxCodeField key={`tax-code:${org.data?.slug}:${org.data?.taxCode ?? ''}`} taxCode={org.data?.taxCode ?? null} canManage={canManage} />
             )}
             {getConfig().modules.includes('finance') && <VatFilingPeriodField period={org.data?.vatFilingPeriod ?? null} canManage={canManage} />}
-            {getConfig().modules.includes('finance') && <TaxCalendarField key={org.data?.slug} canManage={canManage} />}
-            <AddressField key={`${org.data?.slug}:${org.data?.address ?? ''}`} address={org.data?.address ?? null} canManage={canManage} />
+            {getConfig().modules.includes('finance') && <TaxCalendarField key={`tax-calendar:${org.data?.slug}`} canManage={canManage} />}
+            <AddressField key={`address:${org.data?.slug}:${org.data?.address ?? ''}`} address={org.data?.address ?? null} canManage={canManage} />
             {getConfig().modules.includes('finance') && (
-              <ContactEmailField key={`${org.data?.slug}:${org.data?.contactEmail ?? ''}`} email={org.data?.contactEmail ?? null} canManage={canManage} />
+              <ContactEmailField key={`contact-email:${org.data?.slug}:${org.data?.contactEmail ?? ''}`} email={org.data?.contactEmail ?? null} canManage={canManage} />
             )}
-            {getConfig().modules.includes('finance') && <ProposalRemindersField key={org.data?.slug} canManage={canManage} />}
+            {getConfig().modules.includes('finance') && <ProposalRemindersField key={`proposal-reminders:${org.data?.slug}`} canManage={canManage} />}
             <div>
               <dt className="text-subtle-foreground">{t('inboundAddress')}</dt>
               <dd className="break-all font-mono text-foreground">{org.data?.inboundAddress ?? t('inboundOff')}</dd>
@@ -1152,22 +1155,24 @@ export function SettingsPage() {
         </Card>
         {/* Who approves the ledger's proposals (#1425), with the finance module; every member sees it, owners switch it. */}
         {getConfig().modules.includes('finance') && org.data && (
-          <ApprovalPresetCard key={`${org.data.slug}:${org.data.approvalPreset}`} preset={org.data.approvalPreset} isOwner={isOwner} />
+          <ApprovalPresetCard key={`approval-preset:${org.data.slug}:${org.data.approvalPreset}`} preset={org.data.approvalPreset} isOwner={isOwner} />
         )}
         {/* The member's own working hours and days off (#1313). */}
-        {org.data && <WorkingHoursCard key={org.data.slug} canEdit={org.data.role !== 'viewer'} />}
+        {org.data && <WorkingHoursCard key={`working-hours:${org.data.slug}`} canEdit={org.data.role !== 'viewer'} />}
         {/* The booking pages' event types (#1314), with the crm module. */}
         {getConfig().modules.includes('crm') && org.data && me.data && (
-          <EventTypesCard key={org.data.slug} members={org.data.members} me={me.data.userId} role={org.data.role} />
+          <EventTypesCard key={`event-types:${org.data.slug}`} members={org.data.members} me={me.data.userId} role={org.data.role} />
         )}
         {/* The legal entities the books are kept for (#1278), with the finance module; owners and admins only. */}
-        {getConfig().modules.includes('finance') && canManage && <LegalEntitiesCard key={org.data?.slug} />}
+        {getConfig().modules.includes('finance') && canManage && <LegalEntitiesCard key={`legal-entities:${org.data?.slug}`} />}
+        {/* Bank feeds (ADR-0039, #2099): with the finance module, and only where the deployment offers one. */}
+        {showsBankFeeds(getConfig()) && org.data && <BankFeedsCard key={`bank-feeds:${org.data.slug}`} role={org.data.role} />}
         {/* The chart of accounts belongs to the finance module (#319). */}
         {getConfig().modules.includes('finance') && <ChartOfAccountsCard canManage={canManage} />}
         {/* The MISA codes of stock purchases (#1398), for the goods purchase export. */}
-        {getConfig().modules.includes('finance') && <MisaGoodsCodesCard key={org.data?.slug} canManage={canManage} />}
+        {getConfig().modules.includes('finance') && <MisaGoodsCodesCard key={`misa-goods:${org.data?.slug}`} canManage={canManage} />}
         {/* The account rules learned from approvals, and keyword rules (#1399). */}
-        {getConfig().modules.includes('finance') && org.data && <AccountRulesCard key={org.data.slug} canManage={canManage} />}
+        {getConfig().modules.includes('finance') && org.data && <AccountRulesCard key={`account-rules:${org.data.slug}`} canManage={canManage} />}
         <TwoFactorCard />
         {me.data && <MySessions userId={me.data.userId} />}
         {isOwner && org.data && <Offboarding name={org.data.name} slug={org.data.slug} />}

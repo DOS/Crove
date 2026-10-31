@@ -8,6 +8,7 @@
 //   an existing mapping at another bank account of the same entity.
 // - finance.bank_feed.unmap: removes a mapping; the lines it brought in stay, as imported ones do.
 // - finance.bank_feed.accounts: the mappings the caller's entities hold, with their connection's name and status.
+// - finance.bank_feed.connections: the live connections, mapped or not, for the Settings card.
 // - finance.bank_feed.listed: the accounts a connection reaches, as the worker last listed them.
 // The worker's sync (#2044 part 2b, apps/kernel/src/bank-feed-sync.ts) runs two system commands:
 // - finance.bank_feed.record_accounts: the accounts the provider lists for a connection, replacing the last listing;
@@ -16,7 +17,7 @@
 import { sql } from 'kysely';
 import { z } from 'zod';
 import type { MemberRole } from '@crove/db';
-import { isBankFeedProviderId, zBankFeedMap, zBankFeedRecordAccounts, zBankFeedRecordPull, zId, type BankFeedAccountView, type BankFeedListedAccount, type BankImportResult } from '@crove/kernel-contract';
+import { isBankFeedProviderId, zBankFeedMap, zBankFeedRecordAccounts, zBankFeedRecordPull, zId, type BankFeedAccountView, type BankFeedConnectionView, type BankFeedListedAccount, type BankImportResult } from '@crove/kernel-contract';
 import { DomainError, defineCommand, defineQuery } from '@crove/kernel-runtime';
 import { bankAccount, ingestFeedLines } from './bank.ts';
 import { resolveLegalEntity } from './legal-entity.ts';
@@ -144,6 +145,28 @@ export const bankFeedAccounts = defineQuery({
   },
 });
 
+// The org's live bank feed connections, whether an account of theirs is mapped or not, newest first: the Settings card
+// lists them to map from and to say which one expired (#2099). The managers' alone, as the listing is org-wide.
+export const bankFeedConnections = defineQuery({
+  name: 'finance.bank_feed.connections',
+  input: z.object({}),
+  access: MANAGERS,
+  handler: async (ctx): Promise<BankFeedConnectionView[]> => {
+    const rows = await ctx.trx
+      .selectFrom('crove_kernel.channel_connection')
+      .select(['id', 'provider', 'display_name', 'status', 'connected_at'])
+      .where('org_id', '=', ctx.orgId)
+      .where('provider', 'like', 'bank\\_%')
+      .where('status', '<>', 'revoked')
+      .orderBy('connected_at', 'desc')
+      .limit(500)
+      .execute();
+    return rows
+      .filter((r) => isBankFeedProviderId(r.provider))
+      .map((r) => ({ id: r.id, provider: r.provider, displayName: r.display_name, status: r.status as BankFeedConnectionView['status'], connectedAt: new Date(r.connected_at).toISOString() }));
+  },
+});
+
 // The managers' alone: the listing is org-wide (no entity), and only they map an account.
 export const bankFeedListed = defineQuery({
   name: 'finance.bank_feed.listed',
@@ -268,4 +291,4 @@ export const bankFeedRecordPull = defineCommand({
 });
 
 export const bankFeedCommands = [bankFeedMap, bankFeedUnmap, bankFeedRecordAccounts, bankFeedRecordPull];
-export const bankFeedQueries = [bankFeedAccounts, bankFeedListed, bankFeedPullDue, bankFeedConnection];
+export const bankFeedQueries = [bankFeedAccounts, bankFeedConnections, bankFeedListed, bankFeedPullDue, bankFeedConnection];
