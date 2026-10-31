@@ -163,7 +163,8 @@ export const calendarDisconnect = defineCommand({
   input: z.strictObject({ connectionId: zId }),
   risk: 'R2',
   sideEffect: 'external',
-  access: EDITORS,
+  // Every role, a viewer included: a member demoted after connecting can still take their own calendar away.
+  access: ['owner', 'admin', 'member', 'viewer'],
   target: (input) => ({ type: 'kernel.calendar_connection', id: input.connectionId }),
   handler: async (ctx, input) => {
     const userId = requireUser(ctx);
@@ -320,6 +321,8 @@ export const calendarBusyReplace = defineCommand({
     const have = new Set(existing.map((e) => e.external_id));
     const stale = existing.filter((e) => e.external_id === null || !wanted.has(e.external_id)).map((e) => e.id);
     if (stale.length > 0) await ctx.trx.deleteFrom('crove_kernel.calendar_event').where('org_id', '=', ctx.orgId).where('id', 'in', stale).execute();
+    // Blocks that ended before the window are history nobody reads: they go with the sync that moved past them.
+    await ctx.trx.deleteFrom('crove_kernel.calendar_event').where('org_id', '=', ctx.orgId).where('source_id', '=', input.connectionId).where('ends_at', '<=', new Date(from)).execute();
     const fresh = [...wanted.entries()].filter(([key]) => !have.has(key));
     for (let i = 0; i < fresh.length; i += 500) {
       await ctx.trx

@@ -1384,12 +1384,23 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   // Outside calendars (#2123, #1374): the busy times of every active connection are read every 15 minutes, a sweep at a
   // time across worker processes. The adapters are the deployment's; with none on, nothing runs.
   const calendars = channels?.calendars ?? {};
+  // A session advisory lock on one connection of the worker's pool, so two worker processes never sweep at once.
+  const calendarExclusive = <T>(run: () => Promise<T>) =>
+    deps.workerDb.connection().execute(async (db) => {
+      const { rows } = await sql<{ locked: boolean }>`SELECT pg_catalog.pg_try_advisory_lock(pg_catalog.hashtextextended('crove.calendar-sync', 0)) AS locked`.execute(db);
+      if (!rows[0]?.locked) return { ran: false as const };
+      try {
+        return { ran: true as const, value: await run() };
+      } finally {
+        await sql`SELECT pg_catalog.pg_advisory_unlock(pg_catalog.hashtextextended('crove.calendar-sync', 0))`.execute(db);
+      }
+    });
   let calendarSyncing = false;
   const calendarSweep = async () => {
     if (calendarSyncing || !channels) return;
     calendarSyncing = true;
     try {
-      const done = await syncCalendars({ runtime: deps.runtime, broker: channels.broker, workerDb: deps.workerDb, adapters: calendars });
+      const done = await syncCalendars({ runtime: deps.runtime, broker: channels.broker, workerDb: deps.workerDb, adapters: calendars, exclusive: calendarExclusive });
       if (done.synced + done.expired + done.retry > 0) console.log(`[calendar-sync] synced ${done.synced}, expired ${done.expired}, to retry ${done.retry}`);
     } catch (error) {
       console.error('[calendar-sync] sweep', error instanceof Error ? error.name : typeof error);

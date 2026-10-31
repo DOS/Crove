@@ -115,15 +115,61 @@ describe('runCalendarSync', () => {
     expect(onBusy.calls.some((c) => c.name === 'kernel.calendar.busy_replace')).toBe(false);
   });
 
-  it('expires only the version its own token belongs to: after a renewal, the renewed one', async () => {
+  it('expires only the version its own token belongs to: the renewed one after a renewal', async () => {
     const soon = { ...fresh, expiresAt: null };
     const { runtime, calls } = fakeRuntime(soon, seal(SECRET));
     expect(await run(runtime, adapter({ busy: async () => ({ refused: 'invalid_token' }) }))).toEqual({ outcome: 'expired', reason: 'invalid_token' });
     // The refresh stored a new version; the refusal names that one, so a reconnect since leaves the new connection alone.
     expect(calls.at(-1)).toMatchObject({ name: 'kernel.calendar.mark_failed', input: { status: 'expired', ifVersion: '2026-11-03T05:30:00.000Z' } });
-    const plain = fakeRuntime(fresh, seal(SECRET));
-    await run(plain.runtime, adapter({ busy: async () => ({ refused: 'invalid_token' }) }));
-    expect(plain.calls.at(-1)).toMatchObject({ input: { ifVersion: fresh.updatedAt } });
+    // Only one renewal: a token renewed at the start of the sync is not renewed again after a refusal.
+    expect(calls.filter((c) => c.name === 'kernel.calendar.refresh')).toHaveLength(1);
+  });
+
+  it('renews a token once when Google refuses it mid-way, and syncs with the renewed one', async () => {
+    const { runtime, calls } = fakeRuntime(fresh, seal(SECRET));
+    let first = true;
+    const a = adapter({
+      busy: async (secret) => {
+        if (first) {
+          first = false;
+          return { refused: 'invalid_token' };
+        }
+        return JSON.parse(secret).accessToken === 'a-2' ? { busy: [] } : { refused: 'still the old token' };
+      },
+    });
+    expect(await run(runtime, a)).toEqual({ outcome: 'synced', added: 2, removed: 1 });
+    expect(calls.filter((c) => c.name === 'kernel.calendar.refresh')).toHaveLength(1);
+    expect(calls.some((c) => c.name === 'kernel.calendar.mark_failed')).toBe(false);
+  });
+
+  it('expires the connection when the renewal itself is refused after a refusal', async () => {
+    const { runtime, calls } = fakeRuntime(fresh, seal(SECRET));
+    const a = adapter({ busy: async () => ({ refused: 'invalid_token' }), refresh: async () => ({ refused: 'invalid_grant' }) });
+    expect(await run(runtime, a)).toEqual({ outcome: 'expired', reason: 'invalid_grant' });
+    expect(calls.at(-1)).toMatchObject({ name: 'kernel.calendar.mark_failed', input: { status: 'expired', ifVersion: fresh.updatedAt } });
+  });
+
+  it('merges the answer before storing it and notes an answer too large to store', async () => {
+    const day = (n: number, h: number) => new Date(Date.parse('2026-11-04T00:00:00Z') + n * 86_400_000 + h * 3_600_000).toISOString();
+    const { runtime, calls } = fakeRuntime(fresh, seal(SECRET));
+    await run(
+      runtime,
+      adapter({
+        busy: async () => ({
+          busy: [
+            { start: day(0, 2), end: day(0, 4) },
+            { start: day(0, 3), end: day(0, 5) },
+          ],
+        }),
+      }),
+    );
+    const replace = calls.find((c) => c.name === 'kernel.calendar.busy_replace');
+    expect(replace?.input.busy).toHaveLength(1);
+    // Thousands of separate intervals: more than a command takes, so the old blocks stay and the reason is noted.
+    const many = fakeRuntime(fresh, seal(SECRET));
+    const huge = Array.from({ length: 20_001 }, (_, i) => ({ start: new Date(Date.parse('2026-11-04T00:00:00Z') + i * 1_200_000).toISOString(), end: new Date(Date.parse('2026-11-04T00:00:00Z') + i * 1_200_000 + 600_000).toISOString() }));
+    expect(await run(many.runtime, adapter({ busy: async (_s, f) => ({ busy: f.getTime() === Date.parse('2026-11-03T05:00:00Z') ? huge : [] }) }))).toEqual({ outcome: 'retry', reason: 'too_many_busy_intervals' });
+    expect(many.calls.some((c) => c.name === 'kernel.calendar.busy_replace')).toBe(false);
   });
 
   it('notes a passing failure and leaves the connection active', async () => {

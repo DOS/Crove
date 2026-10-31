@@ -4,19 +4,18 @@
 // run out, asks the provider for the busy times of the next year and replaces the connection's busy blocks with them
 // (kernel.calendar.busy_replace). Only start and end instants cross: no title, no attendee.
 // A provider that refuses the grant (the member revoked the app) expires the connection, which drops the dead token;
-// the member reconnects. Any other failure leaves the connection active with the reason noted, and the next sweep,
-// 15 minutes later, tries again. The blocks of a failing connection stay: a stale block withholds a slot, it never
-// frees one that may be busy.
+// the member reconnects. A refusal of the access token alone is first answered by renewing it once. Any other failure
+// leaves the connection active with the reason noted, and the next sweep, 15 minutes later, tries again. The blocks of
+// a failing connection stay: a stale block withholds a slot, it never frees one that may be busy.
 import { CALENDAR_SYNC_DAYS, calendarBinding, type CalendarProvider } from '@crove/kernel-contract';
 import type { CalendarAdapter } from '@crove/channel';
 import { sql } from 'kysely';
 import type { Db } from '@crove/db';
 import { CredentialError, DomainError, type CredentialBroker, type Runtime, type SystemActor } from '@crove/kernel-runtime';
-import type { SealedCalendarCredential } from '@crove/kernel';
+import { busyPieces, type SealedCalendarCredential } from '@crove/kernel';
 
 const ACTOR: SystemActor = { type: 'system', component: 'kernel.calendar.sync' };
 export const CALENDAR_SYNC_SWEEP_MS = 15 * 60_000;
-const LOCK_KEY = 'crove.calendar-sync';
 // Renew an access token that runs out within this long: a sync runs every 15 minutes, so one that is about to expire
 // is renewed before the call and never goes out with a dead token.
 const REFRESH_AHEAD_MS = 5 * 60_000;
@@ -24,6 +23,8 @@ const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
 // One free/busy request spans at most this many days.
 const CHUNK_DAYS = 100;
+// More merged busy intervals than the kernel command takes in one answer: the sync notes it and keeps the old blocks.
+const MAX_BUSY = 20_000;
 
 export interface CalendarSyncJob {
   orgId: string;
@@ -88,7 +89,9 @@ export async function runCalendarSync(deps: CalendarSyncDeps, job: CalendarSyncJ
     await deps.runtime.execute('kernel.calendar.mark_failed', { connectionId: job.connectionId, status: 'retry', reason: `sync failed (${reason})`.slice(0, 200) }, options);
     return { outcome: 'retry', reason };
   };
-  if (state.expiresAt === null || Date.parse(state.expiresAt) - now().getTime() < REFRESH_AHEAD_MS) {
+  let renewed = false;
+  // Renews the access token and seals the new pair; an outcome when the sync must stop there.
+  const renew = async (): Promise<CalendarSyncOutcome | null> => {
     const result = await adapter.refresh(secret);
     if ('refused' in result) return expire(result.refused);
     if ('failed' in result) return retry(result.failed);
@@ -109,21 +112,42 @@ export async function runCalendarSync(deps: CalendarSyncDeps, job: CalendarSyncJ
       }
     }
     secret = result.secret;
+    renewed = true;
+    return null;
+  };
+  if (state.expiresAt === null || Date.parse(state.expiresAt) - now().getTime() < REFRESH_AHEAD_MS) {
+    const stopped = await renew();
+    if (stopped) return stopped;
   }
   // From the start of the hour, so a busy interval that began earlier keeps one stable key from sync to sync.
   const from = new Date(Math.floor(now().getTime() / HOUR_MS) * HOUR_MS);
   const to = new Date(from.getTime() + CALENDAR_SYNC_DAYS * DAY_MS);
   // The farthest an event type may book ahead is a year: the whole of it is read, in pieces a request can bear.
-  const busy: Array<{ start: string; end: string }> = [];
-  for (let start = from.getTime(); start < to.getTime(); start += CHUNK_DAYS * DAY_MS) {
-    const answer = await adapter.busy(secret, new Date(start), new Date(Math.min(to.getTime(), start + CHUNK_DAYS * DAY_MS)));
-    if ('refused' in answer) return expire(answer.refused);
-    if ('failed' in answer) return retry(answer.failed);
-    busy.push(...answer.busy);
+  const readAll = async (): Promise<{ busy: Array<{ start: number; end: number }> } | { refused: string } | { failed: string }> => {
+    const busy: Array<{ start: number; end: number }> = [];
+    for (let start = from.getTime(); start < to.getTime(); start += CHUNK_DAYS * DAY_MS) {
+      const answer = await adapter.busy(secret, new Date(start), new Date(Math.min(to.getTime(), start + CHUNK_DAYS * DAY_MS)));
+      if ('refused' in answer || 'failed' in answer) return answer;
+      for (const b of answer.busy) busy.push({ start: Date.parse(b.start), end: Date.parse(b.end) });
+    }
+    return { busy };
+  };
+  let answer = await readAll();
+  // One refusal of the access token (a revoked early, clock skew) is not the end of the grant: renew it and ask again.
+  // Only a refusal of the renewed token, or of the renewal itself, expires the connection.
+  if ('refused' in answer && !renewed) {
+    const stopped = await renew();
+    if (stopped) return stopped;
+    answer = await readAll();
   }
+  if ('refused' in answer) return expire(answer.refused);
+  if ('failed' in answer) return retry(answer.failed);
+  // Overlapping and touching intervals are one block, which keeps the answer small.
+  const merged = busyPieces(answer.busy, from.getTime(), to.getTime());
+  if (merged.length > MAX_BUSY) return retry('too_many_busy_intervals');
   const done = await deps.runtime.execute<{ replaced: boolean; added: number; removed: number }>(
     'kernel.calendar.busy_replace',
-    { connectionId: job.connectionId, from: from.toISOString(), to: to.toISOString(), busy },
+    { connectionId: job.connectionId, from: from.toISOString(), to: to.toISOString(), busy: merged.map((b) => ({ start: new Date(b.start).toISOString(), end: new Date(b.end).toISOString() })) },
     options,
   );
   return done.replaced ? { outcome: 'synced', added: done.added, removed: done.removed } : { outcome: 'skipped', reason: 'not_active' };
@@ -134,6 +158,9 @@ export interface CalendarSweepDeps {
   broker: CredentialBroker;
   workerDb: Db;
   adapters: CalendarSyncDeps['adapters'];
+  // Runs the sweep while no other worker process does (the worker holds the connection the lock lives on); { ran: false }
+  // when another one has it.
+  exclusive: <T>(run: () => Promise<T>) => Promise<{ ran: true; value: T } | { ran: false }>;
 }
 
 export interface CalendarSweepOutcome {
@@ -145,36 +172,30 @@ export interface CalendarSweepOutcome {
   busy: boolean;
 }
 
-// A sweep over every active connection, one at a time across worker processes (a session advisory lock): a connection
-// that fails ends only its own sync, and the rest go on.
+// A sweep over every active connection, one at a time across worker processes: a connection that fails ends only its
+// own sync, and the rest go on.
 export async function syncCalendars(deps: CalendarSweepDeps): Promise<CalendarSweepOutcome> {
   const outcome: CalendarSweepOutcome = { synced: 0, expired: 0, retry: 0, skipped: 0, busy: false };
   const providers = new Set(Object.values(deps.adapters).map((a) => a?.provider));
   if (providers.size === 0) return outcome;
-  return deps.workerDb.connection().execute(async (db) => {
-    const { rows } = await sql<{ locked: boolean }>`SELECT pg_catalog.pg_try_advisory_lock(pg_catalog.hashtextextended(${LOCK_KEY}, 0)) AS locked`.execute(db);
-    if (!rows[0]?.locked) return { ...outcome, busy: true };
-    try {
-      let after: { orgId: string; connectionId: string } | null = null;
-      for (;;) {
-        const page = await calendarSyncDue(deps.workerDb, after);
-        for (const row of page.filter((r) => providers.has(r.provider as CalendarAdapter['provider']))) {
-          const done = await runCalendarSync(deps, { orgId: row.orgId, connectionId: row.connectionId }).catch((error: unknown) => {
-            // The connection's id and the error's name only: never a token or an interval.
-            console.error(`[calendar-sync] connection ${row.connectionId.slice(0, 8)}`, error instanceof Error ? error.name : typeof error);
-            return null;
-          });
-          if (done === null) outcome.retry += 1;
-          else if (done.outcome === 'synced') outcome.synced += 1;
-          else outcome[done.outcome] += 1;
-        }
-        const last = page.at(-1);
-        if (!last || page.length < CALENDAR_SYNC_PAGE) break;
-        after = { orgId: last.orgId, connectionId: last.connectionId };
+  const ran = await deps.exclusive(async () => {
+    let after: { orgId: string; connectionId: string } | null = null;
+    for (;;) {
+      const page = await calendarSyncDue(deps.workerDb, after);
+      for (const row of page.filter((r) => providers.has(r.provider as CalendarAdapter['provider']))) {
+        const done = await runCalendarSync(deps, { orgId: row.orgId, connectionId: row.connectionId }).catch((error: unknown) => {
+          // The connection's id and the error's name only: never a token or an interval.
+          console.error(`[calendar-sync] connection ${row.connectionId.slice(0, 8)}`, error instanceof Error ? error.name : typeof error);
+          return null;
+        });
+        if (done === null) outcome.retry += 1;
+        else if (done.outcome === 'synced') outcome.synced += 1;
+        else outcome[done.outcome] += 1;
       }
-      return outcome;
-    } finally {
-      await sql`SELECT pg_catalog.pg_advisory_unlock(pg_catalog.hashtextextended(${LOCK_KEY}, 0))`.execute(db);
+      const last = page.at(-1);
+      if (!last || page.length < CALENDAR_SYNC_PAGE) break;
+      after = { orgId: last.orgId, connectionId: last.connectionId };
     }
   });
+  return ran.ran ? outcome : { ...outcome, busy: true };
 }

@@ -61,14 +61,15 @@ CREATE POLICY own_calendar_connection ON crove_kernel.calendar_connection AS RES
 
 CREATE TABLE IF NOT EXISTS crove_kernel.calendar_credential (
   org_id uuid NOT NULL,
-  connection_id uuid NOT NULL,
+  -- The id of the connection it seals: one credential per connection.
+  id uuid NOT NULL,
   -- Which credential key sealed the envelope, for rotation.
   key_id text NOT NULL CHECK (key_id ~ '^[A-Za-z0-9_.-]{1,64}$'),
   envelope bytea NOT NULL CHECK (pg_catalog.octet_length(envelope) BETWEEN 1 AND 65536),
   created_at timestamptz NOT NULL DEFAULT pg_catalog.now(),
   sealed_at timestamptz NOT NULL DEFAULT pg_catalog.now(),
-  PRIMARY KEY (org_id, connection_id),
-  CONSTRAINT calendar_credential_connection_fk FOREIGN KEY (org_id, connection_id)
+  PRIMARY KEY (org_id, id),
+  CONSTRAINT calendar_credential_connection_fk FOREIGN KEY (org_id, id)
     REFERENCES crove_kernel.calendar_connection (org_id, id) ON DELETE CASCADE
 );
 ALTER TABLE crove_kernel.calendar_credential ENABLE ROW LEVEL SECURITY;
@@ -104,9 +105,9 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'CALENDAR_FORBIDDEN' USING ERRCODE = '42501';
   END IF;
-  INSERT INTO crove_kernel.calendar_credential AS k (org_id, connection_id, key_id, envelope)
+  INSERT INTO crove_kernel.calendar_credential AS k (org_id, id, key_id, envelope)
   VALUES (v_org, p_connection_id, p_key_id, p_envelope)
-  ON CONFLICT (org_id, connection_id) DO UPDATE
+  ON CONFLICT (org_id, id) DO UPDATE
     SET key_id = EXCLUDED.key_id, envelope = EXCLUDED.envelope, sealed_at = pg_catalog.now();
 END $$;
 
@@ -139,7 +140,7 @@ BEGIN
   END IF;
   RETURN QUERY
     SELECT k.key_id, k.envelope, v_connection.provider, v_connection.external_account
-    FROM crove_kernel.calendar_credential k WHERE k.org_id = v_org AND k.connection_id = p_connection_id;
+    FROM crove_kernel.calendar_credential k WHERE k.org_id = v_org AND k.id = p_connection_id;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'CALENDAR_NOT_FOUND' USING ERRCODE = 'P0002';
   END IF;
@@ -165,7 +166,7 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'CALENDAR_FORBIDDEN' USING ERRCODE = '42501';
   END IF;
-  DELETE FROM crove_kernel.calendar_credential k WHERE k.org_id = v_org AND k.connection_id = p_connection_id;
+  DELETE FROM crove_kernel.calendar_credential k WHERE k.org_id = v_org AND k.id = p_connection_id;
 END $$;
 
 REVOKE ALL ON FUNCTION crove_kernel.calendar_credential_put(uuid, text, bytea) FROM PUBLIC, crove_tenant, crove_app, crove_worker;

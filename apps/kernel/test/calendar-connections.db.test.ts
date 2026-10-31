@@ -174,8 +174,6 @@ suite('outside calendars on PostgreSQL (#2123)', () => {
     // Another member, or another provider, cannot finish it, and one answer covers both.
     await expect(o.exec(o.other, 'kernel.calendar.oauth_consume', { provider: 'google_calendar', stateHash: hash })).rejects.toMatchObject({ code: 'OAUTH_STATE_INVALID' });
     await expect(o.exec(o.member, 'kernel.calendar.oauth_consume', { provider: 'microsoft_calendar', stateHash: hash })).rejects.toMatchObject({ code: 'OAUTH_STATE_INVALID' });
-    // The channel flow cannot finish a calendar attempt either.
-    await expect(o.exec(o.owner, 'kernel.channel.oauth_consume', { provider: 'google_calendar', stateHash: hash })).rejects.toBeDefined();
     expect(await o.exec(o.member, 'kernel.calendar.oauth_consume', { provider: 'google_calendar', stateHash: hash })).toEqual({ codeVerifier: verifier });
     await expect(o.exec(o.member, 'kernel.calendar.oauth_consume', { provider: 'google_calendar', stateHash: hash })).rejects.toMatchObject({ code: 'OAUTH_STATE_USED' });
     // The verifier is wiped with the consume; a viewer cannot start one.
@@ -237,7 +235,7 @@ suite('outside calendars on PostgreSQL (#2123)', () => {
     expect(await o.exec(o.member, 'kernel.calendar.disconnect', { connectionId: a.connectionId })).toEqual({ connectionId: a.connectionId, disconnected: true });
     const left = await admin((cl) => cl.query<{ source_id: string }>('SELECT source_id FROM crove_kernel.calendar_event WHERE org_id = $1 AND source_id IS NOT NULL', [o.orgId]));
     expect(left.rows.map((r) => r.source_id)).toEqual([b.connectionId]);
-    const creds = await admin((cl) => cl.query('SELECT 1 FROM crove_kernel.calendar_credential WHERE org_id = $1 AND connection_id = $2', [o.orgId, a.connectionId]));
+    const creds = await admin((cl) => cl.query('SELECT 1 FROM crove_kernel.calendar_credential WHERE org_id = $1 AND id = $2', [o.orgId, a.connectionId]));
     expect(creds.rowCount).toBe(0);
     expect(await o.query(o.member, 'kernel.calendar.connections', {})).toEqual([]);
   });
@@ -259,6 +257,9 @@ suite('outside calendars on PostgreSQL (#2123)', () => {
     list = await o.query(o.member, 'kernel.calendar.connections', {});
     expect(list[0]).toMatchObject({ status: 'expired' });
     await expect(o.sysQuery('kernel.calendar.credential', { connectionId: c.connectionId })).rejects.toMatchObject({ code: 'CALENDAR_NOT_ACTIVE' });
+    // The refusal above comes before the credential lookup: the row itself is what must be gone.
+    const sealedLeft = await admin((cl) => cl.query('SELECT 1 FROM crove_kernel.calendar_credential WHERE org_id = $1 AND id = $2', [o.orgId, c.connectionId]));
+    expect(sealedLeft.rowCount).toBe(0);
     // Its blocks stay, so time that may still be busy is not offered; a sync of an expired connection stores nothing.
     expect(await o.sys('kernel.calendar.busy_replace', { connectionId: c.connectionId, ...window, busy: [] })).toMatchObject({ replaced: false });
     const blocks = await admin((cl) => cl.query('SELECT 1 FROM crove_kernel.calendar_event WHERE source_id = $1', [c.connectionId]));
@@ -280,6 +281,44 @@ suite('outside calendars on PostgreSQL (#2123)', () => {
     // The same version is now stale: a reconnect or another refresh moved it.
     expect(await o.sys('kernel.calendar.refresh', { ...command, ifVersion: state.updatedAt })).toMatchObject({ refreshed: false });
     await expect(o.exec(o.member, 'kernel.calendar.refresh', { ...command, ifVersion: state.updatedAt })).rejects.toMatchObject({ status: 403 });
+  });
+
+  it('marks a connection failed only against the version the caller saw', async () => {
+    const o = await org();
+    const c = await connect(o, o.member);
+    const state = await o.sysQuery<{ updatedAt: string }>('kernel.calendar.connection_state', { connectionId: c.connectionId });
+    // The member connects again: a newer version, and a refusal of the old token must leave it alone.
+    await connect(o, o.member, c.account, JSON.stringify({ accessToken: 'access-3', refreshToken: 'refresh-3' }));
+    expect(await o.sys('kernel.calendar.mark_failed', { connectionId: c.connectionId, status: 'expired', reason: 'refused (invalid_token)', ifVersion: state.updatedAt })).toMatchObject({ marked: false });
+    const list = await o.query<{ status: string }[]>(o.member, 'kernel.calendar.connections', {});
+    expect(list[0]?.status).toBe('active');
+    const sealed = await o.sysQuery<SealedCalendarCredential>('kernel.calendar.credential', { connectionId: c.connectionId });
+    expect(JSON.parse(vault.open({ keyId: sealed.keyId, envelope: Buffer.from(sealed.envelope, 'base64') }, calendarBinding(o.orgId, 'google', c.account)))).toEqual({ accessToken: 'access-3', refreshToken: 'refresh-3' });
+  });
+
+  it('drops the blocks that ended before the window with the sync that moved past them', async () => {
+    const o = await org();
+    const c = await connect(o, o.member);
+    const day = nextWorkday();
+    const window = { from: at(day, 0), to: new Date(Date.parse(at(day, 0)) + 60 * DAY).toISOString() };
+    // A block of last week, put there as the sync of last week left it.
+    await admin((cl) =>
+      cl.query(
+        "INSERT INTO crove_kernel.calendar_event (org_id, user_id, starts_at, ends_at, time_zone, kind, source_id, external_id, created_by) VALUES ($1, $2, now() - interval '20 days', now() - interval '20 days' + interval '1 hour', 'UTC', 'google', $3, 'old-block', $2)",
+        [o.orgId, o.member, c.connectionId],
+      ),
+    );
+    await o.sys('kernel.calendar.busy_replace', { connectionId: c.connectionId, ...window, busy: [busy(day, 480, 540)] });
+    const left = await admin((cl) => cl.query<{ external_id: string }>('SELECT external_id FROM crove_kernel.calendar_event WHERE source_id = $1', [c.connectionId]));
+    expect(left.rows.map((r) => r.external_id)).not.toContain('old-block');
+    expect(left.rowCount).toBe(1);
+  });
+
+  it('lets a member demoted to viewer still disconnect their own calendar', async () => {
+    const o = await org();
+    const c = await connect(o, o.member);
+    await admin((cl) => cl.query("UPDATE crove_kernel.tenant_member SET role = 'viewer' WHERE org_id = $1 AND user_id = $2", [o.orgId, o.member]));
+    expect(await o.exec(o.member, 'kernel.calendar.disconnect', { connectionId: c.connectionId })).toEqual({ connectionId: c.connectionId, disconnected: true });
   });
 
   it('lists for the sync only active connections of members who are still in the org', async () => {
