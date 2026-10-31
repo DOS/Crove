@@ -67,7 +67,7 @@ import { socialAgentPrograms, socialCommands, socialManifest, socialOverviewCont
 import { crmAgentPrograms, crmCommands, crmManifest, crmQueries } from '@crove/mod-crm';
 import { notesCommands, notesManifest, notesQueries } from '@crove/mod-notes';
 import { createAuthenticator, type Authenticate } from './auth.ts';
-import { AVAILABLE_MODULES, assertExportKey, usageLimits, type Config, type ModuleId } from './config.ts';
+import { AVAILABLE_MODULES, assertExportKey, assertSplitRoles, usageLimits, type Config, type ModuleId } from './config.ts';
 import { createCredentialBroker, noCredentialBroker } from './credentials.ts';
 import { rebindExports as rebindOrgExports } from './export-rebind.ts';
 import { numberReseedCommand, runRestoreReport } from './restore-report.ts';
@@ -400,6 +400,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
     const worker = role === 'worker' || role === 'all';
     // Both roles handle org exports (the worker seals them, the API opens them for download).
     assertExportKey(config);
+    assertSplitRoles(config, role);
     // Browser push (#1238): both roles or neither; a partial or mismatched key set stops the start.
     const vapid = loadVapidKeys(config);
     // The alert webhook of this process: the worker's security alerts, and the operational ALERT lines of both roles

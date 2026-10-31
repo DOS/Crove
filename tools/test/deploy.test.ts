@@ -109,6 +109,47 @@ describe.skipIf(!runHere)('deploy.sh', { timeout: 300_000 }, () => {
     expect(existsSync(`${dir}/.deploy/lock`)).toBe(false);
   });
 
+  // #2118: the pilot's split API and worker are an optional host file, passed last when it is there.
+  it('passes compose.pilot.yml after the release file and before the pins, and compose.host.yml last, only when they exist', () => {
+    const filesOf = () => readFileSync(`${log}.files`, 'utf8').split('\n').filter(Boolean);
+    expect(deploy('v1.0.0', 'a').status).toBe(0);
+    for (const files of filesOf()) expect(files).toBe(`${dir}/docker-compose.yml ${dir}/docker-compose.override.yml`);
+    writeFileSync(`${dir}/compose.host.yml`, 'services: {}\n');
+    writeFileSync(`${dir}/compose.pilot.yml`, 'services: {}\n');
+    rmSync(`${log}.files`);
+    const res = deploy('v1.1.0', 'b', { STUB_SERVICES: 'db migrate auth auth-grants crove-extract mailpit api worker' });
+    expect(res.status, res.out).toBe(0);
+    expect(filesOf().length).toBeGreaterThan(5);
+    for (const files of filesOf()) expect(files).toBe(`${dir}/docker-compose.yml ${dir}/compose.pilot.yml ${dir}/docker-compose.override.yml ${dir}/compose.host.yml`);
+    // The split roles roll worker first, then the API, and the smoke test finds the API's port.
+    const c = calls();
+    // The all-in-one container of an earlier layout goes first, so it keeps neither the API's port nor the worker's jobs.
+    expect(indexOf(c, 'compose rm --stop --force crove')).toBeGreaterThanOrEqual(0);
+    expect(indexOf(c, 'compose rm --stop --force crove')).toBeLessThan(indexOf(c, 'compose up --detach --no-build --no-deps worker'));
+    // The pins of the release reach api and worker too, for a plain docker compose on the host.
+    expect(running()).toContain(`api: { image: '${image('b')}', build: !reset null }`);
+    expect(running()).toContain(`worker: { image: '${image('b')}', build: !reset null }`);
+    expect(indexOf(c, 'compose up --detach --no-build --no-deps worker')).toBeLessThan(indexOf(c, 'compose up --detach --no-build --no-deps --wait --wait-timeout 600 api'));
+    expect(c.some((l) => l === 'compose port api 8080')).toBe(true);
+  });
+
+  it('refuses to deploy when COMPOSE_FILE names compose.pilot.yml and the file is missing, rather than roll the all-in-one crove (#2118)', () => {
+    writeFileSync(`${dir}/.env`, 'POSTGRES_PASSWORD=x\nCOMPOSE_FILE=docker-compose.yml:compose.pilot.yml:docker-compose.override.yml:compose.host.yml\n');
+    const res = deploy('v1.0.0', 'a', { STUB_SERVICES: 'db migrate auth auth-grants crove-extract mailpit crove' });
+    expect(res.status, res.out).toBe(2);
+    expect(res.out).toContain('lists compose.pilot.yml but');
+    expect(calls().some((l) => l.startsWith('pull '))).toBe(false);
+    writeFileSync(`${dir}/compose.pilot.yml`, 'services: {}\n');
+    expect(deploy('v1.0.0', 'a', { STUB_SERVICES: 'db migrate auth auth-grants crove-extract mailpit api worker' }).status).toBe(0);
+  });
+
+  it('says so when it cannot remove the old crove container, and goes on', () => {
+    writeFileSync(`${dir}/compose.pilot.yml`, 'services: {}\n');
+    const res = deploy('v1.0.0', 'a', { STUB_SERVICES: 'db migrate auth auth-grants crove-extract mailpit api worker', STUB_RM_FAIL: '1' });
+    expect(res.status, res.out).toBe(0);
+    expect(res.out).toContain('could not remove the old crove container (the deploy goes on): rm: stub failure');
+  });
+
   // #892: with --build, /version must report the build being deployed, so an old container that still answers fails.
   describe('build check', () => {
     const build = (c: string) => digest(c).slice(0, 12);
@@ -180,7 +221,7 @@ describe.skipIf(!runHere)('deploy.sh', { timeout: 300_000 }, () => {
     expect(ps).toBeGreaterThan(worker);
     expect(api).toBeGreaterThan(ps);
     expect(indexOf(c, 'compose port api 8080')).toBeGreaterThan(api);
-    expect(c.some((l) => / crove$/.test(l))).toBe(false);
+    expect(c.some((l) => / crove$/.test(l) && !l.startsWith('compose rm '))).toBe(false);
   });
 
   // #1965 (plan §3.5): toward an older release the API goes first, so the worker that runs is never older than the API

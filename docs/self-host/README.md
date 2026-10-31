@@ -81,6 +81,8 @@ cp tools/deploy/caddy/compose.host.yml tools/deploy/caddy/Caddyfile .
 echo 'COMPOSE_FILE=docker-compose.yml:compose.host.yml' >> .env
 ```
 
+This keeps the one-container layout, which is fine for your own use. A deployment other people reach (a pilot) runs the API and the worker apart and only the finance module: add `tools/deploy/compose.pilot.yml` as well ([deploy.md](../runbooks/deploy.md), "The pilot layout"); `pnpm pilot:check` fails a public deployment without it. On a public `PUBLIC_URL` the kernel also refuses to start the one-container layout unless you set `CROVE_ALLOW_ALL_IN_ONE=true` in `.env`, which accepts that the API then runs on the worker's database login.
+
 Point the domain's `A` record (and `AAAA` only if IPv6 reaches the server) at the server and wait until
 `dig +short <your domain>` answers with its address before the first start: Caddy asks for the certificate at once,
 and Let's Encrypt limits repeated failures. The certificates live in the `caddy-data` volume; keep it.

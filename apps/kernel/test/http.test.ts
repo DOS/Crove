@@ -21,7 +21,7 @@ import {
 } from '@crove/kernel-runtime';
 import type { AuthUser } from '../src/auth.ts';
 import { ConcurrencyLimiter } from '../src/concurrency.ts';
-import { assertExportKey, loadConfig } from '../src/config.ts';
+import { assertExportKey, assertSplitRoles, loadConfig } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
 import { secretMatches } from '../src/inbound.ts';
 import { buildZip } from '../../extract/test/zip-fixture.ts';
@@ -68,6 +68,45 @@ describe('configuration guards', () => {
     expect(() => loadConfig({ ...base, BANK_FEED_SANDBOX: 'true' })).not.toThrow();
     expect(() => loadConfig({ ...base, BANK_FEED_SANDBOX: 'true', PUBLIC_URL: 'https://books.example.com' })).toThrow(/BANK_FEED_SANDBOX/);
     expect(() => loadConfig({ ...base, PUBLIC_URL: 'https://books.example.com', PUBLIC_AUTH_URL: 'https://auth.example.com/auth/v1' })).not.toThrow();
+  });
+
+  // #2118: docker-compose.yml falls back to published passwords for an unset one; on a public URL the kernel refuses them.
+  it('refuses a sample database password on a public PUBLIC_URL, naming the setting and never the value', () => {
+    const publicBase = { ...base, PUBLIC_URL: 'https://books.example.com', PUBLIC_AUTH_URL: 'https://auth.example.com/auth/v1' };
+    const sample = (name: string, password: string) => ({ ...publicBase, [name]: `postgres://crove_x:${password}@db:5432/postgres` });
+    for (const name of ['DATABASE_URL', 'WORKER_DATABASE_URL', 'ADMIN_DATABASE_URL', 'DATABASE_LISTEN_URL']) {
+      for (const password of ['local-app-password', 'local-worker-password', 'local-postgres-password', 'change-me-app', 'my-Change-Me-pass', '%63hange-me-worker', 'change%2Dme-app']) {
+        let message = '';
+        try {
+          loadConfig(sample(name, password));
+        } catch (error) {
+          message = error instanceof Error ? error.message : String(error);
+        }
+        expect(message, `${name} ${password}`).toContain(`${name} carries a database password shipped in .env.example or docker-compose.yml`);
+        expect(message).not.toContain(password);
+      }
+      expect(() => loadConfig(sample(name, 'r4nd0m-Pa55-0123456789abcdef'))).not.toThrow();
+    }
+    // The password may also come as a query parameter, which node-postgres reads.
+    expect(() => loadConfig({ ...publicBase, DATABASE_URL: 'postgres://crove_app@db:5432/postgres?password=local-app-password' })).toThrow(/DATABASE_URL carries a database password/);
+    // Locally the compose fallbacks are the documented default.
+    expect(() => loadConfig({ ...base, DATABASE_URL: 'postgres://crove_app:local-app-password@db:5432/postgres' })).not.toThrow();
+    expect(() => loadConfig({ ...base, PUBLIC_URL: 'http://localhost:8080', DATABASE_URL: 'postgres://crove_app:local-app-password@db:5432/postgres' })).not.toThrow();
+    // No password in the URL, or no URL at all (the connection fails on its own later), is not a sample password.
+    expect(() => loadConfig({ ...publicBase, DATABASE_URL: 'postgres://localhost/x' })).not.toThrow();
+  });
+
+  // #2118: a missing compose.pilot.yml or a stray profile must not silently run the API on the worker's login.
+  it('starts the all role on a public PUBLIC_URL only with CROVE_ALLOW_ALL_IN_ONE=true', () => {
+    const publicConfig = (extra: Record<string, string> = {}) => loadConfig({ ...base, PUBLIC_URL: 'https://books.example.com', PUBLIC_AUTH_URL: 'https://auth.example.com/auth/v1', ...extra });
+    expect(() => assertSplitRoles(publicConfig(), 'all')).toThrow(/CROVE_ALLOW_ALL_IN_ONE=true/);
+    expect(() => assertSplitRoles(publicConfig({ CROVE_ALLOW_ALL_IN_ONE: 'false' }), 'all')).toThrow(/separate processes/);
+    expect(() => assertSplitRoles(publicConfig({ CROVE_ALLOW_ALL_IN_ONE: '' }), 'all')).toThrow(/separate processes/);
+    expect(() => assertSplitRoles(publicConfig({ CROVE_ALLOW_ALL_IN_ONE: 'true' }), 'all')).not.toThrow();
+    for (const role of ['api', 'worker'] as const) expect(() => assertSplitRoles(publicConfig(), role)).not.toThrow();
+    // A laptop needs no opt-in.
+    expect(() => assertSplitRoles(loadConfig(base), 'all')).not.toThrow();
+    expect(() => loadConfig({ ...base, CROVE_ALLOW_ALL_IN_ONE: 'yes' })).toThrow(/CROVE_ALLOW_ALL_IN_ONE/);
   });
 
   // ADR-0028 section 1 and 3.

@@ -57,6 +57,7 @@ A run fails, and is kept as `<run id>.partial` until the next one deletes it, wh
 1. Fill the "Backups" block of `.env` (see `.env.example`): `BACKUP_DIR`, `BACKUP_KEEP_DAYS`, `BACKUP_LOCAL_KEEP_DAYS`, `BACKUP_S3_ENDPOINT`, `BACKUP_S3_BUCKET`, `BACKUP_S3_PREFIX`, `BACKUP_S3_ACCESS_KEY_ID`, `BACKUP_S3_SECRET_ACCESS_KEY`. With `STORAGE=s3` the script reads the stack's own `S3_*` settings to copy the files bucket; those keys must allow listing and reading it.
 2. Make the encryption key, `openssl rand -base64 32`, set it as `BACKUP_ENCRYPTION_KEY` in `.env`, and store a copy in your secret store apart from the backup bucket. Use a key of its own, not `EXPORT_ENCRYPTION_KEY`.
 3. The host needs bash, Docker with the compose plugin, tar, sha256sum and coreutils; the S3 work runs in a throwaway container of the pinned MinIO client image and sealing in a container of the stack's own image, so nothing else is installed.
+   On the pilot layout ([deploy.md](deploy.md), "The pilot layout") the all-in-one `crove` service does not run, and the scripts default to it: set `BACKUP_FILES_SERVICE=worker` (with `STORAGE=local`, the service that mounts the files volume), `BACKUP_NODE_SERVICE=worker` (the image that seals) and, for a restore, `RESTORE_FILES_SERVICE=worker` in the environment of the backup job and of `restore.sh`. With `STORAGE=s3` only the node service matters.
 4. Run it once by hand from the checkout and read the end of the output (`complete`, `uploaded`, `blob stores`, `done`):
 
    ```sh
