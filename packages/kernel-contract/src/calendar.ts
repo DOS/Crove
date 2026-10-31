@@ -349,7 +349,7 @@ export const CALENDAR_CONNECTION_STATUSES = ['active', 'expired'] as const;
 export const CALENDAR_SYNC_DAYS = 366;
 // Write-back (#2124): the Google scope that lets a connection insert, change and delete events (the connect dialog asks for it
 // next to free/busy when the member opts in), and how many failed sweeps in a row stop a link retrying until its booking changes.
-export const GOOGLE_CALENDAR_EVENTS_SCOPE = 'https://www.googleapis.com/auth/calendar.events';
+export const GOOGLE_CALENDAR_EVENTS_SCOPE = 'https://www.googleapis.com/auth/calendar.events.owned';
 export const CALENDAR_LINK_MAX_ATTEMPTS = 6;
 
 export const zCalendarConnectionView = z.strictObject({

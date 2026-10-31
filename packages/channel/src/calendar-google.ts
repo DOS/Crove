@@ -13,7 +13,7 @@ import { ConnectorError, allowlistedFetch, type AuthorizeInput, type ExchangeInp
 export const GOOGLE_CALENDAR_HOSTS = ['oauth2.googleapis.com', 'www.googleapis.com'] as const;
 export const GOOGLE_CALENDAR_FREEBUSY_SCOPE = 'https://www.googleapis.com/auth/calendar.freebusy';
 // Write-back (#2124): insert, change and delete events. Asked for only when the member opts in; the grant says what it carries.
-export const GOOGLE_CALENDAR_EVENTS_SCOPE = 'https://www.googleapis.com/auth/calendar.events';
+export const GOOGLE_CALENDAR_EVENTS_SCOPE = 'https://www.googleapis.com/auth/calendar.events.owned';
 const AUTH_SCOPES = ['openid', 'email', GOOGLE_CALENDAR_FREEBUSY_SCOPE] as const;
 
 export interface GoogleCalendarAppConfig {
@@ -221,7 +221,8 @@ export class GoogleCalendarAdapter implements CalendarAdapter {
   async writeEvent(secret: string, event: CalendarEventWrite): Promise<CalendarWriteResult> {
     const s = googleCalendarSecretOf(secret);
     if (!s) return { refused: 'NO_ACCESS_TOKEN' };
-    const body = { summary: event.summary, start: { dateTime: event.startsAt, timeZone: 'UTC' }, end: { dateTime: event.endsAt, timeZone: 'UTC' } };
+    // private and opaque: people the member shares their calendar with see a busy block, never the visitor's name.
+    const body = { summary: event.summary, visibility: 'private', transparency: 'opaque', start: { dateTime: event.startsAt, timeZone: 'UTC' }, end: { dateTime: event.endsAt, timeZone: 'UTC' } };
     const base = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
     try {
       await this.call('POST', base, s.accessToken, { id: event.externalId, ...body });

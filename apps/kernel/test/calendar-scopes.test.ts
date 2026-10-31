@@ -8,6 +8,6 @@ import { GOOGLE_CALENDAR_EVENTS_SCOPE as CHECKED } from '@crove/kernel-contract'
 describe('the Google events scope', () => {
   it('is the same string where the adapter asks for it and where the kernel checks for it', () => {
     expect(ASKED).toBe(CHECKED);
-    expect(CHECKED).toBe('https://www.googleapis.com/auth/calendar.events');
+    expect(CHECKED).toBe('https://www.googleapis.com/auth/calendar.events.owned');
   });
 });

@@ -153,7 +153,7 @@ describe('GoogleCalendarAdapter', () => {
   it('inserts an event under the id the kernel chose, with the title and the instants and nothing else of the booking', async () => {
     const { fetchImpl, calls } = google({ [EVENTS]: [{ body: { id: EVENT.externalId } }] });
     expect(await new GoogleCalendarAdapter(APP, fetchImpl).writeEvent(SECRET, EVENT)).toEqual({ ok: true });
-    expect(calls[0]?.body).toEqual({ id: EVENT.externalId, summary: 'Tư vấn: Lan', start: { dateTime: EVENT.startsAt, timeZone: 'UTC' }, end: { dateTime: EVENT.endsAt, timeZone: 'UTC' } });
+    expect(calls[0]?.body).toEqual({ id: EVENT.externalId, summary: 'Tư vấn: Lan', visibility: 'private', transparency: 'opaque', start: { dateTime: EVENT.startsAt, timeZone: 'UTC' }, end: { dateTime: EVENT.endsAt, timeZone: 'UTC' } });
     expect(calls[0]?.auth).toBe('Bearer ya29.token-1');
   });
 
@@ -162,7 +162,7 @@ describe('GoogleCalendarAdapter', () => {
     const { fetchImpl, calls } = google({ [EVENTS]: [exists, exists], [ONE]: [{ body: {} }, { status: 404, body: { error: { code: 404, message: 'Not Found' } } }] });
     const adapter = new GoogleCalendarAdapter(APP, fetchImpl);
     expect(await adapter.writeEvent(SECRET, EVENT)).toEqual({ ok: true });
-    expect(calls[1]?.body).toMatchObject({ summary: 'Tư vấn: Lan', status: 'confirmed' });
+    expect(calls[1]?.body).toMatchObject({ summary: 'Tư vấn: Lan', visibility: 'private', transparency: 'opaque', status: 'confirmed' });
     expect(await adapter.writeEvent(SECRET, EVENT)).toEqual({ gone: true });
   });
 
