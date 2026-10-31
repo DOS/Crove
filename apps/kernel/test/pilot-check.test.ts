@@ -94,7 +94,7 @@ describe('pilot-check settings', () => {
   it('passes a ready deployment and leaves the human items as manual', () => {
     const results = checkEnv(READY);
     expect(failures(results)).toEqual([]);
-    expect(results.filter((r) => r.status === 'manual').map((r) => r.item)).toEqual(['Alerts', 'Credential key', 'Roles', 'Extraction sandbox', 'RLS matrix', 'Backups', 'Evidence holds', 'Owner sign-off']);
+    expect(results.filter((r) => r.status === 'manual').map((r) => r.item)).toEqual(['Alerts', 'Credential key', 'Roles', 'WAL archiving', 'Extraction sandbox', 'RLS matrix', 'Backups', 'Evidence holds', 'Owner sign-off']);
     // Evidence holds (#1009): the bucket's Object Lock is confirmed by hand; without S3 or with holds off, the owner
     // accepts that posted files are not held.
     const holds = (env: Record<string, string | undefined>) => checkEnv(env).find((r) => r.item === 'Evidence holds')?.message;
@@ -283,6 +283,18 @@ describe('pilot-check settings', () => {
       const items = failures(checkEnv(local)).map((r) => r.item);
       expect(items).toEqual(['TLS']);
       expect(checkEnv(local).some((r) => r.item === 'Roles' || r.item === 'Modules' || r.item === 'AI cost cap')).toBe(false);
+    });
+
+    // #2120: whether the database archives its WAL runs inside its container; the preflight sees only the overlay.
+    it('names the 24 hour recovery point of a stack without the WAL overlay, and asks to confirm one that lists it', () => {
+      const line = (env: Env) => checkEnv(env).find((r) => r.item === 'WAL archiving');
+      expect(line(READY)).toMatchObject({ status: 'manual', message: expect.stringContaining('archives no WAL, so a restore goes back to last night') });
+      const withOverlay = { ...READY, COMPOSE_FILE: `${String(READY.COMPOSE_FILE)}:tools/backup/compose.wal.yml` };
+      expect(line(withOverlay)).toMatchObject({ status: 'manual', message: expect.stringContaining('wal.sh info lists a full base backup') });
+      expect(line({ ...READY, COMPOSE_FILE: String(READY.COMPOSE_FILE).replace(/$/, ':my-compose.wal.yml') })?.message).toContain('archives no WAL');
+      // Never a failure: the checklist of the pilot decides when it is required.
+      expect(failing(withOverlay)).toEqual([]);
+      expect(failing(READY)).toEqual([]);
     });
 
     it('asks a person to confirm the running roles', () => {
@@ -537,7 +549,7 @@ describe('pilot-check command', () => {
     const lines: string[] = [];
     const print = (line: string) => lines.push(line);
     expect(await runPilotCheck([], READY, fakeFetch({}), print)).toBe(PILOT_EXIT.ok);
-    expect(lines.join('\n')).toContain('Automatic checks passed. Confirm the 8 manual item(s)');
+    expect(lines.join('\n')).toContain('Automatic checks passed. Confirm the 9 manual item(s)');
     expect(await runPilotCheck(['--url', 'https://crove.example.com'], READY, fakeFetch(healthy), print)).toBe(PILOT_EXIT.ok);
     lines.length = 0;
     expect(await runPilotCheck([], { ...READY, AUTH_DISABLE_SIGNUP: 'false' }, fakeFetch({}), print)).toBe(PILOT_EXIT.failed);

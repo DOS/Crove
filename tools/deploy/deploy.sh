@@ -348,6 +348,9 @@ dc() {
   # `crove` service, whose image the release's pins (next) must then replace.
   if [ -f "$DEPLOY_DIR/compose.pilot.yml" ]; then args+=(-f "$DEPLOY_DIR/compose.pilot.yml"); fi
   args+=(-f "$DEPLOY_DIR/docker-compose.override.yml")
+  # The database image with pgBackRest and the bucket's settings (tools/backup/compose.wal.yml, #2120). The image
+  # (crove-db:local, built from tools/wal) is on the host, never pulled: a deploy starts `db` with --no-build.
+  if [ -f "$DEPLOY_DIR/compose.wal.yml" ]; then args+=(-f "$DEPLOY_DIR/compose.wal.yml"); fi
   if [ -f "$DEPLOY_DIR/compose.host.yml" ]; then args+=(-f "$DEPLOY_DIR/compose.host.yml"); fi
   docker "${args[@]}" "$@"
 }
@@ -581,6 +584,11 @@ preflight() {
   # deploy would roll the all-in-one `crove` (API on the worker's database login) instead of api and worker (#2118).
   if sed -n 's/^COMPOSE_FILE=//p' "$ENV_FILE" | tail -n 1 | grep -q 'compose\.pilot\.yml' && [ ! -f "$DEPLOY_DIR/compose.pilot.yml" ]; then
     die "$EXIT_USAGE" "COMPOSE_FILE in $ENV_FILE lists compose.pilot.yml but $DEPLOY_DIR/compose.pilot.yml does not exist: copy tools/deploy/compose.pilot.yml there (docs/runbooks/deploy.md, \"The pilot layout\")"
+  fi
+  # The same for the WAL archiving overlay (#2120): without it the deploy would recreate `db` on the plain PostgreSQL image,
+  # while the volume still tells PostgreSQL to push every WAL segment with a command that image does not have.
+  if sed -n 's/^COMPOSE_FILE=//p' "$ENV_FILE" | tail -n 1 | grep -q 'compose\.wal\.yml' && [ ! -f "$DEPLOY_DIR/compose.wal.yml" ]; then
+    die "$EXIT_USAGE" "COMPOSE_FILE in $ENV_FILE lists compose.wal.yml but $DEPLOY_DIR/compose.wal.yml does not exist: copy tools/backup/compose.wal.yml there (docs/runbooks/backup-and-restore.md, \"Point in time recovery\")"
   fi
   command -v docker >/dev/null || die "$EXIT_USAGE" 'docker is not installed'
   command -v curl >/dev/null || die "$EXIT_USAGE" 'curl is not installed'
