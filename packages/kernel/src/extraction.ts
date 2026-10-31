@@ -28,12 +28,30 @@ export const STALE_RUN_ERROR = 'Đọc lại quá lâu nên đã dừng; hãy b�
 // Extraction runs one file may have. Each run can cost an AI call; one pending run at a time is the main limit.
 export const MAX_EXTRACTION_VERSIONS = 20;
 
+// Asked of the finance module (finance.extraction.lookup) through ctx.query, as VOIDED_PROPOSALS_QUERY is, so the kernel
+// does not read the finance schema (#204); a deployment without finance has no purchase proposals to duplicate.
+export const DUPLICATE_LOOKUP_QUERY = 'finance.extraction.lookup';
+
+// The duplicate check made again where it can be trusted (#2137). Documents are read at the same time, so the lookup a
+// reader made before recording can miss a copy another reader records a moment later: two copies of one invoice in a
+// ZIP would then both go in with no warning. `key` names the identity of the document (the invoice, for finance); the
+// record takes a transaction-level advisory lock on it, asks the lookup again inside its own transaction, and when it now
+// finds an earlier proposal it flags this one: duplicateOf is set and `check` goes first in the run's checks and in the
+// payload's. The second to record is the one flagged, since it sees the first's committed proposal.
+export const zDuplicateGuard = z.object({
+  key: z.string().min(1).max(500),
+  // The input of the lookup query, without the file (the command adds it).
+  lookup: z.record(z.string(), z.unknown()),
+  check: zCheck,
+});
+
 export const zProposalDraft = z.object({
   kind: z.string(),
   command: z.string(),
   title: z.string().max(300),
   payload: z.record(z.string(), z.unknown()),
   duplicateOf: zId.nullable(),
+  duplicateGuard: zDuplicateGuard.optional(),
 });
 
 // In flight: created within the stale window, measured at the start of the transaction (now()). A decision that
@@ -265,6 +283,40 @@ export async function readAgainIn(ctx: CommandContext, fileId: string, legalEnti
   await ctx.run('kernel.file.reextract', { fileId, legalEntityId });
 }
 
+interface DuplicateAnswer {
+  duplicateDocumentId: string | null;
+  duplicateProposalId: string | null;
+}
+
+// The input of kernel.extraction.record with its duplicate guard applied (#2137, zDuplicateGuard): the lock on the
+// document's identity taken first, the lookup asked again, and a copy found now flagged. The lock is held until the
+// command commits, so a reader that recorded the same document a moment earlier has committed (or not started) by the
+// time this one looks. Without a guard, or without a proposal, the input is returned as it is.
+async function withDuplicateGuard<T extends { fileId: string; checks: Array<z.infer<typeof zCheck>>; proposal: z.infer<typeof zProposalDraft> | null }>(
+  ctx: CommandContext,
+  input: T,
+): Promise<T> {
+  const guard = input.proposal?.duplicateGuard;
+  if (!input.proposal || !guard) return input;
+  await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`crove_kernel.extraction_duplicate:${ctx.orgId}:${guard.key}`}, 0))`.execute(ctx.trx);
+  const answer = await ctx.query<DuplicateAnswer>(DUPLICATE_LOOKUP_QUERY, { ...guard.lookup, fileId: input.fileId });
+  if (answer.status !== 'ok' || (!answer.value.duplicateDocumentId && !answer.value.duplicateProposalId)) return input;
+  ctx.audit({ duplicate_guard: 'found', duplicate_of: answer.value.duplicateProposalId });
+  const flagged = (checks: Array<z.infer<typeof zCheck>>) => (checks.some((c) => c.code === guard.check.code) ? checks : [guard.check, ...checks]);
+  const payloadChecks = input.proposal.payload['checks'];
+  return {
+    ...input,
+    checks: flagged(input.checks),
+    proposal: {
+      ...input.proposal,
+      duplicateOf: input.proposal.duplicateOf ?? answer.value.duplicateProposalId,
+      payload: Array.isArray(payloadChecks)
+        ? { ...input.proposal.payload, checks: flagged(payloadChecks as Array<z.infer<typeof zCheck>>) }
+        : input.proposal.payload,
+    },
+  };
+}
+
 // Records the result of an extraction run (worker only). Without `version` it is the first extraction of a new
 // file (a no-op once the file has any run). With `version` it finishes that pending re-extraction (a no-op if the
 // run is no longer pending), and the file's pending proposal gets a new revision with the new content.
@@ -289,8 +341,9 @@ export const recordExtraction = defineCommand({
   sideEffect: 'internal',
   access: 'system',
   target: (input) => ({ type: 'kernel.file', id: input.fileId }),
-  handler: async (ctx, input) => {
-    const file = await lockFile(ctx, input.fileId);
+  handler: async (ctx, original) => {
+    const file = await lockFile(ctx, original.fileId);
+    const input = await withDuplicateGuard(ctx, original);
     const outcome = {
       method: input.method,
       status: input.status,
