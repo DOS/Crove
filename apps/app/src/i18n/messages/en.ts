@@ -6189,6 +6189,7 @@ export const en = {
         connections: 'List my outside calendars',
         credential: 'Read the sealed credential of an outside calendar',
         disconnect: 'Disconnect an outside calendar',
+        finish_disconnect: 'Finish disconnecting an outside calendar (revoke the grant at the provider)',
         mark_failed: 'Note an outside calendar sync failure',
         oauth_begin: 'Start connecting an outside calendar',
         oauth_consume: 'Finish connecting an outside calendar',

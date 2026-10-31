@@ -1410,14 +1410,16 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     calendarSyncing = true;
     try {
       const done = await syncCalendars({ runtime: deps.runtime, broker: channels.broker, workerDb: deps.workerDb, adapters: calendars, exclusive: calendarExclusive });
-      if (done.synced + done.expired + done.retry > 0) console.log(`[calendar-sync] synced ${done.synced}, expired ${done.expired}, to retry ${done.retry}`);
+      if (done.synced + done.expired + done.retry + done.disconnected > 0) console.log(`[calendar-sync] synced ${done.synced}, expired ${done.expired}, to retry ${done.retry}, disconnected ${done.disconnected}`);
     } catch (error) {
       console.error('[calendar-sync] sweep', error instanceof Error ? error.name : typeof error);
     } finally {
       calendarSyncing = false;
     }
   };
-  const calendarTimer = Object.keys(calendars).length > 0 ? setInterval(() => void calendarSweep(), CALENDAR_SYNC_SWEEP_MS) : null;
+  // Also with no adapter on: a member's disconnect is finished (the grant revoked, or given up on after three days, and the
+  // sealed token removed) whatever the server has configured.
+  const calendarTimer = channels ? setInterval(() => void calendarSweep(), CALENDAR_SYNC_SWEEP_MS) : null;
   calendarTimer?.unref();
   void calendarSweep();
 

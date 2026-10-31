@@ -117,7 +117,7 @@ export type NumberSeriesPolicyTable = Refine<G.KernelNumberSeriesPolicyTable, { 
 // The calendar core (issue #1313): a member's weekly working hours and the events on their calendar. Holidays and the
 // slot rules are in @crove/kernel-contract (calendar.ts).
 export const CALENDAR_EVENT_KINDS = ['manual', 'time_off', 'booking', 'google', 'microsoft', 'caldav'] as const;
-export const CALENDAR_CONNECTION_STATUSES = ['active', 'expired'] as const;
+export const CALENDAR_CONNECTION_STATUSES = ['active', 'expired', 'disconnecting'] as const;
 export const CALENDAR_PROVIDERS = ['google', 'microsoft', 'caldav'] as const;
 export const CALENDAR_EVENT_STATUSES = ['active', 'cancelled'] as const;
 export type CalendarEventTable = Refine<

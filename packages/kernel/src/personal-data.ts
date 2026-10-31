@@ -119,9 +119,14 @@ export const PERSONAL_DATA_COLUMNS = {
   },
   // A member's connected outside calendar (#2123): the member's own account address, kept only for them.
   'crove_kernel.calendar_connection.display_name': {
-    kind: 'name',
+    kind: 'email',
     handling: 'erase',
-    reason: "The member's own address in an outside calendar (their Google account); disconnecting removes it, and it is not exported with the org",
+    reason: "The member's own address in an outside calendar (their Google account), the same value as external_account; disconnecting removes it, and it is not exported with the org",
+  },
+  'crove_kernel.calendar_connection.external_account': {
+    kind: 'email',
+    handling: 'erase',
+    reason: "The member's own address in an outside calendar (their Google account); disconnecting removes it, and it is not exported with the org. Its row policy hides it from the admin who runs an erasure: the member disconnects it",
   },
   // Bank feeds (ADR-0039, #2044): the accounts a connection reaches, as the worker listed them; not the books.
   'crove_finance.bank_feed_listed_account.display_name': {

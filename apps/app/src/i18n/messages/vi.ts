@@ -6189,6 +6189,7 @@ export const vi = {
         connections: 'Xem các lịch ngoài của tôi',
         credential: 'Đọc thông tin đăng nhập đã niêm phong của lịch ngoài',
         disconnect: 'Ngắt kết nối lịch ngoài',
+        finish_disconnect: 'Hoàn tất ngắt kết nối lịch ngoài (thu hồi quyền ở nhà cung cấp)',
         mark_failed: 'Ghi nhận lỗi đồng bộ lịch ngoài',
         oauth_begin: 'Bắt đầu kết nối lịch ngoài',
         oauth_consume: 'Hoàn tất kết nối lịch ngoài',

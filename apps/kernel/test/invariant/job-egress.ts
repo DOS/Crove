@@ -72,6 +72,8 @@ export const DEPS_REACH: Readonly<Record<string, readonly Reach[]>> = {
   // The bank feed adapters (ADR-0039, #2044): the offline sandbox reaches nothing; a real adapter is classified here,
   // with its provider, before it is added.
   'channels.bankFeeds': [],
+  // The outside calendar adapters (#2123): Google's OAuth and Calendar hosts, through @crove/channel.
+  'channels.calendars': ['provider:channel'],
   publicUrl: [],
   brand: [],
   mail: ['provider:mail'],
