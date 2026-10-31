@@ -213,10 +213,12 @@ describe('pilot-check settings', () => {
 
     it('fails when the API and the worker run as the one all-in-one process', () => {
       for (const env of [{ COMPOSE_FILE: undefined }, { COMPOSE_FILE: 'docker-compose.yml:compose.host.yml' }, { COMPOSE_FILE: 'docker-compose.yml:docker-compose.split.yml' }]) {
-        expect(failing({ ...READY, ...env }), JSON.stringify(env)).toEqual([expect.stringMatching(/^Roles: COMPOSE_FILE does not list compose\.pilot\.yml.*command all/)]);
+        expect(failing({ ...READY, ...env }), JSON.stringify(env)).toEqual([expect.stringMatching(/^Roles: COMPOSE_FILE (?:does not list compose\.pilot\.yml|and CROVE_ROLES are unset).*command all/)]);
       }
       expect(failing({ ...READY, COMPOSE_PROFILES: 'prober,all-in-one' })).toEqual([expect.stringMatching(/^Roles: COMPOSE_PROFILES includes all-in-one/)]);
       expect(failing({ ...READY, COMPOSE_PROFILES: 'all-in-one' })).toEqual([expect.stringMatching(/^Roles: COMPOSE_PROFILES includes all-in-one/)]);
+      // `*` starts every profile.
+      for (const profiles of ['*', 'prober,*']) expect(failing({ ...READY, COMPOSE_PROFILES: profiles }), profiles).toEqual([expect.stringMatching(/^Roles: COMPOSE_PROFILES includes all-in-one \(or \*\)/)]);
     });
 
     it('accepts the pilot compose file in any position, as a path, with either list separator', () => {
@@ -233,6 +235,8 @@ describe('pilot-check settings', () => {
       expect(failing({ ...READY, COMPOSE_FILE: undefined, CROVE_ROLES: 'all' })).toEqual([expect.stringContaining('Roles: CROVE_ROLES includes all')]);
       expect(failing({ ...READY, COMPOSE_FILE: undefined, CROVE_ROLES: 'api' })).toEqual([expect.stringContaining('Roles: CROVE_ROLES must name both api and worker')]);
       expect(failing({ ...READY, COMPOSE_FILE: undefined, CROVE_ROLES: 'api,worker,all' })).toEqual([expect.stringContaining('CROVE_ROLES includes all')]);
+      // A COMPOSE_FILE without the pilot file wins over the statement: docker compose would run all-in-one.
+      expect(failing({ ...READY, COMPOSE_FILE: 'docker-compose.yml', CROVE_ROLES: 'api,worker' })).toEqual([expect.stringMatching(/^Roles: COMPOSE_FILE does not list compose\.pilot\.yml/)]);
     });
 
     it('fails an empty or unknown CROVE_MODULES', () => {

@@ -656,17 +656,23 @@ export const SAMPLE_DB_PASSWORDS: ReadonlySet<string> = new Set([
   'change-me-auth',
 ]);
 
-// Whether a database URL carries one of those passwords, or any `change-me` placeholder. A value that is not a URL
-// has no password to read here (the connection itself fails later).
+// Whether a database URL carries one of those passwords, or any `change-me` placeholder (broader than the shipped
+// values on purpose: it is a sample whatever its tail). The password may sit in the userinfo or in a `?password=` query
+// parameter, which node-postgres reads too. A value that is not a URL has no password to read here (the connection
+// itself fails later). The prober's and the reporter's URLs are read by their own roles; pilot-check fails their
+// sample *_PASSWORD settings.
 export function hasSampleDbPassword(url: string | undefined): boolean {
   if (url === undefined || !URL.canParse(url)) return false;
-  let password = new URL(url).password;
-  try {
-    password = decodeURIComponent(password);
-  } catch {
-    // Keep the raw spelling.
-  }
-  return SAMPLE_DB_PASSWORDS.has(password) || /change-?me/i.test(password);
+  const parsed = new URL(url);
+  return [parsed.password, parsed.searchParams.get('password') ?? ''].some((raw) => {
+    let password = raw;
+    try {
+      password = decodeURIComponent(raw);
+    } catch {
+      // Keep the raw spelling.
+    }
+    return SAMPLE_DB_PASSWORDS.has(password) || /change-?me/i.test(password);
+  });
 }
 
 // The context token key the test suites use (vitest.config.ts, vitest.invariant.config.ts): public, so never a

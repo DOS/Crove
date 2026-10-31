@@ -110,8 +110,10 @@ The first deploy creates `releases/`, `.deploy/` and the active compose files. A
 
 1. Copy the file next to the release's `docker-compose.yml` on the host: `cp /opt/crove-src/tools/deploy/compose.pilot.yml /opt/crove/` (the checkout of [provision-pilot.md](provision-pilot.md), section 8). Like `compose.host.yml`, it is the host's: a release never overwrites it.
 2. In the env file set `CROVE_MODULES=finance` and list the file last: `COMPOSE_FILE=docker-compose.yml:docker-compose.override.yml:compose.host.yml:compose.pilot.yml`. `deploy.sh` passes it on after `compose.host.yml` when it is there. It sees `api` and `worker` and so rolls the worker first, then the API, and runs the smoke test on the API's port.
-3. Never put `all-in-one` in `COMPOSE_PROFILES`: that starts `crove` beside them, and `pnpm pilot:check` fails it.
-4. Check, once, after the first deploy:
+3. Never put `all-in-one` or `*` in `COMPOSE_PROFILES`: that starts `crove` beside them, and `pnpm pilot:check` fails it.
+4. On a host that already ran the all-in-one `crove` container, remove it **before** the first deploy with the overlay: `docker compose rm --stop --force crove` in `/opt/crove`. Otherwise the old container is an orphan that keeps `127.0.0.1:${PORT}`, the new `api` cannot bind it, the smoke test fails and the rollback runs the same configuration. The database volume is untouched.
+5. A plain `docker compose` in `/opt/crove` (a manual `up`, `exec`, `logs`) needs `CROVE_IMAGE` too, since `api` and `worker` are not in the generated `docker-compose.override.yml`: `export CROVE_IMAGE=$(sed -n 's/^IMAGE=//p' releases/<current release>/release.env)`, or it runs `crove:local`. `deploy.sh` sets it itself.
+6. Check, once, after the first deploy:
 
    ```bash
    docker compose ps --services                                    # api, worker, ... and no crove
@@ -121,7 +123,9 @@ The first deploy creates `releases/`, `.deploy/` and the active compose files. A
 
 A deployment without docker compose (Kubernetes, systemd) runs the same two roles from the one image (`api` and `worker` as the container command) and gives the worker, and only the worker, `WORKER_DATABASE_URL`, `EXTRACT_URL` and the archive settings. It names the roles in `CROVE_ROLES=api,worker` so `pilot:check` can tell.
 
-Going back to one container (a laptop, a test) is the same stack without `compose.pilot.yml` in `COMPOSE_FILE`; the services change, the database stays.
+What this layout does not do yet: the API container still receives the other settings of `docker-compose.yml`, the secrets that only the worker uses among them (the S3 secret key, the archive settings, the channel app secrets), and mounts the same volumes. Trimming them per role is a follow-up (#2130, P3, Icebox); this change takes away the worker's all-org database login, the parsing sandbox and every module but finance.
+
+Going back to one container (a laptop, a test) is the same stack without `compose.pilot.yml` in `COMPOSE_FILE`, after `docker compose rm --stop --force api worker` so the two old containers do not keep the port; the services change, the database stays.
 
 Two more settings keep a pilot safe by default and are checked by `pnpm pilot:check` on a public `PUBLIC_URL`: `BACKUP_ENCRYPTION_KEY` (the backup bucket never holds the books unsealed) and a price in `AI_PRICE_INPUT_PER_MTOK` or `AI_PRICE_OUTPUT_PER_MTOK` whenever `AI_API_KEY` is set (without one the AI cost cap `ORG_LIMIT_AI_COST_PER_DAY` counts nothing). The kernel itself also refuses to start on a public `PUBLIC_URL` when a database URL (`DATABASE_URL`, `WORKER_DATABASE_URL`, `ADMIN_DATABASE_URL`, `DATABASE_LISTEN_URL`) carries one of the passwords this repository ships in `.env.example` and the compose fallbacks.
 

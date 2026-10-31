@@ -133,17 +133,26 @@ function list(raw: string | undefined, separator: RegExp): string[] {
 // (COMPOSE_FILE lists compose.pilot.yml, COMPOSE_PROFILES does not start the all-in-one service); a deployment without
 // docker compose names its roles in CROVE_ROLES. Names settings only, never a value.
 function rolesProblem(env: Env): string | null {
-  if (list(value(env, 'COMPOSE_PROFILES'), /,/).includes('all-in-one')) {
-    return 'COMPOSE_PROFILES includes all-in-one: the API then runs with the worker in one container (command all), on the worker database login and every secret; drop that profile and run api and worker apart (docs/runbooks/deploy.md)';
+  // `*` is every profile, the all-in-one service among them.
+  const profiles = list(value(env, 'COMPOSE_PROFILES'), /,/);
+  if (profiles.includes('all-in-one') || profiles.includes('*')) {
+    return 'COMPOSE_PROFILES includes all-in-one (or *): the API then runs with the worker in one container (command all), on the worker database login and every secret; drop that profile and run api and worker apart (docs/runbooks/deploy.md)';
+  }
+  // The list separator is ':' (';' on Windows hosts), and an entry may be a path: the file name is matched as a whole entry.
+  const composeFile = value(env, 'COMPOSE_FILE');
+  const listsPilotFile = /(?:^|[:;/\\])compose\.pilot\.yml(?:$|[:;])/.test(composeFile ?? '');
+  // CROVE_ROLES is the deployment's own statement, for one without docker compose; it never outvotes a COMPOSE_FILE that
+  // says the opposite.
+  if (composeFile !== undefined && !listsPilotFile) {
+    return `COMPOSE_FILE does not list ${PILOT_COMPOSE_FILE}: docker compose then starts the all-in-one crove service (command all), with the API on the worker database login and every secret; list ${PILOT_COMPOSE_FILE} (docs/runbooks/deploy.md)`;
   }
   const roles = list(value(env, 'CROVE_ROLES')?.toLowerCase(), /[\s,]+/);
   if (roles.length > 0) {
     if (roles.includes('all')) return 'CROVE_ROLES includes all: run api and worker as separate processes (docs/runbooks/deploy.md)';
     return roles.includes('api') && roles.includes('worker') ? null : 'CROVE_ROLES must name both api and worker, each as its own container or service (docs/runbooks/deploy.md)';
   }
-  // The list separator is ':' (';' on Windows hosts), and an entry may be a path: the file name is matched as a whole entry.
-  if (/(?:^|[:;/\\])compose\.pilot\.yml(?:$|[:;])/.test(value(env, 'COMPOSE_FILE') ?? '')) return null;
-  return `COMPOSE_FILE does not list ${PILOT_COMPOSE_FILE} and CROVE_ROLES is unset: docker compose then starts the all-in-one crove service (command all), with the API on the worker database login and every secret; list ${PILOT_COMPOSE_FILE} (docs/runbooks/deploy.md), or name the roles in CROVE_ROLES for a deployment without docker compose`;
+  if (listsPilotFile) return null;
+  return `COMPOSE_FILE and CROVE_ROLES are unset: docker compose then starts the all-in-one crove service (command all), with the API on the worker database login and every secret; list ${PILOT_COMPOSE_FILE} in COMPOSE_FILE (docs/runbooks/deploy.md), or name the roles in CROVE_ROLES for a deployment without docker compose`;
 }
 
 // CROVE_MODULES names the modules the pilot runs; empty runs every module, Social's public routes included.

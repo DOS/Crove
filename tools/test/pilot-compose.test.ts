@@ -3,7 +3,7 @@
 // pilot layout runs api and worker apart, drops the worker's database login from the API, and keeps the all-in-one
 // service behind a profile. docker-compose.yml alone must stay what `docker compose up` runs on a laptop.
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -100,9 +100,5 @@ describe.skipIf(!hasCompose)('compose.pilot.yml', { timeout: 60_000 }, () => {
     const prober = config(['docker-compose.yml', 'compose.pilot.yml'], {}, ['prober'])['prober'];
     expect(prober?.environment?.['PROBER_AUTH_URL']).toBe('http://api:8080/auth/v1');
     expect(config(['docker-compose.yml', 'compose.pilot.yml'], { PROBER_AUTH_URL: 'https://auth.example/auth/v1' }, ['prober'])['prober']?.environment?.['PROBER_AUTH_URL']).toBe('https://auth.example/auth/v1');
-  });
-
-  it('is the file pilot-check looks for in COMPOSE_FILE', () => {
-    expect(readFileSync(join(repo, 'apps/kernel/src/pilot-check.ts'), 'utf8')).toContain("const PILOT_COMPOSE_FILE = 'compose.pilot.yml';");
   });
 });
