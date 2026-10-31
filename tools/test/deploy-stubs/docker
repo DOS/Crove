@@ -50,6 +50,8 @@ sub="$1"
 shift
 args="$*"
 printf 'compose %s %s\n' "$sub" "$args" >>"$STUB_LOG"
+# The compose files of each call, apart from the log so the order checks stay as they are.
+printf '%s\n' "${files[*]}" >>"$STUB_LOG.files"
 
 case "$sub" in
   config)

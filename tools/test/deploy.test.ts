@@ -109,6 +109,24 @@ describe.skipIf(!runHere)('deploy.sh', { timeout: 300_000 }, () => {
     expect(existsSync(`${dir}/.deploy/lock`)).toBe(false);
   });
 
+  // #2118: the pilot's split API and worker are an optional host file, passed last when it is there.
+  it('passes compose.host.yml and compose.pilot.yml to every compose call, in that order, only when they exist', () => {
+    const filesOf = () => readFileSync(`${log}.files`, 'utf8').split('\n').filter(Boolean);
+    expect(deploy('v1.0.0', 'a').status).toBe(0);
+    for (const files of filesOf()) expect(files).toBe(`${dir}/docker-compose.yml ${dir}/docker-compose.override.yml`);
+    writeFileSync(`${dir}/compose.host.yml`, 'services: {}\n');
+    writeFileSync(`${dir}/compose.pilot.yml`, 'services: {}\n');
+    rmSync(`${log}.files`);
+    const res = deploy('v1.1.0', 'b', { STUB_SERVICES: 'db migrate auth auth-grants crove-extract mailpit api worker' });
+    expect(res.status, res.out).toBe(0);
+    expect(filesOf().length).toBeGreaterThan(5);
+    for (const files of filesOf()) expect(files).toBe(`${dir}/docker-compose.yml ${dir}/docker-compose.override.yml ${dir}/compose.host.yml ${dir}/compose.pilot.yml`);
+    // The split roles roll worker first, then the API, and the smoke test finds the API's port.
+    const c = calls();
+    expect(indexOf(c, 'compose up --detach --no-build --no-deps worker')).toBeLessThan(indexOf(c, 'compose up --detach --no-build --no-deps --wait --wait-timeout 600 api'));
+    expect(c.some((l) => l === 'compose port api 8080')).toBe(true);
+  });
+
   // #892: with --build, /version must report the build being deployed, so an old container that still answers fails.
   describe('build check', () => {
     const build = (c: string) => digest(c).slice(0, 12);

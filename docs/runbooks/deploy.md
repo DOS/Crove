@@ -31,7 +31,7 @@ The workflow builds `ghcr.io/<owner>/<repo>` (the kernel image, `Dockerfile`, wi
 3. Start the database and run `migrate` with the new image (the migrations, then the DDL watch's event triggers, [alerts.md](alerts.md)). If it fails, the services are left as they were and the run exits 1: the old release keeps running.
 4. Start Supabase Auth (it applies its own migrations before it is healthy) and run `auth-grants`.
 5. Start the other services (`crove-extract`, Mailpit, anything from `compose.host.yml`).
-6. Roll the app. With separate `worker` and `api` services, the **worker first**: it must still be running after `CROVE_WORKER_SETTLE` seconds (15), then the API. With the all-in-one `crove` service (the pilot), that one container. Toward an older build (usually a rollback, or the recovery after a failed deploy; also a deploy of an older tag), the **API first**, then the worker, still checked the same way, so a newer API does not serve beside an older worker (plan §3.5; its `/readyz` waits while a live worker runs an older build, #1952, #1965). Older is by the build time the image carries (`CROVE_BUILD_TIME`, recorded as `BUILD_EPOCH` in the release's `release.env`); between releases without one (images from before #1952), by when each was deployed. So a second rollback, back to the newer build, rolls the worker first again.
+6. Roll the app. With separate `worker` and `api` services, the **worker first**: it must still be running after `CROVE_WORKER_SETTLE` seconds (15), then the API. With the all-in-one `crove` service (the default `docker-compose.yml`, for a laptop), that one container; the pilot runs the separate services ([The pilot layout](#the-pilot-layout)). Toward an older build (usually a rollback, or the recovery after a failed deploy; also a deploy of an older tag), the **API first**, then the worker, still checked the same way, so a newer API does not serve beside an older worker (plan §3.5; its `/readyz` waits while a live worker runs an older build, #1952, #1965). Older is by the build time the image carries (`CROVE_BUILD_TIME`, recorded as `BUILD_EPOCH` in the release's `release.env`); between releases without one (images from before #1952), by when each was deployed. So a second rollback, back to the newer build, rolls the worker first again.
 7. Wait for `/readyz` (`CROVE_READY_TIMEOUT`, 300 seconds): it answers 200 only when every migration in the image is in the ledger and the session check can read Supabase Auth's tables.
 8. Start the prober (when its profile is on), then run the smoke test on the loopback port.
 9. On success, record the release as current. On a failure in steps 4 to 8, deploy the release that ran before again (same steps without the migration), run the smoke test on it, and exit 1.
@@ -88,12 +88,42 @@ The host is one Linux server with Docker Engine and the compose plugin **v2.24 o
 1. Create a deploy user (for example `crove-deploy`) in the `docker` group. Membership of `docker` is equivalent to root on that machine, so this user and its key are as sensitive as root.
 2. Create an SSH key pair for the workflow (`ssh-keygen -t ed25519 -N '' -f deploy_key`). Put the public key in the deploy user's `~/.ssh/authorized_keys` with the `restrict` option (no port, agent or X11 forwarding, no terminal): `restrict ssh-ed25519 AAAA... crove-deploy`.
 3. Create the stack directory, owned by the deploy user, mode 700: `/opt/crove` by default (`DEPLOY_DIR`).
-4. Write the env file there as `.env` (or at `DEPLOY_ENV_FILE`), mode 600: start from `.env.example`, change every secret, and set at least `PUBLIC_URL` (the https address), `AUTH_AUTOCONFIRM=false` with a real SMTP server, `EXPORT_ENCRYPTION_KEY` and `TRUSTED_PROXY_HOPS=1` behind the reverse proxy. The pilot readiness checklist (M1-8) lists the rest.
-5. Optional: `compose.host.yml` in the same directory (for example, to drop Mailpit's loopback port, which the default compose file publishes for local use: `services: { mailpit: { ports: !reset [] } }`) for local changes the release files must not overwrite (a reverse proxy service, split `api` and `worker` services, extra volumes). Services it adds that run the Ludy images use `image: ${CROVE_IMAGE}` and `${CROVE_EXTRACT_IMAGE}`, which the deploy sets to the release's digests. `COMPOSE_PROFILES=prober` in the env file turns the prober on.
+4. Write the env file there as `.env` (or at `DEPLOY_ENV_FILE`), mode 600: start from `.env.example`, change every secret, and set at least `PUBLIC_URL` (the https address), `AUTH_AUTOCONFIRM=false` with a real SMTP server, `EXPORT_ENCRYPTION_KEY`, `BACKUP_ENCRYPTION_KEY`, `TRUSTED_PROXY_HOPS=1` behind the reverse proxy, `CROVE_MODULES=finance` and the `COMPOSE_FILE` of [The pilot layout](#the-pilot-layout). The pilot readiness checklist (M1-8, [pilot-readiness.md](pilot-readiness.md)) lists the rest, and `pnpm pilot:check` fails the settings it forbids.
+5. Optional: `compose.host.yml` in the same directory (for example, to drop Mailpit's loopback port, which the default compose file publishes for local use: `services: { mailpit: { ports: !reset [] } }`) for local changes the release files must not overwrite (a reverse proxy service, extra volumes; the split `api` and `worker` have a file of their own, below). Services it adds that run the Ludy images use `image: ${CROVE_IMAGE}` and `${CROVE_EXTRACT_IMAGE}`, which the deploy sets to the release's digests (and which a plain `docker compose` there does not know: export them from `releases/<current>/release.env`, `IMAGE=` and `EXTRACT_IMAGE=`, first). `COMPOSE_PROFILES=prober` in the env file turns the prober on.
 6. Put a TLS reverse proxy in front of `127.0.0.1:${PORT}` (the compose file publishes the port on loopback only). `tools/deploy/caddy/` holds one for this layout (a `compose.host.yml` and a `Caddyfile`); the whole server setup, from a fresh machine to the first deploy, is in [provision-pilot.md](provision-pilot.md).
 7. Read the host key for the workflow from a trusted session on the server (`ssh-keyscan -t ed25519 localhost` on the host itself, then replace `localhost` with the address the runner uses; for a port other than 22 the line starts with `[address]:port`). Do not take it from a scan over the network you are trying to protect.
 
 The first deploy creates `releases/`, `.deploy/` and the active compose files. After it, plain `docker compose` in the stack directory sees the same stack: `docker-compose.yml` is the running release's file and `docker-compose.override.yml` pins its images. With a `compose.host.yml`, add `COMPOSE_FILE=docker-compose.yml:docker-compose.override.yml:compose.host.yml` to the env file so that plain `docker compose` includes it too (the deploy passes the files itself). The nightly backup ([backup-and-restore.md](backup-and-restore.md)) runs `tools/backup` from a checkout with `CROVE_DIR` set to this directory.
+
+## The pilot layout
+
+`docker-compose.yml` on its own is the laptop layout: one `crove` container runs the API and the worker together (`command: all`), with every module on. Its API process then holds the worker's database login (`WORKER_DATABASE_URL`, which enters the system context of every org) and every secret, and Social's public routes answer on the public address. A deployment other people reach (a pilot) runs this instead (#2118, from the outside review of 2026-10-29):
+
+| | Laptop (`docker compose up`) | Pilot |
+|---|---|---|
+| Processes | one `crove` container, role `all` | `api` (HTTP edge) and `worker` (outbox, jobs, archive, extraction), same image |
+| Database login of the API | `crove_app` and `crove_worker` | `crove_app` only: no `WORKER_DATABASE_URL`, no `EXTRACT_URL`, not on the `extract` network |
+| Modules | every module | `CROVE_MODULES=finance` (kernel is always on) |
+| Prober | asks `crove` | asks `api` |
+
+`tools/deploy/compose.pilot.yml` makes the pilot layout. It extends the release's `crove` service, so every setting of `docker-compose.yml` reaches both services and nothing is copied; it moves `crove` behind the `all-in-one` profile and defaults `CROVE_MODULES` to `finance` for the API, the worker and the prober. Nothing in `docker-compose.yml` changes, so the laptop layout needs no new setting.
+
+1. Copy the file next to the release's `docker-compose.yml` on the host: `cp /opt/crove-src/tools/deploy/compose.pilot.yml /opt/crove/` (the checkout of [provision-pilot.md](provision-pilot.md), section 8). Like `compose.host.yml`, it is the host's: a release never overwrites it.
+2. In the env file set `CROVE_MODULES=finance` and list the file last: `COMPOSE_FILE=docker-compose.yml:docker-compose.override.yml:compose.host.yml:compose.pilot.yml`. `deploy.sh` passes it on after `compose.host.yml` when it is there. It sees `api` and `worker` and so rolls the worker first, then the API, and runs the smoke test on the API's port.
+3. Never put `all-in-one` in `COMPOSE_PROFILES`: that starts `crove` beside them, and `pnpm pilot:check` fails it.
+4. Check, once, after the first deploy:
+
+   ```bash
+   docker compose ps --services                                    # api, worker, ... and no crove
+   docker compose exec api printenv | cut -d= -f1 | grep -c '^WORKER_DATABASE_URL$'   # 0
+   docker compose exec worker printenv | cut -d= -f1 | grep -c '^CROVE_MODULES$'      # 1
+   ```
+
+A deployment without docker compose (Kubernetes, systemd) runs the same two roles from the one image (`api` and `worker` as the container command) and gives the worker, and only the worker, `WORKER_DATABASE_URL`, `EXTRACT_URL` and the archive settings. It names the roles in `CROVE_ROLES=api,worker` so `pilot:check` can tell.
+
+Going back to one container (a laptop, a test) is the same stack without `compose.pilot.yml` in `COMPOSE_FILE`; the services change, the database stays.
+
+Two more settings keep a pilot safe by default and are checked by `pnpm pilot:check` on a public `PUBLIC_URL`: `BACKUP_ENCRYPTION_KEY` (the backup bucket never holds the books unsealed) and a price in `AI_PRICE_INPUT_PER_MTOK` or `AI_PRICE_OUTPUT_PER_MTOK` whenever `AI_API_KEY` is set (without one the AI cost cap `ORG_LIMIT_AI_COST_PER_DAY` counts nothing). The kernel itself also refuses to start on a public `PUBLIC_URL` when a database URL (`DATABASE_URL`, `WORKER_DATABASE_URL`, `ADMIN_DATABASE_URL`, `DATABASE_LISTEN_URL`) carries one of the passwords this repository ships in `.env.example` and the compose fallbacks.
 
 ## Settings of each GitHub environment
 

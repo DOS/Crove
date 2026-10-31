@@ -28,6 +28,8 @@ const READY: Env = {
   ALERT_WEBHOOK_URL: `https://alerts.example.com/hook/${fake('hook')}`,
   PROBER_HEARTBEAT_URL: `https://hc.example.com/ping/${fake('check')}`,
   COMPOSE_PROFILES: 'prober',
+  COMPOSE_FILE: 'docker-compose.yml:docker-compose.override.yml:compose.host.yml:compose.pilot.yml',
+  CROVE_MODULES: 'finance',
   BACKUP_S3_ENDPOINT: 'https://backups.storage.example',
   BACKUP_S3_BUCKET: 'crove-backups',
   BACKUP_S3_ACCESS_KEY_ID: fake('backup-key'),
@@ -80,7 +82,7 @@ describe('pilot-check settings', () => {
     expect(line({ ...READY, CREDENTIAL_KEY_PREVIOUS: previous.toString('hex') })?.message).toContain(
       `the worker opens tokens sealed under the key in CREDENTIAL_KEY_FILE (docker compose: /data/keys/credential.key on the keys volume) and CREDENTIAL_KEY_PREVIOUS (${vaultKeyId(previous)}); `,
     );
-    expect(line(READY)?.message).toContain('docker compose logs crove | grep "cannot open"');
+    expect(line(READY)?.message).toContain('docker compose logs worker | grep "cannot open"');
     // A sample value fails as for every optional secret (Codex review): the worker would refuse it at start.
     expect(failing({ ...READY, CREDENTIAL_KEY_PREVIOUS: 'change-me' })).toEqual(['Secrets: CREDENTIAL_KEY_PREVIOUS still has a sample value']);
     expect(failing({ ...READY, CREDENTIAL_KEY: 'not-a-key', CREDENTIAL_KEY_PREVIOUS: previous.toString('hex').slice(2) })).toEqual([
@@ -92,7 +94,7 @@ describe('pilot-check settings', () => {
   it('passes a ready deployment and leaves the human items as manual', () => {
     const results = checkEnv(READY);
     expect(failures(results)).toEqual([]);
-    expect(results.filter((r) => r.status === 'manual').map((r) => r.item)).toEqual(['Alerts', 'Credential key', 'Extraction sandbox', 'RLS matrix', 'Backups', 'Evidence holds', 'Owner sign-off']);
+    expect(results.filter((r) => r.status === 'manual').map((r) => r.item)).toEqual(['Alerts', 'Credential key', 'Roles', 'Extraction sandbox', 'RLS matrix', 'Backups', 'Evidence holds', 'Owner sign-off']);
     // Evidence holds (#1009): the bucket's Object Lock is confirmed by hand; without S3 or with holds off, the owner
     // accepts that posted files are not held.
     const holds = (env: Record<string, string | undefined>) => checkEnv(env).find((r) => r.item === 'Evidence holds')?.message;
@@ -179,11 +181,10 @@ describe('pilot-check settings', () => {
     // The same 32 bytes written as hex are the same key.
     expect(failing({ ...READY, BACKUP_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('hex') })).toEqual([expect.stringContaining('give each its own key')]);
     expect(failing({ ...READY, BACKUP_HEARTBEAT_URL: 'http://hc.example.com/ping/x' })).toEqual([expect.stringContaining('BACKUP_HEARTBEAT_URL is not https')]);
-    // Without a key or a heartbeat it passes, and asks the owner to accept or fix each.
-    const manual = checkEnv({ ...READY, BACKUP_ENCRYPTION_KEY: undefined, BACKUP_HEARTBEAT_URL: undefined }).filter((r) => r.item === 'Backups' && r.status !== 'pass');
-    expect(manual.map((r) => r.status)).toEqual(['manual', 'manual', 'manual']);
+    // Without a heartbeat it passes, and asks the owner to accept or fix it. Without a key it fails (#2118, below).
+    const manual = checkEnv({ ...READY, BACKUP_HEARTBEAT_URL: undefined }).filter((r) => r.item === 'Backups' && r.status !== 'pass');
+    expect(manual.map((r) => r.status)).toEqual(['manual', 'manual']);
     expect(manual.map((r) => r.message)).toEqual([
-      expect.stringContaining('BACKUP_ENCRYPTION_KEY is unset'),
       expect.stringContaining('BACKUP_HEARTBEAT_URL is unset'),
       expect.stringContaining('restore onto a scratch stack passed'),
     ]);
@@ -204,6 +205,82 @@ describe('pilot-check settings', () => {
     expect(problems.some((p) => p.includes('AUTH_AUTOCONFIRM is unset'))).toBe(true);
     expect(problems.some((p) => p.includes('SMTP_HOST is unset'))).toBe(true);
     expect(problems.some((p) => p.startsWith('Sign-up limited: AUTH_DISABLE_SIGNUP is unset'))).toBe(true);
+  });
+
+  // #2118: the settings that make a deployment other people reach safe by default.
+  describe('pilot defaults (#2118)', () => {
+    const stripped = (message: string) => message.replace(/^[^:]+: /, '');
+
+    it('fails when the API and the worker run as the one all-in-one process', () => {
+      for (const env of [{ COMPOSE_FILE: undefined }, { COMPOSE_FILE: 'docker-compose.yml:compose.host.yml' }, { COMPOSE_FILE: 'docker-compose.yml:docker-compose.split.yml' }]) {
+        expect(failing({ ...READY, ...env }), JSON.stringify(env)).toEqual([expect.stringMatching(/^Roles: COMPOSE_FILE does not list compose\.pilot\.yml.*command all/)]);
+      }
+      expect(failing({ ...READY, COMPOSE_PROFILES: 'prober,all-in-one' })).toEqual([expect.stringMatching(/^Roles: COMPOSE_PROFILES includes all-in-one/)]);
+      expect(failing({ ...READY, COMPOSE_PROFILES: 'all-in-one' })).toEqual([expect.stringMatching(/^Roles: COMPOSE_PROFILES includes all-in-one/)]);
+    });
+
+    it('accepts the pilot compose file in any position, as a path, with either list separator', () => {
+      for (const file of ['compose.pilot.yml', '/opt/crove/docker-compose.yml:/opt/crove/compose.pilot.yml', 'docker-compose.yml;compose.pilot.yml;compose.host.yml', String.raw`C:\crove\docker-compose.yml;C:\crove\compose.pilot.yml`]) {
+        expect(failing({ ...READY, COMPOSE_FILE: file }), file).toEqual([]);
+      }
+      // A file that only ends the same way is another file.
+      expect(failing({ ...READY, COMPOSE_FILE: 'docker-compose.yml:my-compose.pilot.yml' })).toEqual([expect.stringContaining('Roles: COMPOSE_FILE does not list')]);
+    });
+
+    it('takes the roles a deployment without docker compose names in CROVE_ROLES', () => {
+      expect(failing({ ...READY, COMPOSE_FILE: undefined, CROVE_ROLES: 'api, worker' })).toEqual([]);
+      expect(failing({ ...READY, COMPOSE_FILE: undefined, CROVE_ROLES: 'worker,api' })).toEqual([]);
+      expect(failing({ ...READY, COMPOSE_FILE: undefined, CROVE_ROLES: 'all' })).toEqual([expect.stringContaining('Roles: CROVE_ROLES includes all')]);
+      expect(failing({ ...READY, COMPOSE_FILE: undefined, CROVE_ROLES: 'api' })).toEqual([expect.stringContaining('Roles: CROVE_ROLES must name both api and worker')]);
+      expect(failing({ ...READY, COMPOSE_FILE: undefined, CROVE_ROLES: 'api,worker,all' })).toEqual([expect.stringContaining('CROVE_ROLES includes all')]);
+    });
+
+    it('fails an empty or unknown CROVE_MODULES', () => {
+      for (const modules of [undefined, '', '  ', ' , ']) {
+        expect(failing({ ...READY, CROVE_MODULES: modules }), String(modules)).toEqual([expect.stringMatching(/^Modules: CROVE_MODULES is empty: .*Social's public routes/)]);
+      }
+      // The prober refuses the same list on its own (Alerts), so look at the item.
+      expect(failing({ ...READY, CROVE_MODULES: 'finance,sosial' })).toContainEqual(expect.stringContaining('Modules: CROVE_MODULES names 1 module(s) this build does not ship'));
+      expect(failing({ ...READY, CROVE_MODULES: 'Finance, CRM' })).toEqual([]);
+    });
+
+    it('fails backups with no BACKUP_ENCRYPTION_KEY and drops the manual line it replaces', () => {
+      const env = { ...READY, BACKUP_ENCRYPTION_KEY: undefined };
+      expect(failing(env)).toEqual([expect.stringMatching(/^Backups: BACKUP_ENCRYPTION_KEY is unset: whoever can read the backup bucket/)]);
+      expect(checkEnv(env).filter((r) => r.status === 'manual' && r.message.startsWith('BACKUP_ENCRYPTION_KEY is unset'))).toEqual([]);
+      expect(failing({ ...env, BACKUP_ENCRYPTION_KEY: ' ' })).toHaveLength(1);
+    });
+
+    it('fails an AI key with every AI_PRICE_* at 0, so the cost cap does nothing', () => {
+      const ai = { ...READY, AI_API_KEY: fake('ai') };
+      const expected = [expect.stringMatching(/^AI cost cap: AI_API_KEY is set while AI_PRICE_INPUT_PER_MTOK and AI_PRICE_OUTPUT_PER_MTOK are both 0/)];
+      expect(failing(ai)).toEqual(expected);
+      expect(failing({ ...ai, AI_PRICE_INPUT_PER_MTOK: '0', AI_PRICE_OUTPUT_PER_MTOK: '0.0' })).toEqual(expected);
+      expect(failing({ ...ai, AI_PRICE_INPUT_PER_MTOK: '3' })).toEqual([]);
+      expect(failing({ ...ai, AI_PRICE_OUTPUT_PER_MTOK: '15.5' })).toEqual([]);
+      // No key, no AI calls, nothing to cap.
+      expect(failing({ ...READY, AI_API_KEY: undefined })).toEqual([]);
+      expect(failing({ ...READY, AI_API_KEY: '' })).toEqual([]);
+    });
+
+    it('names the setting, never its value', () => {
+      const secret = fake('never-print-this', 40);
+      const env = { ...READY, COMPOSE_FILE: secret, CROVE_MODULES: secret, AI_API_KEY: secret, CROVE_ROLES: secret, BACKUP_ENCRYPTION_KEY: undefined };
+      const messages = failures(checkEnv(env)).map((r) => stripped(r.message));
+      expect(messages.length).toBeGreaterThanOrEqual(4);
+      for (const message of messages) expect(message).not.toContain(secret);
+    });
+
+    it('checks none of this on a loopback or unset PUBLIC_URL, where TLS already fails', () => {
+      const local = { ...READY, PUBLIC_URL: 'http://localhost:8080', COMPOSE_FILE: undefined, CROVE_MODULES: undefined, AI_API_KEY: fake('ai'), BACKUP_ENCRYPTION_KEY: undefined };
+      const items = failures(checkEnv(local)).map((r) => r.item);
+      expect(items).toEqual(['TLS']);
+      expect(checkEnv(local).some((r) => r.item === 'Roles' || r.item === 'Modules' || r.item === 'AI cost cap')).toBe(false);
+    });
+
+    it('asks a person to confirm the running roles', () => {
+      expect(checkEnv(READY).find((r) => r.item === 'Roles' && r.status === 'manual')?.message).toMatch(/docker compose ps lists api and worker and no crove service/);
+    });
   });
 
   it('requires https on the public URLs browsers open', () => {
@@ -453,7 +530,7 @@ describe('pilot-check command', () => {
     const lines: string[] = [];
     const print = (line: string) => lines.push(line);
     expect(await runPilotCheck([], READY, fakeFetch({}), print)).toBe(PILOT_EXIT.ok);
-    expect(lines.join('\n')).toContain('Automatic checks passed. Confirm the 7 manual item(s)');
+    expect(lines.join('\n')).toContain('Automatic checks passed. Confirm the 8 manual item(s)');
     expect(await runPilotCheck(['--url', 'https://crove.example.com'], READY, fakeFetch(healthy), print)).toBe(PILOT_EXIT.ok);
     lines.length = 0;
     expect(await runPilotCheck([], { ...READY, AUTH_DISABLE_SIGNUP: 'false' }, fakeFetch({}), print)).toBe(PILOT_EXIT.failed);

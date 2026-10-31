@@ -70,6 +70,30 @@ describe('configuration guards', () => {
     expect(() => loadConfig({ ...base, PUBLIC_URL: 'https://books.example.com', PUBLIC_AUTH_URL: 'https://auth.example.com/auth/v1' })).not.toThrow();
   });
 
+  // #2118: docker-compose.yml falls back to published passwords for an unset one; on a public URL the kernel refuses them.
+  it('refuses a sample database password on a public PUBLIC_URL, naming the setting and never the value', () => {
+    const publicBase = { ...base, PUBLIC_URL: 'https://books.example.com', PUBLIC_AUTH_URL: 'https://auth.example.com/auth/v1' };
+    const sample = (name: string, password: string) => ({ ...publicBase, [name]: `postgres://crove_x:${password}@db:5432/postgres` });
+    for (const name of ['DATABASE_URL', 'WORKER_DATABASE_URL', 'ADMIN_DATABASE_URL', 'DATABASE_LISTEN_URL']) {
+      for (const password of ['local-app-password', 'local-worker-password', 'local-postgres-password', 'change-me-app', 'my-Change-Me-pass', encodeURIComponent('change-me-worker')]) {
+        let message = '';
+        try {
+          loadConfig(sample(name, password));
+        } catch (error) {
+          message = error instanceof Error ? error.message : String(error);
+        }
+        expect(message, `${name} ${password}`).toContain(`${name} carries a database password shipped in .env.example or docker-compose.yml`);
+        expect(message).not.toContain(password);
+      }
+      expect(() => loadConfig(sample(name, 'r4nd0m-Pa55-0123456789abcdef'))).not.toThrow();
+    }
+    // Locally the compose fallbacks are the documented default.
+    expect(() => loadConfig({ ...base, DATABASE_URL: 'postgres://crove_app:local-app-password@db:5432/postgres' })).not.toThrow();
+    expect(() => loadConfig({ ...base, PUBLIC_URL: 'http://localhost:8080', DATABASE_URL: 'postgres://crove_app:local-app-password@db:5432/postgres' })).not.toThrow();
+    // No password in the URL, or no URL at all (the connection fails on its own later), is not a sample password.
+    expect(() => loadConfig({ ...publicBase, DATABASE_URL: 'postgres://localhost/x' })).not.toThrow();
+  });
+
   // ADR-0028 section 1 and 3.
   it('refuses to boot without an issuer', () => {
     expect(() => loadConfig({ ...base, AUTH_ISSUER: undefined })).toThrow(/AUTH_ISSUER/);

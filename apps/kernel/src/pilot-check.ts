@@ -8,6 +8,7 @@
 // Exit codes: 0 every automatic check passed, 1 a check failed, 2 the check could not run (bad arguments).
 import { randomBytes } from 'node:crypto';
 import { S3BlobStore, parseVaultKey, type S3Sender } from '@crove/kernel-runtime';
+import { AVAILABLE_MODULES, SAMPLE_DB_PASSWORDS } from './config.ts';
 import { parseExportKey } from './export-seal.ts';
 import { loadProberConfig } from './prober.ts';
 
@@ -43,21 +44,12 @@ export const REQUIRED_SECRETS = [
 ] as const;
 
 export const KNOWN_DEFAULTS: ReadonlySet<string> = new Set([
+  // The database passwords of .env.example and the docker-compose.yml fallbacks, which the kernel also refuses in a
+  // database URL on a public PUBLIC_URL (config.ts).
+  ...SAMPLE_DB_PASSWORDS,
   // .env.example
-  'change-me-postgres',
-  'change-me-app',
-  'change-me-worker',
-  'change-me-prober',
-  'change-me-reporter',
-  'change-me-auth',
   'change-me-to-a-long-random-string-0123456789',
-  // docker-compose.yml fallbacks
-  'local-postgres-password',
-  'local-app-password',
-  'local-worker-password',
-  'local-prober-password',
-  'local-reporter-password',
-  'local-auth-password',
+  // docker-compose.yml fallback
   'local-only-jwt-secret-change-me-0123456789',
   // docker-compose.split.yml (a local test stack)
   'split-stack-inbound-secret-0123456789abcdef',
@@ -125,6 +117,52 @@ function secretProblem(name: string, secret: string | undefined, minLength: numb
   return null;
 }
 
+// The compose files a split pilot lists in COMPOSE_FILE (docs/runbooks/deploy.md): compose.pilot.yml moves the all-in-one
+// `crove` service behind the `all-in-one` profile and starts `api` and `worker` apart (tools/deploy/compose.pilot.yml).
+const PILOT_COMPOSE_FILE = 'compose.pilot.yml';
+
+function list(raw: string | undefined, separator: RegExp): string[] {
+  return (raw ?? '')
+    .split(separator)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+// Whether the API and the worker run as separate processes. The all-in-one role (`all`) gives the HTTP edge the worker's
+// database login, which enters the system context of every org, and every secret. The deployment's compose files tell
+// (COMPOSE_FILE lists compose.pilot.yml, COMPOSE_PROFILES does not start the all-in-one service); a deployment without
+// docker compose names its roles in CROVE_ROLES. Names settings only, never a value.
+function rolesProblem(env: Env): string | null {
+  if (list(value(env, 'COMPOSE_PROFILES'), /,/).includes('all-in-one')) {
+    return 'COMPOSE_PROFILES includes all-in-one: the API then runs with the worker in one container (command all), on the worker database login and every secret; drop that profile and run api and worker apart (docs/runbooks/deploy.md)';
+  }
+  const roles = list(value(env, 'CROVE_ROLES')?.toLowerCase(), /[\s,]+/);
+  if (roles.length > 0) {
+    if (roles.includes('all')) return 'CROVE_ROLES includes all: run api and worker as separate processes (docs/runbooks/deploy.md)';
+    return roles.includes('api') && roles.includes('worker') ? null : 'CROVE_ROLES must name both api and worker, each as its own container or service (docs/runbooks/deploy.md)';
+  }
+  // The list separator is ':' (';' on Windows hosts), and an entry may be a path: the file name is matched as a whole entry.
+  if (/(?:^|[:;/\\])compose\.pilot\.yml(?:$|[:;])/.test(value(env, 'COMPOSE_FILE') ?? '')) return null;
+  return `COMPOSE_FILE does not list ${PILOT_COMPOSE_FILE} and CROVE_ROLES is unset: docker compose then starts the all-in-one crove service (command all), with the API on the worker database login and every secret; list ${PILOT_COMPOSE_FILE} (docs/runbooks/deploy.md), or name the roles in CROVE_ROLES for a deployment without docker compose`;
+}
+
+// CROVE_MODULES names the modules the pilot runs; empty runs every module, Social's public routes included.
+function modulesProblem(env: Env): string | null {
+  const names = list(value(env, 'CROVE_MODULES')?.toLowerCase(), /,/);
+  if (names.length === 0) {
+    return `CROVE_MODULES is empty: the deployment then runs every module (${AVAILABLE_MODULES.join(', ')}), Social's public routes among them; set CROVE_MODULES=finance, or the modules the pilot uses (docs/runbooks/deploy.md)`;
+  }
+  const unknown = names.filter((name) => !(AVAILABLE_MODULES as readonly string[]).includes(name));
+  return unknown.length > 0 ? `CROVE_MODULES names ${unknown.length} module(s) this build does not ship (available: ${AVAILABLE_MODULES.join(', ')}); the kernel refuses to start on it` : null;
+}
+
+// The per-org AI cost limit counts tokens at AI_PRICE_*; with both at 0 every call costs nothing to the cap.
+function aiCostProblem(env: Env): string | null {
+  if (value(env, 'AI_API_KEY') === undefined) return null;
+  const priced = ['AI_PRICE_INPUT_PER_MTOK', 'AI_PRICE_OUTPUT_PER_MTOK'].some((name) => Number(value(env, name) ?? '0') > 0);
+  return priced ? null : 'AI_API_KEY is set while AI_PRICE_INPUT_PER_MTOK and AI_PRICE_OUTPUT_PER_MTOK are both 0: AI usage then costs nothing to ORG_LIMIT_AI_COST_PER_DAY and the cap does nothing; set the price of the model per million tokens';
+}
+
 /** Checks the deployment's settings (the .env docker compose reads, or the environment of a non-compose deploy). */
 export function checkEnv(env: Env): CheckResult[] {
   const results: CheckResult[] = [];
@@ -156,6 +194,15 @@ export function checkEnv(env: Env): CheckResult[] {
     );
   }
   add('TLS', tls, 'PUBLIC_URL and the other browser-facing URLs are https, and TRUSTED_PROXY_HOPS counts the reverse proxy in front');
+
+  // The settings below guard a deployment other people reach: a loopback or unset PUBLIC_URL is a local run, and TLS
+  // above already fails it.
+  const publicDeployment = publicUrl !== undefined && URL.canParse(publicUrl) && !isLocalHost(new URL(publicUrl).hostname);
+  if (publicDeployment) {
+    add('Roles', [rolesProblem(env)], 'the API and the worker run as separate processes (api and worker), not as the all-in-one role');
+    add('Modules', [modulesProblem(env)], `CROVE_MODULES=${list(value(env, 'CROVE_MODULES')?.toLowerCase(), /,/).join(',')}: only those modules run (kernel is always on)`);
+    add('AI cost cap', [aiCostProblem(env)], value(env, 'AI_API_KEY') === undefined ? 'no AI key is set: no AI call is made' : 'AI_PRICE_* is set, so ORG_LIMIT_AI_COST_PER_DAY counts the AI cost');
+  }
 
   // Secrets: none left at a value this public repository ships.
   const secrets: (string | null)[] = REQUIRED_SECRETS.map((name) =>
@@ -303,6 +350,8 @@ export function checkEnv(env: Env): CheckResult[] {
     } catch {
       backups.push('BACKUP_ENCRYPTION_KEY is not 32 bytes as base64 or hex (openssl rand -base64 32)');
     }
+  } else if (publicDeployment) {
+    backups.push('BACKUP_ENCRYPTION_KEY is unset: whoever can read the backup bucket can read the books; set a key of its own, kept apart from the bucket (openssl rand -base64 32, docs/runbooks/backup-and-restore.md)');
   }
   const backupHeartbeat = value(env, 'BACKUP_HEARTBEAT_URL');
   if (backupHeartbeat) backups.push(secretUrlProblem('BACKUP_HEARTBEAT_URL', backupHeartbeat));
@@ -364,9 +413,18 @@ export function checkEnv(env: Env): CheckResult[] {
       status: 'manual',
       message:
         `the worker opens tokens sealed under ${credentialKeys.length > 0 ? credentialKeys.join(' and ') : 'no valid key (see Secrets)'}; ` +
-        'confirm its log since its last start has no "[credential-reseal] ERROR sealed under a key this worker cannot open" line (docker compose logs crove | grep "cannot open"; ' +
-        'the worker service with docker-compose.split.yml): the key was lost, or CREDENTIAL_KEY_PREVIOUS removed before every channel token and team chat target was resealed (docs/runbooks/credential-key.md)',
+        'confirm its log since its last start has no "[credential-reseal] ERROR sealed under a key this worker cannot open" line (docker compose logs worker | grep "cannot open"; ' +
+        'the crove service in the all-in-one layout): the key was lost, or CREDENTIAL_KEY_PREVIOUS removed before every channel token and team chat target was resealed (docs/runbooks/credential-key.md)',
     },
+    ...(publicDeployment
+      ? [
+          {
+            item: 'Roles',
+            status: 'manual' as const,
+            message: 'confirm docker compose ps lists api and worker and no crove service, and that the API container has no WORKER_DATABASE_URL (docker compose exec api printenv | cut -d= -f1 | grep -c WORKER_DATABASE_URL prints 0)',
+          },
+        ]
+      : []),
     {
       item: 'Extraction sandbox',
       status: 'manual',
@@ -377,7 +435,7 @@ export function checkEnv(env: Env): CheckResult[] {
       status: 'manual',
       message: `${RLS_MANUAL} (with --url, pilot-check reads them from GitHub)`,
     },
-    ...(backupKey
+    ...(backupKey || publicDeployment
       ? []
       : [
           {

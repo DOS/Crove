@@ -1,0 +1,53 @@
+# The pilot's process layout (issue #2118, docs/runbooks/deploy.md, "The pilot layout"): the HTTP API and the worker run
+# as two containers of the same image, and only the finance module runs. docker-compose.yml alone runs both in the one
+# `crove` container (command `all`), where the API holds the worker's all-org database login (WORKER_DATABASE_URL) and
+# every secret, and every module is on, Social's public routes included. That is right for `docker compose up` on a
+# laptop and wrong for a deployment other people reach.
+#
+# Copy this file next to the release's docker-compose.yml on the host (/opt/crove) and list it last in COMPOSE_FILE:
+#
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.override.yml:compose.host.yml:compose.pilot.yml
+#
+# tools/deploy/deploy.sh passes it on after compose.host.yml when it is there, and rolls the worker before the API. It
+# extends the release's `crove` service, so every setting of docker-compose.yml reaches both and stays in step. Images:
+# ${CROVE_IMAGE}, which the deploy exports (the release's digest); a stack built from a checkout falls back to the
+# locally built crove:local.
+services:
+  # Not started unless COMPOSE_PROFILES lists all-in-one; `pnpm pilot:check` fails a public deployment that does.
+  crove:
+    profiles: ['all-in-one']
+
+  # The HTTP edge: web app, /api and the /auth/v1 proxy. It never gets the worker's database login, never reaches the
+  # parsing sandbox and is not on its network.
+  api:
+    extends:
+      file: docker-compose.yml
+      service: crove
+    image: ${CROVE_IMAGE:-crove:local}
+    command: ['api']
+    environment:
+      CROVE_MODULES: ${CROVE_MODULES:-finance}
+      WORKER_DATABASE_URL: !reset null
+      EXTRACT_URL: !reset null
+    networks: !override
+      - default
+
+  # Outbox relay, jobs, the archive and the extraction client. It opens no port; the image's healthcheck probes the API
+  # port, so it is off here.
+  worker:
+    extends:
+      file: docker-compose.yml
+      service: crove
+    image: ${CROVE_IMAGE:-crove:local}
+    command: ['worker']
+    healthcheck:
+      disable: true
+    environment:
+      CROVE_MODULES: ${CROVE_MODULES:-finance}
+    ports: !reset []
+
+  # The prober reads the modules the deployment runs and asks Supabase Auth through the API's proxy: `crove` does not run.
+  prober:
+    environment:
+      CROVE_MODULES: ${CROVE_MODULES:-finance}
+      PROBER_AUTH_URL: ${PROBER_AUTH_URL:-http://api:8080/auth/v1}

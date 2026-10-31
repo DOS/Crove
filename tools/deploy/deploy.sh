@@ -281,6 +281,7 @@ smoke() {
 # State on the host, under $DEPLOY_DIR:
 #   .env                         the instance's settings and secrets (owner managed; or --env-file)
 #   compose.host.yml             optional owner managed override (reverse proxy, split roles, profiles)
+#   compose.pilot.yml            optional: the split API and worker with the finance module only (tools/deploy/compose.pilot.yml)
 #   docker-compose.yml           the running release's compose file
 #   docker-compose.override.yml  the running release's image pins (generated), so plain `docker compose` in this
 #                                directory (and tools/backup) sees the same stack
@@ -344,6 +345,8 @@ guard_run() {
 dc() {
   local args=(compose --project-directory "$DEPLOY_DIR" --env-file "$ENV_FILE" -f "$DEPLOY_DIR/docker-compose.yml" -f "$DEPLOY_DIR/docker-compose.override.yml")
   if [ -f "$DEPLOY_DIR/compose.host.yml" ]; then args+=(-f "$DEPLOY_DIR/compose.host.yml"); fi
+  # The pilot's split API and worker (tools/deploy/compose.pilot.yml, #2118), last so its profiles and overrides win.
+  if [ -f "$DEPLOY_DIR/compose.pilot.yml" ]; then args+=(-f "$DEPLOY_DIR/compose.pilot.yml"); fi
   docker "${args[@]}" "$@"
 }
 

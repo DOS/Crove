@@ -578,6 +578,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     if (config.AUTH_JWT_SECRET && SAMPLE_SECRETS.has(config.AUTH_JWT_SECRET)) {
       throw new Error('AUTH_JWT_SECRET is a sample value; generate a random secret before exposing Crove');
     }
+    // docker-compose.yml falls back to these passwords when a variable is unset, so a deployment that forgot one would
+    // otherwise run its database logins on a value this public repository publishes. Only the setting is named.
+    for (const name of ['DATABASE_URL', 'WORKER_DATABASE_URL', 'ADMIN_DATABASE_URL', 'DATABASE_LISTEN_URL'] as const) {
+      if (hasSampleDbPassword(config[name])) {
+        throw new Error(`${name} carries a database password shipped in .env.example or docker-compose.yml; set a random one (openssl rand -base64 24) before exposing Crove`);
+      }
+    }
     if ([config.TURNSTILE_SITE_KEY, config.TURNSTILE_SECRET].some((key) => key !== undefined && TURNSTILE_TEST_KEY.test(key))) {
       throw new Error("TURNSTILE_SITE_KEY or TURNSTILE_SECRET is one of Cloudflare's test keys; use the widget's real keys before exposing Crove");
     }
@@ -632,6 +639,36 @@ export const EMAIL_BUDGET_MIN_CLIENTS = 10;
 
 // Values shipped in docker-compose.yml and .env.example. Fine on localhost, never on a public URL.
 const SAMPLE_SECRETS = new Set(['local-only-jwt-secret-change-me-0123456789', 'change-me-to-a-long-random-string-0123456789']);
+// Database passwords shipped in docker-compose.yml (the fallbacks) and .env.example. The rule is checked on a public
+// PUBLIC_URL when the kernel loads its settings; pilot-check keeps its own list in step (KNOWN_DEFAULTS).
+export const SAMPLE_DB_PASSWORDS: ReadonlySet<string> = new Set([
+  'local-postgres-password',
+  'local-app-password',
+  'local-worker-password',
+  'local-prober-password',
+  'local-reporter-password',
+  'local-auth-password',
+  'change-me-postgres',
+  'change-me-app',
+  'change-me-worker',
+  'change-me-prober',
+  'change-me-reporter',
+  'change-me-auth',
+]);
+
+// Whether a database URL carries one of those passwords, or any `change-me` placeholder. A value that is not a URL
+// has no password to read here (the connection itself fails later).
+export function hasSampleDbPassword(url: string | undefined): boolean {
+  if (url === undefined || !URL.canParse(url)) return false;
+  let password = new URL(url).password;
+  try {
+    password = decodeURIComponent(password);
+  } catch {
+    // Keep the raw spelling.
+  }
+  return SAMPLE_DB_PASSWORDS.has(password) || /change-?me/i.test(password);
+}
+
 // The context token key the test suites use (vitest.config.ts, vitest.invariant.config.ts): public, so never a
 // deployment's.
 const SAMPLE_CONTEXT_TOKEN_KEYS = [Buffer.from('test-only-context-token-key-0123456789')];
