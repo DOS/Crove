@@ -23,7 +23,7 @@ export const kernelManifest = defineModule({
       auth_session_org: columns(['org_id', 'user_id', 'session_id', 'status', 'first_seen_at', 'last_seen_at', 'revoked_at', 'revoked_by', 'reason']),
       availability_rule: columns(['org_id', 'id', 'user_id', 'weekday', 'start_minute', 'end_minute', 'time_zone', 'created_by', 'created_at']),
       budget_policy: columns(['org_id', 'id', 'scope', 'target', 'monthly_limit', 'warn_percent', 'hard_stop', 'updated_by', 'updated_at']),
-      calendar_connection: columns(['org_id', 'id', 'user_id', 'provider', 'scopes', 'status', 'status_reason', 'expires_at', 'last_synced_at', 'write_back', 'connected_at', 'updated_at'], { external_account: 'pii', display_name: 'pii' }),
+      calendar_connection: columns(['org_id', 'id', 'user_id', 'provider', 'scopes', 'status', 'status_reason', 'expires_at', 'last_synced_at', 'write_back', 'connected_at', 'updated_at'], { external_account: 'contact', display_name: 'contact' }),
       calendar_credential: columns(['org_id', 'id', 'key_id', 'created_at', 'sealed_at'], { envelope: 'sensitive' }),
       calendar_event: columns(['org_id', 'id', 'user_id', 'starts_at', 'ends_at', 'time_zone', 'title', 'kind', 'status', 'created_by', 'created_at', 'cancelled_by', 'cancelled_at', 'source_id', 'external_id']),
       channel_connection: columns(['org_id', 'id', 'provider', 'scopes', 'status', 'status_reason', 'connected_by', 'expires_at', 'connected_at', 'updated_at'], { external_account_id: 'pii', display_name: 'pii' }),
