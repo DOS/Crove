@@ -239,6 +239,12 @@ export const calendarFinishDisconnect = defineCommand({
       }
       return { connectionId: input.connectionId, finished: false };
     }
+    // Disconnected again after the worker read the older disconnect, which ended without a revoke (it gave up, or could
+    // not open the old token): the new disconnect has a newer token the worker has yet to try, so it is left for the next
+    // sweep. After a revoke the whole grant is gone, the newer token's too, and it finishes.
+    if (!input.revoked && input.ifVersion !== undefined && Math.floor(row.updated_at.getTime()) !== Date.parse(input.ifVersion)) {
+      return { connectionId: input.connectionId, finished: false };
+    }
     await sql`SELECT crove_kernel.calendar_credential_drop(${input.connectionId}::uuid)`.execute(ctx.trx).catch(calendarError);
     await ctx.trx.deleteFrom('crove_kernel.calendar_connection').where('org_id', '=', ctx.orgId).where('id', '=', input.connectionId).execute();
     ctx.audit({ connection_id: input.connectionId, provider: row.provider, revoked: input.revoked, ...(input.reason ? { reason: input.reason } : {}) });

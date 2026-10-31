@@ -106,6 +106,9 @@ async function disconnectSeen(deps: CalendarSyncDeps, job: CalendarSyncJob, stat
   try {
     secret = deps.broker.open({ keyId: sealed.keyId, envelope: Buffer.from(sealed.envelope, 'base64') }, calendarBinding(job.orgId, sealed.provider as CalendarProvider, sealed.externalAccount));
   } catch (error) {
+    // No credential key on the server at all (the key and its file removed, the Google app still configured): the broker
+    // answers BROKER_NOT_CONFIGURED. The key may come back, so retry until the give-up time, then remove the connection.
+    if (error instanceof DomainError && error.code === 'BROKER_NOT_CONFIGURED') return expired ? finish(false, 'no_credential_key') : { outcome: 'retry', reason: 'no_credential_key' };
     if (!(error instanceof CredentialError)) throw error;
     if (error.message.startsWith(UNKNOWN_KEY) && !expired) return { outcome: 'retry', reason: 'unknown_key' };
     return finish(false, 'credential_unreadable');

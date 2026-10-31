@@ -274,6 +274,23 @@ suite('outside calendars on PostgreSQL (#2123)', () => {
     expect(await o.query<unknown[]>(o.member, 'kernel.calendar.connections', {})).toHaveLength(1);
   });
 
+  it('leaves a newer disconnect for the next sweep when an older one ended without a revoke', async () => {
+    const o = await org();
+    const c = await connect(o, o.member);
+    await o.exec(o.member, 'kernel.calendar.disconnect', { connectionId: c.connectionId });
+    const seen = await o.sysQuery<{ updatedAt: string }>('kernel.calendar.connection_state', { connectionId: c.connectionId });
+    // The member connects again and disconnects again while the worker waits on Google for the older one.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await connect(o, o.member, c.account, JSON.stringify({ accessToken: 'access-6', refreshToken: 'refresh-6' }));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await o.exec(o.member, 'kernel.calendar.disconnect', { connectionId: c.connectionId });
+    // The older one gave up: it must not delete the newer one's token before the worker has tried to revoke it.
+    expect(await o.sys('kernel.calendar.finish_disconnect', { connectionId: c.connectionId, revoked: false, reason: 'revoke_failed', ifVersion: seen.updatedAt })).toMatchObject({ finished: false });
+    await expect(o.sysQuery('kernel.calendar.credential', { connectionId: c.connectionId })).resolves.toMatchObject({ provider: 'google' });
+    // After a revoke the whole grant is gone, the newer token's too: it finishes.
+    expect(await o.sys('kernel.calendar.finish_disconnect', { connectionId: c.connectionId, revoked: true, ifVersion: seen.updatedAt })).toMatchObject({ finished: true });
+  });
+
   it('keeps a connection the member connected again while its revoke was pending', async () => {
     const o = await org();
     const c = await connect(o, o.member);

@@ -252,6 +252,13 @@ describe('runCalendarDisconnect', () => {
     expect(await disconnect(fakeRuntime(going, unknown).runtime, adapter(), new Date(NOW.getTime() + 4 * 86_400_000))).toEqual({ outcome: 'disconnected', revoked: false, reason: 'credential_unreadable' });
   });
 
+  it('retries a disconnect while the server has no credential key, and removes it after the give-up time', async () => {
+    const noKey = { ...vault, seal: vault.seal.bind(vault), open: () => { throw new DomainError('BROKER_NOT_CONFIGURED', 503, 'x'); }, id: 'none' } as unknown as typeof vault;
+    const run = (rt: Runtime, at: Date) => runCalendarDisconnect({ runtime: rt, broker: noKey, adapters: { google_calendar: adapter() }, now: () => at }, { orgId: ORG, connectionId: CONNECTION });
+    expect(await run(fakeRuntime(going, seal(SECRET)).runtime, NOW)).toEqual({ outcome: 'retry', reason: 'no_credential_key' });
+    expect(await run(fakeRuntime(going, seal(SECRET)).runtime, new Date(NOW.getTime() + 4 * 86_400_000))).toEqual({ outcome: 'disconnected', revoked: false, reason: 'no_credential_key' });
+  });
+
   it('counts a finish the kernel did not make as skipped, not as a disconnect', async () => {
     const { runtime } = fakeRuntime(going, seal(SECRET));
     (runtime as unknown as { execute: () => Promise<unknown> }).execute = async () => ({ finished: false });
