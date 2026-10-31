@@ -20,8 +20,8 @@ export interface AiConfig {
   supportsStructuredOutputs?: boolean;
   timeoutMs?: number;
   // Times a call is sent again after a 429, a 5xx or a network error (the AI SDK's own retry, with its backoff and the
-  // provider's retry-after). Unset: the SDK's default of 2. Each attempt can take timeoutMs, so a document's call holds a
-  // worker slot for (1 + maxRetries) x timeoutMs at most (#2119).
+  // provider's retry-after). Unset: the SDK's default of 2. The timeout covers the whole call, retries included, so this
+  // bounds the provider calls a failing document costs to 1 + maxRetries (#2119).
   maxRetries?: number;
 }
 

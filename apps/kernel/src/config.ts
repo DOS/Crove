@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
+import { EXTRACT_TIMING } from '@crove/extract-contract';
 import type { UsageLimits } from '@crove/kernel';
 import { SIGNUP_POLICIES, parseAllowedDomains } from './auth-signup-policy.ts';
 import { WEBHOOK_ENV } from './alert.ts';
@@ -356,13 +357,15 @@ const schema = z.object({
   EXTRACT_URL: optional.pipe(z.url({ protocol: /^https?$/ }).optional()),
   // Extract jobs the worker runs at once (#2119), each one reading a file and, for a PDF or a photo, calling the AI. Unset:
   // 4, or the sandbox's slots when it has fewer. EXTRACT_CONCURRENCY is the sandbox's own setting of that name (its
-  // parser slots, 1 to 8); give the worker the same value, since it cannot ask. The worker never runs more extract jobs
-  // than the sandbox has slots, and keeps within the AI provider's rate limit by this setting going down, not up.
+  // parser slots, 1 to 8, the sandbox's own default being 1); give the worker the same value, since it cannot ask: docker
+  // compose passes 4 to both. The worker never runs more extract jobs than the sandbox has slots, and keeps within the AI
+  // provider's rate limit by this setting going down, not up.
   EXTRACT_WORKER_CONCURRENCY: z.preprocess((v) => (typeof v === 'string' && v.trim() === '' ? undefined : v), z.coerce.number().int().min(1).max(8).optional()),
-  EXTRACT_CONCURRENCY: z.preprocess((v) => (typeof v === 'string' && v.trim() === '' ? undefined : v), z.coerce.number().int().min(1).max(8).default(DEFAULT_EXTRACT_WORKER_CONCURRENCY)),
+  EXTRACT_CONCURRENCY: z.preprocess((v) => (typeof v === 'string' && v.trim() === '' ? undefined : v), z.coerce.number().int().min(1).max(8).default(EXTRACT_TIMING.concurrency)),
   // Times the AI SDK sends an invoice-reading call again after a 429, a 5xx or a network error, before the document's
-  // job fails and pg-boss retries it (#2119). Each attempt waits up to 120 s, so the default 1 holds a
-  // concurrency slot for at most 2 x 120 s instead of the SDK's 3 x 120 s; 0 sends each call once.
+  // job fails and pg-boss retries it (#2119). The whole call, retries included, stops at the 120 s timeout; this bounds
+  // the provider calls one document costs to 1 + AI_MAX_RETRIES (2 by default, the SDK's own default being 3), and so
+  // the cost and the rate-limit load of a document that keeps failing. 0 sends each call once.
   AI_MAX_RETRIES: z.preprocess((v) => (typeof v === 'string' && v.trim() === '' ? undefined : v), z.coerce.number().int().min(0).max(5).default(1)),
   // Outbound mail (invites, issue #129), the same SMTP settings the bundled Supabase Auth uses. Unset SMTP_HOST: mail
   // is off, and the inviter passes the link on. Port 465 is implicit TLS; with SMTP_USER and SMTP_PASS on any other
@@ -530,7 +533,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
         'with a remote Supabase Auth, restrict sign-up there and leave AUTH_SIGNUP_POLICY unset',
     );
   }
-  if (config.EXTRACT_WORKER_CONCURRENCY !== undefined && config.EXTRACT_WORKER_CONCURRENCY > config.EXTRACT_CONCURRENCY) {
+  // Only where the sandbox is used (the worker; the API resets EXTRACT_URL), so a stray value never stops another role.
+  if (config.EXTRACT_URL && config.EXTRACT_WORKER_CONCURRENCY !== undefined && config.EXTRACT_WORKER_CONCURRENCY > config.EXTRACT_CONCURRENCY) {
     throw new Error('EXTRACT_WORKER_CONCURRENCY must not exceed EXTRACT_CONCURRENCY, the sandbox parser slots: more extract jobs than slots only wait, or are refused as busy');
   }
   if (config.STORAGE === 's3' && !config.S3_BUCKET) throw new Error('STORAGE=s3 needs S3_BUCKET');

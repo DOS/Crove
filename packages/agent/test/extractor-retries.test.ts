@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // A document whose AI call keeps failing is sent at most 1 + maxRetries times (#2119), against a local fake endpoint
-// through the real AI SDK client, so one failing document cannot hold an extract slot for the SDK's 3 x 120 s.
+// through the real AI SDK client, so a failing document costs a known number of provider calls and its slot is not
+// held for a retry storm.
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';

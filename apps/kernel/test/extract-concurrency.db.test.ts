@@ -62,13 +62,18 @@ suite('parallel extraction on PostgreSQL (#2119)', () => {
     return createExtractClient({ url: 'http://crove-extract.test', concurrency, fetch: async (input, init) => app.fetch(new Request(input, init)) });
   };
 
-  // An AI reader that takes `ms` per document and remembers the most documents it had in hand at once.
-  function slowReader(ms: number) {
+  // An AI reader that takes `ms` per document and remembers the most documents it had in hand at once. The first `slots`
+  // reads wait (up to 5 s) until that many are in hand, so reaching the limit does not depend on when the relay queued the
+  // jobs; a limit that was not enforced would still show as a larger maximum.
+  function slowReader(ms: number, slots: number) {
     const state = { inFlight: 0, max: 0, calls: 0 };
     const read = async () => {
       state.calls += 1;
+      const first = state.calls <= slots;
       state.inFlight += 1;
       state.max = Math.max(state.max, state.inFlight);
+      const deadline = Date.now() + 5_000;
+      while (first && state.inFlight < slots && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
       await new Promise((resolve) => setTimeout(resolve, ms));
       state.inFlight -= 1;
       numbers += 1;
@@ -146,7 +151,7 @@ suite('parallel extraction on PostgreSQL (#2119)', () => {
   });
 
   async function readAll(concurrency: number, files: number) {
-    const reader = slowReader(400);
+    const reader = slowReader(400, concurrency);
     const ids: string[] = [];
     for (let i = 0; i < files; i++) ids.push(await upload());
     const stop = await startWorker({ connectionString: workerUrl, workerDb, runtime: workerRuntime, store, extractor: reader.ai, extract: extractClient(concurrency), inboundDomain: null });

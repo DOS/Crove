@@ -309,8 +309,8 @@ services:
   # to start with any variable but its own EXTRACT_* settings. Its only network is `extract`, which has no route out,
   # and no port is published. Each parse also runs in a short-lived process with no network permission.
   # EXTRACT_CONCURRENCY parser slots (#2119, 1 to 8, default 4): the worker runs that many extract jobs at once. Memory,
-  # CPUs and processes are sized for four slots (a parser process is held to 768 MB resident, a PDF rarely uses a tenth of
-  # that); with more slots, raise them in compose.host.yml (docs/runbooks/extract-sizing.md).
+  # CPUs and processes are sized for four slots (a parser process is held to 768 MB resident, so 3 GB is the worst case; a
+  # PDF rarely uses a tenth of that); with more slots, raise them in compose.host.yml (docs/runbooks/extract-sizing.md).
   crove-extract:
     build:
       context: .
@@ -322,8 +322,8 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
-    mem_limit: 2g
-    memswap_limit: 2g
+    mem_limit: 3g
+    memswap_limit: 3g
     cpus: 2
     pids_limit: 256
     environment:

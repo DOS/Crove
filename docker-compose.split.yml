@@ -139,6 +139,8 @@ services:
       <<: *crove-env
       WORKER_DATABASE_URL: postgres://crove_worker:${CROVE_WORKER_DB_PASSWORD:-local-worker-password}@db:5432/postgres
       EXTRACT_URL: http://crove-extract:8090
+      # The sandbox's slots (docker-compose.yml gives the same value to crove-extract), which the worker never exceeds.
+      EXTRACT_CONCURRENCY: ${EXTRACT_CONCURRENCY:-4}
       # The WORM fact stream (#891) in the Object Lock bucket, with the shortest lag so the run sees a batch.
       ARCHIVE_STORE: s3
       ARCHIVE_S3_BUCKET: crove-archive
