@@ -20,6 +20,7 @@ import { proposalName } from '../lib/review.ts';
 import { THEMES } from '../lib/theme.ts';
 import { useThemeSetting } from '../lib/theme-runtime.ts';
 import { signOut } from '../lib/session-actions.ts';
+import { useRouteFocus } from '../lib/route-focus.ts';
 import { useScrollRoom } from '../lib/scroll-room.ts';
 import { SAFETY_POLL_MS, pollEvery, useInvalidationStream, useStreamLive } from '../lib/stream-hook.ts';
 import { unreadLabel } from '../lib/social-notifications.ts';
@@ -49,6 +50,8 @@ export function OrgLayout() {
   const [menuOpen, setMenuOpen] = useState(false);
   // The phone's header sticks to the top: a control the keyboard focuses stops below it, never under it (#1575).
   const phoneHeader = useRef<HTMLElement>(null);
+  const main = useRef<HTMLElement>(null);
+  const screenName = useRouteFocus(main);
   useScrollRoom(phoneHeader, 'top');
   const { slug } = useParams({ strict: false }) as { slug: string };
   const navigate = useNavigate();
@@ -249,6 +252,21 @@ export function OrgLayout() {
 
   return (
     <div className="flex min-h-full bg-background">
+      {/* The first stop of the keyboard (WCAG 2.4.1, #2115): fixed, so the sticky phone header never covers it. */}
+      <a
+        href="#main-content"
+        onClick={(e) => {
+          e.preventDefault();
+          main.current?.focus();
+        }}
+        className="sr-only focus-visible:not-sr-only focus-visible:fixed focus-visible:top-2 focus-visible:left-2 focus-visible:z-50 focus-visible:rounded-lg focus-visible:border focus-visible:border-ring focus-visible:bg-background focus-visible:px-4 focus-visible:py-3 focus-visible:text-sm focus-visible:font-medium focus-visible:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+      >
+        {t('skipToContent')}
+      </a>
+      {/* Names the new screen to a screen reader after a navigation (#2115). */}
+      <div role="status" aria-live="polite" data-route-announcer className="sr-only">
+        {screenName}
+      </div>
       <aside className="sticky top-0 hidden h-screen w-72 shrink-0 border-r bg-sidebar md:flex">{shellNav()}</aside>
       <div className="min-w-0 flex-1">
         {/* The phone's header (issue #1245): the menu button, the org's name and the palette; the rest is in the drawer. */}
@@ -271,7 +289,7 @@ export function OrgLayout() {
           {shellNav(() => setMenuOpen(false))}
         </NavDrawer>
         {/* Focusable from code only: where the focus goes when the toast that held it leaves (#2026). */}
-        <main tabIndex={-1} className="mx-auto w-full max-w-6xl px-4 py-6 outline-none md:px-8 md:py-8">
+        <main ref={main} id="main-content" tabIndex={-1} className="mx-auto w-full max-w-6xl px-4 py-6 outline-none md:px-8 md:py-8">
           <OrgLeftNotice />
           {me.isSuccess && !org ? <p className="text-sm text-destructive">{t('notMember')}</p> : <Outlet />}
         </main>

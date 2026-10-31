@@ -1,6 +1,7 @@
 import { Outlet, createRootRoute, createRoute, createRouter, notFound, redirect, type ErrorComponentProps } from '@tanstack/react-router';
 import { useTranslations } from 'use-intl';
 import { Button } from '@crove/ui/components/button';
+import { ScreenTitle } from './components/ui.tsx';
 import { errorMessage, getCurrentOrg, isUnauthenticated, orpc, queryClient, setCurrentOrg } from './lib/api.ts';
 import { accessToken, auth, getConfig, needsSecondFactor, needsSecondFactorNow } from './lib/auth.ts';
 import { landingFor } from './lib/clients.ts';
@@ -84,6 +85,7 @@ function ErrorPage({ error }: ErrorComponentProps) {
   return (
     <main className="flex min-h-full items-center justify-center bg-background px-4">
       <div className="max-w-md text-center">
+        <ScreenTitle name={t('error')} />
         <h1 className="text-lg font-semibold text-foreground">{t('error')}</h1>
         <p className="mt-2 text-sm text-muted-foreground">{error instanceof Error ? errorMessage(error) : t('unknownError')}</p>
         <div className="mt-6 flex justify-center gap-2">
@@ -102,6 +104,7 @@ function NotFoundMessage() {
   const t = useTranslations('common');
   return (
     <div className="max-w-md text-center">
+      <ScreenTitle name={t('notFound')} />
       <h1 className="text-lg font-semibold text-foreground">{t('notFound')}</h1>
       <p className="mt-2 text-sm text-muted-foreground">{t('notFoundHint')}</p>
       <div className="mt-6 flex justify-center">

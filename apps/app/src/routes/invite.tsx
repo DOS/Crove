@@ -4,7 +4,7 @@ import type { ReactNode } from 'react';
 import { useTranslations } from 'use-intl';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
-import { CardSkeleton, ErrorText, Logo } from '../components/ui.tsx';
+import { CardSkeleton, ErrorText, Logo, ScreenTitle } from '../components/ui.tsx';
 import { errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { signOut } from '../lib/session-actions.ts';
 import { useFormat } from '../i18n/provider.tsx';
@@ -58,6 +58,7 @@ export function InvitePage() {
   if (!token) {
     return (
       <Shell>
+        <ScreenTitle name={t('noInviteTitle')} />
         <h1 className="mt-6 text-lg font-semibold text-foreground">{t('noInviteTitle')}</h1>
         <p className="mt-1 text-sm text-muted-foreground">{t('noInviteBody')}</p>
         <Button variant="outline" size="lg" className="mt-6" onClick={() => void navigate({ to: '/' })}>
@@ -79,6 +80,7 @@ export function InvitePage() {
     const mismatch = errorCode(preview.error) === 'INVITE_EMAIL_MISMATCH';
     return (
       <Shell>
+        <ScreenTitle name={t('openFailed')} />
         <h1 className="mt-6 text-lg font-semibold text-foreground">{t('openFailed')}</h1>
         <ErrorText>{errorMessage(preview.error)}</ErrorText>
         {mismatch && me.data && <p className="mt-2 text-sm text-muted-foreground">{t('signedInAs', { email: me.data.email })}</p>}
@@ -101,6 +103,7 @@ export function InvitePage() {
   if (!invite) return null;
   return (
     <Shell>
+      <ScreenTitle name={t('title', { org: invite.orgName })} />
       <h1 className="mt-6 text-lg font-semibold text-foreground">{t('title', { org: invite.orgName })}</h1>
       <p className="mt-2 text-sm text-muted-foreground">
         {t.rich('body', {

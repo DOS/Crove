@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslations } from 'use-intl';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
-import { ErrorText, Logo, Spinner } from '../components/ui.tsx';
+import { ErrorText, Logo, ScreenTitle, Spinner } from '../components/ui.tsx';
 import { errorMessage, orpc } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
 import { forgetShare, pendingShare, shareFragment, type PendingShare } from '../lib/social-share.ts';
@@ -52,6 +52,7 @@ export function SocialSharePage() {
   if (!shared || !socialOn) {
     return (
       <Shell>
+        <ScreenTitle name={t(socialOn ? 'nothingTitle' : 'offTitle')} />
         <h1 className="mt-6 text-lg font-semibold text-foreground">{t(socialOn ? 'nothingTitle' : 'offTitle')}</h1>
         <p className="mt-1 text-sm text-muted-foreground">{t(socialOn ? 'nothingBody' : 'offBody')}</p>
         <Button variant="outline" size="lg" className="mt-6" onClick={leave}>
@@ -76,6 +77,7 @@ export function SocialSharePage() {
   }
   return (
     <Shell>
+      <ScreenTitle name={t('pickTitle')} />
       <h1 className="mt-6 text-lg font-semibold text-foreground">{t('pickTitle')}</h1>
       <p className="mt-1 text-sm text-muted-foreground">{orgs.length === 0 ? t('noOrgs') : t('pickBody')}</p>
       {shared.link && <p className="mt-3 truncate text-xs text-subtle-foreground">{shared.link}</p>}

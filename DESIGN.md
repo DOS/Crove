@@ -249,6 +249,7 @@ Approve, edit and reject have equal visual access (reject is not hidden in a men
 - Visible `:focus-visible` ring on every interactive element, never hidden behind sticky headers or banners (2.4.11).
 - Targets at least 24x24px (2.5.8); 44px on touch-first screens.
 - Semantic landmarks and heading order; icon-only buttons have `aria-label`; tables use real `<table>` markup.
+- Every screen has its own tab title "<screen> · <brand>" (the `PageHeader` title, or `ScreenTitle` where there is none), the first Tab stop of the signed-in shell is a "Skip to content" link that focuses `<main>`, and a navigation that changes the path moves the focus to the new screen's heading and names the screen in a polite live region, while a search-param change, the first load and back or forward do not move it (WCAG 2.4.1, 2.4.2, 2.4.3; #2115).
 - Color is never the only signal (chips have text, charts have labels).
 - Help is in the same place on every screen (3.2.6): the "Góp ý / Hỗ trợ" link.
 - Respect `prefers-reduced-motion`. Light is the default theme; follow `prefers-color-scheme` only when the user picks "system".
