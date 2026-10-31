@@ -215,7 +215,15 @@ export async function runCalendarSync(deps: CalendarSyncDeps, job: CalendarSyncJ
       a.kind === 'delete' || a.summary === null || a.startsAt === null || a.endsAt === null
         ? adapter.removeEvent(secret, a.externalId)
         : adapter.writeEvent(secret, { externalId: a.externalId, summary: a.summary, startsAt: a.startsAt, endsAt: a.endsAt });
+    let first = true;
     for (const a of plan.actions) {
+      // The plan is a few moments old after the first call: a member who switched write-back off, or disconnected, in the
+      // meantime has no more of their bookings sent.
+      if (!first) {
+        const current = await deps.runtime.query<{ status: string; writeBack: boolean } | null>('kernel.calendar.connection_state', { connectionId: job.connectionId }, options);
+        if (!current || current.status !== 'active' || !current.writeBack) return null;
+      }
+      first = false;
       let result = await call(a);
       // A refused token is renewed once and the call repeated; refused again, the grant is gone.
       if ('refused' in result && !renewed) {
@@ -227,13 +235,16 @@ export async function runCalendarSync(deps: CalendarSyncDeps, job: CalendarSyncJ
       // The grant lacks the events permission (the member unticked it): nothing more can be written until they connect again.
       // (The busy read that follows clears a connection's failure note, so none is written; the next sweep tries again.)
       if ('scope' in result) return null;
+      // An outage or a limit says nothing about this event and would hit every one behind it: no record, no attempt counted,
+      // and the rest of the batch (each call may wait 30 seconds, and the sweep holds one lock) is left for the next sweep.
+      if ('failed' in result && result.transient) return null;
       const written = 'ok' in result || 'gone' in result;
       // gone: the member deleted the event by hand (an upsert) or it was not there (a delete): either way it stays gone
       // until its booking changes.
       const recorded = written ? (a.kind === 'delete' || 'gone' in result ? 'removed' : 'written') : 'error';
       await deps.runtime.execute(
         'kernel.calendar.link.record',
-        { connectionId: job.connectionId, eventId: a.eventId, externalId: a.externalId, state: recorded, syncedHash: a.hash, ...(recorded === 'error' ? { error: String('failed' in result ? result.failed : 'failed').slice(0, 100) } : {}) },
+        { connectionId: job.connectionId, eventId: a.eventId, externalId: a.externalId, state: recorded, syncedHash: a.hash, ...(recorded === 'error' ? { error: String('failed' in result ? result.failed : 'failed').slice(0, 100) || 'failed' } : {}) },
         options,
       );
     }
@@ -246,7 +257,13 @@ export async function runCalendarSync(deps: CalendarSyncDeps, job: CalendarSyncJ
   // Write-back (#2124): make the member's calendar match their bookings before the busy times are read, so a sweep never
   // reads busy times that still hold an event it is about to delete. A write that fails never stops the busy read.
   if (state.writeBack) {
-    const stopped = await writeBackStep();
+    let stopped: CalendarSyncOutcome | null = null;
+    try {
+      stopped = await writeBackStep();
+    } catch (error) {
+      // A plan or a record that fails (a disconnect finishing meanwhile, a database blip) must not cost the member their busy times.
+      console.error(`[calendar-sync] connection ${job.connectionId.slice(0, 8)} write-back failed: ${error instanceof Error ? error.name : 'error'}`);
+    }
     if (stopped) return stopped;
   }
   // From the start of the hour, so a busy interval that began earlier keeps one stable key from sync to sync.

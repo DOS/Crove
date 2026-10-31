@@ -170,8 +170,11 @@ describe('GoogleCalendarAdapter', () => {
     const run = (answer: { status: number; body: unknown }) => new GoogleCalendarAdapter(APP, google({ [EVENTS]: [answer] }).fetchImpl).writeEvent(SECRET, EVENT);
     expect(await run({ status: 401, body: { error: { code: 401, message: 'Invalid Credentials' } } })).toEqual({ refused: 'invalid_token' });
     expect(await run({ status: 403, body: { error: { code: 403, message: 'Insufficient Permission', errors: [{ reason: 'insufficientPermissions' }] } } })).toEqual({ scope: true });
-    expect(await run({ status: 403, body: { error: { code: 403, message: 'quota', errors: [{ reason: 'rateLimitExceeded' }] } } })).toEqual({ failed: 'rateLimitExceeded' });
-    expect(await run({ status: 503, body: { error: { code: 503, message: 'x', status: 'UNAVAILABLE' } } })).toEqual({ failed: 'UNAVAILABLE' });
+    // A limit or a server error says nothing about the event: marked transient. A refusal specific to the event is not.
+    expect(await run({ status: 403, body: { error: { code: 403, message: 'quota', errors: [{ reason: 'rateLimitExceeded' }] } } })).toEqual({ failed: 'rateLimitExceeded', transient: true });
+    expect(await run({ status: 503, body: { error: { code: 503, message: 'x', status: 'UNAVAILABLE' } } })).toEqual({ failed: 'UNAVAILABLE', transient: true });
+    expect(await run({ status: 429, body: { error: { code: 429, message: 'x' } } })).toEqual({ failed: '429', transient: true });
+    expect(await run({ status: 400, body: { error: { code: 400, message: 'x', errors: [{ reason: 'invalid' }] } } })).toEqual({ failed: 'invalid' });
     expect(await new GoogleCalendarAdapter(APP, google({}).fetchImpl).writeEvent('not json', EVENT)).toEqual({ refused: 'NO_ACCESS_TOKEN' });
   });
 
@@ -182,7 +185,7 @@ describe('GoogleCalendarAdapter', () => {
     expect(await adapter.removeEvent(SECRET, EVENT.externalId)).toEqual({ ok: true });
     expect(await adapter.removeEvent(SECRET, EVENT.externalId)).toEqual({ gone: true });
     expect(await adapter.removeEvent(SECRET, EVENT.externalId)).toEqual({ refused: 'invalid_token' });
-    expect(await adapter.removeEvent(SECRET, EVENT.externalId)).toEqual({ failed: '500' });
+    expect(await adapter.removeEvent(SECRET, EVENT.externalId)).toEqual({ failed: '500', transient: true });
     expect(calls).toHaveLength(4);
   });
 

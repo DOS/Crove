@@ -42,7 +42,9 @@ export type CalendarBusyResult = { busy: BusyInterval[] } | { refused: string } 
 // What one write to the provider came to: ok; gone (the event is not there: the member deleted it, or it never was);
 // refused (the token is dead: renew it once, then expire the connection); scope (the grant lacks the events permission);
 // failed (a quota, an outage: the next sweep tries again).
-export type CalendarWriteResult = { ok: true } | { gone: true } | { refused: string } | { scope: true } | { failed: string };
+// `transient` marks a failure that says nothing about the event (the network, a server error, a rate or quota limit): the
+// worker leaves the rest of the batch for the next sweep and does not count it against the event.
+export type CalendarWriteResult = { ok: true } | { gone: true } | { refused: string } | { scope: true } | { failed: string; transient?: true };
 export interface CalendarEventWrite {
   // The provider event id, chosen by the kernel and the same on every try, so a retry cannot make a second event.
   externalId: string;
@@ -205,10 +207,12 @@ export class GoogleCalendarAdapter implements CalendarAdapter {
 
   // The answer of a write that did not succeed, as the result the worker acts on.
   private writeFailure(error: unknown): CalendarWriteResult {
-    if (!(error instanceof GoogleCalendarError)) return { failed: 'NETWORK' };
+    if (!(error instanceof GoogleCalendarError)) return { failed: 'NETWORK', transient: true };
     if (error.status === 401) return { refused: 'invalid_token' };
     if (error.status === 403 && (error.reason === 'insufficientPermissions' || error.reason === 'forbidden' || error.reason === 'PERMISSION_DENIED')) return { scope: true };
-    return { failed: error.reason ?? String(error.status) };
+    const limited = error.status === 429 || (error.status === 403 && /rate|quota|limit/i.test(error.reason ?? ''));
+    const failed = error.reason ?? String(error.status);
+    return error.status >= 500 || limited ? { failed, transient: true } : { failed };
   }
 
   // Inserts the event under the id the kernel chose; Google answers 409 for an id it already has (a retry, or an event it
