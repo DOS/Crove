@@ -438,6 +438,15 @@ export function checkEnv(env: Env): CheckResult[] {
           },
         ]
       : []),
+    // WAL archiving (#2120) runs in the database container: the preflight cannot see whether `wal.sh setup` was run, only
+    // whether the stack lists the overlay that makes it possible.
+    {
+      item: 'WAL archiving',
+      status: 'manual',
+      message: /(?:^|[:;/\\,])compose\.wal\.yml(?:$|[:;,])/.test(value(env, 'COMPOSE_FILE') ?? '')
+        ? 'confirm tools/backup/wal.sh info lists a full base backup and a WAL range up to a few minutes ago, and the prober runs (it alerts as wal_archive when segments stop reaching the bucket; docs/runbooks/backup-and-restore.md, "Point in time recovery")'
+        : 'COMPOSE_FILE does not list tools/backup/compose.wal.yml: the database archives no WAL, so a restore goes back to last night\'s backup and up to 24 hours of data can be lost; set it up before real data arrives (docs/runbooks/backup-and-restore.md, "Point in time recovery")',
+    },
     {
       item: 'Extraction sandbox',
       status: 'manual',

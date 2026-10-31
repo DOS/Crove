@@ -27,10 +27,11 @@
 //   7. tears everything down (containers, volumes, networks, the images, the temporary directory).
 // No AI endpoint: e-invoice XML is read without AI. Plain Node (26+), no dependencies; needs docker and bash.
 //
-//   node tools/backup/drill.mjs [--storage s3|local] [--restore-storage s3|local] [--seal on|off] [--keep]
+//   node tools/backup/drill.mjs [--storage s3|local] [--restore-storage s3|local] [--seal on|off] [--wal on|off] [--keep]
 // --storage s3 (default) runs the stack of docker-compose.split.yml (api and worker, files in MinIO), like a pilot
 // on an S3-compatible bucket; local runs the all-in-one stack with the files volume. --restore-storage (default: the
 // same) picks the scratch stack's; local adds tools/backup/scratch.compose.yml, as the monthly restore test does.
+// --wal off skips the point-in-time restore drill that follows (tools/backup/wal-drill.mjs, #2120).
 // --seal off uploads the runs unsealed. --keep leaves everything running for a look (tear down with
 // `docker compose -p <project> down -v`).
 // Environment: DRILL_PREFIX (default crove-drill; names the compose projects, the target, its network and the image
@@ -52,6 +53,9 @@ const STORAGE = option('--storage', 's3');
 const RESTORE_STORAGE = option('--restore-storage', STORAGE);
 const SEAL = option('--seal', 'on');
 const KEEP = args.includes('--keep');
+// After the backup and restore drill, the point-in-time restore drill of tools/backup/wal-drill.mjs (#2120), unless off.
+const WAL = option('--wal', 'on');
+if (!['on', 'off'].includes(WAL)) throw new Error('--wal is on or off');
 if (!['s3', 'local'].includes(STORAGE) || !['s3', 'local'].includes(RESTORE_STORAGE)) throw new Error('--storage and --restore-storage are s3 or local');
 if (!['on', 'off'].includes(SEAL)) throw new Error('--seal is on or off');
 const PREFIX = process.env.DRILL_PREFIX ?? 'crove-drill';
@@ -577,6 +581,17 @@ async function main() {
   });
 
   const rto = timings['restore (restore.sh s3:latest, until /readyz is green)'] + timings['verify through the API'];
+  // The point-in-time restore (#2120) has a database and a bucket of its own: it runs after the stacks above are gone.
+  if (WAL === 'on') {
+    teardown();
+    await time('point-in-time restore drill (wal-drill.mjs)', async () => {
+      const result = spawnSync(process.execPath, [`${ROOT}tools/backup/wal-drill.mjs`], {
+        stdio: 'inherit',
+        env: { ...process.env, DRILL_PREFIX: `${PREFIX}-wal`.slice(0, 31) },
+      });
+      assert(result.status === 0, `the point-in-time restore drill failed (exit ${result.status})`);
+    });
+  }
   console.log('\n[drill] timings (seconds):');
   for (const [name, seconds] of Object.entries(timings)) console.log(`  ${name.padEnd(56)} ${seconds.toFixed(1)}`);
   console.log(`  ${'restore and verify (the RTO part)'.padEnd(56)} ${rto.toFixed(1)}`);

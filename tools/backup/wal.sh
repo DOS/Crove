@@ -20,11 +20,11 @@
 #                                a scratch copy never pushes into the bucket it was restored from; for the real thing,
 #                                after checking the data, run `wal.sh setup` to start archiving again (a new timeline)
 #
-# Settings: the stack's .env (CROVE_DIR, default this checkout), as backup.sh reads it. The bucket, keys and encryption key
-# are BACKUP_S3_* and BACKUP_ENCRYPTION_KEY; WAL_S3_ENDPOINT, WAL_S3_REGION, WAL_S3_URI_STYLE, WAL_RETENTION_FULL and
-# WAL_RETENTION_DIFF are in tools/backup/compose.wal.yml. WAL_ARCHIVE_TIMEOUT (default 60) is the longest a write waits
-# before its WAL segment is closed and pushed: the recovery point objective is that plus the upload time. BACKUP_ALERT=off
-# turns the failure alert off.
+# Settings: the stack's .env (CROVE_DIR, default this checkout), as backup.sh reads it. The bucket and its keys are
+# BACKUP_S3_*; the others are the WAL_* settings of tools/backup/compose.wal.yml (WAL_ENCRYPTION_KEY, WAL_S3_ENDPOINT,
+# WAL_S3_PORT, WAL_S3_REGION, WAL_S3_URI_STYLE, WAL_RETENTION_FULL, WAL_RETENTION_DIFF). WAL_ARCHIVE_TIMEOUT (default 60) is
+# the longest a write waits before its WAL segment is closed and pushed: the recovery point objective is that plus the
+# upload time. BACKUP_ALERT=off turns the failure alert off.
 set -Eeuo pipefail
 LOG_TAG=wal
 # shellcheck source=tools/backup/lib.sh

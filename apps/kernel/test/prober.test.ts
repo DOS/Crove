@@ -20,6 +20,7 @@ import {
   walSegmentsPending,
   type HealthSnapshot,
   type ProberConfig,
+  type Thresholds,
   type WalArchive,
 } from '../src/prober.ts';
 import type { AlertGate } from '../src/alert-gate.ts';
@@ -162,7 +163,7 @@ describe('health thresholds', () => {
       ...patch,
     });
     const walLimits = { ...limits, walArchiveAgeSeconds: 600 };
-    const checks = (w: WalArchive | undefined, t = walLimits) => evaluateHealth(w ? { ...healthy, wal_archive: w } : healthy, t, 300);
+    const checks = (w: WalArchive | undefined, t: Thresholds = walLimits) => evaluateHealth(w ? { ...healthy, wal_archive: w } : healthy, t, 300);
 
     it('counts the finished segments not yet archived', () => {
       expect(walSegmentsPending(wal())).toBe(0);

@@ -10,9 +10,10 @@
 # `wal.sh backup` takes the base backups a restore starts from; together they restore the database to any moment since the
 # oldest base backup kept, to the second.
 #
-# The bucket is the backup bucket (BACKUP_S3_*), under <BACKUP_S3_PREFIX>/wal, sealed by pgBackRest with
-# BACKUP_ENCRYPTION_KEY (aes-256-cbc, the key as passphrase), so the bucket alone does not expose the books. Keep that key
-# apart from the bucket, as for the nightly runs: without it neither a run nor a WAL segment opens.
+# The bucket is the backup bucket (BACKUP_S3_*), under <BACKUP_S3_PREFIX>/wal, sealed by pgBackRest with its own key,
+# WAL_ENCRYPTION_KEY (aes-256-cbc, the key as passphrase), so the bucket alone does not expose the books. Keep that key
+# apart from the bucket, as BACKUP_ENCRYPTION_KEY is: without it no WAL segment opens. pgBackRest cannot change a
+# repository's passphrase in place, so unlike the nightly key this one is not rotated; see the runbook.
 services:
   db:
     build:
@@ -36,7 +37,7 @@ services:
       PGBACKREST_REPO1_S3_KEY_SECRET: ${BACKUP_S3_SECRET_ACCESS_KEY:?set BACKUP_S3_SECRET_ACCESS_KEY}
       PGBACKREST_REPO1_PATH: /${BACKUP_S3_PREFIX:-crove}/wal
       PGBACKREST_REPO1_CIPHER_TYPE: aes-256-cbc
-      PGBACKREST_REPO1_CIPHER_PASS: ${BACKUP_ENCRYPTION_KEY:?set BACKUP_ENCRYPTION_KEY, which the WAL is sealed with}
+      PGBACKREST_REPO1_CIPHER_PASS: ${WAL_ENCRYPTION_KEY:?set WAL_ENCRYPTION_KEY, which the WAL is sealed with}
       # Full and differential base backups kept; the WAL older than the oldest full one is expired with it.
       PGBACKREST_REPO1_RETENTION_FULL: ${WAL_RETENTION_FULL:-4}
       PGBACKREST_REPO1_RETENTION_DIFF: ${WAL_RETENTION_DIFF:-6}

@@ -4,10 +4,11 @@ How a Ludy instance that runs the `docker compose` stack on one server (the pilo
 
 | Target | Value | Why |
 |---|---|---|
-| RPO (data that may be lost) | 24 h | One backup a night. The files bucket's versioning keeps files written since then; the database changes of the last day can be lost. |
+| RPO (data that may be lost), nightly runs only | 24 h | One backup a night. The files bucket's versioning keeps files written since then; the database changes of the last day can be lost. |
+| RPO with WAL archiving on ([Point in time recovery](#point-in-time-recovery)) | 1 to 2 min while the bucket answers | Every finished WAL segment goes to the bucket; a write waits at most `WAL_ARCHIVE_TIMEOUT` (60 s) for its segment to close, plus the upload. The prober alerts after 10 minutes without a push. A restore reaches any moment since the oldest base backup kept, to the second. |
 | RTO (time to serve again) | 4 h | Restoring the backup takes minutes (see [the drill](#the-restore-drill)); the rest is a new server, DNS and the checks after a restore. |
 
-These targets are for the pilot. Plan §7.9 sets tighter ones for Ludy Cloud (point-in-time recovery, a WORM stream); they need managed PostgreSQL or WAL archiving and are not part of this setup.
+These targets are for the pilot. The 24 h figure is the nightly runs alone; the pilot turns WAL archiving on before real data arrives (#2120), which brings the database's RPO to minutes. Plan §7.9 sets tighter ones for Ludy Cloud (a WORM stream beyond this, managed PostgreSQL); they are not part of this setup.
 
 ## What holds state, and what the backup takes
 
@@ -154,6 +155,52 @@ unset COMPOSE_PROJECT_NAME COMPOSE_FILE
 - Accounts, password hashes, MFA factors and sessions come back with the `auth` schema, so users sign in with their usual passwords. Sessions created after the backup are gone; a user whose session is gone signs in again.
 - The `crove_jobs` queue and the outbox come back as they were at backup time, and the worker picks them up. Work done after the backup (an extraction, a sent invite) is not in the restored database and may run again.
 - If the restored copy left your control (a laptop, another environment), rotate the context key there again; that copy and production must never share one.
+
+## Point in time recovery
+
+The nightly runs lose up to a day. WAL archiving closes that gap (#2120): PostgreSQL hands every finished write-ahead log (WAL) segment to pgBackRest, which pushes it to the backup bucket, sealed; `wal.sh backup` takes base backups from which a restore starts. A restore then replays the WAL up to any moment you name, to the second, so "the books as they were at 10:41, before the bad import" is a command, not a guess. The nightly runs stay: they carry the files, the rows the dump leaves out on purpose and the WORM archive check; the WAL carries the database.
+
+| Piece | Where |
+|---|---|
+| The database image: the stack's own PostgreSQL plus pgBackRest | `tools/wal/Dockerfile` (built as `crove-db:local`) |
+| The overlay that gives `db` the bucket's settings | `tools/backup/compose.wal.yml`, listed last in `COMPOSE_FILE` |
+| Set up, base backup, check, info, restore | `tools/backup/wal.sh` |
+| The proof | `tools/backup/wal-drill.mjs`, run by `drill.mjs` in CI |
+| The alert | the prober's `wal_archive` check |
+
+**What it protects, and what it does not.** The whole PostgreSQL cluster: every Ludy schema, Supabase Auth's `auth` schema, the job queue, the roles' settings (passwords are set again by `migrate`). Not the files: with `STORAGE=s3` they are objects in their own bucket, written once and versioned, and a database restored to a past moment only points at files that existed then; with `STORAGE=local` they are the nightly runs' file copy. Not the WORM archive, which already lives outside the database.
+
+**The new recovery point objective** is `WAL_ARCHIVE_TIMEOUT` (60 s: the longest a write waits for its segment to be closed) plus the upload, so a minute or two while the bucket answers. If the bucket stops answering, the database keeps every unpushed segment on its own disk and the prober alerts after `PROBER_MAX_WAL_ARCHIVE_AGE_SECONDS` (600 s, check `wal_archive`): the gap grows until archiving is back, so treat that alert like a failed backup. A disk that fills with segments stops the database; watch `pg_wal` size beside the alert.
+
+### Set up (once; production steps, run by the coordinator with the owner's approval)
+
+Names, never values: the bucket, its keys and `WAL_ENCRYPTION_KEY` come from the secret store; the host and bucket names are the ones of the backup bucket of this deployment.
+
+1. Make the key, on the server, without printing it, and put it in the secret store apart from the bucket: `openssl rand -base64 32`. Add to `.env`: `WAL_ENCRYPTION_KEY`, `WAL_S3_ENDPOINT` (the host of `BACKUP_S3_ENDPOINT` without `https://`), and `WAL_S3_URI_STYLE=path` for a store without bucket host names. Check: `docker compose config >/dev/null` fails with the name of a missing setting and passes with all of them. Rollback: remove the lines.
+2. Build the database image from the checkout the deploy uses and list the overlay: `docker build -t crove-db:local /opt/crove-src/tools/wal`, copy `tools/backup/compose.wal.yml` next to `docker-compose.yml`, and append it to `COMPOSE_FILE` (`...:compose.wal.yml`). Check: `docker compose config | grep PGBACKREST_REPO1_PATH`. Rollback: take it out of `COMPOSE_FILE`; nothing has changed in the database yet.
+3. Take a nightly backup first, so the database has a restore point whatever happens next: `tools/backup/backup.sh`. Check: it ends `complete`.
+4. Recreate the database container on the new image and turn archiving on: `docker compose up -d db`, then `tools/backup/wal.sh setup`. It sets `archive_mode`, `archive_command` and `archive_timeout`, restarts `db` once (a few seconds without the database: the app answers 503 meanwhile), creates the stanza, checks that a segment reaches the bucket and takes the first full base backup. Check: `tools/backup/wal.sh info` lists one full backup and a WAL range; `docker compose exec db psql -U postgres -Atc "SELECT last_archived_wal, failed_count FROM pg_stat_archiver"` shows a segment and no failures; `docker compose run --rm prober prober` is healthy. Rollback: `docker compose exec db psql -U postgres -c "ALTER SYSTEM RESET archive_mode"` and `docker compose restart db`; the bucket keeps what it has.
+5. Schedule the base backups from cron on the server, next to the nightly run: a full one weekly and a differential one nightly, for example `30 2 * * 0 /opt/crove-src/tools/backup/wal.sh backup --type full` and `30 2 * * 1-6 /opt/crove-src/tools/backup/wal.sh backup --type diff` with `CROVE_DIR=/opt/crove`. A failed run alerts through the prober like a failed nightly run. Check: the next morning `wal.sh info` shows the new backup.
+6. Run `pnpm pilot:check`: the "WAL archiving" item is a manual line until you confirm the steps above.
+7. On the pilot layout ([deploy.md](deploy.md)) nothing else changes: `deploy.sh` keeps rolling `api` and `worker`, and the `db` container is recreated only when its image or settings change.
+
+### Restore to a point in time
+
+When: a bad import, a wrong bulk action, an operator error, or the database lost (a new server). Decide the moment first: read it off the audit trail or the users' report, and take it a little before; the restore stops there and everything after is gone. `wal.sh info` shows the window (`wal archive min/max`): the earliest moment is the oldest base backup kept.
+
+1. Stop the application and look for a fresh server: `docker compose stop api worker` (or `crove`). On a new server install the stack, `.env` (with the WAL settings and the secrets from the secret store), the `crove-db` image and the overlay, and leave the `db-data` volume empty.
+2. Restore, with the time and its time zone: `tools/backup/wal.sh restore --to "2026-10-31 08:40:00+00"` (`--latest` replays the whole archive). It stops `db`, restores the newest base backup before that moment into the empty `db-data` volume, and writes the recovery settings. A volume that is not empty is refused by pgBackRest: use a new one (`docker compose down`, `docker volume rm <project>_db-data`) only after you have a copy of what is there.
+3. Start the database: `docker compose up -d db`. It replays the WAL up to the moment, opens and accepts connections; the log says `recovery stopping before commit` or `reached recovery target`. Check, in `psql`: `SELECT pg_is_in_recovery()` is `f`, and look for the rows you expect before the moment and none after.
+4. Archiving is off on the restored cluster (so a scratch copy never writes into the bucket it was restored from). For the real thing, once the data is right, start archiving again with `tools/backup/wal.sh setup` (a new timeline in the same stanza, then a fresh full backup), then start the application.
+5. Reconcile as after any restore ([After a restore](#after-a-restore) and [ledger-after-restore.md](ledger-after-restore.md)): the work between the moment and the incident is gone from the database, the WORM archive check names the journal entries and vouchers it holds that the database no longer does, and the number series must be raised above the archive. The context key of a point-in-time restore is the production one; on a copy that leaves your control rotate it ([context-key-rotation.md](context-key-rotation.md)).
+
+A scratch restore next to production, to look at old data: use another compose project and port as in [Onto a scratch stack](#onto-a-scratch-stack-next-to-the-live-one-the-monthly-test-or-to-look-at-old-data), with the same `.env` WAL settings; the default `--archive-mode off` keeps it read-only toward the bucket (it only needs to read it).
+
+### Keys, retention and the drill
+
+- `WAL_ENCRYPTION_KEY` is the passphrase of the WAL repository. pgBackRest cannot change it in place: the nightly key rotates ([Rotating the backup encryption key](#rotating-the-backup-encryption-key)), this one does not. To change it, start a new repository (another `BACKUP_S3_PREFIX`, which moves the nightly runs too, or another `WAL_*` path) with `wal.sh setup`, keep the old key until the old repository is past its retention, then delete it. Lose the key and the WAL is unreadable: keep a copy in the secret store.
+- Retention: `WAL_RETENTION_FULL` full base backups (default 4, about a month of weekly ones) and `WAL_RETENTION_DIFF` differential ones; `wal.sh backup` expires the older ones with their WAL, so the recovery window is about four weeks.
+- The drill: `node tools/backup/wal-drill.mjs` (CI runs it after the nightly drill, `ci.yml` job "Backup and restore drill"). It starts a database with the real overlay and a throwaway MinIO behind a self-signed certificate, runs `wal.sh setup`, writes a first row, notes the time, writes a second row, closes and archives the WAL segment, wipes the database, restores to the noted time and finds the first row and not the second (and an archiving-off restored cluster), then restores to the end of the archive and finds both. It takes about a minute. Run it again after any change to `tools/wal/`, `compose.wal.yml` or `wal.sh`.
 
 ## Rotating the backup encryption key
 

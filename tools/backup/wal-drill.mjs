@@ -35,7 +35,7 @@ const settings = {
   BACKUP_S3_ACCESS_KEY_ID: 'crove-wal-drill',
   BACKUP_S3_SECRET_ACCESS_KEY: 'crove-wal-drill-secret-0123456789',
   BACKUP_S3_PREFIX: 'drill',
-  BACKUP_ENCRYPTION_KEY: 'drill-encryption-key-not-a-secret-0123456789',
+  WAL_ENCRYPTION_KEY: 'drill-encryption-key-not-a-secret-0123456789',
   WAL_S3_ENDPOINT: 'minio',
   WAL_S3_PORT: '9000',
   WAL_S3_URI_STYLE: 'path',
